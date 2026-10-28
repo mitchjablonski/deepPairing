@@ -18,12 +18,23 @@ beforeEach(() => {
 });
 
 describe("reshaped skeleton plan", () => {
-  it("a draft v2 of a skeleton plan is labelled a skeleton change, with the reason and the pause", () => {
+  it("after an APPROVED v1: 'reshaped the skeleton you approved', the reason, and the enforced pause", () => {
+    useArtifactStore.setState({
+      artifacts: [{ ...mk(skeleton), id: "plan_v1", version: 1, parentId: null, status: "superseded", statusHistory: [{ status: "approved", at: "2026-10-01T00:00:00.000Z" }] }],
+    } as any);
     render(<PlanArtifact artifact={mk(skeleton, { agentReasoning: "Skeleton change: smooth() needs a tension parameter" })} />);
     const note = document.querySelector('[data-skel-reshape="true"]')!;
     expect(note.textContent).toContain("Skeleton change (v2): Claude reshaped the skeleton you approved.");
-    expect(note.textContent).toContain("Fills are paused until you approve this version.");
+    expect(note.textContent).toContain("Fills are paused: until you approve this version, any edit to this plan's files asks you first.");
     expect(note.textContent).toContain("Why: Skeleton change: smooth() needs a tension parameter");
+  });
+
+  it("#610 L1: a v1 that was never approved doesn't claim 'you approved'", () => {
+    useArtifactStore.setState({ artifacts: [{ ...mk(skeleton), id: "plan_v1", version: 1, parentId: null, status: "superseded" }] } as any);
+    render(<PlanArtifact artifact={mk(skeleton)} />);
+    const note = document.querySelector('[data-skel-reshape="true"]')!;
+    expect(note.textContent).toContain("Skeleton change (v2): Claude revised this skeleton before you approved it.");
+    expect(note.textContent).not.toContain("you approved.");
   });
 
   it("no label once approved, on a v1, or on an ordinary plan's revision", () => {

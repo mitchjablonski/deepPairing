@@ -1,5 +1,5 @@
 import { resolveProjectRoot } from "../../project-root.js";
-import { planDeclaredFiles, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
+import { planDeclaredFiles, readSkeletonScopeFile, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
 import { isLivePlanVersion } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { resnapshotSkeleton } from "../skeleton-snapshot.js";
@@ -116,7 +116,8 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   let liftedNote = "";
   if (!isSpec) {
     const lifted = updates
-      .filter((u) => u.status === "pending" || u.status === "skipped")
+      // #610 review L2 — `skipped` is a legitimate, often human-asked exit.
+      .filter((u) => u.status === "pending")
       .filter((u) => priorStatuses[u.stepIndex]?.status === "in_progress" && typeof priorStatuses[u.stepIndex]?.skelId === "string")
       .map((u) => ({ index: u.stepIndex, skelId: priorStatuses[u.stepIndex]!.skelId!, status: u.status }));
     if (lifted.length > 0) {
@@ -138,7 +139,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   // before fills resume.
   const isSkeleton = !isSpec && (c.steps ?? []).some((st) => typeof st.skelId === "string" && st.skelId);
   const reshapeNote = isSkeleton && artifact.status === "draft" && artifact.parentId
-    ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused (no fence opens) until your pair approves it."
+    ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused. Until your pair approves it, the preflight hook asks before any edit to this plan's files."
     : "";
   // Parity PR 4 — the finalize check once the last skeleton step is done.
   let finalizeNote = "";
@@ -180,7 +181,10 @@ function syncSkeletonScope(
     const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
     const approved = artifact.status === "approved";
     const activeSkelIds = approved ? steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId!) : [];
-    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: new Date().toISOString(), sessionId, workspaceRoot });
+    // Parity PR 4 (#610 M1) — a reshape scope keeps its pause/restore block;
+    // progress on the new version never silently lifts it.
+    const reshape = readSkeletonScopeFile(root.projectRoot, artifact.id)?.reshape;
+    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: new Date().toISOString(), sessionId, workspaceRoot, ...(reshape ? { reshape } : {}) });
 
     const finished = updates
       .filter((u) => u.status === "done")

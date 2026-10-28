@@ -82,8 +82,29 @@ function skeletonGateCopy(f: HookGateFacts): HookGateCopy {
   return { title, ...(subagent ? { subagent } : {}), match, next, announcement };
 }
 
+/** Parity PR 4 (#610 M1) — the enforced reshape pause: a reshaped skeleton
+ *  awaits your approval, so any edit to its files asks. */
+function skeletonPausedCopy(f: HookGateFacts): HookGateCopy {
+  const file = f.targetPath ? ` (\`${f.targetPath}\`)` : "";
+  const worker = subagentName(f);
+  const deny = f.decision === "deny";
+  const title = deny
+    ? `Stopped: a skeleton change awaits your approval, so fills are paused${file}`
+    : `Skeleton change awaiting your approval: fills are paused${file}`;
+  const match = `${worker ? `${worker[0]!.toUpperCase()}${worker.slice(1)}` : "Claude"} reshaped this skeleton plan, and you haven't approved the new version yet. Until you do, every edit to the plan's files asks you first.`;
+  const next = deny
+    ? "Nothing was written. Review the reshaped plan on its card, then approve or reject it."
+    : "Answer in the terminal: its prompt won't show this reason. Deny it and review the reshaped plan on its card first; allow only if you want this one edit to go ahead anyway.";
+  const announcement = [title.replace(/`/g, ""), match, deny ? "Nothing was written." : "Answer in the terminal."]
+    .map((t) => (/[.!?]$/.test(t) ? t : `${t}.`))
+    .join(" ");
+  const subagent = worker ? `Subagent: ${f.agentType ?? "unnamed"}` : undefined;
+  return { title, ...(subagent ? { subagent } : {}), match, next, announcement };
+}
+
 export function hookGateCopy(f: HookGateFacts): HookGateCopy {
   if (f.guardrail === "skeleton-scope") return skeletonGateCopy(f);
+  if (f.guardrail === "skeleton-paused") return skeletonPausedCopy(f);
   const target = f.targetPath ? `\`${f.targetPath}\`` : "a file";
   const deny = f.decision === "deny";
   const worker = subagentName(f);

@@ -33,8 +33,8 @@ pairing protocol):
 4. If a step needs a structural change, stop and propose it. Don't work around
    the fence, and don't set the step back to `pending` to lift it. Once I
    agree, `revise_artifact` the plan (`mode: "supersede"`, a reason that starts
-   `Skeleton change:`). I re-review the new skeleton, and fills pause until I
-   approve it.
+   `Skeleton change:`). I re-review the new skeleton; until I approve it, fills
+   are paused and the preflight hook asks me before any edit to the plan's files.
 5. When every step is done, strip the marker lines (the progress reply and
    `present_changeset` warn about any `SKEL[`, `/SKEL[` or `SKEL_TODO` left in
    the plan's files), then present the whole change with `present_changeset`

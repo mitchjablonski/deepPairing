@@ -95,6 +95,31 @@ describe("finalize check", () => {
     expect(res.text).toContain("Every skeleton step is done and no SKEL markers remain");
   });
 
+  it("#610 L3: prose files are checked only for this plan's own fences, never for a stray SKEL_TODO", () => {
+    fs.writeFileSync(path.join(root, "a.ts"), FINAL);
+    fs.writeFileSync(path.join(root, "README.md"), "Example:\n// SKEL[9] demo\nthrow new Error(\"SKEL_TODO\");\n// /SKEL[9]\n");
+    const steps = [{ ...STEPS[0]!, files: ["a.ts", "README.md"] }];
+    expect(skeletonLeftovers(root, { steps }).leftovers).toEqual([]);
+    // A fence the plan claims is real even in a prose file.
+    fs.writeFileSync(path.join(root, "README.md"), "// SKEL[1] doc step\nfilled\n// /SKEL[1]\n");
+    expect(skeletonLeftovers(root, { steps }).leftovers.map((l) => l.what)).toEqual(["SKEL[1]", "/SKEL[1]"]);
+  });
+
+  it("#610 L3: only the CURRENT finished plan warns, not an older one", async () => {
+    fs.writeFileSync(path.join(root, "old.ts"), "// SKEL[1] old\nx\n// /SKEL[1]\n");
+    await callTool("present_plan", { title: "Old skeleton", steps: [{ description: "old", reasoning: "r", skelId: "1", files: ["old.ts"] }], estimatedChanges: 1 });
+    const old = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+    store.updateArtifactStatus(old.id, "approved", "ui_approve_button");
+    await progress(old.id, 0, "done");
+    await new Promise((r) => setTimeout(r, 5));
+    fs.writeFileSync(path.join(root, "a.ts"), FINAL);
+    const id = await presentApproved();
+    await progress(id, 0, "done");
+    const res = await changeset();
+    expect(res.text).not.toContain("Old skeleton");
+    expect(res.text).not.toContain("Skeleton markers remain");
+  });
+
   it("an unfinished skeleton plan, or no skeleton at all, adds nothing", async () => {
     await presentApproved(); // step still pending
     expect((await changeset()).text).not.toContain("Skeleton markers");
@@ -114,9 +139,38 @@ describe("reshape and lifted fences", () => {
     const v2 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
     expect(v2.parentId).toBe(id);
     expect(v2.agentReasoning).toBe("Skeleton change: smooth() needs a tension parameter");
+    // #610 M1 — the pause is ENFORCED: v2's scope file carries the reshape.
+    const scopeFile = path.join(root, ".deeppairing", "skeleton-scopes", `${v2.id}.json`);
+    const written = JSON.parse(fs.readFileSync(scopeFile, "utf-8"));
+    expect(written).toMatchObject({
+      artifactId: v2.id,
+      activeSkelIds: [],
+      sessionId: store.getSessionId(),
+      workspaceRoot: root,
+      reshape: { fromId: id, restoreApproved: true, restoreSkelIds: [] },
+    });
+    expect(written.reshape.files).toContain("a.ts");
     const paused = await progress(v2.id, 0, "in_progress");
     expect(paused.text).toContain("reshaped skeleton awaiting re-review: fills are paused");
+    expect(paused.text).toContain("the preflight hook asks before any edit to this plan's files");
     expect(paused.text).toContain("Skeleton fence NOT opened");
+    // Progress on the draft never lifts the pause.
+    expect(JSON.parse(fs.readFileSync(scopeFile, "utf-8")).reshape.fromId).toBe(id);
+  });
+
+  it("the restore record reflects v1: in-progress fences, and whether it was approved", async () => {
+    const id = await presentApproved();
+    await progress(id, 0, "in_progress");
+    await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "Skeleton change: x", content: { steps: STEPS, estimatedChanges: 1 } });
+    const v2 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+    const r1 = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "skeleton-scopes", `${v2.id}.json`), "utf-8")).reshape;
+    expect(r1).toMatchObject({ restoreApproved: true, restoreSkelIds: ["1"] });
+    // A never-approved plan revised in review: nothing to restore.
+    await callTool("present_plan", { title: "Draft skeleton", steps: STEPS, estimatedChanges: 1 });
+    const d1 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+    await callTool("revise_artifact", { artifactId: d1.id, mode: "supersede", reason: "address comments", content: { steps: STEPS, estimatedChanges: 1 } });
+    const d2 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+    expect(JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "skeleton-scopes", `${d2.id}.json`), "utf-8")).reshape.restoreApproved).toBe(false);
   });
 
   it("#608 (a): leaving in_progress without done posts a notice on the plan and warns the agent", async () => {
@@ -126,6 +180,11 @@ describe("reshape and lifted fences", () => {
     expect(res.text).toContain("Fence lifted without done: SKEL[1] (step 1, now pending)");
     const notice = store.getComments().find((c) => c.target.artifactId === id && c.author === "agent" && c.content.includes("Fence lifted"));
     expect(notice?.content).toContain("Fence lifted without completing the step: SKEL[1] (step 1, now pending)");
+    // #610 L2 — skipped is a legitimate exit: no notice.
+    await progress(id, 0, "in_progress");
+    const skipped = await progress(id, 0, "skipped");
+    expect(skipped.text).not.toContain("Fence lifted");
+    expect(store.getComments().filter((c) => c.author === "agent" && c.content.includes("Fence lifted"))).toHaveLength(1);
     // done is the normal exit: no notice.
     await progress(id, 0, "in_progress");
     const ok = await progress(id, 0, "done");

@@ -31,17 +31,23 @@ function within(dir: string, abs: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/** Prose shows the marker syntax in examples; it is only checked for this
+ *  plan's OWN fences, never for a stray SKEL_TODO (#610 review L3). */
+const PROSE_FILE = /\.(md|mdx|markdown|rst|txt)$/i;
+
 export function skeletonLeftovers(root: string, content: unknown): { leftovers: SkeletonLeftover[]; errors: string[] } {
-  const c = (content ?? {}) as { steps?: Array<{ files?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> };
+  const c = (content ?? {}) as { steps?: Array<{ files?: unknown; skelId?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> };
   const declared = planDeclaredFiles(c);
+  const claimed = new Set((c.steps ?? []).map((st) => st?.skelId).filter((id): id is string => typeof id === "string" && id.length > 0));
   const { fences, errors } = scanSkeletonFences(root, { files: declared });
   const out: SkeletonLeftover[] = [];
   for (const f of fences) {
+    if (PROSE_FILE.test(f.file) && !claimed.has(f.id)) continue;
     out.push({ file: f.file, line: f.openLine, what: `SKEL[${f.id}]` });
     out.push({ file: f.file, line: f.closeLine, what: `/SKEL[${f.id}]` });
   }
-  // SKEL_TODO anywhere in the declared files (inside a fence or stray).
-  const files = new Set([...declared, ...fences.map((f) => f.file)]);
+  // SKEL_TODO anywhere in the plan's CODE files (inside a fence or stray).
+  const files = new Set([...declared, ...fences.map((f) => f.file)].filter((f) => !PROSE_FILE.test(f)));
   let realRoot: string;
   try {
     realRoot = fs.realpathSync(root);
@@ -89,15 +95,17 @@ export function formatLeftovers(title: string, found: { leftovers: SkeletonLefto
  */
 export function finalizeCheckNote(artifacts: Artifact[], root?: string): string {
   try {
-    const plans = artifacts.filter(
-      (a) => a.type === "plan" && a.status === "approved" && isLivePlanVersion(a, artifacts) && allSkeletonStepsDone(a.content),
-    );
-    if (plans.length === 0) return "";
+    // #610 review L3 — the CURRENT plan only: the most recently updated
+    // finished skeleton plan. Older finished plans don't re-warn.
+    const current = artifacts
+      .filter((a) => a.type === "plan" && a.status === "approved" && isLivePlanVersion(a, artifacts) && allSkeletonStepsDone(a.content))
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0];
+    if (!current) return "";
     const r = root ?? (() => {
       const pr = resolveProjectRoot();
       return pr.worktree?.workspaceRoot ?? pr.projectRoot;
     })();
-    return plans.map((p) => formatLeftovers(p.title, skeletonLeftovers(r, p.content))).join("");
+    return formatLeftovers(current.title, skeletonLeftovers(r, current.content));
   } catch {
     return "";
   }

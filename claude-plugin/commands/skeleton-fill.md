@@ -29,8 +29,9 @@ file), stop and propose it: what, where and why. Don't work around the fence,
 and don't set the step back to `pending` to lift it (the card tells me when a
 fence is lifted without the step being done). Once I agree, `revise_artifact`
 the plan (`mode: "supersede"`) with a reason that starts `Skeleton change:`.
-The card shows it to me as a skeleton change for re-review. Fills pause until I
-approve the new version; continue on the new version's id.
+The card shows it to me as a skeleton change for re-review. Fills are paused
+until I approve the new version: the preflight hook asks me before any edit to
+the plan's files. Continue on the new version's id.
 
 When every step is done, strip the marker lines. The `update_plan_progress`
 reply and `present_changeset` check the plan's files for any `SKEL[`, `/SKEL[`

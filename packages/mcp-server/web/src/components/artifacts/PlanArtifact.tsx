@@ -230,6 +230,12 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
   // CHANGE, so it reads as one and says fills are paused until approval.
   const isSkeletonPlan = steps.some((st) => typeof st?.skelId === "string" && st.skelId.length > 0);
   const reshaped = isSkeletonPlan && !!artifact.parentId && artifact.status === "draft";
+  // #610 review L1 — "you approved" only when the previous version WAS approved.
+  const parentWasApproved = useArtifactStore((st) => {
+    if (!reshaped) return false;
+    const parent = st.artifacts.find((a) => a.id === artifact.parentId);
+    return !!parent && (parent.status === "approved" || !!parent.statusHistory?.some((h) => h.status === "approved"));
+  });
 
   return (
     <div className="space-y-4">
@@ -240,10 +246,12 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
           className="rounded-md border border-accent-amber/50 bg-accent-amber-dim/30 px-3 py-2 text-xs text-text-primary space-y-0.5"
         >
           <div className="font-semibold">
-            Skeleton change (v{artifact.version}): Claude reshaped the skeleton you approved.
+            {parentWasApproved
+              ? `Skeleton change (v${artifact.version}): Claude reshaped the skeleton you approved.`
+              : `Skeleton change (v${artifact.version}): Claude revised this skeleton before you approved it.`}
           </div>
           <div className="text-text-secondary">
-            Re-review the new shape below. Fills are paused until you approve this version.
+            Re-review the new shape below. Fills are paused: until you approve this version, any edit to this plan&apos;s files asks you first.
           </div>
           {artifact.agentReasoning && <div className="text-text-muted italic">Why: {artifact.agentReasoning}</div>}
         </div>

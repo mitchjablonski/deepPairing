@@ -36,6 +36,16 @@ describe("skeleton fence toast copy", () => {
     expect(deny.next).toContain("Nothing was written.");
   });
 
+  it("#610 M1: the enforced reshape pause reads as one, naming the file", () => {
+    const c = hookGateCopy({ ...facts, guardrail: "skeleton-paused", concept: "Skeleton change awaiting approval" });
+    expect(c.title).toBe("Skeleton change awaiting your approval: fills are paused (`src/x.ts`)");
+    expect(c.match).toContain("you haven't approved the new version yet");
+    expect(c.next).toContain("Answer in the terminal");
+    const deny = hookGateCopy({ ...facts, guardrail: "skeleton-paused", concept: "Skeleton change awaiting approval", decision: "deny" });
+    expect(deny.title).toBe("Stopped: a skeleton change awaits your approval, so fills are paused (`src/x.ts`)");
+    expect(deny.next).toContain("Nothing was written.");
+  });
+
   it("other guarded files and stances keep their existing copy", () => {
     const g = hookGateCopy({ ...facts, guardrail: "secrets", concept: ".env files" });
     expect(g.match).toBe("This file is on deepPairing's guarded list: .env files.");

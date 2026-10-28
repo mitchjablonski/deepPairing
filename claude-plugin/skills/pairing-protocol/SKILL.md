@@ -343,7 +343,8 @@ Words to the agent:
   `SKEL_TODO` is left (the reply warns if one is). A new helper, a changed
   signature or another file is a **skeleton change**: stop, propose it, and once
   agreed `revise_artifact` the plan (supersede, reason `Skeleton change: …`);
-  the human re-reviews it and fills pause until they approve. Don't set a step
+  the human re-reviews it, and until they approve, the hook asks on any edit to
+  the plan's files. Don't set a step
   back to `pending` to lift its fence. Fill pacing: one step then stop and
   report, unless the human says `all` (`/deeppairing:skeleton-fill [all|id]`). Never route around the fence. The fence is a heuristic (markers, the
   text outside it, and brackets or indentation that would leave the block), not
