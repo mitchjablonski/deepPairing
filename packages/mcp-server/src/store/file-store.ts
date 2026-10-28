@@ -5,7 +5,7 @@ import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutco
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, SKELETON_VISUAL_PREFIX } from "@deeppairing/shared";
+import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -1022,7 +1022,7 @@ export class FileStore implements IStore {
   updatePlanProgress(
     artifactId: string,
     updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
-    opts?: { skeletonVisuals?: unknown[] },
+    opts?: { skeletonVisuals?: unknown[]; skeletonReadAt?: number },
   ): Artifact | null {
     this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
@@ -1041,18 +1041,35 @@ export class FileStore implements IStore {
       touched = true;
     }
     if (!touched) return null;
-    // Skeleton plans (parity PR 3) — progress read from the code: swap in the
-    // server's fresh snapshot of the fenced files. Only `skelcode:` visuals are
-    // replaced (and only `skelcode:` ids are accepted), so the agent's own
-    // visuals never change here. The secret re-scan below covers the new text.
-    if (art.type === "plan" && Array.isArray(opts?.skeletonVisuals)) {
-      const isSkel = (v: unknown) =>
-        !!v && typeof v === "object" && typeof (v as { id?: unknown }).id === "string" && (v as { id: string }).id.startsWith(SKELETON_VISUAL_PREFIX);
+    // Skeleton plans (parity PR 3) — progress read from the code. The server's
+    // fresh LIVE snapshot (`skelcode-live:` visuals only) replaces the previous
+    // live snapshot; the APPROVED `skelcode:` snapshot (what the human
+    // reviewed) and the agent's own visuals are never touched (#609 review).
+    //   - Live plans only, enforced HERE under the synchronous write (a
+    //     supersede landing between the tool's read and this write can't let a
+    //     closed version be rewritten): the latest version in its lineage, not
+    //     superseded / rejected / retracted / obsolete.
+    //   - Atomic per plan: the whole live set is swapped in one assignment, and
+    //     only when its read stamp (`skeleton.readAt`) is newer than the stored
+    //     one — so of two concurrent progress calls the NEWER disk read wins,
+    //     not the later writer. The step updates above always apply.
+    if (art.type === "plan" && Array.isArray(opts?.skeletonVisuals) && isLivePlanVersion(art, this.artifacts)) {
       const plan = art.content as { visuals?: unknown[] };
-      const kept = (Array.isArray(plan.visuals) ? plan.visuals : []).filter((v) => !isSkel(v));
-      const next = [...kept, ...opts.skeletonVisuals.filter(isSkel)];
-      if (next.length > 0) plan.visuals = next;
-      else delete plan.visuals;
+      const current = Array.isArray(plan.visuals) ? plan.visuals : [];
+      const incoming = opts.skeletonVisuals.filter((v) => !!v && typeof v === "object" && isSkeletonLiveVisualId((v as { id?: unknown }).id));
+      const stampOf = (vs: unknown[]) =>
+        vs.reduce<number>((m, v) => {
+          const r = (v as { skeleton?: { readAt?: unknown } }).skeleton?.readAt;
+          return typeof r === "number" && r > m ? r : m;
+        }, -Infinity);
+      const stored = current.filter((v) => !!v && typeof v === "object" && isSkeletonLiveVisualId((v as { id?: unknown }).id));
+      const readAt = typeof opts.skeletonReadAt === "number" ? opts.skeletonReadAt : stampOf(incoming);
+      const newer = stored.length === 0 || readAt > stampOf(stored);
+      if (newer) {
+        const next = [...current.filter((v) => !(v && typeof v === "object" && isSkeletonLiveVisualId((v as { id?: unknown }).id))), ...incoming];
+        if (next.length > 0) plan.visuals = next;
+        else delete plan.visuals;
+      }
     }
     // #162 — statusNote is free text, and this is the ONLY path that mutates
     // artifact content after creation (revise/supersede creates a NEW

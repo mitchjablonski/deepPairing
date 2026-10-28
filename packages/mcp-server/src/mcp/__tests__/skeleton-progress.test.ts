@@ -64,7 +64,9 @@ afterEach(() => {
 
 const planOf = (id: string) => store.getArtifacts().find((a) => a.id === id)!;
 const visualsOf = (id: string) => ((planOf(id).content as { visuals?: PlanVisual[] }).visuals ?? []);
-const codeView = (id: string) => visualsOf(id).find((v) => v.id === "skelcode:a.ts")!;
+/** The APPROVED snapshot (what the human reviewed) and the LIVE progress snapshot. */
+const approvedView = (id: string) => visualsOf(id).find((v) => v.id === "skelcode:a.ts")!;
+const liveView = (id: string) => visualsOf(id).find((v) => v.id === "skelcode-live:a.ts");
 
 async function presentApproved(visuals: unknown[] = [DIAGRAM, FILE_MAP]) {
   await callTool("present_plan", { title: "Smoothing skeleton", steps: STEPS, estimatedChanges: 2, visuals });
@@ -76,16 +78,21 @@ const progress = (artifactId: string, stepIndex: number, status: string) =>
   callTool("update_plan_progress", { artifactId, updates: [{ stepIndex, status }] });
 
 describe("skeleton progress — re-read on update_plan_progress", () => {
-  it("the code view follows the fill: new text, fence status from disk, agent visuals untouched", async () => {
+  it("the LIVE view follows the fill; the APPROVED snapshot stays exactly what was reviewed", async () => {
     const id = await presentApproved();
-    expect(codeView(id).skeleton?.fences.map((f) => f.status)).toEqual(["todo", "filled"]);
+    const approved = structuredClone(approvedView(id));
+    expect(approved.skeleton?.fences.map((f) => f.status)).toEqual(["todo", "filled"]);
+    expect(liveView(id)).toBeUndefined(); // nothing live until the first progress call
     await progress(id, 0, "in_progress");
     fs.writeFileSync(path.join(root, "a.ts"), FILLED);
     await progress(id, 0, "done");
-    const a = codeView(id);
-    expect(a.code).toContain("return [...new Set(raw)];");
-    expect(a.skeleton?.fences.map((f) => f.status)).toEqual(["filled", "filled"]);
-    expect(visualsOf(id).map((v) => v.id)).toEqual(["arch", "fm", "skelcode:a.ts", UNFENCED_VISUAL_ID]);
+    const live = liveView(id)!;
+    expect(live.code).toContain("return [...new Set(raw)];");
+    expect(live.skeleton?.fences.map((f) => f.status)).toEqual(["filled", "filled"]);
+    expect(typeof live.skeleton?.readAt).toBe("number");
+    // The approved record is byte-identical to what the human approved.
+    expect(approvedView(id)).toEqual(approved);
+    expect(visualsOf(id).map((v) => v.id)).toEqual(["arch", "fm", "skelcode:a.ts", UNFENCED_VISUAL_ID, "skelcode-live:a.ts"]);
     expect(visualsOf(id)[0]).toEqual(DIAGRAM);
   });
 
@@ -98,7 +105,7 @@ describe("skeleton progress — re-read on update_plan_progress", () => {
     const json = JSON.stringify(planOf(id).content);
     expect(json).not.toContain("LEAK-MARKER");
     expect(json).not.toContain("interface Point");
-    expect(visualsOf(id).filter((v) => v.kind === "annotated_code").map((v) => v.id)).toEqual(["skelcode:a.ts"]);
+    expect(visualsOf(id).filter((v) => v.kind === "annotated_code").map((v) => v.id)).toEqual(["skelcode:a.ts", "skelcode-live:a.ts"]);
     expect(visualsOf(id).find((v) => v.id === UNFENCED_VISUAL_ID)!.files!.map((f) => f.path)).toEqual(["types.ts"]);
   });
 
@@ -107,7 +114,7 @@ describe("skeleton progress — re-read on update_plan_progress", () => {
     const token = ["gh", "p_", "Q".repeat(36)].join("");
     fs.writeFileSync(path.join(root, "a.ts"), FILLED.replace("canvas.on", `const k = "${token}";\n  canvas.on`));
     const res = await progress(id, 0, "in_progress");
-    const a = codeView(id);
+    const a = liveView(id)!;
     expect(a.code).toBeUndefined();
     expect(a.skeleton?.withheld).toContain("possible secret detected");
     // Status still comes from the code, without fence titles (a marker line could hold the value).
@@ -121,14 +128,75 @@ describe("skeleton progress — re-read on update_plan_progress", () => {
 
   it("an unchanged file keeps its takenAt (its line comments aren't flagged as moved)", async () => {
     const id = await presentApproved();
-    const first = codeView(id).skeleton?.takenAt;
+    const first = approvedView(id).skeleton?.takenAt;
     expect(first).toBeTruthy();
     await progress(id, 0, "in_progress");
-    expect(codeView(id).skeleton?.takenAt).toBe(first);
+    expect(liveView(id)!.skeleton?.takenAt).toBe(first);
     fs.writeFileSync(path.join(root, "a.ts"), FILLED);
     await progress(id, 0, "done");
-    expect(codeView(id).code).toContain("return [...new Set(raw)];");
-    expect(codeView(id).skeleton?.takenAt).toBeTruthy();
+    expect(liveView(id)!.code).toContain("return [...new Set(raw)];");
+    expect(liveView(id)!.skeleton?.takenAt).toBeTruthy();
+  });
+
+  for (const status of ["superseded", "rejected", "retracted", "obsolete"] as const) {
+    it(`a ${status} plan is never re-read: its code stays as reviewed`, async () => {
+      const id = await presentApproved();
+      await progress(id, 0, "in_progress"); // a live snapshot exists while live
+      const before = structuredClone(visualsOf(id));
+      // Set directly: the transition path to each status differs, the rule doesn't.
+      (planOf(id) as { status: string }).status = status;
+      fs.writeFileSync(path.join(root, "a.ts"), FILLED);
+      await progress(id, 0, "done");
+      expect(visualsOf(id)).toEqual(before);
+      expect(JSON.stringify(visualsOf(id))).not.toContain("new Set(raw)");
+    });
+  }
+
+  it("a version with a successor is not live, even before its status flips (enforced in the store)", async () => {
+    const id = await presentApproved();
+    const before = structuredClone(visualsOf(id));
+    // A v2 naming v1 as parent, status still draft on v1's side of the race.
+    await store.createArtifact({ id: "art_v2race", type: "plan", title: "v2", content: { steps: STEPS, estimatedChanges: 1 }, parentId: id, version: 2 } as any);
+    fs.writeFileSync(path.join(root, "a.ts"), FILLED);
+    const fresh = [{ id: "skelcode-live:a.ts", kind: "annotated_code", code: "x", filePath: "a.ts", skeleton: { fences: [], readAt: 1 } }];
+    store.updatePlanProgress(id, [{ stepIndex: 0, status: "in_progress" }], { skeletonVisuals: fresh, skeletonReadAt: 1 });
+    expect(visualsOf(id)).toEqual(before);
+  });
+
+  it("a line comment on the LIVE view is delivered against the live fences, separate from the approved view's", async () => {
+    const id = await presentApproved();
+    fs.writeFileSync(path.join(root, "a.ts"), FILLED);
+    await progress(id, 0, "in_progress");
+    await store.addComment({
+      id: "cmt_live",
+      artifactId: id,
+      content: "is Set order stable here?",
+      author: "human",
+      target: { visualId: "skelcode-live:a.ts", filePath: "a.ts", lineStart: 3, lineEnd: 3 },
+    } as any);
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain("a.ts:3 (inside the SKEL[1] fence, step 1 — active)");
+  });
+
+  it("the live swap is atomic per plan and keeps the NEWEST read (a stale concurrent read is dropped)", async () => {
+    const id = await presentApproved();
+    const snap = (code: string, readAt: number) => [
+      { id: "skelcode-live:a.ts", kind: "annotated_code", code, filePath: "a.ts", skeleton: { fences: [], readAt } },
+      { id: "skelcode-live:b.ts", kind: "annotated_code", code, filePath: "b.ts", skeleton: { fences: [], readAt } },
+    ];
+    store.updatePlanProgress(id, [{ stepIndex: 0, status: "in_progress" }], { skeletonVisuals: snap("newer", 20), skeletonReadAt: 20 });
+    // The older read lands second: the step update applies, the stale code does not.
+    const after = store.updatePlanProgress(id, [{ stepIndex: 1, status: "in_progress" }], { skeletonVisuals: snap("older", 10), skeletonReadAt: 10 })!;
+    const steps = (after.content as { steps: Array<{ status?: string }> }).steps;
+    expect(steps.map((st) => st.status)).toEqual(["in_progress", "in_progress"]);
+    const live = visualsOf(id).filter((v) => v.id.startsWith("skelcode-live:"));
+    expect(live.map((v) => v.code)).toEqual(["newer", "newer"]); // all-or-nothing, never mixed
+    // Only live ids are accepted: an approved-id visual in the payload is ignored.
+    store.updatePlanProgress(id, [{ stepIndex: 0, status: "in_progress" }], {
+      skeletonVisuals: [{ id: "skelcode:a.ts", kind: "annotated_code", code: "FORGED" }],
+      skeletonReadAt: 30,
+    });
+    expect(approvedView(id).code).not.toBe("FORGED");
   });
 
   it("a non-skeleton plan's progress leaves its content exactly as it was", async () => {

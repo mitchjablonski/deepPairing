@@ -1,4 +1,5 @@
 import type { PlanVisual, SkeletonFenceView } from "@deeppairing/shared";
+import { isSkeletonApprovedVisualId, liveVisualIdFor } from "@deeppairing/shared";
 import type { CodeLineDecoration } from "./CommentableCode";
 
 /**
@@ -167,7 +168,16 @@ const STATUS_RANK: Record<FenceStatus, number> = { active: 3, pending: 2, filled
  */
 export function planStepNodeStates(visuals: PlanVisual[], steps: SkeletonStepLike[] | undefined): Record<string, StepNodeState> {
   const out: Record<string, StepNodeState> = {};
-  const snaps = visuals.filter((v) => v?.kind === "annotated_code" && v.skeleton && Array.isArray(v.skeleton.fences));
+  // #609 review — progress reads the LIVE snapshot where one exists; the
+  // approved snapshot stands in only for files never re-read.
+  const ids = new Set(visuals.map((v) => v?.id));
+  const snaps = visuals.filter(
+    (v) =>
+      v?.kind === "annotated_code" &&
+      v.skeleton &&
+      Array.isArray(v.skeleton.fences) &&
+      !(isSkeletonApprovedVisualId(v.id) && ids.has(liveVisualIdFor(v.id))),
+  );
   (steps ?? []).forEach((st, i) => {
     const id = st?.skelId;
     if (typeof id !== "string" || !id || out[id]) return;

@@ -1,4 +1,4 @@
-import { SKELETON_VISUAL_PREFIX } from "@deeppairing/shared";
+import { SKELETON_VISUAL_PREFIX, isAnySkeletonVisualId } from "@deeppairing/shared";
 import type { Artifact, PlanVisual } from "@deeppairing/shared";
 
 /**
@@ -10,7 +10,8 @@ import type { Artifact, PlanVisual } from "@deeppairing/shared";
 export { SKELETON_VISUAL_PREFIX };
 
 export const skeletonVisualId = (relPath: string): string => `${SKELETON_VISUAL_PREFIX}${relPath}`;
-export const isSkeletonVisualId = (id: unknown): boolean => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX);
+/** Either server snapshot kind: approved (`skelcode:`) or live (`skelcode-live:`). */
+export const isSkeletonVisualId = (id: unknown): boolean => isAnySkeletonVisualId(id);
 
 /** Drop every snapshot visual (`skelcode:` id) and any `skeleton` field from a
  *  visuals array — the server's snapshot step is the only author of either. */

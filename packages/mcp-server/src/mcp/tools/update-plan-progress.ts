@@ -1,5 +1,6 @@
 import { resolveProjectRoot } from "../../project-root.js";
 import { planDeclaredFiles, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
+import { isLivePlanVersion } from "@deeppairing/shared";
 import { resnapshotSkeleton } from "../skeleton-snapshot.js";
 import { skeletonProgressMismatches } from "../skeleton-line.js";
 import type { ToolContext, ToolResult } from "./types.js";
@@ -47,10 +48,15 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   // Skeleton plans, parity PR 3 — progress read from the code: re-read the
   // plan's fenced files (present_plan's bounds + allowlist) so the code view
   // and diagram follow the fills. Non-skeleton plans and specs skip this.
-  const before = (await store.getArtifacts()).find((a) => a.id === artifactId);
-  const resnap = before?.type === "plan" ? resnapshotSkeleton(before.content) : null;
+  // #609 review — only a LIVE plan version is re-read (the store enforces the
+  // same rule under its write); a closed version keeps the code it was
+  // reviewed with. The result lands in `skelcode-live:` visuals; the approved
+  // `skelcode:` snapshot is never rewritten.
+  const all = await store.getArtifacts();
+  const before = all.find((a) => a.id === artifactId);
+  const resnap = before && isLivePlanVersion(before, all) ? resnapshotSkeleton(before.content) : null;
   const artifact = resnap
-    ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals })
+    ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals, ...(resnap.readAt !== undefined ? { skeletonReadAt: resnap.readAt } : {}) })
     : await store.updatePlanProgress(artifactId, updates);
   if (!artifact) {
     return {
@@ -84,7 +90,8 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   const warning = NOT_EXECUTABLE[artifact.status]
     ? `\n⚠ WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.`
     : "";
-  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates);
+  // #609 review L3 — one scan per call: the re-read's scan feeds the fence check.
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates, resnap?.scan);
   // Parity PR 3 — the checklist vs the code. Steps finished in THIS call are
   // already named by syncSkeletonScope's own "still has SKEL_TODO" check.
   let mismatchNote = "";
@@ -117,6 +124,7 @@ function syncSkeletonScope(
   sessionId: string,
   artifact: { id: string; title: string; status: string; content: unknown },
   updates: Array<{ stepIndex: number; status: string }>,
+  scan?: ReturnType<typeof scanSkeletonFences>,
 ): string {
   try {
     const content = (artifact.content ?? {}) as { steps?: Array<{ status?: string; skelId?: string; files?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> };
@@ -136,7 +144,7 @@ function syncSkeletonScope(
     if (finished.length > 0) {
       // Fences live in the working tree (a linked worktree's own files), not
       // the canonical root the scope file is keyed to.
-      const { fences } = scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
+      const { fences } = scan ?? scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
       for (const id of finished) {
         const mine = fences.filter((f) => f.id === id);
         const todo = mine.filter((f) => f.status === "todo");
