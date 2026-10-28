@@ -45,6 +45,13 @@ describe("skeleton snapshot on a visual", () => {
     expect(plain.visuals?.[0]).toEqual({ id: "ac", kind: "annotated_code", code: "x" });
   });
 
+  it("only a skelcode: (server snapshot) id may carry it; withheld survives", () => {
+    const stray = coercePlanContent({ steps: [], estimatedChanges: 1, visuals: [{ ...visual, id: "agent-visual" }] });
+    expect((stray.visuals?.[0] as any).skeleton).toBeUndefined();
+    const withheld = coercePlanContent({ steps: [], estimatedChanges: 1, visuals: [{ id: "skelcode:a.ts", kind: "annotated_code", skeleton: { fences: [], withheld: "possible secret detected" } }] });
+    expect((withheld.visuals?.[0] as any).skeleton).toEqual({ fences: [], withheld: "possible secret detected" });
+  });
+
   it("the agent-facing schema strips it; the stored schema accepts it", () => {
     const parsed = PlanVisualSchema.parse(visual) as Record<string, unknown>;
     expect(parsed.skeleton).toBeUndefined();

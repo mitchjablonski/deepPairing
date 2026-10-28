@@ -104,7 +104,18 @@ export function ArtifactVisuals({
               )}
             </div>
 
-            {v.skeleton && v.kind === "annotated_code" && <SkeletonSummary visual={v} steps={skeletonSteps} />}
+            {v.skeleton && v.kind === "annotated_code" && (
+              <SkeletonSummary
+                visual={v}
+                steps={skeletonSteps}
+                // #607 review L2 — line threads posted on an EARLIER version of
+                // this file's snapshot are shown by line number; the re-read may
+                // have moved the code under them, so say so.
+                carriedComments={
+                  comments.filter((c) => c.target.visualId === v.id && c.target.artifactId !== artifactId && c.target.lineStart != null).length
+                }
+              />
+            )}
 
             {(cap || v.skeleton) && v.kind !== "diagram" ? (
               // T3 — bound the non-diagram body so a tall file_map / annotated_code
@@ -205,6 +216,15 @@ export function VisualBody({
   }
 
   if (visual.kind === "annotated_code") {
+    // #607 review M1 — the server withheld this skeleton file's content (a
+    // secret-shaped value was found on disk); there is no code to show.
+    if (visual.skeleton?.withheld) {
+      return (
+        <div role="status" className="rounded border border-accent-amber/40 bg-accent-amber-dim/20 px-2 py-1.5 text-2xs text-text-secondary">
+          Content withheld: {visual.skeleton.withheld}. Open the file in your editor to review it.
+        </div>
+      );
+    }
     return typeof visual.code === "string" && visual.code.length > 0 ? (
       <AnnotatedCode artifactId={artifactId} visual={visual} readOnly={readOnly} skeletonSteps={skeletonSteps} />
     ) : (

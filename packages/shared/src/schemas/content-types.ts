@@ -243,6 +243,11 @@ export const PlanVisualSchema = z.object({
   annotations: z.array(PlanVisualAnnotationSchema).optional(),
 });
 
+/** Skeleton plans — snapshot visuals are keyed by PATH under this prefix
+ *  (`skelcode:src/a.ts`), so a line thread survives a revise. Only visuals
+ *  with this id prefix may carry `skeleton` metadata. */
+export const SKELETON_VISUAL_PREFIX = "skelcode:";
+
 /**
  * Skeleton plans (#606 parity PR 2) — one SKEL[id] fence inside a server-side
  * skeleton snapshot. Lines are absolute (1-based) in the snapshot's code.
@@ -274,6 +279,9 @@ export const SkeletonCodeSnapshotSchema = z.object({
   truncated: z.object({ shownLines: z.number(), totalLines: z.number() }).optional(),
   /** Malformed SKEL markers in this file (fences are then unknown). */
   markerError: z.string().optional(),
+  /** Set when the server WITHHELD the file's content (a secret-shaped value
+   *  was found on disk). The visual then carries no `code` at all. */
+  withheld: z.string().optional(),
 });
 
 export type SkeletonCodeSnapshot = z.infer<typeof SkeletonCodeSnapshotSchema>;

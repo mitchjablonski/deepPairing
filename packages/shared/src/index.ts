@@ -258,6 +258,7 @@ export {
   PlanVisualAnnotationSchema,
   PlanVisualDocSectionSchema,
   PlanVisualSchema,
+  SKELETON_VISUAL_PREFIX,
   SkeletonFenceViewSchema,
   SkeletonCodeSnapshotSchema,
   StoredPlanVisualSchema,

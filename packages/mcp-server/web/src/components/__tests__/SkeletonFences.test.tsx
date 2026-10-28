@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { PlanVisual } from "@deeppairing/shared";
 import { ArtifactVisuals } from "../ArtifactVisuals";
+import { SkeletonSummary } from "../SkeletonFences";
 import { useArtifactStore } from "../../stores/artifact";
 
 /**
@@ -111,6 +112,26 @@ describe("skeleton code in the plan card", () => {
     render(<ArtifactVisuals artifactId="art_p" visuals={[truncated, tracked]} skeletonSteps={STEPS} />);
     expect(screen.getByText(/Truncated: lines 1–15 of 90/)).toBeInTheDocument();
     expect(screen.getByText("Tracked file, no fences")).toBeInTheDocument();
+  });
+
+  it("M1: a withheld file shows the notice and no code", () => {
+    const withheld: PlanVisual = {
+      id: "skelcode:src/cfg.ts",
+      kind: "annotated_code",
+      filePath: "src/cfg.ts",
+      skeleton: { fences: [], withheld: "possible secret detected (GitHub personal access token, line 3)" },
+    };
+    const { container } = render(<ArtifactVisuals artifactId="art_p" visuals={[withheld]} skeletonSteps={STEPS} />);
+    expect(container.textContent).toContain("Content withheld: possible secret detected (GitHub personal access token, line 3)");
+    expect(container.querySelector('[data-comment-anchor^="line:"]')).toBeNull();
+    expect(screen.queryByText(/No code provided/i)).toBeNull();
+  });
+
+  it("L2: line comments carried from an earlier version are flagged as possibly moved", () => {
+    const { container, rerender } = render(<SkeletonSummary visual={SKELETON} steps={STEPS} carriedComments={2} />);
+    expect(container.querySelector('[data-skel-carried="true"]')?.textContent).toMatch(/2 line comments from an earlier version.*may have moved/);
+    rerender(<SkeletonSummary visual={SKELETON} steps={STEPS} />);
+    expect(container.querySelector('[data-skel-carried="true"]')).toBeNull();
   });
 
   it("an ordinary annotated_code visual renders exactly as before (no fence decoration)", () => {

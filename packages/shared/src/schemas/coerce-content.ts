@@ -31,6 +31,7 @@ import type {
   ExplainerContent,
   ExplainerSection,
 } from "./content-types.js";
+import { SKELETON_VISUAL_PREFIX } from "./content-types.js";
 
 /**
  * Coercion boundary for artifact `content`.
@@ -302,7 +303,11 @@ function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
   // Skeleton plans (#606 parity PR 2) — the server-set fence snapshot on an
   // annotated_code visual. Built field by field like everything above, so a
   // malformed value degrades to "no fences" rather than reaching the renderer.
-  if (out.kind === "annotated_code" && isObj(o.skeleton)) out.skeleton = coerceSkeletonSnapshot(o.skeleton);
+  // Only a server snapshot id may carry it (defence in depth: every tool path
+  // strips agent-supplied `skeleton`, and this keeps a stray one off the card).
+  if (out.kind === "annotated_code" && out.id.startsWith(SKELETON_VISUAL_PREFIX) && isObj(o.skeleton)) {
+    out.skeleton = coerceSkeletonSnapshot(o.skeleton);
+  }
   return out;
 }
 
@@ -326,6 +331,7 @@ function coerceSkeletonSnapshot(o: Record<string, unknown>): SkeletonCodeSnapsho
     out.truncated = { shownLines: o.truncated.shownLines as number, totalLines: o.truncated.totalLines as number };
   }
   if (typeof o.markerError === "string" && o.markerError) out.markerError = o.markerError;
+  if (typeof o.withheld === "string" && o.withheld) out.withheld = o.withheld;
   return out;
 }
 

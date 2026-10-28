@@ -1,3 +1,4 @@
+import { SKELETON_VISUAL_PREFIX } from "@deeppairing/shared";
 import type { Artifact, PlanVisual } from "@deeppairing/shared";
 
 /**
@@ -6,11 +7,53 @@ import type { Artifact, PlanVisual } from "@deeppairing/shared";
  * builder lives in skeleton-snapshot.ts.
  */
 
-/** Snapshot visuals are keyed by PATH, so a line thread survives a revise. */
-export const SKELETON_VISUAL_PREFIX = "skelcode:";
+export { SKELETON_VISUAL_PREFIX };
 
 export const skeletonVisualId = (relPath: string): string => `${SKELETON_VISUAL_PREFIX}${relPath}`;
 export const isSkeletonVisualId = (id: unknown): boolean => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX);
+
+/** Drop every snapshot visual (`skelcode:` id) and any `skeleton` field from a
+ *  visuals array — the server's snapshot step is the only author of either. */
+export function stripSkeletonVisuals(visuals: unknown): unknown[] | undefined {
+  if (!Array.isArray(visuals)) return undefined;
+  return visuals
+    .filter((v) => !(v && typeof v === "object" && isSkeletonVisualId((v as { id?: unknown }).id)))
+    .map((v) => {
+      if (!v || typeof v !== "object" || !("skeleton" in (v as object))) return v;
+      const { skeleton: _forged, ...rest } = v as Record<string, unknown>;
+      return rest;
+    });
+}
+
+const hasForged = (visuals: unknown): boolean =>
+  Array.isArray(visuals) &&
+  visuals.some((v) => v && typeof v === "object" && (isSkeletonVisualId((v as { id?: unknown }).id) || "skeleton" in (v as object)));
+
+/**
+ * #607 review M2 — strip server-only skeleton metadata from AGENT content of
+ * any artifact type: top-level `visuals` and every decision option's
+ * `visuals`. Deterministic and pure, so it is safe inside the stance-admission
+ * snapshot (the same input always yields the same digest). Content with
+ * nothing to strip comes back as the SAME object.
+ */
+export function stripForgedSkeleton<T>(content: T): T {
+  if (!content || typeof content !== "object" || Array.isArray(content)) return content;
+  const c = content as Record<string, unknown>;
+  const topForged = hasForged(c.visuals);
+  const options = Array.isArray(c.options) ? (c.options as unknown[]) : null;
+  const optForged = !!options?.some((o) => o && typeof o === "object" && hasForged((o as { visuals?: unknown }).visuals));
+  if (!topForged && !optForged) return content;
+  const out: Record<string, unknown> = { ...c };
+  if (topForged) out.visuals = stripSkeletonVisuals(c.visuals);
+  if (optForged && options) {
+    out.options = options.map((o) =>
+      o && typeof o === "object" && hasForged((o as { visuals?: unknown }).visuals)
+        ? { ...(o as Record<string, unknown>), visuals: stripSkeletonVisuals((o as { visuals?: unknown }).visuals) }
+        : o,
+    );
+  }
+  return out as T;
+}
 
 /**
  * check_feedback — place a line comment on a skeleton snapshot inside its

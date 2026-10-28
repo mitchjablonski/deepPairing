@@ -1,43 +1,49 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PlanVisual, SkeletonCodeSnapshot, SkeletonFenceView } from "@deeppairing/shared";
-import { isSkeletonVisualId, skeletonVisualId } from "./skeleton-line.js";
+import { isSkeletonVisualId, skeletonVisualId, stripSkeletonVisuals } from "./skeleton-line.js";
 import { planDeclaredFiles, scanSkeletonFences, scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
 import { ruleForRelPath } from "../guardrail-rules.js";
 import { resolveProjectRoot } from "../project-root.js";
+import { scanForSecrets } from "../secret-scan.js";
 
-export { SKELETON_VISUAL_PREFIX, isSkeletonVisualId, skeletonVisualId, describeSkeletonLine } from "./skeleton-line.js";
+export {
+  SKELETON_VISUAL_PREFIX,
+  isSkeletonVisualId,
+  skeletonVisualId,
+  describeSkeletonLine,
+  stripSkeletonVisuals,
+  stripForgedSkeleton,
+} from "./skeleton-line.js";
 
 /**
  * Skeleton plans, parity PR 2 — the skeleton AS CODE in the plan card.
  *
- * A skeleton plan's real review object is the code on disk: the fenced stubs,
- * signatures and wiring the agent wrote before presenting. At present_plan
- * (and at a revise_artifact supersede of a skeleton plan) the server reads
- *   - every file holding a SKEL[id] fence some step claims (`skelId`), and
- *   - every file_map "create" entry that has no fence (the standalone
- *     `skel track`: new types, wiring files),
- * and attaches each one as an ordinary `annotated_code` visual. Nothing new on
- * the wire: the renderer is CommentableCode, so per-line comments anchor to
- * (visualId, filePath, line) and reach the agent through check_feedback like
- * any other visual's line comment. The visual id is derived from the PATH
- * (`skelcode:<path>`), so a comment thread on a file survives a revise.
+ * At present_plan (and at an ordinary revise_artifact supersede of a plan) the
+ * server reads the files holding a SKEL[id] fence some step claims (`skelId`)
+ * and attaches each as an ordinary `annotated_code` visual keyed by path
+ * (`skelcode:<path>`). The renderer is CommentableCode, so per-line comments
+ * anchor to (visualId, filePath, line) and reach the agent through
+ * check_feedback.
  *
- * Bounded and safe:
- *   - paths are confined to the working tree: no absolute paths outside it, no
- *     `..`, and the REAL path (symlinks resolved) must stay inside the real
- *     root — the same realpath-prefix rule the file-viewer route applies;
- *   - git and deepPairing state, secrets-class paths and binary files are
- *     never read into an artifact;
- *   - file count, per-file and total bytes are capped; a cut is marked on the
- *     visual (caption + `skeleton.truncated`) and in the tool reply;
- *   - the text lands in artifact content, so the store's authoritative
- *     secret scan (scanContentForSecrets at createArtifact) covers it like
- *     any other present_* string.
+ * #607 review — content is ALLOWLISTED, not denylisted:
+ *   - H1: only a file whose own text holds a claimed fence is ever read into
+ *     an artifact. Unfenced file_map "create" entries are listed by PATH ONLY
+ *     (one `skelcode:unfenced` file_map) — never read. A file must resolve
+ *     (realpath) inside the real root, be a regular file opened without
+ *     following a final symlink, and pass a case-insensitive denylist on
+ *     every segment of BOTH its spelled and its real path (.env*, .git, .ssh,
+ *     .deeppairing, *.pem, *.key, *.p12, id_rsa*, id_ed25519*, .npmrc,
+ *     .netrc, .pypirc, credentials*) — defence in depth behind the allowlist.
+ *   - M1: a file whose text matches the secret scanner is WITHHELD: the
+ *     visual carries no code at all (`skeleton.withheld`), so nothing secret
+ *     is stored, broadcast or exported.
+ *   - L1: size and type are checked on the opened handle, and the handle's
+ *     dev/ino must match the realpath's, which narrows the swap window.
+ *   - L3: no file is opened once the total byte budget is spent.
  *
- * The fence parser is #606's (scanSkeletonFences / scanSkeletonText) — this
- * module never parses markers itself. Never throws: a fault leaves the plan
- * exactly as the agent presented it.
+ * The fence parser is #606's (scanSkeletonFences / scanSkeletonText). Never
+ * throws: a fault leaves the plan exactly as the agent presented it.
  */
 
 export interface SkeletonSnapshotLimits {
@@ -55,9 +61,11 @@ export const SKELETON_SNAPSHOT_LIMITS: SkeletonSnapshotLimits = {
   maxReadBytes: 1_000_000,
 };
 
+/** The path-only list of unfenced skeleton files. */
+export const UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
+
 /** Below this much remaining budget a file is omitted rather than shown as a stub. */
 const MIN_USEFUL_BYTES = 512;
-
 
 type ScanResult = ReturnType<typeof scanSkeletonFences>;
 
@@ -66,7 +74,7 @@ export interface SkeletonSnapshotResult {
   visuals: PlanVisual[];
   /** One line for the tool reply ("" when nothing was attached or skipped). */
   note: string;
-  /** The fence scan, so present_plan's fence check reuses one walk. */
+  /** The fence scan, so present_plan's fence check reuses it. */
   scan?: ScanResult;
 }
 
@@ -87,13 +95,40 @@ export function normalizeSkeletonPath(root: string, raw: string): string | null 
   return path.relative(root, abs).split(path.sep).join("/");
 }
 
-const SECRET_FILE = /\.(pem|key|p12|pfx|jks|keystore)$/i;
+/** One path segment, lower-cased, that must never be snapshotted. */
+export function isDeniedSegment(segment: string): boolean {
+  const s = segment.toLowerCase();
+  return (
+    s.startsWith(".env") ||
+    s === ".git" ||
+    s === ".ssh" ||
+    s === ".deeppairing" ||
+    s === ".npmrc" ||
+    s === ".netrc" ||
+    s === ".pypirc" ||
+    s.startsWith("id_rsa") ||
+    s.startsWith("id_ed25519") ||
+    s.startsWith("credentials") ||
+    s.endsWith(".pem") ||
+    s.endsWith(".key") ||
+    s.endsWith(".p12")
+  );
+}
 
-/** Read one file for the snapshot — confined, size-checked, text-only. */
+/** Case-insensitive denylist over every segment, plus the guardrail secrets
+ *  class on the lower-cased path. */
+export function isDeniedPath(rel: string): boolean {
+  const segs = rel.split(/[\\/]+/).filter(Boolean);
+  if (segs.some(isDeniedSegment)) return true;
+  return ruleForRelPath(rel.toLowerCase())?.category === "secrets";
+}
+
+const O_NOFOLLOW = (fs.constants as Record<string, number | undefined>).O_NOFOLLOW ?? 0;
+
+/** Read one fenced file for the snapshot — confined, denylisted, size- and
+ *  type-checked on the opened handle, text only. */
 function readConfined(root: string, rel: string, limits: SkeletonSnapshotLimits): ReadOutcome {
-  const segs = rel.split("/");
-  if (segs.includes(".git") || segs.includes(".deeppairing")) return { ok: false, reason: "git/deepPairing state is never snapshotted" };
-  if (ruleForRelPath(rel)?.category === "secrets" || SECRET_FILE.test(rel)) return { ok: false, reason: "a secrets path — withheld" };
+  if (isDeniedPath(rel)) return { ok: false, reason: "a protected path — never snapshotted" };
   let realRoot: string;
   let realAbs: string;
   try {
@@ -107,23 +142,46 @@ function readConfined(root: string, rel: string, limits: SkeletonSnapshotLimits)
     return { ok: false, reason: "not on disk" };
   }
   if (!within(realRoot, realAbs)) return { ok: false, reason: "it resolves outside the project (symlink)" };
-  let size: number;
+  // The REAL path is checked too: an in-root symlink to `.env` is still `.env`.
+  if (isDeniedPath(path.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path — never snapshotted" };
+
+  let fd: number;
   try {
-    const st = fs.statSync(realAbs);
+    fd = fs.openSync(realAbs, fs.constants.O_RDONLY | O_NOFOLLOW);
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+  try {
+    const st = fs.fstatSync(fd);
     if (!st.isFile()) return { ok: false, reason: "not a regular file" };
-    size = st.size;
+    // The handle must be the file the realpath named (narrows a swap between
+    // the realpath and the open to "nothing changed").
+    try {
+      const named = fs.statSync(realAbs);
+      if (named.dev !== st.dev || named.ino !== st.ino) return { ok: false, reason: "it changed while being read" };
+    } catch {
+      return { ok: false, reason: "it changed while being read" };
+    }
+    if (st.size > limits.maxReadBytes) return { ok: false, reason: `too large to snapshot (${st.size} bytes)` };
+    const buf = Buffer.alloc(st.size);
+    let off = 0;
+    while (off < st.size) {
+      const n = fs.readSync(fd, buf, off, st.size - off, off);
+      if (n <= 0) break;
+      off += n;
+    }
+    const data = buf.subarray(0, off);
+    if (data.subarray(0, 8192).includes(0)) return { ok: false, reason: "binary — not shown" };
+    return { ok: true, text: data.toString("utf-8") };
   } catch {
     return { ok: false, reason: "unreadable" };
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already closed */
+    }
   }
-  if (size > limits.maxReadBytes) return { ok: false, reason: `too large to snapshot (${size} bytes)` };
-  let buf: Buffer;
-  try {
-    buf = fs.readFileSync(realAbs);
-  } catch {
-    return { ok: false, reason: "unreadable" };
-  }
-  if (buf.subarray(0, 8192).includes(0)) return { ok: false, reason: "binary — not shown" };
-  return { ok: true, text: buf.toString("utf-8") };
 }
 
 /** Cut `text` at a line boundary so it fits `budget` bytes. */
@@ -154,19 +212,6 @@ function fenceViews(fences: SkeletonFence[], shownLines: number | null): Skeleto
     }));
 }
 
-/** Drop every snapshot visual (and any `skeleton` field an agent echoed onto
- *  its own visual) — the server is the only author of either. */
-export function stripSkeletonVisuals(visuals: unknown): unknown[] | undefined {
-  if (!Array.isArray(visuals)) return undefined;
-  return visuals
-    .filter((v) => !(v && typeof v === "object" && isSkeletonVisualId((v as { id?: unknown }).id)))
-    .map((v) => {
-      if (!v || typeof v !== "object" || !("skeleton" in (v as object))) return v;
-      const { skeleton: _forged, ...rest } = v as Record<string, unknown>;
-      return rest;
-    });
-}
-
 /**
  * Build the snapshot visuals for a plan's steps + visuals. Pure over the
  * filesystem under `root` (the working tree — a linked worktree's own dir).
@@ -182,13 +227,14 @@ export function buildSkeletonSnapshot(args: {
   const skelIds = [...new Set(steps.map((s) => s?.skelId).filter((id): id is string => typeof id === "string" && id.length > 0))];
   if (skelIds.length === 0) return { visuals: [], note: "" };
   const root = path.resolve(args.root);
+  const agentVisuals = Array.isArray(args.visuals) ? args.visuals : [];
 
   // The SAME scan #606's fence check runs: the plan's declared files (step
   // `files` + file_map paths), or its bounded fallback walk when none are declared.
   const scan = scanSkeletonFences(root, {
     files: planDeclaredFiles({
       steps: steps as Array<{ files?: unknown }>,
-      visuals: (Array.isArray(args.visuals) ? args.visuals : []) as Array<{ kind?: unknown; files?: unknown }>,
+      visuals: agentVisuals as Array<{ kind?: unknown; files?: unknown }>,
     }),
   });
   // Fenced files, in the order the plan's steps claim them.
@@ -196,10 +242,11 @@ export function buildSkeletonSnapshot(args: {
   for (const id of skelIds) {
     for (const f of scan.fences) if (f.id === id && !fenced.includes(f.file)) fenced.push(f.file);
   }
-  // Tracked: file_map "create" entries with no fence (standalone `skel track`).
-  const tracked: string[] = [];
+  // Unfenced file_map "create" entries (the standalone `skel track`): PATHS
+  // ONLY. They are never opened — no fence, no content (#607 review H1).
+  const unfenced: string[] = [];
   const skipped: string[] = [];
-  for (const v of Array.isArray(args.visuals) ? args.visuals : []) {
+  for (const v of agentVisuals) {
     const vis = v as { kind?: unknown; files?: unknown };
     if (vis?.kind !== "file_map" || !Array.isArray(vis.files)) continue;
     for (const entry of vis.files as Array<{ path?: unknown; change?: unknown }>) {
@@ -209,59 +256,67 @@ export function buildSkeletonSnapshot(args: {
         skipped.push(`${entry.path} (outside the project)`);
         continue;
       }
-      if (!fenced.includes(rel) && !tracked.includes(rel)) tracked.push(rel);
+      if (!fenced.includes(rel) && !unfenced.includes(rel)) unfenced.push(rel);
     }
   }
 
   const visuals: PlanVisual[] = [];
   const omitted: string[] = [];
+  const withheld: string[] = [];
   let used = 0;
-  const candidates: Array<{ rel: string; tracked: boolean }> = [
-    ...fenced.map((rel) => ({ rel, tracked: false })),
-    ...tracked.map((rel) => ({ rel, tracked: true })),
-  ];
-  for (const { rel, tracked: isTracked } of candidates) {
-    if (visuals.length >= limits.maxFiles) {
+  for (const rel of fenced) {
+    const remaining = limits.maxTotalBytes - used;
+    // L3 — once the count or byte budget is spent, nothing else is opened.
+    if (visuals.length >= limits.maxFiles || remaining < MIN_USEFUL_BYTES) {
       omitted.push(rel);
       continue;
     }
     const read = readConfined(root, rel, limits);
     if (!read.ok) {
-      // A tracked file the agent hasn't written yet is normal; say so quietly.
       skipped.push(`${rel} (${read.reason})`);
       continue;
     }
-    const remaining = limits.maxTotalBytes - used;
-    const budget = Math.min(limits.maxFileBytes, remaining);
-    // Out of TOTAL budget: omit rather than show a sliver. (A small per-file
-    // cap still truncates — that's a deliberate setting, not leftovers.)
-    if (remaining < MIN_USEFUL_BYTES && Buffer.byteLength(read.text, "utf-8") > remaining) {
-      omitted.push(rel);
-      continue;
-    }
-    const cut = truncateToBytes(read.text, budget);
-    const code = cut ? cut.code : read.text.replace(/\n$/, "");
-    used += Buffer.byteLength(code, "utf-8");
-
-    let fences: SkeletonFence[] = [];
-    let markerError: string | undefined;
+    // Allowlist: the text actually read must hold a fence a step claims.
+    let fences: SkeletonFence[];
     try {
       fences = scanSkeletonText(read.text, rel);
     } catch (err) {
-      markerError = err instanceof Error ? err.message : String(err);
+      skipped.push(`${rel} (malformed SKEL markers: ${err instanceof Error ? err.message : String(err)})`);
+      continue;
     }
+    if (!fences.some((f) => skelIds.includes(f.id))) {
+      skipped.push(`${rel} (no claimed fence)`);
+      continue;
+    }
+    // M1 — a secret-shaped value anywhere in the file: withhold ALL of it.
+    // Labels and line only; the value never leaves this function.
+    const secrets = scanForSecrets(read.text);
+    if (secrets.length > 0) {
+      const what = secrets.map((m) => `${m.label}${m.line ? `, line ${m.line}` : ""}`).join("; ");
+      withheld.push(rel);
+      visuals.push({
+        id: skeletonVisualId(rel),
+        kind: "annotated_code",
+        title: rel,
+        filePath: rel,
+        caption: `Content withheld: possible secret detected (${what}).`,
+        skeleton: { fences: [], withheld: `possible secret detected (${what})` },
+      });
+      continue;
+    }
+
+    const cut = truncateToBytes(read.text, Math.min(limits.maxFileBytes, remaining));
+    const code = cut ? cut.code : read.text.replace(/\n$/, "");
+    used += Buffer.byteLength(code, "utf-8");
     const skeleton: SkeletonCodeSnapshot = {
       fences: fenceViews(fences, cut ? cut.shownLines : null),
-      ...(isTracked && fences.length === 0 ? { tracked: true } : {}),
       ...(cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {}),
-      ...(markerError ? { markerError } : {}),
     };
     const n = skeleton.fences.length;
     const captionParts = [
-      skeleton.tracked ? "Skeleton file with no fences (a file-map \"create\" entry)." : `${n} fence${n === 1 ? "" : "s"}.`,
+      `${n} fence${n === 1 ? "" : "s"}.`,
       "Read from disk when the plan was presented. Comment on any line.",
       ...(cut ? [`Truncated: lines 1–${cut.shownLines} of ${cut.totalLines} shown (snapshot size cap).`] : []),
-      ...(markerError ? [`Malformed SKEL markers: ${markerError}`] : []),
     ];
     visuals.push({
       id: skeletonVisualId(rel),
@@ -278,9 +333,21 @@ export function buildSkeletonSnapshot(args: {
     const last = visuals[visuals.length - 1]!;
     last.caption = `${last.caption ?? ""} Not shown (snapshot cap): ${omitted.join(", ")}.`.trim();
   }
+  if (unfenced.length > 0) {
+    visuals.push({
+      id: UNFENCED_VISUAL_ID,
+      kind: "file_map",
+      title: "Unfenced skeleton files (paths only)",
+      caption: "New files from the file map with no SKEL fence. Their content is not shown here.",
+      files: unfenced.map((p) => ({ path: p, change: "create" as const, note: "no fence, content not shown" })),
+    });
+  }
 
+  const shown = visuals.filter((v) => v.kind === "annotated_code" && !v.skeleton?.withheld).length;
   const noteParts: string[] = [];
-  if (visuals.length > 0) noteParts.push(`attached ${visuals.length} file${visuals.length === 1 ? "" : "s"} to the plan card as reviewable code`);
+  if (shown > 0) noteParts.push(`attached ${shown} fenced file${shown === 1 ? "" : "s"} to the plan card as reviewable code`);
+  if (unfenced.length > 0) noteParts.push(`listed ${unfenced.length} unfenced file${unfenced.length === 1 ? "" : "s"} by path only`);
+  if (withheld.length > 0) noteParts.push(`content withheld (possible secret detected): ${withheld.join(", ")}`);
   if (omitted.length > 0) noteParts.push(`not shown (cap of ${limits.maxFiles} files / ${Math.round(limits.maxTotalBytes / 1024)} KiB): ${omitted.join(", ")}`);
   if (skipped.length > 0) noteParts.push(`skipped: ${skipped.join("; ")}`);
   if (visuals.some((v) => v.skeleton?.truncated)) noteParts.push("some files are truncated (marked on the card)");
@@ -289,8 +356,9 @@ export function buildSkeletonSnapshot(args: {
 
 /**
  * Replace a plan content's snapshot visuals with a fresh snapshot. Agent
- * visuals are kept, in order, ahead of the snapshot. A plan with no `skelId`
- * steps and no snapshot visuals comes back as the SAME object (byte-unchanged).
+ * visuals are kept, in order, ahead of the snapshot, with any forged
+ * `skeleton` field stripped. A plan with no `skelId` steps and nothing to
+ * strip comes back as the SAME object (byte-unchanged).
  */
 export function attachSkeletonSnapshot<T extends Record<string, unknown>>(
   content: T,
@@ -302,14 +370,15 @@ export function attachSkeletonSnapshot<T extends Record<string, unknown>>(
     const visuals = Array.isArray(content.visuals) ? (content.visuals as unknown[]) : undefined;
     const hasReserved = !!visuals?.some((v) => v && typeof v === "object" && (isSkeletonVisualId((v as { id?: unknown }).id) || "skeleton" in (v as object)));
     if (!hasSkel && !hasReserved) return { content, note: "" };
-    const root = opts.root ?? (() => {
-      const r = resolveProjectRoot();
-      return r.worktree?.workspaceRoot ?? r.projectRoot;
-    })();
     const kept = stripSkeletonVisuals(visuals) ?? [];
-    const snap: SkeletonSnapshotResult = hasSkel
-      ? buildSkeletonSnapshot({ steps, visuals: kept, root, ...(opts.limits ? { limits: opts.limits } : {}) })
-      : { visuals: [], note: "" };
+    let snap: SkeletonSnapshotResult = { visuals: [], note: "" };
+    if (hasSkel) {
+      const root = opts.root ?? (() => {
+        const r = resolveProjectRoot();
+        return r.worktree?.workspaceRoot ?? r.projectRoot;
+      })();
+      snap = buildSkeletonSnapshot({ steps, visuals: kept, root, ...(opts.limits ? { limits: opts.limits } : {}) });
+    }
     const nextVisuals = [...kept, ...snap.visuals];
     const next: Record<string, unknown> = { ...content };
     if (nextVisuals.length > 0) next.visuals = nextVisuals;

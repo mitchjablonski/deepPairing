@@ -90,7 +90,16 @@ export function skeletonLineDecoration(
 }
 
 /** One compact line above the code: counts by status, plus tracked / truncated notes. */
-export function SkeletonSummary({ visual, steps }: { visual: PlanVisual; steps: SkeletonStepLike[] | undefined }) {
+export function SkeletonSummary({
+  visual,
+  steps,
+  carriedComments = 0,
+}: {
+  visual: PlanVisual;
+  steps: SkeletonStepLike[] | undefined;
+  /** Line comments carried from an earlier version of this snapshot. */
+  carriedComments?: number;
+}) {
   const snap = visual.skeleton;
   if (!snap) return null;
   const fences = Array.isArray(snap.fences) ? snap.fences : [];
@@ -113,6 +122,12 @@ export function SkeletonSummary({ visual, steps }: { visual: PlanVisual; steps: 
         </span>
       )}
       {snap.markerError && <span className="text-accent-red">Malformed SKEL markers</span>}
+      {carriedComments > 0 && (
+        <span className="text-accent-amber" data-skel-carried="true">
+          {carriedComments} line comment{carriedComments === 1 ? "" : "s"} from an earlier version: the file was re-read, so
+          {carriedComments === 1 ? " it" : " they"} may have moved
+        </span>
+      )}
     </div>
   );
 }

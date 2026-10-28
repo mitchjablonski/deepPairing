@@ -1,19 +1,27 @@
 /**
  * Skeleton plans, parity PR 2 — the skeleton AS CODE in the plan card.
  *
- * present_plan (and a revise_artifact supersede) of a plan with `skelId` steps
- * snapshots the fenced files, plus the file_map's unfenced "create" files,
- * into annotated_code visuals keyed by path. Real files in a temp project; no
- * mocks.
+ * present_plan (and an ordinary revise_artifact supersede) of a plan with
+ * `skelId` steps snapshots the FENCED files into annotated_code visuals keyed
+ * by path; unfenced file_map "create" entries are listed by path only. Real
+ * files in a temp project; no mocks.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { PlanVisual } from "@deeppairing/shared";
+import type { Artifact, PlanVisual } from "@deeppairing/shared";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
-import { buildSkeletonSnapshot, SKELETON_SNAPSHOT_LIMITS, stripSkeletonVisuals } from "../skeleton-snapshot.js";
+import {
+  buildSkeletonSnapshot,
+  isDeniedPath,
+  SKELETON_SNAPSHOT_LIMITS,
+  stripForgedSkeleton,
+  stripSkeletonVisuals,
+  UNFENCED_VISUAL_ID,
+} from "../skeleton-snapshot.js";
+import { deriveReviseContent, finalizeReviseContent, reviseSnapshot } from "../proposal-resolution.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -35,6 +43,9 @@ export function wire(): void {
 }
 `;
 const TYPES = "export interface Point {\n  x: number;\n  y: number;\n}\n";
+/** A file that WOULD qualify (it holds a claimed fence) — used to prove the
+ *  denylist and confinement, not the allowlist, keep it out. */
+const FENCED_LEAK = '// LEAK-MARKER\n// SKEL[1] x\nthrow new Error("SKEL_TODO");\n// /SKEL[1]\n';
 
 const DIAGRAM = { id: "arch", kind: "diagram", title: "Shape", source: "graph TD; A-->B" };
 const FILE_MAP = {
@@ -66,8 +77,21 @@ afterEach(() => {
   fs.rmSync(outside, { recursive: true, force: true });
 });
 
-const latestPlan = () => store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+const latestOf = (type: string) => store.getArtifacts().filter((a) => a.type === type).at(-1)!;
+const latestPlan = () => latestOf("plan");
 const visualsOf = (a: { content: unknown }) => ((a.content as { visuals?: PlanVisual[] }).visuals ?? []);
+const write = (rel: string, text: string | Buffer) => {
+  fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+  fs.writeFileSync(path.join(root, rel), text);
+};
+const trySymlink = (target: string, rel: string): boolean => {
+  try {
+    fs.symlinkSync(target, path.join(root, rel));
+    return true;
+  } catch {
+    return false; // no symlink privilege on this runner
+  }
+};
 
 async function presentSkeleton(extra: Record<string, unknown> = {}) {
   const res = await callTool("present_plan", { title: "Smoothing skeleton", steps: STEPS, estimatedChanges: 2, visuals: [DIAGRAM, FILE_MAP], ...extra });
@@ -75,12 +99,12 @@ async function presentSkeleton(extra: Record<string, unknown> = {}) {
 }
 
 describe("skeleton code view — the snapshot on present_plan", () => {
-  it("attaches the fenced file and the unfenced file_map 'create' file after the agent's visuals", async () => {
+  it("attaches the fenced file as code and lists the unfenced 'create' file by path only", async () => {
     const { res, plan } = await presentSkeleton();
     expect(res.isError).toBeFalsy();
     const visuals = visualsOf(plan);
     // Agent visuals first, untouched; snapshot visuals added after them.
-    expect(visuals.map((v) => v.id)).toEqual(["arch", "fm", "skelcode:a.ts", "skelcode:types.ts"]);
+    expect(visuals.map((v) => v.id)).toEqual(["arch", "fm", "skelcode:a.ts", UNFENCED_VISUAL_ID]);
     expect(visuals[0]).toEqual(DIAGRAM);
 
     const a = visuals[2]!;
@@ -92,56 +116,147 @@ describe("skeleton code view — the snapshot on present_plan", () => {
       { id: "1", title: "drop duplicates", openLine: 2, closeLine: 4, status: "todo" },
       { id: "2", title: "connect the canvas", openLine: 8, closeLine: 10, status: "filled" },
     ]);
-    expect(a.skeleton?.tracked).toBeUndefined();
 
-    const t = visuals[3]!;
-    expect(t.code).toBe(TYPES.replace(/\n$/, ""));
-    expect(t.skeleton).toEqual({ fences: [], tracked: true });
+    // H1 — the unfenced file: its path, never its content.
+    const u = visuals[3]!;
+    expect(u.kind).toBe("file_map");
+    expect(u.files).toEqual([{ path: "types.ts", change: "create", note: "no fence, content not shown" }]);
+    expect(u.code).toBeUndefined();
+    expect(JSON.stringify(plan.content)).not.toContain("interface Point");
 
-    expect(res.text).toContain("Skeleton code view: attached 2 files to the plan card");
+    expect(res.text).toContain("Skeleton code view: attached 1 fenced file to the plan card");
+    expect(res.text).toContain("listed 1 unfenced file by path only");
     // #606's own fence check still runs (from the same scan).
     expect(res.text).toContain("Skeleton check: 2 fences found on disk");
   });
 
   it("a plan without skelId steps is unchanged: the agent's visuals exactly, no snapshot, no note", async () => {
     const res = await callTool("present_plan", { title: "P", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1, visuals: [DIAGRAM, FILE_MAP] });
-    const plan = latestPlan();
-    expect(visualsOf(plan)).toEqual([DIAGRAM, { ...FILE_MAP }]);
+    expect(visualsOf(latestPlan())).toEqual([DIAGRAM, { ...FILE_MAP }]);
     expect(res.text).not.toContain("Skeleton");
     const bare = await callTool("present_plan", { title: "Q", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1 });
     expect(bare.isError).toBeFalsy();
     expect((latestPlan().content as Record<string, unknown>).visuals).toBeUndefined();
   });
 
-  it("an agent can't forge snapshot metadata: a supplied `skeleton` field never reaches the stored visual", async () => {
-    const forged = { id: "mine", kind: "annotated_code", code: "x", filePath: "x.ts", skeleton: { fences: [{ id: "9", openLine: 1, closeLine: 1, status: "filled" }] } };
-    await presentSkeleton({ visuals: [forged] });
-    const mine = visualsOf(latestPlan()).find((v) => v.id === "mine")!;
-    expect(mine.code).toBe("x");
-    expect(mine.skeleton).toBeUndefined();
+  it("M2 present_plan: a supplied `skeleton` field and a forged skelcode: visual never reach the store", async () => {
+    const forgedMeta = { id: "mine", kind: "annotated_code", code: "x", filePath: "x.ts", skeleton: { fences: [{ id: "9", openLine: 1, closeLine: 1, status: "filled" }] } };
+    const forgedVisual = { id: "skelcode:a.ts", kind: "annotated_code", code: "FORGED-CODE", filePath: "a.ts" };
+    await presentSkeleton({ visuals: [forgedMeta, forgedVisual] });
+    const visuals = visualsOf(latestPlan());
+    expect(visuals.find((v) => v.id === "mine")!.skeleton).toBeUndefined();
+    expect(visuals.filter((v) => v.id === "skelcode:a.ts")).toHaveLength(1);
+    expect(JSON.stringify(visuals)).not.toContain("FORGED-CODE");
+    // Even a non-skeleton plan can't carry one.
+    await callTool("present_plan", { title: "P", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1, visuals: [forgedMeta, forgedVisual] });
+    expect(JSON.stringify(visualsOf(latestPlan()))).not.toMatch(/FORGED-CODE|"skeleton"/);
   });
 
-  it("the store's secret scan covers the snapshot code (field path names the visual)", async () => {
+  it("M1: a secret-shaped value withholds the WHOLE file — never stored, broadcast or exported", async () => {
     const token = ["gh", "p_", "Z".repeat(36)].join("");
     fs.writeFileSync(path.join(root, "a.ts"), SRC.replace("canvas.on", `const t = "${token}";\n  canvas.on`));
-    const { plan } = await presentSkeleton();
-    const warnings = plan.secretWarnings ?? [];
-    expect(warnings.some((w) => w.pattern === "ghp_" && w.field === "visuals[2].code")).toBe(true);
-    // Locations only — the value itself is never copied into the warning.
-    expect(JSON.stringify(warnings)).not.toContain(token);
+    const { res, plan } = await presentSkeleton();
+    const a = visualsOf(plan).find((v) => v.id === "skelcode:a.ts")!;
+    expect(a.code).toBeUndefined();
+    expect(a.skeleton?.withheld).toContain("possible secret detected");
+    expect(a.caption).toContain("Content withheld: possible secret detected");
+    expect(JSON.stringify(plan)).not.toContain(token);
+    expect(JSON.stringify(plan)).not.toContain("canvas.on");
+    expect(plan.secretWarnings ?? []).toEqual([]);
+    expect(res.text).toContain("content withheld (possible secret detected): a.ts");
+    expect(res.text).not.toContain(token);
+    for (const format of ["full", "pr-comments"]) {
+      const exported = await callTool("export_session", { format });
+      expect(exported.text).not.toContain(token);
+    }
   });
 });
 
-describe("skeleton code view — bounds and confinement", () => {
+describe("skeleton code view — allowlist, denylist and confinement (H1)", () => {
   const snap = (visuals: unknown[], limits = SKELETON_SNAPSHOT_LIMITS) =>
     buildSkeletonSnapshot({ steps: STEPS, visuals, root, limits });
+  const declare = (...paths: string[]) => ({ id: "fm", kind: "file_map", files: paths.map((p) => ({ path: p, change: "modify" })) });
+
+  it("never snapshots protected files, even when they hold a claimed fence", () => {
+    write(".env", FENCED_LEAK);
+    write(".ENV", FENCED_LEAK);
+    write("examples/.env", FENCED_LEAK);
+    write(".GIT/config", FENCED_LEAK);
+    write(".npmrc", FENCED_LEAK);
+    write("id_rsa", FENCED_LEAK);
+    write(".ssh/notes.ts", FENCED_LEAK);
+    write("credentials.json", FENCED_LEAK);
+    write(".deeppairing/x.ts", FENCED_LEAK);
+    write("server.pem", FENCED_LEAK);
+    const out = snap([declare("a.ts", ".env", ".ENV", "examples/.env", ".GIT/config", ".npmrc", "id_rsa", ".ssh/notes.ts", "credentials.json", ".deeppairing/x.ts", "server.pem")]);
+    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
+    expect(JSON.stringify(out.visuals)).not.toContain("LEAK-MARKER");
+    for (const p of [".env", ".ENV", "examples/.env", ".GIT/config", ".npmrc", "id_rsa"]) {
+      expect(out.note).toContain(`${p} (a protected path`);
+    }
+  });
+
+  it("an in-root symlink to .env is judged by its REAL path", () => {
+    write(".env", FENCED_LEAK);
+    const linked = trySymlink(path.join(root, ".env"), "cfg.ts");
+    const out = snap([declare("a.ts", "cfg.ts")]);
+    expect(JSON.stringify(out.visuals)).not.toContain("LEAK-MARKER");
+    if (linked) expect(out.note).toContain("cfg.ts (a protected path");
+  });
+
+  it("a symlink escaping the root, '..' and absolute paths are never read", () => {
+    fs.writeFileSync(path.join(outside, "x.ts"), FENCED_LEAK);
+    const linked = trySymlink(path.join(outside, "x.ts"), "esc.ts");
+    const out = snap([
+      declare("a.ts", "esc.ts", `../${path.basename(outside)}/x.ts`, path.join(outside, "x.ts")),
+      { id: "fm2", kind: "file_map", files: [{ path: `../${path.basename(outside)}/y.ts`, change: "create" }] },
+    ]);
+    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
+    expect(JSON.stringify(out.visuals)).not.toContain("LEAK-MARKER");
+    expect(out.note).toContain("outside the project");
+    if (linked) expect(out.note).toContain("esc.ts (it resolves outside the project (symlink))");
+  });
+
+  it("an unfenced 'create' entry is listed by path only — never opened, even if it exists", () => {
+    write("later.ts", "LEAK-MARKER unfenced content\n");
+    const out = snap([{ id: "fm", kind: "file_map", files: [{ path: "a.ts", change: "modify" }, { path: "later.ts", change: "create" }, { path: "not-yet.ts", change: "create" }] }]);
+    const unfenced = out.visuals.find((v) => v.id === UNFENCED_VISUAL_ID)!;
+    expect(unfenced.files!.map((f) => f.path)).toEqual(["later.ts", "not-yet.ts"]);
+    expect(JSON.stringify(out.visuals)).not.toContain("LEAK-MARKER");
+  });
+
+  it("a declared file without a claimed fence is not snapshotted (the allowlist)", () => {
+    write("other.ts", "// SKEL[99] someone else's\nthrow new Error(\"SKEL_TODO\");\n// /SKEL[99]\n");
+    const out = snap([declare("a.ts", "other.ts")]);
+    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
+  });
+
+  it("skips binary files", () => {
+    write("bin.ts", Buffer.concat([Buffer.from([0x89, 0x00, 0x0a]), Buffer.from(FENCED_LEAK)]));
+    const out = snap([declare("a.ts", "bin.ts")]);
+    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
+    expect(out.note).toContain("bin.ts (binary");
+  });
+
+  it("isDeniedPath is case-insensitive on every segment", () => {
+    for (const p of [".env.local", "a/.Env", "x/.SSH/k", ".DeepPairing/s.json", "k/ID_RSA.pub", "id_ed25519", ".NETRC", ".pypirc", "Credentials.yml", "c.KEY", "c.P12"]) {
+      expect(isDeniedPath(p)).toBe(true);
+    }
+    for (const p of ["src/a.ts", "env.ts", "docs/keys.md", "src/git.ts"]) expect(isDeniedPath(p)).toBe(false);
+  });
+});
+
+describe("skeleton code view — bounds", () => {
+  const snap = (visuals: unknown[], limits = SKELETON_SNAPSHOT_LIMITS) =>
+    buildSkeletonSnapshot({ steps: STEPS, visuals, root, limits });
+  const fencedB = (filler = "") => `export function b() {\n${filler}  // SKEL[2] b\n  return 2;\n  // /SKEL[2]\n}\n`;
 
   it("caps the file count; the omitted files are named on the card and in the reply", () => {
-    fs.writeFileSync(path.join(root, "b.ts"), "export const b = 1;\n");
-    const out = snap([{ id: "fm", kind: "file_map", files: [{ path: "a.ts", change: "modify" }, { path: "types.ts", change: "create" }, { path: "b.ts", change: "create" }] }], { ...SKELETON_SNAPSHOT_LIMITS, maxFiles: 2 });
-    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts", "skelcode:types.ts"]);
-    expect(out.visuals[1]!.caption).toContain("Not shown (snapshot cap): b.ts");
-    expect(out.note).toContain("not shown (cap of 2 files");
+    write("b.ts", fencedB());
+    const out = snap([{ id: "fm", kind: "file_map", files: [{ path: "a.ts", change: "modify" }, { path: "b.ts", change: "modify" }] }], { ...SKELETON_SNAPSHOT_LIMITS, maxFiles: 1 });
+    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
+    expect(out.visuals[0]!.caption).toContain("Not shown (snapshot cap): b.ts");
+    expect(out.note).toContain("not shown (cap of 1 files");
   });
 
   it("truncates a file over the per-file cap at a line boundary, marked, with fences past the cut dropped", () => {
@@ -154,69 +269,15 @@ describe("skeleton code view — bounds and confinement", () => {
     expect(out.note).toContain("truncated");
   });
 
-  it("stops at the total byte cap", () => {
-    const big = "// filler\n".repeat(80); // ~800 bytes
-    fs.writeFileSync(path.join(root, "types.ts"), big);
-    const out = snap([FILE_MAP], { ...SKELETON_SNAPSHOT_LIMITS, maxTotalBytes: Buffer.byteLength(SRC) + 100 });
-    const total = out.visuals.reduce((n, v) => n + Buffer.byteLength(v.code ?? "", "utf-8"), 0);
-    expect(total).toBeLessThanOrEqual(Buffer.byteLength(SRC) + 100);
+  it("L3: once the total byte budget is spent, later files are omitted without being read", () => {
+    write("b.ts", fencedB("  // filler\n".repeat(80)));
+    const out = snap(
+      [{ id: "fm", kind: "file_map", files: [{ path: "a.ts", change: "modify" }, { path: "b.ts", change: "modify" }] }],
+      { ...SKELETON_SNAPSHOT_LIMITS, maxTotalBytes: Buffer.byteLength(SRC) + 100 },
+    );
     expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
-    expect(out.note).toContain("types.ts");
-  });
-
-  it("never reads outside the project: '..', absolute paths and symlink escapes are skipped", () => {
-    fs.writeFileSync(path.join(outside, "secret.ts"), "export const leaked = 1;\n");
-    let linked = true;
-    try {
-      fs.symlinkSync(path.join(outside, "secret.ts"), path.join(root, "link.ts"));
-    } catch {
-      linked = false; // no symlink privilege on this runner
-    }
-    const out = snap([
-      {
-        id: "fm",
-        kind: "file_map",
-        files: [
-          { path: "a.ts", change: "modify" },
-          { path: "../" + path.basename(outside) + "/secret.ts", change: "create" },
-          { path: path.join(outside, "secret.ts"), change: "create" },
-          { path: "link.ts", change: "create" },
-        ],
-      },
-    ]);
-    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
-    expect(JSON.stringify(out.visuals)).not.toContain("leaked");
-    expect(out.note).toContain("outside the project");
-    if (linked) expect(out.note).toContain("link.ts (it resolves outside the project (symlink))");
-  });
-
-  it("skips binary files, secrets paths and deepPairing state", () => {
-    fs.writeFileSync(path.join(root, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x01]));
-    fs.writeFileSync(path.join(root, ".env"), "TOKEN=x\n");
-    fs.mkdirSync(path.join(root, ".deeppairing"), { recursive: true });
-    fs.writeFileSync(path.join(root, ".deeppairing", "daemon.json"), "{}");
-    const out = snap([
-      {
-        id: "fm",
-        kind: "file_map",
-        files: [
-          { path: "a.ts", change: "modify" },
-          { path: "logo.png", change: "create" },
-          { path: ".env", change: "create" },
-          { path: ".deeppairing/daemon.json", change: "create" },
-        ],
-      },
-    ]);
-    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
-    expect(out.note).toContain("logo.png (binary");
-    expect(out.note).toContain(".env (a secrets path");
-    expect(out.note).toContain(".deeppairing/daemon.json (git/deepPairing state");
-  });
-
-  it("a tracked file the agent hasn't written yet is reported, not fatal", () => {
-    const out = snap([{ id: "fm", kind: "file_map", files: [{ path: "a.ts", change: "modify" }, { path: "later.ts", change: "create" }] }]);
-    expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
-    expect(out.note).toContain("later.ts (not on disk)");
+    expect(out.note).toContain("not shown");
+    expect(out.note).toContain("b.ts");
   });
 
   it("stripSkeletonVisuals drops snapshot visuals and forged metadata, keeps everything else", () => {
@@ -226,10 +287,9 @@ describe("skeleton code view — bounds and confinement", () => {
   });
 });
 
-describe("skeleton code view — revise and feedback", () => {
-  it("a supersede re-reads the files: the same per-path ids, fresh status, no duplicates", async () => {
+describe("skeleton code view — revise paths (M2) and feedback", () => {
+  it("an ordinary supersede re-reads the files: the same per-path ids, fresh status, no duplicates", async () => {
     const { plan: v1 } = await presentSkeleton();
-    // The agent fills fence 1 on disk, then revises, echoing v1's visuals back.
     fs.writeFileSync(path.join(root, "a.ts"), SRC.replace('throw new Error("SKEL_TODO");', "return [...new Set(raw)];"));
     const res = await callTool("revise_artifact", {
       artifactId: v1.id,
@@ -240,12 +300,65 @@ describe("skeleton code view — revise and feedback", () => {
     expect(res.isError).toBeFalsy();
     const v2 = latestPlan();
     expect(v2.id).not.toBe(v1.id);
-    const ids = visualsOf(v2).map((v) => v.id);
-    expect(ids).toEqual(["arch", "fm", "skelcode:a.ts", "skelcode:types.ts"]);
+    expect(visualsOf(v2).map((v) => v.id)).toEqual(["arch", "fm", "skelcode:a.ts", UNFENCED_VISUAL_ID]);
     const a = visualsOf(v2).find((v) => v.id === "skelcode:a.ts")!;
     expect(a.code).toContain("return [...new Set(raw)];");
     expect(a.skeleton?.fences.map((f) => f.status)).toEqual(["filled", "filled"]);
-    expect(res.text).toContain("Skeleton code view: attached 2 files");
+    expect(res.text).toContain("Skeleton code view: attached 1 fenced file");
+  });
+
+  it("a supersede of a NON-plan artifact strips forged skeleton metadata too", async () => {
+    await callTool("present_findings", {
+      title: "Research",
+      summary: "s",
+      findings: [{ category: "c", detail: "d", significance: "low" }],
+    });
+    const v1 = latestOf("research");
+    const res = await callTool("revise_artifact", {
+      artifactId: v1.id,
+      mode: "supersede",
+      reason: "add code",
+      content: {
+        summary: "s2",
+        findings: [{ category: "c", detail: "d", significance: "low" }],
+        visuals: [
+          { id: "skelcode:a.ts", kind: "annotated_code", code: "FORGED-CODE", filePath: "a.ts", skeleton: { fences: [] } },
+          { id: "mine", kind: "annotated_code", code: "ok", filePath: "m.ts", skeleton: { fences: [{ id: "1", openLine: 1, closeLine: 1, status: "filled" }] } },
+        ],
+      },
+    });
+    expect(res.isError).toBeFalsy();
+    const v2 = latestOf("research");
+    expect(v2.id).not.toBe(v1.id);
+    expect(visualsOf(v2).map((v) => v.id)).toEqual(["mine"]);
+    expect(JSON.stringify(v2.content)).not.toMatch(/FORGED-CODE|"skeleton"/);
+  });
+
+  it("the stance-admission snapshot (digest-bound) carries no agent skeleton metadata, for plans and decisions", () => {
+    const plan = { id: "art_p", type: "plan", title: "P", version: 1, status: "draft", content: { steps: STEPS, estimatedChanges: 1 } } as unknown as Artifact;
+    const supplied = {
+      steps: STEPS,
+      estimatedChanges: 1,
+      visuals: [DIAGRAM, { id: "skelcode:a.ts", kind: "annotated_code", code: "FORGED-CODE" }, { id: "m", kind: "annotated_code", code: "ok", skeleton: { fences: [] } }],
+    };
+    const content = finalizeReviseContent(plan, structuredClone(deriveReviseContent(plan, supplied)));
+    const snapshot = reviseSnapshot(plan, "P", "why", content);
+    expect(JSON.stringify(snapshot)).not.toMatch(/FORGED-CODE|"skeleton"|skelcode:/);
+    // Deterministic: the same call yields the same snapshot (the digest holds).
+    const again = reviseSnapshot(plan, "P", "why", finalizeReviseContent(plan, structuredClone(deriveReviseContent(plan, supplied))));
+    expect(JSON.stringify(again)).toBe(JSON.stringify(snapshot));
+
+    const decision = { id: "art_d", type: "decision", title: "D", version: 1, status: "draft", content: { context: "c", options: [] } } as unknown as Artifact;
+    const dContent = deriveReviseContent(decision, {
+      context: "c",
+      options: [{ id: "o1", title: "A", visuals: [{ id: "v", kind: "annotated_code", code: "ok", skeleton: { fences: [] } }] }],
+    });
+    expect(JSON.stringify(dContent)).not.toContain('"skeleton"');
+  });
+
+  it("stripForgedSkeleton returns the same object when there is nothing to strip", () => {
+    const c = { summary: "s", visuals: [DIAGRAM] };
+    expect(stripForgedSkeleton(c)).toBe(c);
   });
 
   it("a line comment on the skeleton code reaches check_feedback with file, line and fence", async () => {
