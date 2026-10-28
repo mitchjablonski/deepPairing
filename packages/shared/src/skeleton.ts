@@ -52,11 +52,11 @@ export function sanitizeSkeletonAnchor<T extends Record<string, unknown> | undef
   if (!target || !("skeletonAnchor" in target)) return target;
   const { skeletonAnchor: raw, ...rest } = target as Record<string, unknown>;
   const a = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
-  if (!a || (a.snapshot !== "approved" && a.snapshot !== "live")) return rest as T;
+  if (!a || (a.snapshot !== "approved" && a.snapshot !== "live")) return rest as unknown as T;
   const out: Record<string, unknown> = { snapshot: a.snapshot };
   if (typeof a.takenAt === "string" && a.takenAt) out.takenAt = a.takenAt.slice(0, SKELETON_ANCHOR_LIMITS.takenAt);
   if (typeof a.readAt === "number" && Number.isFinite(a.readAt)) out.readAt = a.readAt;
   if (typeof a.fenceId === "string" && a.fenceId) out.fenceId = a.fenceId.slice(0, SKELETON_ANCHOR_LIMITS.fenceId);
   if (typeof a.lineText === "string") out.lineText = a.lineText.slice(0, SKELETON_ANCHOR_LIMITS.lineText);
-  return { ...rest, skeletonAnchor: out } as T;
+  return { ...rest, skeletonAnchor: out } as unknown as T;
 }
