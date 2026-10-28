@@ -33,6 +33,13 @@ ask text is unchanged. Fire telemetry records `kind: "deny"` and
 `mode: "strict-stop"`; legacy records without a mode retain their existing ask
 interpretation. The companion status and HTML export distinguish stops from asks.
 
+Skeleton-fence fires (`skeleton-scope`, an out-of-fence edit while an
+approved skeleton plan's step is `in_progress`) follow the same mode. Under
+strict-stop they deny and stop the turn with a strict-specific reason
+("stopped before execution (strict-stop mode)… [SKELETON_SCOPE]"). They are
+gates like the others, and strict-stop's contract is that every gate stops. A
+fence fire never dedups in either mode.
+
 Strict guardrail stops neither consult nor write the 30-minute ask dedup stamp,
 including stamps left by an earlier default session. Every matching retry must
 stop. Switching back to ask retains its existing dedup behavior.

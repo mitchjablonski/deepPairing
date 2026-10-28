@@ -138,7 +138,7 @@ describe("skeleton code view — bounds and confinement", () => {
 
   it("caps the file count; the omitted files are named on the card and in the reply", () => {
     fs.writeFileSync(path.join(root, "b.ts"), "export const b = 1;\n");
-    const out = snap([{ id: "fm", kind: "file_map", files: [{ path: "types.ts", change: "create" }, { path: "b.ts", change: "create" }] }], { ...SKELETON_SNAPSHOT_LIMITS, maxFiles: 2 });
+    const out = snap([{ id: "fm", kind: "file_map", files: [{ path: "a.ts", change: "modify" }, { path: "types.ts", change: "create" }, { path: "b.ts", change: "create" }] }], { ...SKELETON_SNAPSHOT_LIMITS, maxFiles: 2 });
     expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts", "skelcode:types.ts"]);
     expect(out.visuals[1]!.caption).toContain("Not shown (snapshot cap): b.ts");
     expect(out.note).toContain("not shown (cap of 2 files");
@@ -177,6 +177,7 @@ describe("skeleton code view — bounds and confinement", () => {
         id: "fm",
         kind: "file_map",
         files: [
+          { path: "a.ts", change: "modify" },
           { path: "../" + path.basename(outside) + "/secret.ts", change: "create" },
           { path: path.join(outside, "secret.ts"), change: "create" },
           { path: "link.ts", change: "create" },
@@ -199,6 +200,7 @@ describe("skeleton code view — bounds and confinement", () => {
         id: "fm",
         kind: "file_map",
         files: [
+          { path: "a.ts", change: "modify" },
           { path: "logo.png", change: "create" },
           { path: ".env", change: "create" },
           { path: ".deeppairing/daemon.json", change: "create" },
@@ -212,7 +214,7 @@ describe("skeleton code view — bounds and confinement", () => {
   });
 
   it("a tracked file the agent hasn't written yet is reported, not fatal", () => {
-    const out = snap([{ id: "fm", kind: "file_map", files: [{ path: "later.ts", change: "create" }] }]);
+    const out = snap([{ id: "fm", kind: "file_map", files: [{ path: "a.ts", change: "modify" }, { path: "later.ts", change: "create" }] }]);
     expect(out.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
     expect(out.note).toContain("later.ts (not on disk)");
   });

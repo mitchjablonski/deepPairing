@@ -94,12 +94,50 @@ export function scanSkeletonText(text: string, file: string): SkeletonFence[] {
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".deeppairing", "dist", "build", "out", ".next", ".turbo", "coverage", "__pycache__", ".venv", "venv", "target"]);
 
-/** Every fence under `root` (server side: present_plan / update_plan_progress
- *  checks). Malformed files are reported, not thrown. */
-export function scanSkeletonFences(root: string, maxFiles = 20_000): { fences: SkeletonFence[]; errors: string[] } {
+/** Prose files show the marker syntax in examples; they never hold real fences. */
+const PROSE_FILE = /\.(md|mdx|markdown|rst|txt)$/i;
+
+function scanFile(root: string, abs: string, fences: SkeletonFence[], errors: string[]): void {
+  let text: string;
+  try {
+    if (fs.statSync(abs).size > 1_000_000) return;
+    text = fs.readFileSync(abs, "utf-8");
+  } catch {
+    return;
+  }
+  if (!text.includes("SKEL[")) return;
+  const rel = path.relative(root, abs).split(path.sep).join("/");
+  try {
+    fences.push(...scanSkeletonText(text, rel));
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/**
+ * Fences for the server-side checks (present_plan / update_plan_progress).
+ * #606 review M3/M4 — with `files` (the plan's declared step files and
+ * file_map paths) ONLY those are read: no repo walk on the tool path, and a
+ * doc or fixture showing the syntax can't pose as a real fence. Without
+ * declared files it falls back to a bounded walk that skips prose files.
+ * Malformed files are reported, not thrown.
+ */
+export function scanSkeletonFences(
+  root: string,
+  opts: { files?: string[]; maxFiles?: number } = {},
+): { fences: SkeletonFence[]; errors: string[]; truncated: boolean } {
   const fences: SkeletonFence[] = [];
   const errors: string[] = [];
+  if (opts.files && opts.files.length > 0) {
+    for (const f of new Set(opts.files)) {
+      const abs = path.resolve(root, f);
+      if (within(root, abs)) scanFile(root, abs, fences, errors);
+    }
+    return { fences, errors, truncated: false };
+  }
+  const maxFiles = opts.maxFiles ?? 20_000;
   let seen = 0;
+  let truncated = false;
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
     try {
@@ -108,32 +146,38 @@ export function scanSkeletonFences(root: string, maxFiles = 20_000): { fences: S
       return;
     }
     for (const e of entries) {
-      if (seen >= maxFiles) return;
+      if (seen >= maxFiles) {
+        truncated = true;
+        return;
+      }
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) walk(abs);
         continue;
       }
-      if (!e.isFile()) continue;
+      if (!e.isFile() || PROSE_FILE.test(e.name)) continue;
       seen++;
-      let text: string;
-      try {
-        if (fs.statSync(abs).size > 1_000_000) continue;
-        text = fs.readFileSync(abs, "utf-8");
-      } catch {
-        continue;
-      }
-      if (!text.includes("SKEL[")) continue;
-      const rel = path.relative(root, abs).split(path.sep).join("/");
-      try {
-        fences.push(...scanSkeletonText(text, rel));
-      } catch (err) {
-        errors.push(err instanceof Error ? err.message : String(err));
-      }
+      scanFile(root, abs, fences, errors);
     }
   };
   walk(root);
-  return { fences, errors };
+  return { fences, errors, truncated };
+}
+
+/** The files a plan declares: every step's `files` plus every file_map path. */
+export function planDeclaredFiles(content: { steps?: Array<{ files?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> }): string[] {
+  const out: string[] = [];
+  const take = (v: unknown) => {
+    if (typeof v === "string" && v) out.push(v);
+    else if (v && typeof v === "object") {
+      const o = v as { filePath?: unknown; path?: unknown };
+      const p = typeof o.filePath === "string" ? o.filePath : typeof o.path === "string" ? o.path : "";
+      if (p) out.push(p);
+    }
+  };
+  for (const st of content.steps ?? []) if (Array.isArray(st.files)) st.files.forEach(take);
+  for (const v of content.visuals ?? []) if (v.kind === "file_map" && Array.isArray(v.files)) v.files.forEach(take);
+  return [...new Set(out)];
 }
 
 
@@ -207,20 +251,44 @@ export function skeletonScopeActive(projectRoot: string, now: number = Date.now(
   return readSkeletonScopes(projectRoot, now).length > 0;
 }
 
+/**
+ * #606 review (M5) — the scope file says which steps are in progress; the STORE
+ * says whether the plan may be executed. A fence is live only while its plan is
+ * `approved` in its own session's artifacts.json, so revising, superseding,
+ * rejecting or withdrawing the plan drops the fence at once (status changes
+ * force a flush, so the hook sees them). Unreadable store → false (fail open,
+ * the backstop's contract).
+ */
+export function planApprovedOnDisk(projectRoot: string, sessionId: string, artifactId: string): boolean {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return false;
+  try {
+    const arr = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
+    if (!Array.isArray(arr)) return false;
+    const plan = arr.find((a: unknown) => !!a && typeof a === "object" && (a as { id?: unknown }).id === artifactId) as { type?: unknown; status?: unknown } | undefined;
+    return plan?.type === "plan" && plan.status === "approved";
+  } catch {
+    return false;
+  }
+}
+
 function within(dir: string, abs: string): boolean {
   const rel = path.relative(dir, abs);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
 /**
- * The scopes that govern one edit: the edit's own session's (when the hook
- * event names one), and only those whose working tree holds the target file.
- * With no session on the event, every live scope for that tree applies — more
- * fencing, never less. Returns one merged scope, or null.
+ * The scopes that govern one edit: exactly the edit's OWN session's, and only
+ * those whose working tree holds the target file. The caller always passes the
+ * session id derived the way the server derives it — from the hook event's
+ * Claude session id, or the fallback id when the event carries none — so a
+ * missing identity matches only a fallback-mode server's plan and never fences
+ * another session (#606 review). Subagents carry their parent's session id and
+ * so inherit its fence: they are part of the same execution. Returns one merged
+ * scope, or null.
  */
-export function selectSkeletonScope(scopes: SkeletonScope[], args: { sessionId?: string; targetAbs: string }): SkeletonScope | null {
+export function selectSkeletonScope(scopes: SkeletonScope[], args: { sessionId: string; targetAbs: string }): SkeletonScope | null {
   const mine = scopes.filter(
-    (s) => (!args.sessionId || !s.sessionId || s.sessionId === args.sessionId) && (!s.workspaceRoot || within(s.workspaceRoot, args.targetAbs)),
+    (s) => s.sessionId === args.sessionId && (!s.workspaceRoot || within(s.workspaceRoot, args.targetAbs)),
   );
   if (mine.length === 0) return null;
   const titles = [...new Set(mine.map((s) => s.planTitle).filter((t): t is string => !!t))];
@@ -271,25 +339,38 @@ function applyEdit(text: string, oldStr: string, newStr: string, all: boolean): 
   return { text: out + text.slice(from), spans };
 }
 
-/** Text outside the given fences' BODIES (markers included) must be identical. */
+/**
+ * Every line outside the given fences' BODIES — marker lines included — must
+ * survive WHOLE and in order. Compared line by line, so nothing can be appended
+ * to or prefixed onto a marker line (#606 review: a substring match let a
+ * marker-line suffix through).
+ */
 function preservesOutside(original: string, next: string, fences: SkeletonFence[]): boolean {
   const lines = original.split("\n");
+  const out = next.split("\n");
   const sorted = [...fences].sort((a, b) => a.openLine - b.openLine);
-  const segments: string[] = [];
+  const segments: string[][] = [];
   let from = 0;
   for (const f of sorted) {
-    segments.push(lines.slice(from, f.openLine).join("\n"));
+    segments.push(lines.slice(from, f.openLine));
     from = f.closeLine - 1;
   }
-  segments.push(lines.slice(from).join("\n"));
+  segments.push(lines.slice(from));
+  const matchesAt = (seg: string[], at: number) => at >= 0 && at + seg.length <= out.length && seg.every((l, i) => out[at + i] === l);
   let pos = 0;
   for (let k = 0; k < segments.length; k++) {
     const seg = segments[k]!;
-    if (k === 0 && !next.startsWith(seg)) return false;
-    if (k === segments.length - 1) return next.endsWith(seg) && next.length - seg.length >= pos;
-    const idx = next.indexOf(seg, pos);
-    if (idx === -1) return false;
-    pos = idx + seg.length;
+    if (k === 0) {
+      if (!matchesAt(seg, 0)) return false;
+      pos = seg.length;
+    } else if (k === segments.length - 1) {
+      if (out.length - seg.length < pos || !matchesAt(seg, out.length - seg.length)) return false;
+    } else {
+      let at = pos;
+      while (at + seg.length <= out.length && !matchesAt(seg, at)) at++;
+      if (!matchesAt(seg, at)) return false;
+      pos = at + seg.length;
+    }
   }
   return true;
 }
@@ -359,6 +440,8 @@ export function evaluateSkeletonEdit(args: {
   readFile: (absPath: string) => string | null;
   /** For display and for resolving a relative file_path. */
   projectRoot: string;
+  /** strict-stop words the reason as a stop, not a question (#547). */
+  strict?: boolean;
 }): SkeletonScopeViolation | null {
   const { scope } = args;
   if (!scope || scope.activeSkelIds.length === 0) return null;
@@ -374,14 +457,18 @@ export function evaluateSkeletonEdit(args: {
   const ids = scope.activeSkelIds;
   const label = ids.length === 1 ? `step SKEL[${ids[0]}]` : `steps ${ids.map((i) => `SKEL[${i}]`).join(", ")}`;
 
+  const plan = scope.planTitle ? ` ("${scope.planTitle}")` : "";
   const violation = (what: string): SkeletonScopeViolation => ({
     skelIds: ids,
     target: shown,
-    reason:
-      `Allow this edit outside the skeleton? ${what}. The approved skeleton${scope.planTitle ? ` ("${scope.planTitle}")` : ""} ` +
-      `is being filled, and ${label} may only change code inside its fence. Allowing it changes the structure you approved.\n` +
-      `[SKELETON_SCOPE — agent: this is a skeleton change. Don't route around the fence; stop and propose the change ` +
-      `(what, where, why) to your pair, then revise the plan before filling on.]`,
+    reason: args.strict
+      ? `Edit to ${shown} stopped before execution (strict-stop mode). ${what}. The approved skeleton${plan} is being filled, and ` +
+        `${label} may only change code inside its fence. Propose the skeleton change to your pair and revise the plan, ` +
+        `or set the step back to pending before an agreed structural edit. [SKELETON_SCOPE]`
+      : `Allow this edit outside the skeleton? ${what}. The approved skeleton${plan} ` +
+        `is being filled, and ${label} may only change code inside its fence. Allowing it changes the structure you approved.\n` +
+        `[SKELETON_SCOPE — agent: this is a skeleton change. Don't route around the fence; stop and propose the change ` +
+        `(what, where, why) to your pair. Once they agree, revise the plan (or set the step back to pending) before the structural edit.]`,
   });
 
   const original = args.readFile(abs);
@@ -415,8 +502,11 @@ export function evaluateSkeletonEdit(args: {
       } catch {
         return violation(`${shown} has malformed SKEL markers`);
       }
+      // A span may include the fence's own marker lines: with identical stubs,
+      // the marker is often the only thing that makes old_string unique
+      // (#606 review H1). Whether the markers SURVIVE is checked on the result.
       for (const [start, end] of applied.spans) {
-        if (!current.some((f) => start > f.openLine && end < f.closeLine)) {
+        if (!current.some((f) => start >= f.openLine && end <= f.closeLine)) {
           return violation(`It touches ${shown}:${start}${end > start ? `-${end}` : ""}`);
         }
       }

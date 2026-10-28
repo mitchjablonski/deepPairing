@@ -156,7 +156,7 @@ export const PlanStepSchema = z.object({
    * (absent = an ordinary prose step).
    */
   skelId: z.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional()
-    .describe("Skeleton plans: the SKEL[id] fence this step fills. While the step is in_progress, edits outside that fence are gated."),
+    .describe("Skeleton plans: the SKEL[id] fence this step fills, e.g. \"2\" or \"2.1\" (starts with a letter or digit; then letters, digits, '.', '_' or '-'; no spaces). While the step is in_progress on an approved plan, edits outside that fence are gated."),
 });
 
 export type PlanStep = z.infer<typeof PlanStepSchema>;

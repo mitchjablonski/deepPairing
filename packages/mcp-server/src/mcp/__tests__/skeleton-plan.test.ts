@@ -39,7 +39,7 @@ afterEach(() => {
 
 const scopeFile = (artifactId: string) => path.join(root, ".deeppairing", "skeleton-scopes", `${artifactId}.json`);
 const presentSkeleton = async (title: string, skelId: string) => {
-  await callTool("present_plan", { title, steps: [{ description: "fill", reasoning: "r", skelId }], estimatedChanges: 1 });
+  await callTool("present_plan", { title, steps: [{ description: "fill", reasoning: "r", skelId, files: ["a.ts"] }], estimatedChanges: 1 });
   const plan = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
   store.updateArtifactStatus(plan.id, "approved", "ui_approve_button");
   return plan;
@@ -50,13 +50,14 @@ describe("skeleton plans", () => {
     const res = await callTool("present_plan", {
       title: "Smoothing skeleton",
       steps: [
-        { description: "dedupe", reasoning: "r", skelId: "1" },
+        { description: "dedupe", reasoning: "r", skelId: "1", files: ["a.ts"] },
         { description: "wire it", reasoning: "r", skelId: "7" },
       ],
       estimatedChanges: 1,
     });
     expect(res.isError).toBeFalsy();
     expect(res.text).toContain('step skelId "7" has no SKEL[7] fence on disk');
+    expect(res.text).not.toContain("declares no files");
     const plan = store.getArtifacts().find((a) => a.type === "plan")!;
     expect((plan.content as any).steps.map((s: any) => s.skelId)).toEqual(["1", "7"]);
   });
@@ -69,10 +70,25 @@ describe("skeleton plans", () => {
     expect(fs.existsSync(path.join(root, ".deeppairing", "skeleton-scopes"))).toBe(false);
   });
 
+  it("#606 M3/M4: with no declared files it says so, and still finds the fence by a bounded walk", async () => {
+    const res = await callTool("present_plan", { title: "S", steps: [{ description: "d", reasoning: "r", skelId: "1" }], estimatedChanges: 1 });
+    expect(res.text).toContain("the plan declares no files");
+    expect(res.text).not.toContain("has no SKEL[1] fence");
+  });
+
+  it("#606 review: a draft plan never opens a fence", async () => {
+    await callTool("present_plan", { title: "Draft", steps: [{ description: "d", reasoning: "r", skelId: "1", files: ["a.ts"] }], estimatedChanges: 1 });
+    const plan = store.getArtifacts().find((a) => a.type === "plan")!;
+    const res = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
+    expect(res.text).toContain("Skeleton fence NOT opened: this plan isn't approved.");
+    expect(fs.existsSync(scopeFile(plan.id))).toBe(false);
+  });
+
   it("in_progress opens the fence; done with SKEL_TODO left warns; done after the fill closes it", async () => {
     const presented = await callTool("present_plan", {
       title: "Smoothing skeleton",
       steps: [{ description: "dedupe", reasoning: "r", skelId: "1" }],
+      visuals: [{ id: "fm", kind: "file_map", files: [{ path: "a.ts", change: "create" }] }],
       estimatedChanges: 1,
     });
     expect(presented.text).toContain("Skeleton check: 1 fence found on disk");
@@ -101,7 +117,7 @@ describe("skeleton plans", () => {
     const a = await presentSkeleton("Plan A", "1");
     await callTool("update_plan_progress", { artifactId: a.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
 
-    await callTool("present_plan", { title: "Plan B (draft)", steps: [{ description: "g", reasoning: "r", skelId: "2" }], estimatedChanges: 1 });
+    await callTool("present_plan", { title: "Plan B (draft)", steps: [{ description: "g", reasoning: "r", skelId: "2", files: ["b.ts"] }], estimatedChanges: 1 });
     const b = store.getArtifacts().filter((x) => x.type === "plan").at(-1)!;
     expect(b.status).toBe("draft");
     await callTool("update_plan_progress", { artifactId: b.id, updates: [{ stepIndex: 0, status: "in_progress" }] });

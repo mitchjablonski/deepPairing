@@ -4,7 +4,7 @@ import { validatePresentPlanInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { resolveProjectRoot } from "../../project-root.js";
-import { scanSkeletonFences } from "../../skeleton-scope.js";
+import { planDeclaredFiles, scanSkeletonFences } from "../../skeleton-scope.js";
 import { attachSkeletonSnapshot } from "../skeleton-snapshot.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
@@ -14,15 +14,19 @@ import type { ToolContext, ToolResult } from "./types.js";
  * doesn't match the code it describes. Reported, not refused. Never throws.
  */
 export function skeletonPlanNote(
-  steps: Array<{ skelId?: string }>,
-  // Parity PR 2 — the code-view snapshot already walked the tree; reuse it.
+  content: { steps: Array<{ skelId?: string; files?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> },
+  // Parity PR 2 — the code-view snapshot already scanned the same declared
+  // files (planDeclaredFiles); reuse that scan instead of reading them twice.
   scan?: ReturnType<typeof scanSkeletonFences>,
 ): string {
   try {
-    const ids = steps.map((st) => st.skelId).filter((id): id is string => typeof id === "string" && id.length > 0);
+    const ids = content.steps.map((st) => st.skelId).filter((id): id is string => typeof id === "string" && id.length > 0);
     if (ids.length === 0) return "";
     const root = resolveProjectRoot();
-    const { fences, errors } = scan ?? scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot);
+    // #606 review M3/M4 — read the plan's declared files only; fall back to a
+    // bounded, prose-skipping walk when the plan declares none.
+    const declared = planDeclaredFiles(content);
+    const { fences, errors, truncated } = scan ?? scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot, { files: declared });
     const onDisk = new Set(fences.map((f) => f.id));
     const claimed = new Set(ids);
     const missing = [...claimed].filter((id) => !onDisk.has(id));
@@ -31,6 +35,8 @@ export function skeletonPlanNote(
       ...missing.map((id) => `step skelId "${id}" has no SKEL[${id}] fence on disk — write the skeleton before presenting it`),
       ...unclaimed.map((id) => `SKEL[${id}] is a pending fence no step claims`),
       ...errors.map((e) => `malformed SKEL markers: ${e}`),
+      ...(declared.length === 0 ? ["the plan declares no files (step `files` or a `file_map`), so the whole tree was scanned — declare them"] : []),
+      ...(truncated ? ["the scan hit its file cap, so some fences may be unseen"] : []),
     ];
     return notes.length > 0 ? `\n⚠ Skeleton check: ${notes.join("; ")}.` : `\nSkeleton check: ${claimed.size} fence${claimed.size === 1 ? "" : "s"} found on disk.`;
   } catch {
@@ -61,7 +67,7 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   const agentContent = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };
   const skeleton = attachSkeletonSnapshot<Record<string, unknown>>(agentContent);
   const content = skeleton.content;
-  const skeletonNote = `${skeletonPlanNote(planSteps, skeleton.scan)}${skeleton.note}`;
+  const skeletonNote = `${skeletonPlanNote(agentContent, skeleton.scan)}${skeleton.note}`;
   // #160 — plans were a scanner GAP: step descriptions/reasoning (and visuals
   // like a prototype's source) routinely quote config blocks, exactly where a
   // pasted key hides. #162 — the scan runs INSIDE createArtifact now (parity

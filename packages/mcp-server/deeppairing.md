@@ -156,16 +156,19 @@ throw new Error("SKEL_TODO");
 // /SKEL[2]
 ```
 
-Then call `present_plan` with one step per fence (`skelId: "2"`), in build
-order, plus a Mermaid architecture `diagram` and a `file_map` visual. The reply
-checks the fences exist on disk, and the plan card shows the fenced files (and
-the `file_map`'s new files) as code the human can comment on line by line;
-those comments arrive in `check_feedback` with file, line and fence. After approval, `update_plan_progress`
+Only when the human asks for it. Then call `present_plan` with one step per
+fence (`skelId: "2"`), in build order, plus a Mermaid architecture `diagram`
+and a `file_map` of every skeleton file. The reply checks that the fences exist
+in the declared files, and the plan card shows those files as code the human
+can comment on line by line (comments arrive in `check_feedback` with file,
+line and fence). Fence each step's test stub with the same id. After approval, `update_plan_progress`
 `in_progress` opens that step's fence, and the preflight hook asks on any edit
 outside it. Mark the step `done` when its `SKEL_TODO` is gone. A structural
 change (new helper, signature, file) is a skeleton change: propose it and
-`revise_artifact` the plan instead of routing around the fence. Strip the
-marker lines when every step is done. Approving the skeleton approves its shape
+`revise_artifact` the plan (or set the step back to `pending`) instead of
+routing around the fence. When every step is done, strip the marker lines and
+present the whole change with `present_changeset` before `present_debrief`.
+The review floor holds at every autonomy level. Approving the skeleton approves its shape
 only: the Autonomy dial, guardrails and any high-risk call still apply mid-fill.
 
 ### log_reasoning

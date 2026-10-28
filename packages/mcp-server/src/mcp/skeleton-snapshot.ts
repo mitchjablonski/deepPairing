@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PlanVisual, SkeletonCodeSnapshot, SkeletonFenceView } from "@deeppairing/shared";
 import { isSkeletonVisualId, skeletonVisualId } from "./skeleton-line.js";
-import { scanSkeletonFences, scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
+import { planDeclaredFiles, scanSkeletonFences, scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
 import { ruleForRelPath } from "../guardrail-rules.js";
 import { resolveProjectRoot } from "../project-root.js";
 
@@ -59,7 +59,7 @@ export const SKELETON_SNAPSHOT_LIMITS: SkeletonSnapshotLimits = {
 const MIN_USEFUL_BYTES = 512;
 
 
-type ScanResult = { fences: SkeletonFence[]; errors: string[] };
+type ScanResult = ReturnType<typeof scanSkeletonFences>;
 
 export interface SkeletonSnapshotResult {
   /** The snapshot visuals (empty for a non-skeleton plan). */
@@ -183,7 +183,14 @@ export function buildSkeletonSnapshot(args: {
   if (skelIds.length === 0) return { visuals: [], note: "" };
   const root = path.resolve(args.root);
 
-  const scan = scanSkeletonFences(root);
+  // The SAME scan #606's fence check runs: the plan's declared files (step
+  // `files` + file_map paths), or its bounded fallback walk when none are declared.
+  const scan = scanSkeletonFences(root, {
+    files: planDeclaredFiles({
+      steps: steps as Array<{ files?: unknown }>,
+      visuals: (Array.isArray(args.visuals) ? args.visuals : []) as Array<{ kind?: unknown; files?: unknown }>,
+    }),
+  });
   // Fenced files, in the order the plan's steps claim them.
   const fenced: string[] = [];
   for (const id of skelIds) {
