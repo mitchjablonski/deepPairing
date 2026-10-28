@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { selectGoverningBrief } from "../lib/governingBrief";
+import { useBriefExceptions, briefExceptionStripText } from "./BriefExceptions";
 
 /**
  * #571 slice 2 — the pinned GOVERNING BRIEF strip. While a delegated run
@@ -21,6 +22,10 @@ export function GoverningBriefStrip({ artifacts }: { artifacts: Artifact[] }) {
   const all = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const brief = useMemo(() => selectGoverningBrief(artifacts, all), [artifacts, all]);
+  // #572 slice A2 — attached AFTER selection (never inside its predicates): the
+  // same exception index the brief's own lists use, read in the brief's session.
+  const briefSessionId = brief ? artifacts.find((a) => a.id === brief.id)?.sessionId : undefined;
+  const exceptionText = briefExceptionStripText(useBriefExceptions(brief?.id, briefSessionId));
   if (!brief) return null;
 
   const open = () => {
@@ -88,6 +93,7 @@ export function GoverningBriefStrip({ artifacts }: { artifacts: Artifact[] }) {
               {brief.edgePathCount} edge path{brief.edgePathCount === 1 ? "" : "s"}
             </span>
           )}
+          {exceptionText && <span data-testid="governing-brief-exceptions">{exceptionText}</span>}
           <span data-testid="governing-brief-review">Review: {brief.reviewMode}</span>
         </span>
       </button>
