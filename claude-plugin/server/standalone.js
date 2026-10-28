@@ -36712,6 +36712,13 @@ import path10 from "node:path";
 var SKEL_TODO = "SKEL_TODO";
 var SKELETON_SCOPE_DIR = "skeleton-scopes";
 var SKELETON_SCOPE_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
+function parseReshape(raw) {
+  if (!raw || typeof raw !== "object") return void 0;
+  const r = raw;
+  if (typeof r.fromId !== "string" || !r.fromId) return void 0;
+  const strs = (v2) => Array.isArray(v2) ? v2.filter((x) => typeof x === "string" && x.length > 0) : [];
+  return { fromId: r.fromId, files: strs(r.files), restoreApproved: r.restoreApproved === true, restoreSkelIds: strs(r.restoreSkelIds) };
+}
 var COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
 var ID = String.raw`([A-Za-z0-9][\w.-]*)`;
 var OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]\s*(.*?)\s*(?:\*\/\}?|-->)?\s*$`);
@@ -36816,12 +36823,30 @@ function skeletonScopeDir(projectRoot2) {
 function scopeFileName(artifactId) {
   return /^[A-Za-z0-9_-]{1,80}$/.test(artifactId) ? `${artifactId}.json` : null;
 }
+function parseScope(raw, now) {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw;
+  const ids = Array.isArray(r.activeSkelIds) ? r.activeSkelIds.filter((x) => typeof x === "string" && x.length > 0) : [];
+  const reshape = parseReshape(r.reshape);
+  if (ids.length === 0 && !reshape || typeof r.artifactId !== "string") return null;
+  const at = Date.parse(String(r.updatedAt));
+  if (!Number.isFinite(at) || now - at > SKELETON_SCOPE_MAX_AGE_MS) return null;
+  return {
+    artifactId: r.artifactId,
+    activeSkelIds: ids,
+    updatedAt: String(r.updatedAt),
+    ...typeof r.planTitle === "string" ? { planTitle: r.planTitle } : {},
+    ...typeof r.sessionId === "string" && r.sessionId ? { sessionId: r.sessionId } : {},
+    ...typeof r.workspaceRoot === "string" && r.workspaceRoot ? { workspaceRoot: r.workspaceRoot } : {},
+    ...reshape ? { reshape } : {}
+  };
+}
 function writeSkeletonScope(projectRoot2, scope) {
   const name = scopeFileName(scope.artifactId);
   if (!name) return;
   const file2 = path10.join(skeletonScopeDir(projectRoot2), name);
   try {
-    if (scope.activeSkelIds.length === 0) {
+    if (scope.activeSkelIds.length === 0 && !scope.reshape) {
       fs10.rmSync(file2, { force: true });
       return;
     }
@@ -36830,6 +36855,15 @@ function writeSkeletonScope(projectRoot2, scope) {
     fs10.writeFileSync(tmp, JSON.stringify(scope, null, 2));
     fs10.renameSync(tmp, file2);
   } catch {
+  }
+}
+function readSkeletonScopeFile(projectRoot2, artifactId, now = Date.now()) {
+  const name = scopeFileName(artifactId);
+  if (!name) return null;
+  try {
+    return parseScope(JSON.parse(fs10.readFileSync(path10.join(skeletonScopeDir(projectRoot2), name), "utf-8")), now);
+  } catch {
+    return null;
   }
 }
 function within(dir, abs) {
@@ -37204,16 +37238,19 @@ function within3(dir, abs) {
   const rel = path12.relative(dir, abs);
   return rel === "" || !rel.startsWith("..") && !path12.isAbsolute(rel);
 }
+var PROSE_FILE2 = /\.(md|mdx|markdown|rst|txt)$/i;
 function skeletonLeftovers(root, content) {
   const c = content ?? {};
   const declared = planDeclaredFiles(c);
+  const claimed = new Set((c.steps ?? []).map((st) => st?.skelId).filter((id) => typeof id === "string" && id.length > 0));
   const { fences, errors } = scanSkeletonFences(root, { files: declared });
   const out = [];
   for (const f of fences) {
+    if (PROSE_FILE2.test(f.file) && !claimed.has(f.id)) continue;
     out.push({ file: f.file, line: f.openLine, what: `SKEL[${f.id}]` });
     out.push({ file: f.file, line: f.closeLine, what: `/SKEL[${f.id}]` });
   }
-  const files = /* @__PURE__ */ new Set([...declared, ...fences.map((f) => f.file)]);
+  const files = new Set([...declared, ...fences.map((f) => f.file)].filter((f) => !PROSE_FILE2.test(f)));
   let realRoot;
   try {
     realRoot = fs12.realpathSync(root);
@@ -37253,15 +37290,13 @@ function formatLeftovers(title, found) {
 }
 function finalizeCheckNote(artifacts, root) {
   try {
-    const plans = artifacts.filter(
-      (a) => a.type === "plan" && a.status === "approved" && isLivePlanVersion(a, artifacts) && allSkeletonStepsDone(a.content)
-    );
-    if (plans.length === 0) return "";
+    const current = artifacts.filter((a) => a.type === "plan" && a.status === "approved" && isLivePlanVersion(a, artifacts) && allSkeletonStepsDone(a.content)).sort((a, b) => a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0)[0];
+    if (!current) return "";
     const r = root ?? (() => {
       const pr = resolveProjectRoot();
       return pr.worktree?.workspaceRoot ?? pr.projectRoot;
     })();
-    return plans.map((p) => formatLeftovers(p.title, skeletonLeftovers(r, p.content))).join("");
+    return formatLeftovers(current.title, skeletonLeftovers(r, current.content));
   } catch {
     return "";
   }
@@ -37338,7 +37373,7 @@ async function handleUpdatePlanProgress(ctx, args) {
   }
   let liftedNote = "";
   if (!isSpec) {
-    const lifted = updates.filter((u) => u.status === "pending" || u.status === "skipped").filter((u) => priorStatuses[u.stepIndex]?.status === "in_progress" && typeof priorStatuses[u.stepIndex]?.skelId === "string").map((u) => ({ index: u.stepIndex, skelId: priorStatuses[u.stepIndex].skelId, status: u.status }));
+    const lifted = updates.filter((u) => u.status === "pending").filter((u) => priorStatuses[u.stepIndex]?.status === "in_progress" && typeof priorStatuses[u.stepIndex]?.skelId === "string").map((u) => ({ index: u.stepIndex, skelId: priorStatuses[u.stepIndex].skelId, status: u.status }));
     if (lifted.length > 0) {
       const what = lifted.map((l) => `SKEL[${l.skelId}] (step ${l.index + 1}, now ${l.status})`).join(", ");
       try {
@@ -37355,7 +37390,7 @@ async function handleUpdatePlanProgress(ctx, args) {
     }
   }
   const isSkeleton = !isSpec && (c.steps ?? []).some((st) => typeof st.skelId === "string" && st.skelId);
-  const reshapeNote = isSkeleton && artifact.status === "draft" && artifact.parentId ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused (no fence opens) until your pair approves it." : "";
+  const reshapeNote = isSkeleton && artifact.status === "draft" && artifact.parentId ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused. Until your pair approves it, the preflight hook asks before any edit to this plan's files." : "";
   let finalizeNote = "";
   if (isSkeleton && artifact.status === "approved" && allSkeletonStepsDone(artifact.content) && updates.some((u) => u.status === "done" || u.status === "skipped")) {
     const root = resolveProjectRoot();
@@ -37378,7 +37413,8 @@ function syncSkeletonScope(sessionId, artifact, updates, scan) {
     const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
     const approved = artifact.status === "approved";
     const activeSkelIds = approved ? steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId) : [];
-    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot });
+    const reshape = readSkeletonScopeFile(root.projectRoot, artifact.id)?.reshape;
+    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot, ...reshape ? { reshape } : {} });
     const finished = updates.filter((u) => u.status === "done").map((u) => steps[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0);
     const notes = [];
     if (finished.length > 0) {
@@ -37404,6 +37440,35 @@ function retirementFailure(outcome) {
   if (outcome.kind !== "blocked_feedback") return outcome.message;
   const counts = [outcome.unansweredQuestions ? `${outcome.unansweredQuestions} unanswered question(s)` : "", outcome.openSuggestions ? `${outcome.openSuggestions} open suggestion(s)` : "", outcome.undrainedComments ? `${outcome.undrainedComments} unread comment(s)` : ""].filter(Boolean);
   return `REFUSED \u2014 ${counts.join(" and ")}. Call check_feedback and address the feedback first; retirement must never dodge review.`;
+}
+
+// src/mcp/skeleton-reshape.ts
+function writeReshapeScope(args) {
+  try {
+    const oldSteps = (args.oldPlan.content ?? {}).steps ?? [];
+    const newSteps = (args.newContent ?? {}).steps ?? [];
+    const isSkel = (steps) => steps.some((st) => typeof st?.skelId === "string" && st.skelId.length > 0);
+    if (!isSkel(oldSteps) && !isSkel(newSteps)) return;
+    const root = resolveProjectRoot();
+    const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
+    const declared = [
+      ...planDeclaredFiles(args.oldPlan.content),
+      ...planDeclaredFiles(args.newContent)
+    ];
+    const fenced = scanSkeletonFences(workspaceRoot, { files: [...new Set(declared)] }).fences.map((f) => f.file);
+    const files = [.../* @__PURE__ */ new Set([...declared, ...fenced])];
+    const restoreSkelIds = oldSteps.filter((st) => typeof st?.skelId === "string" && st.skelId && st.status === "in_progress").map((st) => st.skelId);
+    writeSkeletonScope(root.projectRoot, {
+      artifactId: args.newId,
+      planTitle: args.newTitle,
+      activeSkelIds: [],
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      sessionId: args.sessionId,
+      workspaceRoot,
+      reshape: { fromId: args.oldPlan.id, files, restoreApproved: args.oldPlan.status === "approved", restoreSkelIds }
+    });
+  } catch {
+  }
 }
 
 // src/mcp/tools/revise-artifact.ts
@@ -37465,6 +37530,7 @@ async function handleReviseArtifact(ctx, args) {
       };
     }
     const content = deriveReviseContent(old, suppliedContent);
+    const oldStatusAtRevise = old.status;
     const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
     if (supersedeValidator) {
       const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
@@ -37481,6 +37547,9 @@ async function handleReviseArtifact(ctx, args) {
         regate: (exclude) => preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true, excludeStances: exclude })
       });
       if ("response" in outcome2) return outcome2.response;
+      if (old.type === "plan" && typeof outcome2.admitted.artifactId === "string" && outcome2.admitted.status === "admitted") {
+        writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id: old.id, status: oldStatusAtRevise, content: old.content }, newId: outcome2.admitted.artifactId, newTitle: String(args?.title ?? old.title), newContent: content });
+      }
       await maybeUpdateTaskStatus(server, old.id, store);
       notifyResourcesListChanged(server);
       const skelNote = old.type === "plan" && Array.isArray(content.steps) && content.steps.some((st) => typeof st?.skelId === "string" && st.skelId) ? " The skeleton code view is not re-read on an allowed revision; revise again to refresh it." : "";
@@ -37522,6 +37591,9 @@ async function handleReviseArtifact(ctx, args) {
       // reviseInheritedHash.
       ...carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
     });
+    if (old.type === "plan") {
+      writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id: old.id, status: oldStatusAtRevise, content: old.content }, newId, newTitle: title, newContent: skeletonSnap.content });
+    }
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
     await store.addComment({
@@ -37548,7 +37620,7 @@ async function handleReviseArtifact(ctx, args) {
     broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
     notifyResourcesListChanged(server);
     const reshapeNote = old.type === "plan" && Array.isArray(content.steps) && content.steps.some((st) => typeof st?.skelId === "string" && st.skelId) ? `
-Skeleton change: your pair re-reviews the reshaped skeleton on the card. Fills are paused (no fence opens) until they approve ${newId}; continue on that id.` : "";
+Skeleton change: your pair re-reviews the reshaped skeleton on the card. Fills are PAUSED: until they approve ${newId}, the preflight hook asks before any edit to this plan's files. Continue on ${newId} once approved.` : "";
     const advisory = pre?.ok && pre.advisory ? `
 
 \u26A0 Recalled stance \u2014 advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}` : "";
