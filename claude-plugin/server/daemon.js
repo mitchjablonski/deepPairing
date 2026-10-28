@@ -19175,7 +19175,7 @@ var PlanStepSchema = external_exports.object({
    * preflight hook fences edits to that id's regions. Optional for back-compat
    * (absent = an ordinary prose step).
    */
-  skelId: external_exports.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional().describe("Skeleton plans: the SKEL[id] fence this step fills. While the step is in_progress, edits outside that fence are gated.")
+  skelId: external_exports.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional().describe(`Skeleton plans: the SKEL[id] fence this step fills, e.g. "2" or "2.1" (starts with a letter or digit; then letters, digits, '.', '_' or '-'; no spaces). While the step is in_progress on an approved plan, edits outside that fence are gated.`)
 });
 var PlanVisualFileSchema = external_exports.object({
   path: external_exports.string(),
@@ -19213,6 +19213,25 @@ var PlanVisualSchema = external_exports.object({
   lineStart: external_exports.number().optional(),
   /** kind="annotated_code": line-anchored explanations. */
   annotations: external_exports.array(PlanVisualAnnotationSchema).optional()
+});
+var SkeletonFenceViewSchema = external_exports.object({
+  id: external_exports.string(),
+  title: external_exports.string().optional(),
+  openLine: external_exports.number(),
+  closeLine: external_exports.number(),
+  status: external_exports.enum(["todo", "filled"])
+});
+var SkeletonCodeSnapshotSchema = external_exports.object({
+  fences: external_exports.array(SkeletonFenceViewSchema),
+  /** An unfenced skeleton file (a file_map "create" entry with no fences). */
+  tracked: external_exports.boolean().optional(),
+  /** Set when the snapshot cap cut the file short. */
+  truncated: external_exports.object({ shownLines: external_exports.number(), totalLines: external_exports.number() }).optional(),
+  /** Malformed SKEL markers in this file (fences are then unknown). */
+  markerError: external_exports.string().optional()
+});
+var StoredPlanVisualSchema = PlanVisualSchema.extend({
+  skeleton: SkeletonCodeSnapshotSchema.optional()
 });
 var ResearchContentSchema = external_exports.object({
   summary: external_exports.string(),
@@ -20358,6 +20377,30 @@ function coerceVisual(v, fallbackId) {
       return ann;
     });
   }
+  if (out.kind === "annotated_code" && isObj(o.skeleton))
+    out.skeleton = coerceSkeletonSnapshot(o.skeleton);
+  return out;
+}
+function coerceSkeletonSnapshot(o) {
+  const fences = (Array.isArray(o.fences) ? o.fences : []).filter(isObj).filter((f) => typeof f.id === "string" && f.id.length > 0 && Number.isFinite(f.openLine) && Number.isFinite(f.closeLine)).map((f) => {
+    const fence = {
+      id: f.id,
+      openLine: f.openLine,
+      closeLine: f.closeLine,
+      status: f.status === "filled" ? "filled" : "todo"
+    };
+    if (typeof f.title === "string" && f.title)
+      fence.title = f.title;
+    return fence;
+  });
+  const out = { fences };
+  if (o.tracked === true)
+    out.tracked = true;
+  if (isObj(o.truncated) && Number.isFinite(o.truncated.shownLines) && Number.isFinite(o.truncated.totalLines)) {
+    out.truncated = { shownLines: o.truncated.shownLines, totalLines: o.truncated.totalLines };
+  }
+  if (typeof o.markerError === "string" && o.markerError)
+    out.markerError = o.markerError;
   return out;
 }
 function coerceRequirement(v) {
