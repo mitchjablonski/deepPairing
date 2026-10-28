@@ -675,6 +675,12 @@ function ledgersPresent(projectRoot) {
   return false;
 }
 
+// Skeleton plans — a live fence scope is the fourth reason to keep going. One
+// stat, no import: the core re-reads the file and applies the age check.
+function skeletonScopePresent(projectRoot) {
+  try { return fs.existsSync(path.join(projectRoot, ".deeppairing", "skeleton-scope.json")); } catch { return false; }
+}
+
 // #532 — a few stat calls: is the nearest .git (walking up) a FILE? That is a
 // linked worktree or a submodule; resolveHookRoots tells them apart.
 function nearestDotGitIsFile(dir) {
@@ -770,7 +776,7 @@ process.stdin.on("end", async () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       return await finish();
     }
-    if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
+    if (!ledgersPresent(projectRoot) && !skeletonScopePresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
       return await finish(); // nothing to match against — skip the matcher import
     }
     stage = "import";

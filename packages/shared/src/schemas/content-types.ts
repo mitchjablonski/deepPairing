@@ -148,6 +148,15 @@ export const PlanStepSchema = z.object({
     .describe("Execution status, updated by the agent via update_plan_progress"),
   statusNote: z.string().optional()
     .describe("One-line note shown beside the step (e.g. why it was skipped)"),
+  /**
+   * Skeleton plans — the SKEL fence id this step fills. The skeleton (stubs
+   * fenced `SKEL[id] … /SKEL[id]` with a `SKEL_TODO` body) is written to disk
+   * BEFORE the plan is presented; while this step is `in_progress` the
+   * preflight hook fences edits to that id's regions. Optional for back-compat
+   * (absent = an ordinary prose step).
+   */
+  skelId: z.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional()
+    .describe("Skeleton plans: the SKEL[id] fence this step fills. While the step is in_progress, edits outside that fence are gated."),
 });
 
 export type PlanStep = z.infer<typeof PlanStepSchema>;

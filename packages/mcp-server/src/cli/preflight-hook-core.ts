@@ -32,6 +32,10 @@ import {
   toolInputTargetsGuardrail,
 } from "../guardrail-rules.js";
 import type { GuardrailMatch, GuardrailRule, StateMatch } from "../guardrail-rules.js";
+// Skeleton plans — the fence gate. Leaf module like guardrail-rules; the
+// generated hook reaches skeletonScopeActive through this core's re-export.
+import { evaluateSkeletonEdit, readSkeletonScope, skeletonScopeActive } from "../skeleton-scope.js";
+export { skeletonScopeActive };
 export {
   DEEPPAIRING_STATE_CATEGORY,
   GUARDRAIL_RULES,
@@ -184,7 +188,9 @@ export interface HookDecision {
   /** The matcher fired. The caller's explicit mode determines ask vs stop. */
   fire: boolean;
   reason?: string;
-  source?: "session" | "team" | "guardrail";
+  source?: "session" | "team" | "guardrail" | "skeleton";
+  /** Skeleton plans — present only on a fence fire: the in-progress fence ids. */
+  skeleton?: { skelIds: string[] };
   /** Present only on a guardrail-backstop fire — what the caller stamps for
    *  dedup and names in the fire log. */
   guardrail?: GuardrailMatch;
@@ -1013,7 +1019,8 @@ function evaluateHookGates(args: {
   // NotebookEdit is matched only for this class; the other gates are unchanged.
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
-  if (strings.length === 0) return state ?? { fire: false };
+  // A pure deletion has no proposal strings but can still cross a fence.
+  if (strings.length === 0) return state ?? evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, failures }) ?? { fire: false };
 
   const result = runPreflightSkippingBadEntries({
     toolName,
@@ -1037,7 +1044,43 @@ function evaluateHookGates(args: {
       : { fire: true, reason, source: result.block.source, ...(stance ? { stance } : {}) };
   }
   if (state) return state;
+  // Skeleton plans — after the stance gate (its pinned wording leads) and
+  // before the backstop: an approved skeleton plan IS live ceremony, so the
+  // fence is the more specific thing to say.
+  const skeleton = evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, failures });
+  if (skeleton) return skeleton;
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
+}
+
+/** Skeleton plans — the fence gate as a HookDecision. Pure apart from reading
+ *  the scope file and the target file; any fault is "no decision". */
+export function evaluateSkeletonScope(args: {
+  toolName: string;
+  toolInput: unknown;
+  projectRoot: string;
+  now?: number;
+  failures?: PreflightFailureSink;
+}): HookDecision | null {
+  try {
+    const violation = evaluateSkeletonEdit({
+      toolName: args.toolName,
+      toolInput: args.toolInput,
+      projectRoot: args.projectRoot,
+      scope: readSkeletonScope(args.projectRoot, args.now),
+      readFile: (abs) => {
+        try {
+          return fs.readFileSync(abs, "utf-8");
+        } catch {
+          return null;
+        }
+      },
+    });
+    if (!violation) return null;
+    return { fire: true, reason: violation.reason, source: "skeleton", skeleton: { skelIds: violation.skelIds } };
+  } catch (err) {
+    pushFailure(args.failures, noteFailure("evaluate", "skeleton", err));
+    return null;
+  }
 }
 
 /** #544 — the structured match, read from the block's broadcast payload (the
@@ -1086,7 +1129,10 @@ export function hookGateRecord(decision: HookDecision, mode: PreflightMode = "as
   try {
     if (!decision.fire) return undefined;
     const stance = decision.stance;
-    const g = decision.guardrail;
+    // Skeleton plans — a fence fire reads as its own guardrail class in the gate log.
+    const g = decision.guardrail ?? (decision.skeleton
+      ? { category: "skeleton-scope", path: decision.target ?? "", note: `Skeleton fence ${decision.skeleton.skelIds.map((i) => `SKEL[${i}]`).join(", ")}`, rationale: "Filling an approved skeleton: edits stay inside the in-progress step's fence." }
+      : undefined);
     const concept = gateText(stance?.concept ?? g?.note, 200);
     if (!concept) return undefined;
     const source = stance ? (decision.source === "team" ? "team" : "session") : "guardrail";

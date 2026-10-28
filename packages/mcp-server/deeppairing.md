@@ -145,6 +145,26 @@ finish. The companion UI renders a live joint checklist so the human watches
 the build land instead of staring at a spinner. Not for changing the plan
 itself — that's `revise_artifact`.
 
+### Skeleton plans (`skelId`)
+When the human wants to approve the *shape* once and then let the build run,
+write the skeleton to disk first: real files, types, signatures and wiring,
+with every body a fenced stub. Each marker sits on its own line:
+
+```ts
+// SKEL[2] drop near-duplicate points, then interpolate()
+throw new Error("SKEL_TODO");
+// /SKEL[2]
+```
+
+Then call `present_plan` with one step per fence (`skelId: "2"`), in build
+order, plus a Mermaid architecture `diagram` and a `file_map` visual. The reply
+checks the fences exist on disk. After approval, `update_plan_progress`
+`in_progress` opens that step's fence, and the preflight hook asks on any edit
+outside it. Mark the step `done` when its `SKEL_TODO` is gone. A structural
+change (new helper, signature, file) is a skeleton change: propose it and
+`revise_artifact` the plan instead of routing around the fence. Strip the
+marker lines when every step is done.
+
 ### log_reasoning
 Call BEFORE every Edit or Write. Explain what and why.
 

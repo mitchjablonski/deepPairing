@@ -34,7 +34,7 @@ import path from "node:path";
 // read-modify-write, in the core, so the two hand-maintained hook copies can't
 // drift on the write shape. (This entry's own recordFire is gone.)
 import { resolveHookRoots } from "../git-worktree.js";
-import { evaluatePreflightHook, noteFailure, preflightHookOutput, pushFailure, recordHookFire, recordPreflightFailures, resolvePreflightMode, toolInputTargetsDeeppairingState, toolInputTargetsGuardrail, type PreflightFailureSink } from "./preflight-hook-core.js";
+import { evaluatePreflightHook, noteFailure, preflightHookOutput, pushFailure, recordHookFire, recordPreflightFailures, resolvePreflightMode, skeletonScopeActive, toolInputTargetsDeeppairingState, toolInputTargetsGuardrail, type PreflightFailureSink } from "./preflight-hook-core.js";
 
 /** PP1 — cheap pre-check so the common case (no rejections, no team.json) skips
  *  the matcher entirely. Reading the small preferences.json is ms. */
@@ -107,7 +107,8 @@ process.stdin.on("end", () => {
     if (
       !ledgersPresent(projectRoot, failures) &&
       !toolInputTargetsGuardrail(projectRoot, toolInput) &&
-      !toolInputTargetsDeeppairingState(projectRoot, toolInput)
+      !toolInputTargetsDeeppairingState(projectRoot, toolInput) &&
+      !skeletonScopeActive(projectRoot)
     ) {
       finish(); // nothing to match against — skip the matcher
     }

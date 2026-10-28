@@ -184,6 +184,8 @@ function coercePlanStep(v: unknown): PlanStep {
     out.status = s.status;
   }
   if (typeof s.statusNote === "string") out.statusNote = s.statusNote;
+  // Skeleton plans — same field-by-field trap as `status` above.
+  if (typeof s.skelId === "string" && s.skelId) out.skelId = s.skelId;
   // Conditional-branch fields (now first-class in PlanStepSchema).
   if (typeof s.condition === "string") out.condition = s.condition;
   if (Array.isArray(s.branches)) {
