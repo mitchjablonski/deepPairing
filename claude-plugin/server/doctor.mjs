@@ -15031,7 +15031,11 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   markerError: external_exports.string().optional(),
   /** Set when the server WITHHELD the file's content (a secret-shaped value
    *  was found on disk). The visual then carries no `code` at all. */
-  withheld: external_exports.string().optional()
+  withheld: external_exports.string().optional(),
+  /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
+   *  the same text keeps the old stamp, so a line comment made before it is
+   *  known to sit on unchanged code. */
+  takenAt: external_exports.string().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()

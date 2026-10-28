@@ -19232,7 +19232,11 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   markerError: external_exports.string().optional(),
   /** Set when the server WITHHELD the file's content (a secret-shaped value
    *  was found on disk). The visual then carries no `code` at all. */
-  withheld: external_exports.string().optional()
+  withheld: external_exports.string().optional(),
+  /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
+   *  the same text keeps the old stamp, so a line comment made before it is
+   *  known to sit on unchanged code. */
+  takenAt: external_exports.string().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()
@@ -20408,6 +20412,8 @@ function coerceSkeletonSnapshot(o) {
     out.markerError = o.markerError;
   if (typeof o.withheld === "string" && o.withheld)
     out.withheld = o.withheld;
+  if (typeof o.takenAt === "string" && o.takenAt)
+    out.takenAt = o.takenAt;
   return out;
 }
 function coerceRequirement(v) {
@@ -28255,7 +28261,7 @@ var FileStore = class _FileStore {
     }
   }
   /** D10 (H2) — patch plan step statuses in place. See store-interface.ts. */
-  updatePlanProgress(artifactId, updates) {
+  updatePlanProgress(artifactId, updates, opts) {
     this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "plan" && art.type !== "spec") return null;
@@ -28271,6 +28277,14 @@ var FileStore = class _FileStore {
       touched = true;
     }
     if (!touched) return null;
+    if (art.type === "plan" && Array.isArray(opts?.skeletonVisuals)) {
+      const isSkel = (v) => !!v && typeof v === "object" && typeof v.id === "string" && v.id.startsWith(SKELETON_VISUAL_PREFIX);
+      const plan = art.content;
+      const kept = (Array.isArray(plan.visuals) ? plan.visuals : []).filter((v) => !isSkel(v));
+      const next = [...kept, ...opts.skeletonVisuals.filter(isSkel)];
+      if (next.length > 0) plan.visuals = next;
+      else delete plan.visuals;
+    }
     const secretWarnings = scanContentForSecrets(art.content);
     if (secretWarnings.length > 0) {
       art.secretWarnings = secretWarnings;
@@ -35612,13 +35626,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!r.ok) return r.response;
     const bodyR = await readJsonObject(c);
     if (!bodyR.ok) return bodyR.res;
-    const { updates } = bodyR.body;
+    const { updates, skeletonVisuals } = bodyR.body;
     if (!Array.isArray(updates)) return c.json({ error: "updates must be an array" }, 400);
     const VALID = /* @__PURE__ */ new Set(["pending", "in_progress", "done", "skipped"]);
     const clean = updates.filter(
       (u) => Number.isInteger(u?.stepIndex) && u.stepIndex >= 0 && VALID.has(u?.status)
     );
-    const artifact = r.store.updatePlanProgress(artifactId, clean);
+    const artifact = r.store.updatePlanProgress(artifactId, clean, Array.isArray(skeletonVisuals) ? { skeletonVisuals } : void 0);
     if (!artifact) return c.json({ artifact: null });
     broadcast(sessionId, { type: "plan_progress_updated", artifact });
     return c.json({ artifact });
