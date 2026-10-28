@@ -36541,7 +36541,7 @@ async function handleAnswerQuestion(ctx, args) {
 import fs10 from "node:fs";
 import path10 from "node:path";
 var SKEL_TODO = "SKEL_TODO";
-var SKELETON_SCOPE_FILE = "skeleton-scope.json";
+var SKELETON_SCOPE_DIR = "skeleton-scopes";
 var SKELETON_SCOPE_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
 var COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
 var ID = String.raw`([A-Za-z0-9][\w.-]*)`;
@@ -36611,11 +36611,16 @@ function scanSkeletonFences(root, maxFiles = 2e4) {
   walk(root);
   return { fences, errors };
 }
-function skeletonScopePath(projectRoot2) {
-  return path10.join(projectRoot2, ".deeppairing", SKELETON_SCOPE_FILE);
+function skeletonScopeDir(projectRoot2) {
+  return path10.join(projectRoot2, ".deeppairing", SKELETON_SCOPE_DIR);
+}
+function scopeFileName(artifactId) {
+  return /^[A-Za-z0-9_-]{1,80}$/.test(artifactId) ? `${artifactId}.json` : null;
 }
 function writeSkeletonScope(projectRoot2, scope) {
-  const file2 = skeletonScopePath(projectRoot2);
+  const name = scopeFileName(scope.artifactId);
+  if (!name) return;
+  const file2 = path10.join(skeletonScopeDir(projectRoot2), name);
   try {
     if (scope.activeSkelIds.length === 0) {
       fs10.rmSync(file2, { force: true });
@@ -36681,7 +36686,7 @@ async function handleUpdatePlanProgress(ctx, args) {
   };
   const warning = NOT_EXECUTABLE[artifact.status] ? `
 \u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
-  const skeletonNote = isSpec ? "" : syncSkeletonScope(artifact.id, artifact.title, c.steps ?? [], updates);
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact.id, artifact.title, c.steps ?? [], updates);
   return {
     content: [{
       type: "text",
@@ -36689,16 +36694,17 @@ async function handleUpdatePlanProgress(ctx, args) {
     }]
   };
 }
-function syncSkeletonScope(artifactId, planTitle, steps, updates) {
+function syncSkeletonScope(sessionId, artifactId, planTitle, steps, updates) {
   try {
     if (!steps.some((st) => typeof st.skelId === "string" && st.skelId)) return "";
     const root = resolveProjectRoot();
     const activeSkelIds = steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId);
-    writeSkeletonScope(root.projectRoot, { artifactId, planTitle, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+    const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
+    writeSkeletonScope(root.projectRoot, { artifactId, planTitle, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot });
     const finished = updates.filter((u) => u.status === "done").map((u) => steps[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0);
     const notes = [];
     if (finished.length > 0) {
-      const { fences } = scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot);
+      const { fences } = scanSkeletonFences(workspaceRoot);
       for (const id of finished) {
         const mine = fences.filter((f) => f.id === id);
         const todo = mine.filter((f) => f.status === "todo");
