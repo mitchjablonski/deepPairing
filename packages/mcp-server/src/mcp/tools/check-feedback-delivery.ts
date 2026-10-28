@@ -386,6 +386,8 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
     artsForTargets.find((a) => a.id === c.target.artifactId),
     c.target.visualId,
     c.target.lineStart,
+    c.target.skeletonAnchor,
+    c.createdAt,
   );
   if (skeletonLine) loc += skeletonLine;
   // #186 — an OLD-side comment is about a REMOVED line. Mark it so the agent

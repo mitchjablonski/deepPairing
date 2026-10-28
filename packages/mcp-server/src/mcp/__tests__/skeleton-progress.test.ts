@@ -178,6 +178,73 @@ describe("skeleton progress — re-read on update_plan_progress", () => {
     expect(res.text).toContain("a.ts:3 (inside the SKEL[1] fence, step 1 — active)");
   });
 
+  it("M2: an approved-skeleton comment is named as such and stays exact after fills", async () => {
+    const id = await presentApproved();
+    await store.addComment({
+      id: "cmt_appr",
+      artifactId: id,
+      content: "dedupe by distance",
+      author: "human",
+      target: {
+        visualId: "skelcode:a.ts",
+        filePath: "a.ts",
+        lineStart: 3,
+        lineEnd: 3,
+        skeletonAnchor: { snapshot: "approved", fenceId: "1", lineText: '  throw new Error("SKEL_TODO");' },
+      },
+    } as any);
+    fs.writeFileSync(path.join(root, "a.ts"), "// moved\n// moved\n" + FILLED);
+    await progress(id, 0, "in_progress");
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain("a.ts:3 (inside the SKEL[1] fence, step 1 — active) — on the approved skeleton");
+    expect(res.text).not.toContain("changed since");
+  });
+
+  it("M2: a live comment keeps its anchor across a re-read, names its view, and says the code changed since", async () => {
+    const id = await presentApproved();
+    await progress(id, 0, "in_progress");
+    const live = liveView(id)!;
+    const line3 = live.code!.split("\n")[2]!;
+    await store.addComment({
+      id: "cmt_live_anchor",
+      artifactId: id,
+      content: "is this the right error?",
+      author: "human",
+      target: {
+        visualId: "skelcode-live:a.ts",
+        filePath: "a.ts",
+        lineStart: 3,
+        lineEnd: 3,
+        skeletonAnchor: { snapshot: "live", takenAt: live.skeleton!.takenAt, readAt: live.skeleton!.readAt, fenceId: "1", lineText: line3 },
+      },
+    } as any);
+    // Unchanged so far: named, no "changed since".
+    const first = await callTool("check_feedback", { peek: true });
+    expect(first.text).toContain(`a.ts:3 (inside the SKEL[1] fence, step 1 — active) — on the live view as of ${new Date(Math.floor(live.skeleton!.readAt!)).toISOString()}`);
+    expect(first.text).not.toContain("changed since");
+    // Two lines inserted above: live line 3 is now a different line; the anchor still names fence 1.
+    await new Promise((r) => setTimeout(r, 5));
+    fs.writeFileSync(path.join(root, "a.ts"), "// added\n// added\n" + SRC);
+    await progress(id, 0, "in_progress");
+    expect(liveView(id)!.code!.split("\n")[2]).not.toBe(line3);
+    await store.addComment({
+      id: "cmt_nudge",
+      artifactId: id,
+      content: "and this one?",
+      author: "human",
+      target: {
+        visualId: "skelcode-live:a.ts",
+        filePath: "a.ts",
+        lineStart: 3,
+        lineEnd: 3,
+        skeletonAnchor: { snapshot: "live", takenAt: live.skeleton!.takenAt, readAt: live.skeleton!.readAt, fenceId: "1", lineText: line3 },
+      },
+    } as any);
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain("a.ts:3 (inside the SKEL[1] fence, step 1 — active) — on the live view as of");
+    expect(res.text).toContain('the code has changed since, so this line may have moved — when commented it read "throw new Error(\\"SKEL_TODO\\");"');
+  });
+
   it("the live swap is atomic per plan and keeps the NEWEST read (a stale concurrent read is dropped)", async () => {
     const id = await presentApproved();
     const snap = (code: string, readAt: number) => [

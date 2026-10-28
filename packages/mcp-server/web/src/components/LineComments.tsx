@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Comment, CommentSuggestion } from "@deeppairing/shared";
+import type { Comment, CommentSuggestion, CommentTarget } from "@deeppairing/shared";
 import { suggestionSummary } from "@deeppairing/shared";
 import { unansweredQuestionIds } from "../lib/unanswered";
 import { useArtifactStore, commentPriorVersion } from "../stores/artifact";
@@ -446,6 +446,9 @@ interface LineComposerProps {
     findingIndex?: number;
     evidenceIndex?: number;
     stepIndex?: number;
+    visualId?: string;
+    /** Skeleton plans — the snapshot a comment is written on (#609 review M2). */
+    skeletonAnchor?: CommentTarget["skeletonAnchor"];
   };
   onClose: () => void;
 }

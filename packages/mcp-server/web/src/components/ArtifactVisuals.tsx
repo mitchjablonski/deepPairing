@@ -379,6 +379,26 @@ function AnnotatedCode({
       targetContext={{ visualId: visual.id }}
       readOnly={readOnly}
       lineDecoration={skeletonLineDecoration(visual, skeletonSteps)}
+      // #609 review M2 — a comment on a skeleton snapshot records WHICH
+      // snapshot, its read time, and the fence + line text it was written on,
+      // so check_feedback can place it even after the live view is re-read.
+      {...(visual.skeleton
+        ? {
+            lineTargetExtra: (lineNum: number) => {
+              const fence = visual.skeleton!.fences.find((f) => lineNum >= f.openLine && lineNum <= f.closeLine);
+              const text = (visual.code ?? "").split("\n")[lineNum - lineStart];
+              return {
+                skeletonAnchor: {
+                  snapshot: (isSkeletonLiveVisualId(visual.id) ? "live" : "approved") as "live" | "approved",
+                  ...(visual.skeleton!.takenAt ? { takenAt: visual.skeleton!.takenAt } : {}),
+                  ...(typeof visual.skeleton!.readAt === "number" ? { readAt: visual.skeleton!.readAt } : {}),
+                  ...(fence ? { fenceId: fence.id } : {}),
+                  ...(typeof text === "string" ? { lineText: text.slice(0, 500) } : {}),
+                },
+              };
+            },
+          }
+        : {})}
     />
   );
 }

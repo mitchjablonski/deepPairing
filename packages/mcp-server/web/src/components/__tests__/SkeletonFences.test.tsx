@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { PlanVisual } from "@deeppairing/shared";
 import { ArtifactVisuals } from "../ArtifactVisuals";
 import { SkeletonSummary, planStepNodeStates } from "../SkeletonFences";
@@ -175,6 +176,27 @@ describe("skeleton code in the plan card", () => {
       expect(container.querySelector('[data-skel-other-comments="true"]')?.textContent).toBe("1 comment on the as-approved view");
       fireEvent.click(screen.getByRole("button", { name: "As approved" }));
       expect(container.querySelector('[data-skel-other-comments="true"]')).toBeNull();
+    });
+
+    it("M2: a line comment records the snapshot, its read time, the fence and the line text", async () => {
+      const live: PlanVisual = { ...LIVE, skeleton: { ...LIVE.skeleton!, takenAt: "2026-10-27T10:00:00.000Z", readAt: 1793095200000 } };
+      render(<ArtifactVisuals artifactId="art_p" visuals={[SKELETON, live]} skeletonSteps={STEPS} />);
+      const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+      await userEvent.click(commentBtns[2]!); // line 3
+      await userEvent.type(screen.getByPlaceholderText(/add a comment on this line/i), "dedupe by distance");
+      const submit = screen.getAllByRole("button", { name: /^Comment$/ });
+      await userEvent.click(submit[submit.length - 1]!);
+      const call = (fetch as any).mock.calls.find((c: any[]) => typeof c[1]?.body === "string" && c[1].body.includes("dedupe by distance"));
+      const body = JSON.parse(call[1].body);
+      expect(body.target.visualId).toBe("skelcode-live:src/a.ts");
+      expect(body.target.lineStart).toBe(3);
+      expect(body.target.skeletonAnchor).toEqual({
+        snapshot: "live",
+        takenAt: "2026-10-27T10:00:00.000Z",
+        readAt: 1793095200000,
+        fenceId: "1",
+        lineText: "  return dedupe(raw);",
+      });
     });
 
     it("the diagram/progress states read the live snapshot", () => {
