@@ -22,6 +22,10 @@ you do post one, it is the only card before you build.
   is the progress signal), no `present_code_change` per edit, no explainer I
   didn't ask for.
 
+A delegated run never starts a skeleton plan by itself. Use one only if I ask
+for it (`/deeppairing:skeleton`, or "skeleton first"). It doesn't replace move
+2's condition: when the brief is owed, the skeleton plan is that brief.
+
 If my autonomy level is `supervised`, always post the brief (the move-2 condition
 doesn't apply) and the packet, since I asked for them. Nothing is quieted: every
 fork is presented the way it is today, and you ask as you would without this

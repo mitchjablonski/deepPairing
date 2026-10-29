@@ -145,6 +145,34 @@ finish. The companion UI renders a live joint checklist so the human watches
 the build land instead of staring at a spinner. Not for changing the plan
 itself — that's `revise_artifact`.
 
+### Skeleton plans (`skelId`)
+When the human wants to approve the *shape* once and then let the build run,
+write the skeleton to disk first: real files, types, signatures and wiring,
+with every body a fenced stub. Each marker sits on its own line:
+
+```ts
+// SKEL[2] drop near-duplicate points, then interpolate()
+throw new Error("SKEL_TODO");
+// /SKEL[2]
+```
+
+Only when the human asks for it. Then call `present_plan` with one step per
+fence (`skelId: "2"`), in build order, plus a Mermaid architecture `diagram`
+and a `file_map` of every skeleton file. Name each step's diagram node
+`step_<id>` (step `2.1` is `step_2_1`) so the card colours it by fence status. The reply checks that the fences exist
+in the declared files, and the plan card shows the fenced files as code the
+human can comment on line by line (unfenced new files by path only) (comments arrive in `check_feedback` with file,
+line and fence). Fence each step's test stub with the same id. After approval, `update_plan_progress`
+`in_progress` opens that step's fence, and the preflight hook asks on any edit
+outside it. Mark the step `done` when its `SKEL_TODO` is gone. A structural
+change (new helper, signature, file) is a skeleton change: propose it and
+`revise_artifact` the plan (supersede, reason `Skeleton change: …`; until the
+human approves it, the hook asks on any edit to the plan's files) instead of
+routing around the fence. When every step is done, strip the marker lines and
+present the whole change with `present_changeset` before `present_debrief`.
+The review floor holds at every autonomy level. Approving the skeleton approves its shape
+only: the Autonomy dial, guardrails and any high-risk call still apply mid-fill.
+
 ### log_reasoning
 Call BEFORE every Edit or Write. Explain what and why.
 

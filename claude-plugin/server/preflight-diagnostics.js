@@ -127,6 +127,7 @@ var PREFLIGHT_FAILURE_SOURCES = [
   "matcher",
   "backstop",
   "state",
+  "skeleton",
   "hook"
 ];
 var PREFLIGHT_FAILURES_FIELD = "preflightFailures";

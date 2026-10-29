@@ -82,6 +82,12 @@ opaque "module not found" errors.
   findings for inline PR comments.
 - `/deeppairing:post-pr <pr>` — Post the approved pair findings as inline
   comments on the pull request (via the `gh` CLI).
+- `/deeppairing:skeleton <task>` — Plan a feature as a code skeleton of
+  fenced stubs plus an architecture diagram. You approve the shape once; each
+  step's fill is then gated to its fence, and the finished change still comes
+  to you as a changeset.
+- `/deeppairing:skeleton-fill [all | step-id]` — Fill an approved skeleton plan's fences: one step
+  then stop (default), one named step, or `all` in order. Skeleton changes still come back to you.
 
 **Skill** (auto-invoked)
 

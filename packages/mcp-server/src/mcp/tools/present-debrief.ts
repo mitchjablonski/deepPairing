@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { finalizeCheckNote } from "../skeleton-finalize.js";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentDebriefInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
@@ -133,7 +134,10 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
     ]),
     ...(needsYourEyes ?? []).flatMap((n) => (typeof n.artifactRef === "string" ? [n.artifactRef] : [])),
   ].filter((r): r is string => typeof r === "string" && r.length > 0);
-  const knownIds = new Set((await ctx.store.getArtifacts()).map((a) => a.id));
+  const allArtifacts = await ctx.store.getArtifacts();
+  const knownIds = new Set(allArtifacts.map((a) => a.id));
+  // Skeleton plans, parity PR 4 — the finalize check at close.
+  const skeletonFinalize = finalizeCheckNote(allArtifacts);
   // Preserve first-seen order, de-dupe, and drop any that resolve.
   const dangling = [...new Set(refIds)].filter((r) => !knownIds.has(r));
   const danglingNote =
@@ -148,7 +152,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
         `Debrief "${artifact.title}" presented for review (${id}) — ${sectionCount} section${sectionCount === 1 ? "" : "s"}` +
         `${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. ` +
         `This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. ` +
-        `Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their questions, comments, and verdict.${danglingNote}${skeletonFinalize}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

@@ -88,6 +88,8 @@ interface PlanStep {
   status?: "pending" | "in_progress" | "done" | "skipped";
   statusNote?: string;
   motivatedBy?: string[];
+  // Skeleton plans — the SKEL[id] fence this step fills.
+  skelId?: string;
   preview?: { before: string; after: string; filePath: string };
   condition?: string;
   branches?: BranchStep[];
@@ -224,13 +226,41 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
     }
   };
 
+  // Parity PR 4 — reshape: a newer version of a skeleton plan is a skeleton
+  // CHANGE, so it reads as one and says fills are paused until approval.
+  const isSkeletonPlan = steps.some((st) => typeof st?.skelId === "string" && st.skelId.length > 0);
+  const reshaped = isSkeletonPlan && !!artifact.parentId && artifact.status === "draft";
+  // #610 review L1 — "you approved" only when the previous version WAS approved.
+  const parentWasApproved = useArtifactStore((st) => {
+    if (!reshaped) return false;
+    const parent = st.artifacts.find((a) => a.id === artifact.parentId);
+    return !!parent && (parent.status === "approved" || !!parent.statusHistory?.some((h) => h.status === "approved"));
+  });
+
   return (
     <div className="space-y-4">
+      {reshaped && (
+        <div
+          role="note"
+          data-skel-reshape="true"
+          className="rounded-md border border-accent-amber/50 bg-accent-amber-dim/30 px-3 py-2 text-xs text-text-primary space-y-0.5"
+        >
+          <div className="font-semibold">
+            {parentWasApproved
+              ? `Skeleton change (v${artifact.version}): Claude reshaped the skeleton you approved.`
+              : `Skeleton change (v${artifact.version}): Claude revised this skeleton before you approved it.`}
+          </div>
+          <div className="text-text-secondary">
+            Re-review the new shape below. Fills are paused: until you approve this version, any edit to this plan&apos;s files asks you first.
+          </div>
+          {artifact.agentReasoning && <div className="text-text-muted italic">Why: {artifact.agentReasoning}</div>}
+        </div>
+      )}
       {/* Visuals frame the plan — diagrams / file maps / prototypes the human
           can comment on directly. Self-hides when the plan has none.
           #207 (I2 review) — composers withheld when the plan is retracted/
           terminal or replayed. */}
-      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={writeLocked} />
+      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={writeLocked} skeletonSteps={steps} />
 
       {steps.length > 0 && (
         <div className="space-y-3">
@@ -310,6 +340,14 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                     )}
                     <div className={`flex-1 min-w-0 ${!checkedSteps[i] && artifact.status === "draft" ? "opacity-40 line-through" : ""}`}>
                       <p className="prose-field text-sm text-text-primary font-medium">
+                        {step.skelId && (
+                          <span
+                            className="mr-1.5 rounded px-1 py-px font-mono text-2xs text-accent-blue bg-accent-blue-dim align-middle"
+                            title={`Fills the SKEL[${step.skelId}] fence. While this step is in progress, edits outside it ask you first.`}
+                          >
+                            SKEL[{step.skelId}]
+                          </span>
+                        )}
                         {step.description}
                       </p>
                       <p className="prose-field text-xs text-text-muted mt-0.5">

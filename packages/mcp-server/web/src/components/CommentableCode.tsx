@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { Comment, PlanVisualAnnotation } from "@deeppairing/shared";
+import { useState, type ReactNode } from "react";
+import type { Comment, CommentTarget, PlanVisualAnnotation } from "@deeppairing/shared";
 import { useHighlightedCode } from "../hooks/useHighlightedCode";
 import { detectLanguage } from "../lib/highlighter";
 import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "./LineComments";
@@ -61,6 +61,21 @@ interface CommentableCodeProps {
    *  Used by the revision diff, which is a preview — a comment started there
    *  would anchor to the wrong (new) artifact version. */
   readOnly?: boolean;
+  /** Optional per-line decoration (skeleton plans: fence shading by status).
+   *  `className` styles the line row; `header` renders a labelled strip above
+   *  the line (e.g. the fence's step + status, in text). Absent → every line
+   *  renders exactly as before. */
+  lineDecoration?: (lineNum: number) => CodeLineDecoration | undefined;
+  /** Optional per-line additions to the comment target (skeleton plans: the
+   *  snapshot, fence and line text the comment is written on). */
+  lineTargetExtra?: (lineNum: number) => { skeletonAnchor?: CommentTarget["skeletonAnchor"] } | undefined;
+}
+
+export interface CodeLineDecoration {
+  className?: string;
+  header?: ReactNode;
+  /** data-* hooks for tests and styling (e.g. { "data-skel-status": "todo" }). */
+  attrs?: Record<string, string>;
 }
 
 export function CommentableCode({
@@ -73,6 +88,8 @@ export function CommentableCode({
   annotationsByLine,
   targetContext,
   readOnly = false,
+  lineDecoration,
+  lineTargetExtra,
 }: CommentableCodeProps) {
   // One open composer at a time across the whole block. Mode lives here too so
   // the gutter and composer agree on which tab is active.
@@ -102,10 +119,13 @@ export function CommentableCode({
         // X10 — anchor key matches commentAnchorKey() in lib/comment-anchor.ts.
         const anchorKey = `line:${filePath ?? ""}:${lineNum}`;
 
+        const deco = lineDecoration?.(lineNum);
+
         return (
-          <div key={i} data-comment-anchor={anchorKey}>
+          <div key={i} data-comment-anchor={anchorKey} {...(deco?.attrs ?? {})}>
+            {deco?.header}
             {/* Code line */}
-            <div className="flex group">
+            <div className={deco?.className ? `flex group ${deco.className}` : "flex group"}>
               {readOnly ? (
                 // Preview (revision diff): no interactive gutter — a comment
                 // here would anchor to the wrong version. Keep the width so the
@@ -201,7 +221,7 @@ export function CommentableCode({
                 mode={mode}
                 setMode={setMode}
                 existingComments={chips}
-                targetContext={targetContext}
+                targetContext={lineTargetExtra ? { ...targetContext, ...lineTargetExtra(lineNum) } : targetContext}
                 onClose={closeLine}
               />
             )}

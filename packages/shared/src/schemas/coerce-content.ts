@@ -10,6 +10,8 @@ import type {
   PlanVisualFile,
   PlanVisualDocSection,
   PlanVisualAnnotation,
+  SkeletonCodeSnapshot,
+  SkeletonFenceView,
   SpecContent,
   SpecRequirement,
   SpecTask,
@@ -29,6 +31,7 @@ import type {
   ExplainerContent,
   ExplainerSection,
 } from "./content-types.js";
+import { SKELETON_VISUAL_PREFIX } from "./content-types.js";
 
 /**
  * Coercion boundary for artifact `content`.
@@ -184,6 +187,8 @@ function coercePlanStep(v: unknown): PlanStep {
     out.status = s.status;
   }
   if (typeof s.statusNote === "string") out.statusNote = s.statusNote;
+  // Skeleton plans — same field-by-field trap as `status` above.
+  if (typeof s.skelId === "string" && s.skelId) out.skelId = s.skelId;
   // Conditional-branch fields (now first-class in PlanStepSchema).
   if (typeof s.condition === "string") out.condition = s.condition;
   if (Array.isArray(s.branches)) {
@@ -295,6 +300,40 @@ function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
         return ann;
       });
   }
+  // Skeleton plans (#606 parity PR 2) — the server-set fence snapshot on an
+  // annotated_code visual. Built field by field like everything above, so a
+  // malformed value degrades to "no fences" rather than reaching the renderer.
+  // Only a server snapshot id may carry it (defence in depth: every tool path
+  // strips agent-supplied `skeleton`, and this keeps a stray one off the card).
+  if (out.kind === "annotated_code" && (out.id.startsWith(SKELETON_VISUAL_PREFIX) || out.id.startsWith("skelcode-live:")) && isObj(o.skeleton)) {
+    out.skeleton = coerceSkeletonSnapshot(o.skeleton);
+  }
+  return out;
+}
+
+function coerceSkeletonSnapshot(o: Record<string, unknown>): SkeletonCodeSnapshot {
+  const fences: SkeletonFenceView[] = (Array.isArray(o.fences) ? o.fences : [])
+    .filter(isObj)
+    .filter((f) => typeof f.id === "string" && f.id.length > 0 && Number.isFinite(f.openLine) && Number.isFinite(f.closeLine))
+    .map((f) => {
+      const fence: SkeletonFenceView = {
+        id: f.id as string,
+        openLine: f.openLine as number,
+        closeLine: f.closeLine as number,
+        status: f.status === "filled" ? "filled" : "todo",
+      };
+      if (typeof f.title === "string" && f.title) fence.title = f.title;
+      return fence;
+    });
+  const out: SkeletonCodeSnapshot = { fences };
+  if (o.tracked === true) out.tracked = true;
+  if (isObj(o.truncated) && Number.isFinite(o.truncated.shownLines) && Number.isFinite(o.truncated.totalLines)) {
+    out.truncated = { shownLines: o.truncated.shownLines as number, totalLines: o.truncated.totalLines as number };
+  }
+  if (typeof o.markerError === "string" && o.markerError) out.markerError = o.markerError;
+  if (typeof o.withheld === "string" && o.withheld) out.withheld = o.withheld;
+  if (typeof o.takenAt === "string" && o.takenAt) out.takenAt = o.takenAt;
+  if (typeof o.readAt === "number" && Number.isFinite(o.readAt)) out.readAt = o.readAt;
   return out;
 }
 

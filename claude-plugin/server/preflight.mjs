@@ -1,8 +1,8 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/cli/preflight-hook-entry.ts
-import fs5 from "node:fs";
-import path6 from "node:path";
+import fs6 from "node:fs";
+import path7 from "node:path";
 
 // src/git-worktree.ts
 import fs from "node:fs";
@@ -140,8 +140,8 @@ function resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()
 }
 
 // src/cli/preflight-hook-core.ts
-import fs4 from "node:fs";
-import path5 from "node:path";
+import fs5 from "node:fs";
+import path6 from "node:path";
 
 // src/mcp/preflight-validator.ts
 function normalizeConceptKey(name) {
@@ -730,6 +730,7 @@ var PREFLIGHT_FAILURE_SOURCES = [
   "matcher",
   "backstop",
   "state",
+  "skeleton",
   "hook"
 ];
 var PREFLIGHT_FAILURES_FIELD = "preflightFailures";
@@ -1057,12 +1058,356 @@ function toolInputTargetsDeeppairingState(projectRoot, toolInput) {
   }
 }
 
+// src/skeleton-scope.ts
+import fs4 from "node:fs";
+import path5 from "node:path";
+var SKEL_TODO = "SKEL_TODO";
+var SKELETON_SCOPE_DIR = "skeleton-scopes";
+var SKELETON_SCOPE_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
+function parseReshape(raw) {
+  if (!raw || typeof raw !== "object") return void 0;
+  const r = raw;
+  if (typeof r.fromId !== "string" || !r.fromId) return void 0;
+  const strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.length > 0) : [];
+  return { fromId: r.fromId, files: strs(r.files), restoreApproved: r.restoreApproved === true, restoreSkelIds: strs(r.restoreSkelIds) };
+}
+var COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
+var ID = String.raw`([A-Za-z0-9][\w.-]*)`;
+var OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]\s*(.*?)\s*(?:\*\/\}?|-->)?\s*$`);
+var CLOSE_RE = new RegExp(String.raw`^\s*${COMMENT}\s*\/SKEL\[${ID}\]\s*(?:\*\/\}?|-->)?\s*$`);
+function scanSkeletonText(text, file) {
+  const lines = text.split("\n");
+  const fences = [];
+  let open = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNo = i + 1;
+    const close = CLOSE_RE.exec(line);
+    if (close) {
+      if (!open || open.id !== close[1]) throw new Error(`${file}:${lineNo}: /SKEL[${close[1]}] closes ${open ? `SKEL[${open.id}]` : "nothing"}`);
+      const body = lines.slice(open.openLine, lineNo - 1).join("\n");
+      fences.push({ ...open, file, closeLine: lineNo, status: body.includes(SKEL_TODO) ? "todo" : "filled" });
+      open = null;
+      continue;
+    }
+    const m = OPEN_RE.exec(line);
+    if (m) {
+      if (open) throw new Error(`${file}:${lineNo}: SKEL[${m[1]}] opened inside SKEL[${open.id}]`);
+      open = { id: m[1], title: m[2] ?? "", openLine: lineNo };
+    }
+  }
+  if (open) throw new Error(`${file}:${open.openLine}: SKEL[${open.id}] is never closed`);
+  return fences;
+}
+function skeletonScopeDir(projectRoot) {
+  return path5.join(projectRoot, ".deeppairing", SKELETON_SCOPE_DIR);
+}
+function parseScope(raw, now) {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw;
+  const ids = Array.isArray(r.activeSkelIds) ? r.activeSkelIds.filter((x) => typeof x === "string" && x.length > 0) : [];
+  const reshape = parseReshape(r.reshape);
+  if (ids.length === 0 && !reshape || typeof r.artifactId !== "string") return null;
+  const at = Date.parse(String(r.updatedAt));
+  if (!Number.isFinite(at) || now - at > SKELETON_SCOPE_MAX_AGE_MS) return null;
+  return {
+    artifactId: r.artifactId,
+    activeSkelIds: ids,
+    updatedAt: String(r.updatedAt),
+    ...typeof r.planTitle === "string" ? { planTitle: r.planTitle } : {},
+    ...typeof r.sessionId === "string" && r.sessionId ? { sessionId: r.sessionId } : {},
+    ...typeof r.workspaceRoot === "string" && r.workspaceRoot ? { workspaceRoot: r.workspaceRoot } : {},
+    ...reshape ? { reshape } : {}
+  };
+}
+function readSkeletonScopes(projectRoot, now = Date.now()) {
+  let names;
+  try {
+    names = fs4.readdirSync(skeletonScopeDir(projectRoot)).filter((n) => n.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const n of names) {
+    try {
+      const scope = parseScope(JSON.parse(fs4.readFileSync(path5.join(skeletonScopeDir(projectRoot), n), "utf-8")), now);
+      if (scope) out.push(scope);
+    } catch {
+    }
+  }
+  return out;
+}
+function skeletonScopeActive(projectRoot, now = Date.now()) {
+  return readSkeletonScopes(projectRoot, now).length > 0;
+}
+function planOnDisk(projectRoot, sessionId, artifactId) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
+  try {
+    const arr = JSON.parse(fs4.readFileSync(path5.join(projectRoot, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
+    if (!Array.isArray(arr)) return null;
+    const plan = arr.find((a) => !!a && typeof a === "object" && a.id === artifactId);
+    if (plan?.type !== "plan" || typeof plan.status !== "string") return null;
+    const steps = Array.isArray(plan.content?.steps) ? plan.content.steps : [];
+    const inProgressSkelIds = steps.filter((st) => st && typeof st.skelId === "string" && st.skelId && st.status === "in_progress").map((st) => st.skelId);
+    return { status: plan.status, inProgressSkelIds };
+  } catch {
+    return null;
+  }
+}
+function resolveSkeletonScopes(projectRoot, scopes) {
+  const fenced = [];
+  const paused = [];
+  for (const s of scopes) {
+    if (!s.sessionId) continue;
+    const plan = planOnDisk(projectRoot, s.sessionId, s.artifactId);
+    if (!plan) continue;
+    if (!s.reshape) {
+      if (plan.status === "approved" && s.activeSkelIds.length > 0) fenced.push(s);
+      continue;
+    }
+    if (plan.status === "draft" || plan.status === "revised") {
+      paused.push(s);
+    } else if (plan.status === "approved") {
+      const ids = [.../* @__PURE__ */ new Set([...s.activeSkelIds, ...plan.inProgressSkelIds])];
+      if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
+    } else if ((plan.status === "rejected" || plan.status === "retracted") && s.reshape.restoreApproved) {
+      const ids = restoredSkelIds(projectRoot, s.sessionId, s.artifactId, s.reshape);
+      if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
+    }
+  }
+  return { fenced, paused };
+}
+var RESTORABLE = /* @__PURE__ */ new Set(["superseded", "approved"]);
+function restoredSkelIds(projectRoot, sessionId, reshapeId, reshape) {
+  const arr = readSessionArtifacts(projectRoot, sessionId);
+  if (!arr) return [];
+  const idx = arr.findIndex((a) => a.id === reshape.fromId);
+  if (idx === -1) return reshape.restoreSkelIds;
+  const v1 = arr[idx];
+  if (v1.type !== "plan" || typeof v1.status !== "string" || !RESTORABLE.has(v1.status)) return [];
+  const mine = arr.findIndex((a) => a.id === reshapeId);
+  if (arr.some((a, i) => a.parentId === reshape.fromId && a.id !== reshapeId && i > mine)) return [];
+  return inProgressSkelIdsOf(v1.content);
+}
+function readSessionArtifacts(projectRoot, sessionId) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
+  try {
+    const arr = JSON.parse(fs4.readFileSync(path5.join(projectRoot, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
+    return Array.isArray(arr) ? arr.filter((a) => !!a && typeof a === "object") : null;
+  } catch {
+    return null;
+  }
+}
+function inProgressSkelIdsOf(content) {
+  const steps = content?.steps;
+  if (!Array.isArray(steps)) return [];
+  return steps.filter((st) => !!st && typeof st.skelId === "string" && st.skelId.length > 0 && st.status === "in_progress").map((st) => st.skelId);
+}
+function evaluatePausedEdit(args) {
+  if (args.toolName !== "Edit" && args.toolName !== "Write" && args.toolName !== "MultiEdit") return null;
+  const input2 = args.toolInput ?? {};
+  const fp = input2.file_path ?? input2.filePath;
+  if (typeof fp !== "string" || !fp) return null;
+  const abs = path5.resolve(args.projectRoot, fp);
+  if (abs.split(path5.sep).includes(".deeppairing")) return null;
+  const mine = args.paused.filter((s) => s.sessionId === args.sessionId && (!s.workspaceRoot || within(s.workspaceRoot, abs)));
+  for (const s of mine) {
+    const base = s.workspaceRoot ?? args.projectRoot;
+    const rel = path5.relative(base, abs).split(path5.sep).join("/");
+    const files = (s.reshape?.files ?? []).map((f) => path5.relative(base, path5.resolve(base, f)).split(path5.sep).join("/"));
+    if (!files.includes(rel)) continue;
+    const plan = s.planTitle ? ` ("${s.planTitle}")` : "";
+    return {
+      skelIds: [],
+      target: rel,
+      reason: args.strict ? `Edit to ${rel} stopped before execution (strict-stop mode). The skeleton${plan} was reshaped and the new version awaits your approval, so fills are paused. [SKELETON_PAUSED]` : `Allow this edit while the skeleton change awaits your approval? The skeleton${plan} was reshaped and the new version isn't approved yet, so fills are paused for its files (${rel}).
+[SKELETON_PAUSED \u2014 agent: a reshaped skeleton plan awaits re-review. Don't fill or restructure its files until your pair approves the new version; poll check_feedback.]`
+    };
+  }
+  return null;
+}
+function within(dir, abs) {
+  const rel = path5.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path5.isAbsolute(rel);
+}
+function selectSkeletonScope(scopes, args) {
+  const mine = scopes.filter(
+    (s) => s.sessionId === args.sessionId && (!s.workspaceRoot || within(s.workspaceRoot, args.targetAbs))
+  );
+  if (mine.length === 0) return null;
+  const titles = [...new Set(mine.map((s) => s.planTitle).filter((t) => !!t))];
+  return {
+    artifactId: mine.map((s) => s.artifactId).join(","),
+    activeSkelIds: [...new Set(mine.flatMap((s) => s.activeSkelIds))],
+    updatedAt: mine.map((s) => s.updatedAt).sort().at(-1),
+    ...titles.length > 0 ? { planTitle: titles.join(", ") } : {}
+  };
+}
+function lineOf(text, index) {
+  let n = 1;
+  for (let i = 0; i < index; i++) if (text.charCodeAt(i) === 10) n++;
+  return n;
+}
+function spanOf(text, index, needle) {
+  let start = lineOf(text, index);
+  let end = start;
+  for (let i = 0; i < needle.length; i++) if (needle.charCodeAt(i) === 10) end++;
+  if (needle.startsWith("\n") && end > start) start++;
+  if (needle.endsWith("\n") && end > start) end--;
+  return [start, end];
+}
+function applyEdit(text, oldStr, newStr, all) {
+  if (!oldStr) return null;
+  const first = text.indexOf(oldStr);
+  if (first === -1) return null;
+  const spans = [];
+  let out = "";
+  let from = 0;
+  let i = first;
+  while (i !== -1) {
+    spans.push(spanOf(text, i, oldStr));
+    out += text.slice(from, i) + newStr;
+    from = i + oldStr.length;
+    if (!all) break;
+    i = text.indexOf(oldStr, from);
+  }
+  return { text: out + text.slice(from), spans };
+}
+function preservesOutside(original, next, fences) {
+  const lines = original.split("\n");
+  const out = next.split("\n");
+  const sorted = [...fences].sort((a, b) => a.openLine - b.openLine);
+  const segments = [];
+  let from = 0;
+  for (const f of sorted) {
+    segments.push(lines.slice(from, f.openLine));
+    from = f.closeLine - 1;
+  }
+  segments.push(lines.slice(from));
+  const matchesAt = (seg, at) => at >= 0 && at + seg.length <= out.length && seg.every((l, i) => out[at + i] === l);
+  let pos = 0;
+  for (let k = 0; k < segments.length; k++) {
+    const seg = segments[k];
+    if (k === 0) {
+      if (!matchesAt(seg, 0)) return false;
+      pos = seg.length;
+    } else if (k === segments.length - 1) {
+      if (out.length - seg.length < pos || !matchesAt(seg, out.length - seg.length)) return false;
+    } else {
+      let at = pos;
+      while (at + seg.length <= out.length && !matchesAt(seg, at)) at++;
+      if (!matchesAt(seg, at)) return false;
+      pos = at + seg.length;
+    }
+  }
+  return true;
+}
+var signature = (fences) => fences.map((f) => `${f.id}\0${f.title}`).join("");
+var HASH_COMMENT_EXT = /\.(py|pyi|rb|sh|bash|zsh|ya?ml|toml|r|pl|ex|exs|nim|cr|coffee)$/i;
+function bodyEscapesFence(body, markerLine, file) {
+  const indentOf = (l) => (/^[ \t]*/.exec(l)?.[0] ?? "").replace(/\t/g, "    ").length;
+  const markerIndent = indentOf(markerLine);
+  const hash = HASH_COMMENT_EXT.test(file);
+  let depth = 0;
+  let quote = null;
+  const lines = body.split("\n");
+  for (const line of lines) {
+    if (line.trim() && !quote && indentOf(line) < markerIndent) return "a line is indented outside the fence's block";
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "/" && line[i + 1] === "/" || hash && c === "#") break;
+      else if (c === "(" || c === "[" || c === "{") depth++;
+      else if (c === ")" || c === "]" || c === "}") {
+        if (--depth < 0) return "it closes the block the fence sits in";
+      }
+    }
+    if (quote && quote !== "`") quote = null;
+  }
+  return depth === 0 ? null : "it leaves a bracket open past the fence";
+}
+function evaluateSkeletonEdit(args) {
+  const { scope } = args;
+  if (!scope || scope.activeSkelIds.length === 0) return null;
+  if (args.toolName !== "Edit" && args.toolName !== "Write" && args.toolName !== "MultiEdit") return null;
+  const input2 = args.toolInput ?? {};
+  const fp = input2.file_path ?? input2.filePath;
+  if (typeof fp !== "string" || !fp) return null;
+  const abs = path5.resolve(args.projectRoot, fp);
+  if (abs.split(path5.sep).includes(".deeppairing")) return null;
+  const rel = path5.relative(args.projectRoot, abs);
+  const shown = rel && !rel.startsWith("..") && !path5.isAbsolute(rel) ? rel.split(path5.sep).join("/") : abs;
+  const ids = scope.activeSkelIds;
+  const label = ids.length === 1 ? `step SKEL[${ids[0]}]` : `steps ${ids.map((i) => `SKEL[${i}]`).join(", ")}`;
+  const plan = scope.planTitle ? ` ("${scope.planTitle}")` : "";
+  const violation = (what) => ({
+    skelIds: ids,
+    target: shown,
+    reason: args.strict ? `Edit to ${shown} stopped before execution (strict-stop mode). ${what}. The approved skeleton${plan} is being filled, and ${label} may only change code inside its fence. Propose the skeleton change to your pair and revise the plan, or set the step back to pending before an agreed structural edit. [SKELETON_SCOPE]` : `Allow this edit outside the skeleton? ${what}. The approved skeleton${plan} is being filled, and ${label} may only change code inside its fence. Allowing it changes the structure you approved.
+[SKELETON_SCOPE \u2014 agent: this is a skeleton change. Don't route around the fence; stop and propose the change (what, where, why) to your pair. Once they agree, revise the plan (or set the step back to pending) before the structural edit.]`
+  });
+  const original = args.readFile(abs);
+  if (original === null) return args.toolName === "Write" ? violation(`It creates a new file, ${shown}`) : null;
+  let before;
+  try {
+    before = scanSkeletonText(original, shown);
+  } catch {
+    return violation(`${shown} has malformed SKEL markers`);
+  }
+  const active = before.filter((f) => ids.includes(f.id));
+  if (active.length === 0) return violation(`${shown} has no ${label} fence`);
+  let next;
+  if (args.toolName === "Write") {
+    next = String(input2.content ?? "");
+  } else {
+    const edits = args.toolName === "MultiEdit" ? Array.isArray(input2.edits) ? input2.edits : [] : [input2];
+    next = original;
+    for (const e of edits) {
+      const oldStr = typeof e?.old_string === "string" ? e.old_string : "";
+      const applied = applyEdit(next, oldStr, typeof e?.new_string === "string" ? e.new_string : "", e?.replace_all === true);
+      if (!applied) return null;
+      let current;
+      try {
+        current = scanSkeletonText(next, shown).filter((f) => ids.includes(f.id));
+      } catch {
+        return violation(`${shown} has malformed SKEL markers`);
+      }
+      for (const [start, end] of applied.spans) {
+        if (!current.some((f) => start >= f.openLine && end <= f.closeLine)) {
+          return violation(`It touches ${shown}:${start}${end > start ? `-${end}` : ""}`);
+        }
+      }
+      next = applied.text;
+    }
+  }
+  let after;
+  try {
+    after = scanSkeletonText(next, shown);
+  } catch {
+    return violation(`It leaves malformed SKEL markers in ${shown}`);
+  }
+  if (signature(after) !== signature(before)) return violation(`It adds, removes or retitles SKEL markers in ${shown}`);
+  if (!preservesOutside(original, next, active)) return violation(`It changes ${shown} outside the fence`);
+  const nextLines = next.split("\n");
+  for (const f of after.filter((x) => ids.includes(x.id))) {
+    const body = nextLines.slice(f.openLine, f.closeLine - 1).join("\n");
+    const escape = bodyEscapesFence(body, nextLines[f.openLine - 1] ?? "", shown);
+    if (escape) return violation(`In ${shown}:${f.openLine}-${f.closeLine}, ${escape}`);
+  }
+  return null;
+}
+
 // src/cli/preflight-hook-core.ts
 function readRejectedApproachEntries(projectRoot, failures) {
-  const p = path5.join(projectRoot, ".deeppairing", "preferences.json");
+  const p = path6.join(projectRoot, ".deeppairing", "preferences.json");
   try {
-    if (!fs4.existsSync(p)) return [];
-    const raw = JSON.parse(fs4.readFileSync(p, "utf-8"));
+    if (!fs5.existsSync(p)) return [];
+    const raw = JSON.parse(fs5.readFileSync(p, "utf-8"));
     const list = raw?.rejectedApproaches;
     if (!raw || typeof raw !== "object" || Array.isArray(raw) || list !== void 0 && !Array.isArray(list)) {
       pushFailure(failures, noteFailure("schema", "preferences"));
@@ -1084,10 +1429,10 @@ function readRejectedApproachEntries(projectRoot, failures) {
   }
 }
 function readTeamPreferences(projectRoot, failures) {
-  const p = path5.join(projectRoot, ".deeppairing", "team.json");
+  const p = path6.join(projectRoot, ".deeppairing", "team.json");
   try {
-    if (!fs4.existsSync(p)) return [];
-    const stripped = fs4.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
+    if (!fs5.existsSync(p)) return [];
+    const stripped = fs5.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
     const raw = JSON.parse(stripped);
     if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) {
       pushFailure(failures, noteFailure("schema", "team"));
@@ -1199,16 +1544,16 @@ function artifactCoverage(projectRoot, artifact) {
       invalid = true;
       return;
     }
-    const normalized = raw.replace(/\\/g, path5.sep);
+    const normalized = raw.replace(/\\/g, path6.sep);
     const match = matchGuardrailPath(projectRoot, [normalized]);
     if (match) {
       paths.push(match.path);
       return;
     }
-    const abs = path5.resolve(projectRoot, normalized);
+    const abs = path6.resolve(projectRoot, normalized);
     const mapped = canonicalizeWorktreePath(abs);
-    const rel = path5.relative(projectRoot, mapped.worktree ? mapped.path : abs);
-    if (!rel || rel === ".." || rel.startsWith(`..${path5.sep}`) || path5.isAbsolute(rel)) invalid = true;
+    const rel = path6.relative(projectRoot, mapped.worktree ? mapped.path : abs);
+    if (!rel || rel === ".." || rel.startsWith(`..${path6.sep}`) || path6.isAbsolute(rel)) invalid = true;
     else paths.push(rel.replace(/\\/g, "/"));
   };
   const files = (value, visual = false) => {
@@ -1250,11 +1595,11 @@ function artifactCoverage(projectRoot, artifact) {
   return { declared, paths: declared && !invalid && paths.length > 0 ? paths : null };
 }
 function readSessionCeremony(projectRoot, now = Date.now(), failures, scope = {}) {
-  const sessionsDir = path5.join(projectRoot, ".deeppairing", "sessions");
+  const sessionsDir = path6.join(projectRoot, ".deeppairing", "sessions");
   let ids;
   try {
-    if (!fs4.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
-    ids = fs4.readdirSync(sessionsDir);
+    if (!fs5.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
+    ids = fs5.readdirSync(sessionsDir);
   } catch (err) {
     pushFailure(failures, noteFailure("store", "sessions", err));
     return { reachable: false, hasLiveCeremony: false };
@@ -1270,10 +1615,10 @@ function readSessionCeremony(projectRoot, now = Date.now(), failures, scope = {}
     if (id.startsWith("demo_")) continue;
     let arr;
     try {
-      const af = path5.join(sessionsDir, id, "artifacts.json");
-      if (!fs4.existsSync(af)) continue;
+      const af = path6.join(sessionsDir, id, "artifacts.json");
+      if (!fs5.existsSync(af)) continue;
       storesSeen++;
-      arr = JSON.parse(fs4.readFileSync(af, "utf-8"));
+      arr = JSON.parse(fs5.readFileSync(af, "utf-8"));
       if (!Array.isArray(arr)) continue;
     } catch {
       continue;
@@ -1302,8 +1647,8 @@ function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.n
   const key = guardrailScopeKey(category, identity);
   if (!key) return false;
   try {
-    const sp = path5.join(projectRoot, ".deeppairing", "hooks-state.json");
-    const state = JSON.parse(fs4.readFileSync(sp, "utf-8"));
+    const sp = path6.join(projectRoot, ".deeppairing", "hooks-state.json");
+    const state = JSON.parse(fs5.readFileSync(sp, "utf-8"));
     const entry = state?.guardrailAsks?.[key];
     const at = PER_PATH_DEDUP_CLASSES.has(category) ? entry && typeof entry === "object" ? entry[matchedPath] : void 0 : entry;
     if (typeof at !== "string") return false;
@@ -1435,9 +1780,9 @@ function evaluatePreflightHook(args) {
 function displayTarget(projectRoot, target) {
   if (typeof target !== "string" || !target) return void 0;
   try {
-    if (!path5.isAbsolute(target)) return target;
-    const rel = path5.relative(projectRoot, target);
-    return rel && !rel.startsWith("..") && !path5.isAbsolute(rel) ? rel : target;
+    if (!path6.isAbsolute(target)) return target;
+    const rel = path6.relative(projectRoot, target);
+    return rel && !rel.startsWith("..") && !path6.isAbsolute(rel) ? rel : target;
   } catch {
     return target;
   }
@@ -1447,7 +1792,7 @@ function evaluateHookGates(args) {
   const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode, failures });
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
-  if (strings.length === 0) return state ?? { fire: false };
+  if (strings.length === 0) return state ?? evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
   const result = runPreflightSkippingBadEntries({
     toolName,
     proposalStrings: strings,
@@ -1464,7 +1809,53 @@ function evaluateHookGates(args) {
 ${state.reason}`, source: result.block.source, ...stance ? { stance } : {} } : { fire: true, reason, source: result.block.source, ...stance ? { stance } : {} };
   }
   if (state) return state;
+  const skeleton = evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId });
+  if (skeleton) {
+    const backstop = evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId });
+    return backstop?.fire && backstop.reason ? { ...skeleton, reason: `${skeleton.reason}
+
+${backstop.reason}` } : skeleton;
+  }
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
+}
+function evaluateSkeletonScope(args) {
+  try {
+    const scopes = readSkeletonScopes(args.projectRoot, args.now);
+    if (scopes.length === 0) return null;
+    const target = toolInputTargetPath(args.toolInput);
+    if (typeof target !== "string" || !target) return null;
+    const sessionId = deriveSessionId(args.projectRoot, usableSessionId(args.sessionId)).sessionId;
+    const { fenced, paused } = resolveSkeletonScopes(args.projectRoot, scopes);
+    const hold = evaluatePausedEdit({
+      toolName: args.toolName,
+      toolInput: args.toolInput,
+      paused,
+      sessionId,
+      projectRoot: args.projectRoot,
+      strict: args.mode === "strict-stop"
+    });
+    if (hold) return { fire: true, reason: hold.reason, source: "skeleton", skeleton: { skelIds: [], paused: true } };
+    const scope = selectSkeletonScope(fenced, { sessionId, targetAbs: path6.resolve(args.projectRoot, target) });
+    const violation = evaluateSkeletonEdit({
+      toolName: args.toolName,
+      toolInput: args.toolInput,
+      projectRoot: args.projectRoot,
+      scope,
+      strict: args.mode === "strict-stop",
+      readFile: (abs) => {
+        try {
+          return fs5.readFileSync(abs, "utf-8");
+        } catch {
+          return null;
+        }
+      }
+    });
+    if (!violation) return null;
+    return { fire: true, reason: violation.reason, source: "skeleton", skeleton: { skelIds: violation.skelIds } };
+  } catch (err) {
+    pushFailure(args.failures, noteFailure("evaluate", "skeleton", err));
+    return null;
+  }
 }
 function stanceOf(block) {
   const m = block.broadcastEvent.match;
@@ -1502,7 +1893,7 @@ function hookGateRecord(decision, mode = "ask") {
   try {
     if (!decision.fire) return void 0;
     const stance = decision.stance;
-    const g = decision.guardrail;
+    const g = decision.guardrail ?? (decision.skeleton ? decision.skeleton.paused ? { category: "skeleton-paused", path: decision.target ?? "", note: "Skeleton change awaiting approval", rationale: "A reshaped skeleton awaits your re-review: fills are paused for its files." } : { category: "skeleton-scope", path: decision.target ?? "", note: `Skeleton fence ${decision.skeleton.skelIds.map((i) => `SKEL[${i}]`).join(", ")}`, rationale: "Filling an approved skeleton: edits stay inside the in-progress step's fence." } : void 0);
     const concept = gateText(stance?.concept ?? g?.note, 200);
     if (!concept) return void 0;
     const source = stance ? decision.source === "team" ? "team" : "session" : "guardrail";
@@ -1530,7 +1921,7 @@ function hookGateRecord(decision, mode = "ask") {
 // src/cli/preflight-hook-entry.ts
 function ledgersPresent(root, failures) {
   try {
-    const prefs = JSON.parse(fs5.readFileSync(path6.join(root, ".deeppairing", "preferences.json"), "utf-8"));
+    const prefs = JSON.parse(fs6.readFileSync(path7.join(root, ".deeppairing", "preferences.json"), "utf-8"));
     if (Array.isArray(prefs?.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
     if (!prefs || typeof prefs !== "object" || Array.isArray(prefs) || prefs.rejectedApproaches !== void 0 && !Array.isArray(prefs.rejectedApproaches)) {
       pushFailure(failures, noteFailure("schema", "preferences"));
@@ -1539,7 +1930,7 @@ function ledgersPresent(root, failures) {
     pushFailure(failures, noteFailure("ledger", "preferences", err));
   }
   try {
-    if (fs5.existsSync(path6.join(root, ".deeppairing", "team.json"))) return true;
+    if (fs6.existsSync(path7.join(root, ".deeppairing", "team.json"))) return true;
   } catch {
   }
   return false;
@@ -1572,7 +1963,7 @@ process.stdin.on("end", () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       finish();
     }
-    if (!ledgersPresent(projectRoot, failures) && !toolInputTargetsGuardrail(projectRoot, toolInput) && !toolInputTargetsDeeppairingState(projectRoot, toolInput)) {
+    if (!ledgersPresent(projectRoot, failures) && !toolInputTargetsGuardrail(projectRoot, toolInput) && !toolInputTargetsDeeppairingState(projectRoot, toolInput) && !skeletonScopeActive(projectRoot)) {
       finish();
     }
     const config = resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);

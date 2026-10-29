@@ -14967,7 +14967,15 @@ var PlanStepSchema = external_exports.object({
    * Optional for back-compat (absent = execution not tracked).
    */
   status: external_exports.enum(["pending", "in_progress", "done", "skipped"]).optional().describe("Execution status, updated by the agent via update_plan_progress"),
-  statusNote: external_exports.string().optional().describe("One-line note shown beside the step (e.g. why it was skipped)")
+  statusNote: external_exports.string().optional().describe("One-line note shown beside the step (e.g. why it was skipped)"),
+  /**
+   * Skeleton plans — the SKEL fence id this step fills. The skeleton (stubs
+   * fenced `SKEL[id] … /SKEL[id]` with a `SKEL_TODO` body) is written to disk
+   * BEFORE the plan is presented; while this step is `in_progress` the
+   * preflight hook fences edits to that id's regions. Optional for back-compat
+   * (absent = an ordinary prose step).
+   */
+  skelId: external_exports.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional().describe(`Skeleton plans: the SKEL[id] fence this step fills, e.g. "2" or "2.1" (starts with a letter or digit; then letters, digits, '.', '_' or '-'; no spaces). While the step is in_progress on an approved plan, edits outside that fence are gated.`)
 });
 var PlanVisualFileSchema = external_exports.object({
   path: external_exports.string(),
@@ -15005,6 +15013,35 @@ var PlanVisualSchema = external_exports.object({
   lineStart: external_exports.number().optional(),
   /** kind="annotated_code": line-anchored explanations. */
   annotations: external_exports.array(PlanVisualAnnotationSchema).optional()
+});
+var SkeletonFenceViewSchema = external_exports.object({
+  id: external_exports.string(),
+  title: external_exports.string().optional(),
+  openLine: external_exports.number(),
+  closeLine: external_exports.number(),
+  status: external_exports.enum(["todo", "filled"])
+});
+var SkeletonCodeSnapshotSchema = external_exports.object({
+  fences: external_exports.array(SkeletonFenceViewSchema),
+  /** An unfenced skeleton file (a file_map "create" entry with no fences). */
+  tracked: external_exports.boolean().optional(),
+  /** Set when the snapshot cap cut the file short. */
+  truncated: external_exports.object({ shownLines: external_exports.number(), totalLines: external_exports.number() }).optional(),
+  /** Malformed SKEL markers in this file (fences are then unknown). */
+  markerError: external_exports.string().optional(),
+  /** Set when the server WITHHELD the file's content (a secret-shaped value
+   *  was found on disk). The visual then carries no `code` at all. */
+  withheld: external_exports.string().optional(),
+  /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
+   *  the same text keeps the old stamp, so a line comment made before it is
+   *  known to sit on unchanged code. */
+  takenAt: external_exports.string().optional(),
+  /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
+   *  the newest read, so concurrent progress calls can't regress the view. */
+  readAt: external_exports.number().optional()
+});
+var StoredPlanVisualSchema = PlanVisualSchema.extend({
+  skeleton: SkeletonCodeSnapshotSchema.optional()
 });
 var ResearchContentSchema = external_exports.object({
   summary: external_exports.string(),
@@ -15644,7 +15681,19 @@ var CommentTargetSchema = external_exports.object({
     filePath: external_exports.string(),
     lineStart: external_exports.number().int(),
     lineEnd: external_exports.number().int().optional()
-  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files")
+  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files"),
+  // Skeleton plans, parity PR 3 (#609 review M2) — which skeleton snapshot a
+  // line comment was written on, captured AT COMMENT TIME: the approved
+  // `skelcode:` snapshot (immutable) or the live `skelcode-live:` view as of a
+  // read. The live view is re-read in place, so the line's text and fence are
+  // recorded here; check_feedback resolves against them, not the current code.
+  skeletonAnchor: external_exports.object({
+    snapshot: external_exports.enum(["approved", "live"]),
+    takenAt: external_exports.string().max(64).optional(),
+    readAt: external_exports.number().optional(),
+    fenceId: external_exports.string().max(120).optional(),
+    lineText: external_exports.string().max(500).optional()
+  }).optional().describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -17865,6 +17914,13 @@ function ledgersPresent(projectRoot) {
   return false;
 }
 
+// Skeleton plans \u2014 a live fence scope is the fourth reason to keep going. One
+// readdir, no import: the core re-reads the per-plan files and applies the
+// age and session checks.
+function skeletonScopePresent(projectRoot) {
+  try { return fs.readdirSync(path.join(projectRoot, ".deeppairing", "skeleton-scopes")).some((n) => n.endsWith(".json")); } catch { return false; }
+}
+
 // #532 \u2014 a few stat calls: is the nearest .git (walking up) a FILE? That is a
 // linked worktree or a submodule; resolveHookRoots tells them apart.
 function nearestDotGitIsFile(dir) {
@@ -17960,7 +18016,7 @@ process.stdin.on("end", async () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       return await finish();
     }
-    if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
+    if (!ledgersPresent(projectRoot) && !skeletonScopePresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
       return await finish(); // nothing to match against \u2014 skip the matcher import
     }
     stage = "import";
@@ -18175,6 +18231,7 @@ var PREFLIGHT_FAILURE_SOURCES = [
   "matcher",
   "backstop",
   "state",
+  "skeleton",
   "hook"
 ];
 var PREFLIGHT_FAILURES_FIELD = "preflightFailures";
