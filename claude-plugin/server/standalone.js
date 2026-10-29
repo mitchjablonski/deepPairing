@@ -36841,6 +36841,23 @@ function parseScope(raw, now) {
     ...reshape ? { reshape } : {}
   };
 }
+function readSkeletonScopes(projectRoot2, now = Date.now()) {
+  let names;
+  try {
+    names = fs10.readdirSync(skeletonScopeDir(projectRoot2)).filter((n) => n.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const n of names) {
+    try {
+      const scope = parseScope(JSON.parse(fs10.readFileSync(path10.join(skeletonScopeDir(projectRoot2), n), "utf-8")), now);
+      if (scope) out.push(scope);
+    } catch {
+    }
+  }
+  return out;
+}
 function writeSkeletonScope(projectRoot2, scope) {
   const name = scopeFileName(scope.artifactId);
   if (!name) return;
@@ -36854,6 +36871,36 @@ function writeSkeletonScope(projectRoot2, scope) {
     const tmp = `${file2}.tmp.${process.pid}.${Date.now()}`;
     fs10.writeFileSync(tmp, JSON.stringify(scope, null, 2));
     fs10.renameSync(tmp, file2);
+  } catch {
+  }
+}
+function inProgressSkelIdsOf(content) {
+  const steps = content?.steps;
+  if (!Array.isArray(steps)) return [];
+  return steps.filter((st) => !!st && typeof st.skelId === "string" && st.skelId.length > 0 && st.status === "in_progress").map((st) => st.skelId);
+}
+function refreshReshapeRestores(projectRoot2, plan, now = Date.now()) {
+  try {
+    const steps = (plan.content ?? {}).steps ?? [];
+    const skel = steps.filter((st) => !!st && typeof st.skelId === "string" && st.skelId.length > 0);
+    if (skel.length === 0) return;
+    const complete = skel.every((st) => st.status === "done" || st.status === "skipped");
+    const closed = plan.status === "retracted" || plan.status === "obsolete";
+    const ids = inProgressSkelIdsOf(plan.content);
+    for (const s of readSkeletonScopes(projectRoot2, now)) {
+      if (s.reshape?.fromId !== plan.id) continue;
+      const reshape = complete || closed ? { ...s.reshape, restoreApproved: false, restoreSkelIds: [] } : { ...s.reshape, restoreSkelIds: ids };
+      writeSkeletonScope(projectRoot2, { ...s, reshape, updatedAt: new Date(now).toISOString() });
+    }
+  } catch {
+  }
+}
+function clearReshapeRestores(projectRoot2, fromId, exceptId, now = Date.now()) {
+  try {
+    for (const s of readSkeletonScopes(projectRoot2, now)) {
+      if (s.reshape?.fromId !== fromId || s.artifactId === exceptId || !s.reshape.restoreApproved) continue;
+      writeSkeletonScope(projectRoot2, { ...s, reshape: { ...s.reshape, restoreApproved: false, restoreSkelIds: [] } });
+    }
   } catch {
   }
 }
@@ -37415,6 +37462,7 @@ function syncSkeletonScope(sessionId, artifact, updates, scan) {
     const activeSkelIds = approved ? steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId) : [];
     const reshape = readSkeletonScopeFile(root.projectRoot, artifact.id)?.reshape;
     writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot, ...reshape ? { reshape } : {} });
+    refreshReshapeRestores(root.projectRoot, artifact);
     const finished = updates.filter((u) => u.status === "done").map((u) => steps[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0);
     const notes = [];
     if (finished.length > 0) {
@@ -37458,6 +37506,7 @@ function writeReshapeScope(args) {
     const fenced = scanSkeletonFences(workspaceRoot, { files: [...new Set(declared)] }).fences.map((f) => f.file);
     const files = [.../* @__PURE__ */ new Set([...declared, ...fenced])];
     const restoreSkelIds = oldSteps.filter((st) => typeof st?.skelId === "string" && st.skelId && st.status === "in_progress").map((st) => st.skelId);
+    clearReshapeRestores(root.projectRoot, args.oldPlan.id, args.newId);
     writeSkeletonScope(root.projectRoot, {
       artifactId: args.newId,
       planTitle: args.newTitle,
