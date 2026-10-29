@@ -1,5 +1,5 @@
 import { resolveProjectRoot } from "../../project-root.js";
-import { planDeclaredFiles, readSkeletonScopeFile, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
+import { planDeclaredFiles, readSkeletonScopeFile, refreshReshapeRestores, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
 import { isLivePlanVersion } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { resnapshotSkeleton } from "../skeleton-snapshot.js";
@@ -185,6 +185,9 @@ function syncSkeletonScope(
     // progress on the new version never silently lifts it.
     const reshape = readSkeletonScopeFile(root.projectRoot, artifact.id)?.reshape;
     writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: new Date().toISOString(), sessionId, workspaceRoot, ...(reshape ? { reshape } : {}) });
+    // #611 — progress on a superseded version keeps the reshape scope that
+    // would restore it current: its in-progress fences now, or none once done.
+    refreshReshapeRestores(root.projectRoot, artifact);
 
     const finished = updates
       .filter((u) => u.status === "done")

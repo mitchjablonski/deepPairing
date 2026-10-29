@@ -1140,11 +1140,38 @@ function resolveSkeletonScopes(projectRoot, scopes) {
     } else if (plan.status === "approved") {
       const ids = [.../* @__PURE__ */ new Set([...s.activeSkelIds, ...plan.inProgressSkelIds])];
       if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
-    } else if ((plan.status === "rejected" || plan.status === "retracted") && s.reshape.restoreApproved && s.reshape.restoreSkelIds.length > 0) {
-      fenced.push({ ...s, activeSkelIds: s.reshape.restoreSkelIds });
+    } else if ((plan.status === "rejected" || plan.status === "retracted") && s.reshape.restoreApproved) {
+      const ids = restoredSkelIds(projectRoot, s.sessionId, s.artifactId, s.reshape);
+      if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
     }
   }
   return { fenced, paused };
+}
+var RESTORABLE = /* @__PURE__ */ new Set(["superseded", "approved"]);
+function restoredSkelIds(projectRoot, sessionId, reshapeId, reshape) {
+  const arr = readSessionArtifacts(projectRoot, sessionId);
+  if (!arr) return [];
+  const idx = arr.findIndex((a) => a.id === reshape.fromId);
+  if (idx === -1) return reshape.restoreSkelIds;
+  const v1 = arr[idx];
+  if (v1.type !== "plan" || typeof v1.status !== "string" || !RESTORABLE.has(v1.status)) return [];
+  const mine = arr.findIndex((a) => a.id === reshapeId);
+  if (arr.some((a, i) => a.parentId === reshape.fromId && a.id !== reshapeId && i > mine)) return [];
+  return inProgressSkelIdsOf(v1.content);
+}
+function readSessionArtifacts(projectRoot, sessionId) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
+  try {
+    const arr = JSON.parse(fs4.readFileSync(path5.join(projectRoot, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
+    return Array.isArray(arr) ? arr.filter((a) => !!a && typeof a === "object") : null;
+  } catch {
+    return null;
+  }
+}
+function inProgressSkelIdsOf(content) {
+  const steps = content?.steps;
+  if (!Array.isArray(steps)) return [];
+  return steps.filter((st) => !!st && typeof st.skelId === "string" && st.skelId.length > 0 && st.status === "in_progress").map((st) => st.skelId);
 }
 function evaluatePausedEdit(args) {
   if (args.toolName !== "Edit" && args.toolName !== "Write" && args.toolName !== "MultiEdit") return null;
