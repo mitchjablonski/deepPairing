@@ -168,8 +168,8 @@ function grainsFor(ref: { requirementIds?: string[]; edgePathIds?: string[] }, s
 
 /**
  * Verified spec ancestors of the brief: explicit parentId, same session, type
- * spec, exactly one artifact per id. Stops at a missing / duplicate / non-spec
- * parent; a cycle verifies nothing (the "ancestor" would also be a descendant).
+ * spec, exactly one artifact per id. Missing / duplicate / non-spec parents
+ * and cycles invalidate the entire ancestry, including any collected prefix.
  */
 function verifiedAncestors(byId: Record<string, Artifact[]>, brief: Artifact): Artifact[] {
   const out: Artifact[] = [];
@@ -179,7 +179,7 @@ function verifiedAncestors(byId: Record<string, Artifact[]>, brief: Artifact): A
     if (seen.has(parentId)) return [];
     seen.add(parentId);
     const found = byId[parentId] ?? [];
-    if (found.length !== 1 || found[0]!.type !== "spec") break;
+    if (found.length !== 1 || found[0]!.type !== "spec") return [];
     out.push(found[0]!);
     parentId = found[0]!.parentId;
   }
@@ -228,7 +228,7 @@ export function buildBriefExceptionIndex(artifacts: readonly Artifact[], briefId
   const flags: string[][] = nodes.map(() => []);
   const missingParent: boolean[] = nodes.map(() => false);
   nodes.forEach((d, i) => {
-    if ((posById[d.id] ?? []).length > 1) flags[i]!.push(`duplicate id ${d.id}`);
+    if ((byId[d.id] ?? []).length > 1) flags[i]!.push(`duplicate id ${d.id}`);
     const pid = d.parentId;
     if (!pid) return;
     const sameSession = byId[pid] ?? [];

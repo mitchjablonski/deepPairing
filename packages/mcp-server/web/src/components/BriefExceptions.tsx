@@ -39,8 +39,8 @@ export function useBriefExceptions(briefId: string | null | undefined, sessionId
     [artifacts, briefId, sessionId],
   );
   if (replayActive || replayExiting || !briefId || !sessionId) return { kind: "hidden" };
-  if (!hydrated) return { kind: "loading" };
   if (snapshotUnavailable || sessionConflict) return { kind: "unavailable" };
+  if (!hydrated) return { kind: "loading" };
   return index ? { kind: "ready", index } : { kind: "hidden" };
 }
 

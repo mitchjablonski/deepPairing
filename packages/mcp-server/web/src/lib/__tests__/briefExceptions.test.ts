@@ -100,6 +100,24 @@ describe("lineage: the latest decision per lineage counts once", () => {
     expect(summarizeBriefExceptions(crossType)).toBe("No linked exception cards in this view · 1 ambiguous lineage group not counted");
   });
 
+  it("an own-id collision with another artifact type excludes the entire component", () => {
+    for (const successor of [false, true]) {
+      const r = idx([
+        brief("b1"),
+        art({ id: "x", type: "plan" }),
+        ...(successor ? [card("root", pin(), { status: "superseded" })] : []),
+        card("x", pin(["REQ-1"]), { parentId: successor ? "root" : null }),
+      ]);
+      expect(r.total).toBe(0);
+      expect(r.entries).toEqual([]);
+      expect(r.byRequirement["REQ-1"]).toEqual([]);
+      expect(r.ambiguous).toEqual([{
+        memberIds: successor ? ["root", "x"] : ["x"],
+        reasons: ["duplicate id x"],
+      }]);
+    }
+  });
+
   it("an ambiguous component whose pins name another brief is not a diagnostic here", () => {
     const r = idx([brief("b1"), brief("b9"), card("d1", pin([], [], "b9")), card("d2", pin([], [], "b9"), { parentId: "d1" }), card("d3", pin([], [], "b9"), { parentId: "d1" })]);
     expect(r.ambiguous).toEqual([]);
@@ -238,6 +256,28 @@ describe("versions: historical groups, never retargeted", () => {
     const y = brief("by", { parentId: "bx", version: 2 });
     const r = idx([x, y, card("d1", pin([], [], "bx"))], "by");
     expect(r.total).toBe(0);
+  });
+
+  it("incomplete or ambiguous spec ancestry grants no historical membership, even for a visible prefix", () => {
+    const invalidAncestors = [
+      [], // missing b1
+      [brief("b1"), brief("b1")],
+      [art({ id: "b1", type: "plan" })],
+      [brief("b1"), art({ id: "b1", type: "plan" })],
+    ];
+    for (const ancestors of invalidAncestors) {
+      const r = idx([
+        ...ancestors,
+        brief("b2", { parentId: "b1", version: 2 }),
+        brief("b3", { parentId: "b2", version: 3 }),
+        card("historical", pin(["REQ-1"], undefined, "b2")),
+        card("exact", pin(["REQ-1"], undefined, "b3")),
+      ], "b3");
+      expect(r.total).toBe(1);
+      expect(ids(r.entries)).toEqual(["exact"]);
+      expect(r.historical).toEqual([]);
+      expect(ids(r.byRequirement["REQ-1"]!)).toEqual(["exact"]);
+    }
   });
 
   it("a brief whose id is duplicated in its session attributes nothing", () => {

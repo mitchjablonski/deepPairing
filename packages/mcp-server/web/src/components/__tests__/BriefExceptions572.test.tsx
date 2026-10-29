@@ -162,19 +162,25 @@ describe("#572 A2 — hydration and replay", () => {
     expect(screen.getByTestId("brief-exceptions")).toHaveAttribute("data-state", "loading");
   });
 
-  it("a refused snapshot or session conflict says unavailable, not zero", () => {
-    for (const flag of ["snapshotUnavailable", "sessionConflict"]) {
-      setConnection({ [flag]: true });
+  it("a refused snapshot or session conflict says unavailable before or after hydration", () => {
+    for (const [flag, hydrated] of [
+      ["snapshotUnavailable", false], ["sessionConflict", false],
+      ["snapshotUnavailable", true], ["sessionConflict", true],
+    ] as const) {
+      setConnection({ [flag]: true, hydrated });
       const b = brief("b1");
       setArtifacts([b]);
-      render(<SpecArtifact artifact={b} />);
+      render(<><SpecArtifact artifact={b} /><GoverningBriefStrip artifacts={visible()} /></>);
       expect(screen.getByTestId("brief-exceptions")).toHaveAttribute("data-state", "unavailable");
+      expect(screen.getByTestId("governing-brief-exceptions")).toHaveTextContent("Linked exceptions unavailable");
+      expect(document.body.textContent).not.toContain("No linked exception cards");
       cleanup();
       setConnection();
     }
   });
 
   it("hidden during replay and replay-exit recovery; the strip itself is unchanged", () => {
+    setConnection({ hydrated: false, snapshotUnavailable: true, sessionConflict: true });
     const b = brief("b1");
     setArtifacts([b, card("d1", { artifactId: "b1" })]);
     for (const replay of [{ active: true, exiting: false }, { active: false, exiting: true }]) {
