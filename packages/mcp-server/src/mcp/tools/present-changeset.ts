@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { finalizeCheckNote } from "../skeleton-finalize.js";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentChangesetInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
@@ -143,6 +144,9 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
       `Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask — trace callers, read the surrounding code, run a safe test — ` +
       `and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical — the tool CHECKS this now and refuses otherwise — else COMMENT). No present_debrief is owed for a review of code you did not write.`
     : `When the feature wraps, end with present_debrief.`;
+  // Skeleton plans, parity PR 4 — the finalize check: a finished skeleton
+  // plan's files must not still carry SKEL markers or SKEL_TODO. Own work only.
+  const skeletonFinalize = isExternal ? "" : finalizeCheckNote(await ctx.store.getArtifacts());
   return {
     content: [{
       type: "text",
@@ -150,7 +154,7 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
         `Changeset "${artifact.title}" presented for review (${id}) — ${fileCount} file${fileCount === 1 ? "" : "s"}. ` +
         `The human reviews each file (and can comment across files) at localhost:${reviewPort}. ` +
         `Call check_feedback for their per-file review state, comments, and verdict. ` +
-        `${closing}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
+        `${closing}${skeletonFinalize}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

@@ -393,6 +393,12 @@ export interface IStore {
   updatePlanProgress(
     artifactId: string,
     updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
+    /** Skeleton plans (parity PR 3) — a fresh LIVE snapshot of the plan's
+     *  fenced files (`skelcode-live:` visuals) and its read stamp. Replaces the
+     *  previous live snapshot only when newer, and only on a live plan
+     *  version; the approved `skelcode:` snapshot and the agent's own visuals
+     *  are never touched. */
+    opts?: { skeletonVisuals?: unknown[]; skeletonReadAt?: number },
   ): MaybePromise<Artifact | null>;
   /**
    * #171/#175 — set ONE file of a CHANGESET artifact's DISPOSITION in place

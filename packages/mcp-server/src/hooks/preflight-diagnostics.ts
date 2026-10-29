@@ -52,6 +52,7 @@ export const PREFLIGHT_FAILURE_SOURCES = [
   "matcher",
   "backstop",
   "state",
+  "skeleton",
   "hook",
 ] as const;
 export type PreflightFailureSource = (typeof PREFLIGHT_FAILURE_SOURCES)[number];

@@ -32,6 +32,10 @@ import {
   toolInputTargetsGuardrail,
 } from "../guardrail-rules.js";
 import type { GuardrailMatch, GuardrailRule, StateMatch } from "../guardrail-rules.js";
+// Skeleton plans — the fence gate. Leaf module like guardrail-rules; the
+// generated hook reaches skeletonScopeActive through this core's re-export.
+import { evaluatePausedEdit, evaluateSkeletonEdit, readSkeletonScopes, resolveSkeletonScopes, selectSkeletonScope, skeletonScopeActive } from "../skeleton-scope.js";
+export { skeletonScopeActive };
 export {
   DEEPPAIRING_STATE_CATEGORY,
   GUARDRAIL_RULES,
@@ -184,7 +188,9 @@ export interface HookDecision {
   /** The matcher fired. The caller's explicit mode determines ask vs stop. */
   fire: boolean;
   reason?: string;
-  source?: "session" | "team" | "guardrail";
+  source?: "session" | "team" | "guardrail" | "skeleton";
+  /** Skeleton plans — present only on a fence fire: the in-progress fence ids. */
+  skeleton?: { skelIds: string[]; paused?: boolean };
   /** Present only on a guardrail-backstop fire — what the caller stamps for
    *  dedup and names in the fire log. */
   guardrail?: GuardrailMatch;
@@ -1013,7 +1019,8 @@ function evaluateHookGates(args: {
   // NotebookEdit is matched only for this class; the other gates are unchanged.
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
-  if (strings.length === 0) return state ?? { fire: false };
+  // A pure deletion has no proposal strings but can still cross a fence.
+  if (strings.length === 0) return state ?? evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
 
   const result = runPreflightSkippingBadEntries({
     toolName,
@@ -1037,7 +1044,74 @@ function evaluateHookGates(args: {
       : { fire: true, reason, source: result.block.source, ...(stance ? { stance } : {}) };
   }
   if (state) return state;
+  // Skeleton plans — after the stance gate (its pinned wording leads) and
+  // before the backstop: an approved skeleton plan IS live ceremony, so the
+  // fence is the more specific thing to say.
+  const skeleton = evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId });
+  if (skeleton) {
+    // #606 review L2 — one prompt per call: a fence fire on a guardrail path
+    // still says it's a guardrail path (the backstop's reason rides along; the
+    // fence stays the logged class, so no backstop dedup is stamped).
+    const backstop = evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId });
+    return backstop?.fire && backstop.reason ? { ...skeleton, reason: `${skeleton.reason}\n\n${backstop.reason}` } : skeleton;
+  }
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
+}
+
+/** Skeleton plans — the fence gate as a HookDecision. Pure apart from reading
+ *  the scope file and the target file; any fault is "no decision". */
+export function evaluateSkeletonScope(args: {
+  toolName: string;
+  toolInput: unknown;
+  projectRoot: string;
+  now?: number;
+  mode?: PreflightMode;
+  failures?: PreflightFailureSink;
+} & PreflightIdentity): HookDecision | null {
+  try {
+    const scopes = readSkeletonScopes(args.projectRoot, args.now);
+    if (scopes.length === 0) return null;
+    const target = toolInputTargetPath(args.toolInput);
+    if (typeof target !== "string" || !target) return null;
+    // #606 review — a plan's fence governs only its OWN session's edits. The
+    // hook derives the session id exactly as the server did (same canonical
+    // root); an event with no usable id derives the fallback id, so it matches
+    // only a fallback-mode server's plan and never fences another session.
+    const sessionId = deriveSessionId(args.projectRoot, usableSessionId(args.sessionId)).sessionId;
+    // M5 — a fence is live only while its plan is approved in the store.
+    // Parity PR 4 (#610 M1) — a reshape awaiting approval PAUSES fills: any
+    // edit to its declared files asks, whatever the fences say.
+    const { fenced, paused } = resolveSkeletonScopes(args.projectRoot, scopes);
+    const hold = evaluatePausedEdit({
+      toolName: args.toolName,
+      toolInput: args.toolInput,
+      paused,
+      sessionId,
+      projectRoot: args.projectRoot,
+      strict: args.mode === "strict-stop",
+    });
+    if (hold) return { fire: true, reason: hold.reason, source: "skeleton", skeleton: { skelIds: [], paused: true } };
+    const scope = selectSkeletonScope(fenced, { sessionId, targetAbs: path.resolve(args.projectRoot, target) });
+    const violation = evaluateSkeletonEdit({
+      toolName: args.toolName,
+      toolInput: args.toolInput,
+      projectRoot: args.projectRoot,
+      scope,
+      strict: args.mode === "strict-stop",
+      readFile: (abs) => {
+        try {
+          return fs.readFileSync(abs, "utf-8");
+        } catch {
+          return null;
+        }
+      },
+    });
+    if (!violation) return null;
+    return { fire: true, reason: violation.reason, source: "skeleton", skeleton: { skelIds: violation.skelIds } };
+  } catch (err) {
+    pushFailure(args.failures, noteFailure("evaluate", "skeleton", err));
+    return null;
+  }
 }
 
 /** #544 — the structured match, read from the block's broadcast payload (the
@@ -1086,7 +1160,12 @@ export function hookGateRecord(decision: HookDecision, mode: PreflightMode = "as
   try {
     if (!decision.fire) return undefined;
     const stance = decision.stance;
-    const g = decision.guardrail;
+    // Skeleton plans — a fence fire reads as its own guardrail class in the gate log.
+    const g = decision.guardrail ?? (decision.skeleton
+      ? decision.skeleton.paused
+        ? { category: "skeleton-paused", path: decision.target ?? "", note: "Skeleton change awaiting approval", rationale: "A reshaped skeleton awaits your re-review: fills are paused for its files." }
+        : { category: "skeleton-scope", path: decision.target ?? "", note: `Skeleton fence ${decision.skeleton.skelIds.map((i) => `SKEL[${i}]`).join(", ")}`, rationale: "Filling an approved skeleton: edits stay inside the in-progress step's fence." }
+      : undefined);
     const concept = gateText(stance?.concept ?? g?.note, 200);
     if (!concept) return undefined;
     const source = stance ? (decision.source === "team" ? "team" : "session") : "guardrail";

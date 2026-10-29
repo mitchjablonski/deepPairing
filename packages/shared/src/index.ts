@@ -258,6 +258,10 @@ export {
   PlanVisualAnnotationSchema,
   PlanVisualDocSectionSchema,
   PlanVisualSchema,
+  SKELETON_VISUAL_PREFIX,
+  SkeletonFenceViewSchema,
+  SkeletonCodeSnapshotSchema,
+  StoredPlanVisualSchema,
   PlanContentSchema,
   ReasoningConceptSchema,
   ReasoningRelationSchema,
@@ -292,6 +296,8 @@ export {
   type PlanVisualAnnotation,
   type PlanVisualDocSection,
   type PlanVisual,
+  type SkeletonFenceView,
+  type SkeletonCodeSnapshot,
   type PlanContent,
   type ReasoningConcept,
   type ReasoningRelation,
@@ -401,3 +407,15 @@ export { LedgerDigestSchema, type LedgerDigest } from "./schemas/ledger-digest.j
 export { computeLineDiff, collapseDiff, type DiffLine, type DiffGap, type DiffRow } from "./line-diff.js";
 
 export { isDemoSessionId, KNOWN_SAMPLE_SESSION_IDS } from "./session-provenance.js";
+
+export {
+  SKELETON_LIVE_VISUAL_PREFIX,
+  isSkeletonApprovedVisualId,
+  isSkeletonLiveVisualId,
+  isAnySkeletonVisualId,
+  liveVisualIdFor,
+  approvedVisualIdFor,
+  isLivePlanVersion,
+  SKELETON_ANCHOR_LIMITS,
+  sanitizeSkeletonAnchor,
+} from "./skeleton.js";

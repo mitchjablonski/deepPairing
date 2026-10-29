@@ -148,6 +148,15 @@ export const PlanStepSchema = z.object({
     .describe("Execution status, updated by the agent via update_plan_progress"),
   statusNote: z.string().optional()
     .describe("One-line note shown beside the step (e.g. why it was skipped)"),
+  /**
+   * Skeleton plans — the SKEL fence id this step fills. The skeleton (stubs
+   * fenced `SKEL[id] … /SKEL[id]` with a `SKEL_TODO` body) is written to disk
+   * BEFORE the plan is presented; while this step is `in_progress` the
+   * preflight hook fences edits to that id's regions. Optional for back-compat
+   * (absent = an ordinary prose step).
+   */
+  skelId: z.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional()
+    .describe("Skeleton plans: the SKEL[id] fence this step fills, e.g. \"2\" or \"2.1\" (starts with a letter or digit; then letters, digits, '.', '_' or '-'; no spaces). While the step is in_progress on an approved plan, edits outside that fence are gated."),
 });
 
 export type PlanStep = z.infer<typeof PlanStepSchema>;
@@ -234,7 +243,62 @@ export const PlanVisualSchema = z.object({
   annotations: z.array(PlanVisualAnnotationSchema).optional(),
 });
 
-export type PlanVisual = z.infer<typeof PlanVisualSchema>;
+/** Skeleton plans — snapshot visuals are keyed by PATH under this prefix
+ *  (`skelcode:src/a.ts`), so a line thread survives a revise. Only visuals
+ *  with this id prefix may carry `skeleton` metadata. */
+export const SKELETON_VISUAL_PREFIX = "skelcode:";
+
+/**
+ * Skeleton plans (#606 parity PR 2) — one SKEL[id] fence inside a server-side
+ * skeleton snapshot. Lines are absolute (1-based) in the snapshot's code.
+ * `todo` = the body still holds SKEL_TODO; `filled` otherwise. "Active" is not
+ * stored: the companion derives it live from the claiming step's status.
+ */
+export const SkeletonFenceViewSchema = z.object({
+  id: z.string(),
+  title: z.string().optional(),
+  openLine: z.number(),
+  closeLine: z.number(),
+  status: z.enum(["todo", "filled"]),
+});
+
+export type SkeletonFenceView = z.infer<typeof SkeletonFenceViewSchema>;
+
+/**
+ * Skeleton plans — the SERVER-SET metadata on an `annotated_code` visual that
+ * present_plan / revise_artifact snapshot from disk (id `skelcode:<path>`).
+ * Deliberately NOT part of PlanVisualSchema: agents never author it (the tool
+ * input schemas stay unchanged and a supplied value is stripped); it rides only
+ * on stored content, through the coercer, to the renderer.
+ */
+export const SkeletonCodeSnapshotSchema = z.object({
+  fences: z.array(SkeletonFenceViewSchema),
+  /** An unfenced skeleton file (a file_map "create" entry with no fences). */
+  tracked: z.boolean().optional(),
+  /** Set when the snapshot cap cut the file short. */
+  truncated: z.object({ shownLines: z.number(), totalLines: z.number() }).optional(),
+  /** Malformed SKEL markers in this file (fences are then unknown). */
+  markerError: z.string().optional(),
+  /** Set when the server WITHHELD the file's content (a secret-shaped value
+   *  was found on disk). The visual then carries no `code` at all. */
+  withheld: z.string().optional(),
+  /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
+   *  the same text keeps the old stamp, so a line comment made before it is
+   *  known to sit on unchanged code. */
+  takenAt: z.string().optional(),
+  /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
+   *  the newest read, so concurrent progress calls can't regress the view. */
+  readAt: z.number().optional(),
+});
+
+export type SkeletonCodeSnapshot = z.infer<typeof SkeletonCodeSnapshotSchema>;
+
+/** A visual as STORED (agent shape + the optional server-set skeleton snapshot). */
+export const StoredPlanVisualSchema = PlanVisualSchema.extend({
+  skeleton: SkeletonCodeSnapshotSchema.optional(),
+});
+
+export type PlanVisual = z.infer<typeof StoredPlanVisualSchema>;
 
 // --- research content ---------------------------------------------------------
 // Defined here (not up by FindingSchema) so it can reference PlanVisualSchema

@@ -46,7 +46,65 @@ function subagentName(f: HookGateFacts): string | undefined {
   return f.agentId ? "a subagent" : undefined;
 }
 
+/** Skeleton plans (parity PR 4) — the step ids a `skeleton-scope` firing
+ *  names in its concept ("Skeleton fence SKEL[2], SKEL[3]"). */
+function skeletonSteps(concept: string): string[] {
+  const out: string[] = [];
+  const re = /SKEL\[([^\]]+)\]/g;
+  for (let m = re.exec(concept); m; m = re.exec(concept)) out.push(m[1]!);
+  return out;
+}
+
+/**
+ * Skeleton plans (parity PR 4) — a fence firing is not a guarded file: Claude
+ * is filling an approved skeleton and this edit falls outside the step it is
+ * on. Plain and specific: which step, which file, what allowing it means, and
+ * that the answer goes in the terminal (whose dialog can't show this reason,
+ * upstream #102892).
+ */
+function skeletonGateCopy(f: HookGateFacts): HookGateCopy {
+  const steps = skeletonSteps(f.concept);
+  const stepText = steps.length === 0 ? "the current step" : steps.length === 1 ? `step SKEL[${steps[0]}]` : `steps ${steps.map((s) => `SKEL[${s}]`).join(", ")}`;
+  const file = f.targetPath ? ` (\`${f.targetPath}\`)` : "";
+  const worker = subagentName(f);
+  const deny = f.decision === "deny";
+  const title = deny
+    ? `Stopped: ${verb(f.toolName)} outside ${stepText} would change the approved skeleton${file}`
+    : `${f.toolName === "Write" ? "Write" : "Edit"} outside ${stepText}: this changes the approved skeleton${file}`;
+  const match = `${worker ? `${worker[0]!.toUpperCase()}${worker.slice(1)} is` : "Claude is"} filling ${stepText} of the skeleton you approved, and this ${verb(f.toolName)} falls outside that step's fence. A new helper, a changed signature or a new file is a skeleton change.`;
+  const next = deny
+    ? "Nothing was written. Claude was told to propose the change instead."
+    : "Answer in the terminal: its prompt won't show this reason. Deny to keep Claude inside the fence (it should propose the change and revise the plan). Allow only if you agree to change the skeleton's structure.";
+  const announcement = [title.replace(/`/g, ""), match, deny ? "Nothing was written." : "Answer in the terminal."]
+    .map((t) => (/[.!?]$/.test(t) ? t : `${t}.`))
+    .join(" ");
+  const subagent = worker ? `Subagent: ${f.agentType ?? "unnamed"}` : undefined;
+  return { title, ...(subagent ? { subagent } : {}), match, next, announcement };
+}
+
+/** Parity PR 4 (#610 M1) — the enforced reshape pause: a reshaped skeleton
+ *  awaits your approval, so any edit to its files asks. */
+function skeletonPausedCopy(f: HookGateFacts): HookGateCopy {
+  const file = f.targetPath ? ` (\`${f.targetPath}\`)` : "";
+  const worker = subagentName(f);
+  const deny = f.decision === "deny";
+  const title = deny
+    ? `Stopped: a skeleton change awaits your approval, so fills are paused${file}`
+    : `Skeleton change awaiting your approval: fills are paused${file}`;
+  const match = `${worker ? `${worker[0]!.toUpperCase()}${worker.slice(1)}` : "Claude"} reshaped this skeleton plan, and you haven't approved the new version yet. Until you do, every edit to the plan's files asks you first.`;
+  const next = deny
+    ? "Nothing was written. Review the reshaped plan on its card, then approve or reject it."
+    : "Answer in the terminal: its prompt won't show this reason. Deny it and review the reshaped plan on its card first; allow only if you want this one edit to go ahead anyway.";
+  const announcement = [title.replace(/`/g, ""), match, deny ? "Nothing was written." : "Answer in the terminal."]
+    .map((t) => (/[.!?]$/.test(t) ? t : `${t}.`))
+    .join(" ");
+  const subagent = worker ? `Subagent: ${f.agentType ?? "unnamed"}` : undefined;
+  return { title, ...(subagent ? { subagent } : {}), match, next, announcement };
+}
+
 export function hookGateCopy(f: HookGateFacts): HookGateCopy {
+  if (f.guardrail === "skeleton-scope") return skeletonGateCopy(f);
+  if (f.guardrail === "skeleton-paused") return skeletonPausedCopy(f);
   const target = f.targetPath ? `\`${f.targetPath}\`` : "a file";
   const deny = f.decision === "deny";
   const worker = subagentName(f);

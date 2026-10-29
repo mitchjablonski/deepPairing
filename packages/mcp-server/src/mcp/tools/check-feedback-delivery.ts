@@ -1,5 +1,6 @@
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { suggestionSummary, describeRequestScope, findSpecEdgePath } from "@deeppairing/shared";
+import { describeSkeletonLine } from "../skeleton-line.js";
 
 /**
  * #188 (PAYDOWN) — the per-comment DELIVERY loop of check_feedback, extracted
@@ -377,6 +378,18 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
   // `art_x:12` the agent can't place across a multi-file change.
   if (c.target.filePath) loc += ` ${c.target.filePath}`;
   if (c.target.lineStart) loc += `:${c.target.lineStart}`;
+  // Skeleton plans, parity PR 2 — a line comment on the plan card's skeleton
+  // code names the fence (and step) it sits in, or says it is a structural
+  // line outside every fence. Only for snapshot visuals: every other comment
+  // is byte-unchanged.
+  const skeletonLine = describeSkeletonLine(
+    artsForTargets.find((a) => a.id === c.target.artifactId),
+    c.target.visualId,
+    c.target.lineStart,
+    c.target.skeletonAnchor,
+    c.createdAt,
+  );
+  if (skeletonLine) loc += skeletonLine;
   // #186 — an OLD-side comment is about a REMOVED line. Mark it so the agent
   // reads this as "why did you delete this?", not a note on the replacement,
   // and inline the removed line's content (pulled from the changeset hunks)

@@ -394,3 +394,21 @@ h1, h2, h3, h4, h5, h6 {
   --color-accent-violet-strong-hover: #644ad3;
   --color-accent-cyan-dim: #e4f8fa;
 }
+
+/* Skeleton plans, parity PR 3 — step_<id> nodes in a skeleton plan's diagram,
+   coloured by fence status AND patterned (dashed / solid / double-width), so
+   status never rests on colour alone. Nodes styled `classDef existing` are not
+   step nodes and keep mermaid's own styling. */
+.dp-mermaid g.dp-skel-step { cursor: pointer; }
+.dp-mermaid g.dp-skel-step :is(rect, polygon, circle, ellipse, path) { stroke-width: 2px !important; }
+.dp-mermaid g.dp-skel-pending :is(rect, polygon, circle, ellipse, path) {
+  fill: var(--color-accent-amber-dim) !important; stroke: var(--color-accent-amber) !important; stroke-dasharray: 5 3;
+}
+.dp-mermaid g.dp-skel-filled :is(rect, polygon, circle, ellipse, path) {
+  fill: var(--color-accent-green-dim) !important; stroke: var(--color-accent-green) !important;
+}
+.dp-mermaid g.dp-skel-active :is(rect, polygon, circle, ellipse, path) {
+  fill: var(--color-accent-blue-dim) !important; stroke: var(--color-accent-blue) !important; stroke-width: 4px !important;
+}
+.dp-mermaid g.dp-skel-unknown :is(rect, polygon, circle, ellipse, path) { stroke-dasharray: 1 3; }
+.dp-mermaid text.dp-skel-glyph { font-size: 11px; fill: currentColor; pointer-events: none; }
