@@ -135,6 +135,16 @@ describe("#430 PR 2 — states A–G render the design's exact line", () => {
     expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
   });
 
+  it("#430 slice 1 (Sol P2) — Why on a terminal ask keeps the answer-in-the-terminal instruction in the details", () => {
+    usePreflightBlockStore.setState({ blocks: [{ id: "b1", at: at(), source: "session", concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/m.sql" }], lastSeenAt: null } as any);
+    render(<NextUpBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Why" }));
+    // Marked seen: the primary copy is gone, the instruction is not.
+    expect(screen.getByTestId("next-up-held-terminal")).toHaveTextContent("answer it in the terminal; approving here does not release it");
+    expect(screen.getByText(/A terminal ask is answered in the terminal/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Nothing to do unless you want to retire the stance/)).not.toBeInTheDocument();
+  });
+
   it("G — disconnected with work pending: the failure prefix comes first and the decision is still named", () => {
     useConnectionStore.setState({ connected: false } as any);
     useArtifactStore.setState({ artifacts: [decision("d1", "Store choice", "high")] });

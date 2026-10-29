@@ -217,6 +217,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   // The holds whose "Why" was opened: shown in the expansion after they are
   // marked seen (which, like opening the ⋯ gate log, clears them from the lane).
   const [whyHolds, setWhyHolds] = useState<AttentionItem[]>([]);
+  const heldShown = attention.lanes.held.length > 0 ? attention.lanes.held : whyHolds;
   const primary = attention.line.primary;
   const item = primary.item;
   // #430 PR 3 — absorbing ResumeQuestionsBanner: when the agent exited with
@@ -593,9 +594,20 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
                 <div>
                   <div className="text-text-muted">Held by your stance</div>
                   <ul className="ml-3 list-disc">
-                    {(attention.lanes.held.length > 0 ? attention.lanes.held : whyHolds).map((h) => <li key={h.id}>{h.title}</li>)}
+                    {heldShown.map((h) => (
+                      <li key={h.id}>
+                        {h.title}
+                        {/* #430 slice 1 (Sol P2) — a terminal ask keeps its instruction
+                            here too, after Why marks the record seen. */}
+                        {h.terminal && <span data-testid="next-up-held-terminal"> — answer it in the terminal; approving here does not release it</span>}
+                      </li>
+                    ))}
                   </ul>
-                  <div className="text-text-muted">Nothing to do unless you want to retire the stance — that lives in the ⋯ gate log.</div>
+                  <div className="text-text-muted">
+                    {heldShown.some((h) => h.terminal)
+                      ? "A terminal ask is answered in the terminal. A stance hold needs nothing unless you want to retire the stance — that lives in the ⋯ gate log."
+                      : "Nothing to do unless you want to retire the stance — that lives in the ⋯ gate log."}
+                  </div>
                 </div>
               )}
               <Queue title="Read" items={attention.lanes.read} onOpen={selectArtifact} />

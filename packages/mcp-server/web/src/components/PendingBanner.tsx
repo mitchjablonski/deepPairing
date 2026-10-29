@@ -85,11 +85,17 @@ export function PendingBanner() {
   // single click across a hidden interval. Disarm whenever we suppress, so the
   // banner always reappears with its chips reset (the onBlur reset can't fire —
   // an unmounted-by-return chip never blurs).
+  // #430 slice 1 (Sol review 5676282653, P1) — a terminal-held hook `ask` is
+  // not an artifact card: the empty-drafts and single-card-in-view step-downs
+  // are artifact-only, so they never hide a held lead (it has no card to be
+  // the call to action). Draft count membership is unchanged.
+  const heldLead = next?.kind === "held" && next.terminal === true;
+  const bannerHidden = !heldLead && (total === 0 || suppressed);
   useEffect(() => {
-    if (suppressed) setConfirmingId(null);
-  }, [suppressed]);
+    if (bannerHidden) setConfirmingId(null);
+  }, [bannerHidden]);
 
-  if (total === 0 || suppressed) return null;
+  if (bannerHidden) return null;
 
   return (
     // Q4 review (L5) — a named landmark. This strip is the app's "what needs
@@ -105,9 +111,11 @@ export function PendingBanner() {
     >
       <div className="flex items-center gap-2 min-w-0">
       {/* #430 slice 1 — no pulse: the line below says what waits, in words. */}
-      <span className="text-2xs text-accent-amber font-medium shrink-0">
-        {total} item{total > 1 ? "s" : ""} waiting for you
-      </span>
+      {total > 0 && (
+        <span className="text-2xs text-accent-amber font-medium shrink-0">
+          {total} item{total > 1 ? "s" : ""} waiting for you
+        </span>
+      )}
       <div className="flex gap-1 ml-auto items-center min-w-0 overflow-x-auto">
         {shown.map((a) => (
           <span key={a.id} className="flex items-center bg-accent-amber-dim rounded shrink-0">

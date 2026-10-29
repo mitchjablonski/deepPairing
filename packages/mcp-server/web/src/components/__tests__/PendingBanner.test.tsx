@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PendingBanner } from "../PendingBanner";
@@ -14,6 +14,12 @@ const art = (over: any) =>
 
 beforeEach(() => {
   useArtifactStore.getState().reset();
+});
+// #430 slice 1 (Sol review) — store reset() resets data, not methods: a spy on
+// `updateArtifactStatus` would otherwise carry an earlier test's call history
+// into the next one. Restore every spy so each test sees a fresh method.
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("PendingBanner", () => {
@@ -243,6 +249,32 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
     expect(screen.getByText(/1 item waiting for you/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /migrations/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^dismiss old finding$/i })).toBeInTheDocument();
+  });
+
+  const terminalAsk = { id: "b1", at: "2026-01-05T00:00:00.000Z", source: "session", concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/m.sql" };
+  const HELD_LINE = 'HELD IN TERMINAL "migrations": Claude Code asked about db/m.sql · Claude Code asked in the terminal — answer it there; nothing here releases it · Answer in the terminal — approving here does not release it';
+
+  it("a terminal-held lead shows with ZERO draft cards (no count, no chips)", () => {
+    seed(art({ id: "other", status: "approved", title: "Done" }));
+    usePreflightBlockStore.setState({ blocks: [terminalAsk], lastSeenAt: null } as any);
+    render(<PendingBanner />);
+    expect(screen.getByRole("region", { name: "Waiting for you" })).toBeInTheDocument();
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toBe(HELD_LINE);
+    expect(screen.queryByText(/waiting for you/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
+  });
+
+  it("a terminal-held lead is not suppressed by a selected sole draft (artifact-only step-down)", () => {
+    seed(finding);
+    act(() => { useArtifactStore.getState().selectArtifact("f_old"); });
+    usePreflightBlockStore.setState({ blocks: [terminalAsk], lastSeenAt: null } as any);
+    const { rerender } = render(<PendingBanner />);
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toBe(HELD_LINE);
+    expect(screen.getByText(/1 item waiting for you/)).toBeInTheDocument();
+    // Without the hold, the ordinary J2b step-down still applies.
+    act(() => usePreflightBlockStore.setState({ blocks: [], lastSeenAt: null } as any));
+    rerender(<PendingBanner />);
+    expect(screen.queryByRole("region", { name: "Waiting for you" })).not.toBeInTheDocument();
   });
 
   it("keyboard: the lead chip opens with Enter; dismiss is two-step by keyboard and focus stays on the chip", async () => {
