@@ -110,13 +110,56 @@ export function PendingBanner() {
       className="px-3 py-1 bg-accent-amber-dim/50 border-b border-accent-amber/15"
     >
       <div className="flex items-center gap-2 min-w-0">
-      {/* #430 slice 1 — no pulse: the line below says what waits, in words. */}
+      {/* #430 slice 1 — no pulse: the lead line beside says what waits, in words. */}
       {total > 0 && (
         <span className="text-2xs text-accent-amber font-medium shrink-0">
           {total} item{total > 1 ? "s" : ""} waiting for you
         </span>
       )}
-      <div className="flex gap-1 ml-auto items-center min-w-0 overflow-x-auto">
+      {/* #430 slice 1 — the lead item's line: what, if you leave it, after, why.
+          ONE row, truncated (round-14 "chrome before code" budget, e2e S2):
+          the full text is the row's hover title, stays in the accessibility
+          tree, and the row unwraps while its title control has focus. The
+          title opens the lead artifact (a held hook ask has none — plain text,
+          focusable so keyboard users can unwrap it too). Existing contrast
+          tokens only, no opacity on text. */}
+      {next && copy && (
+        <div
+          data-testid="pending-next"
+          data-next-copy={copyLineText(next.title, copy)}
+          title={copy.why ? `${copyLineText(next.title, copy)} · Why ${copy.why}` : copyLineText(next.title, copy)}
+          tabIndex={next.artifactId ? undefined : 0}
+          className="flex-1 min-w-0 text-2xs text-text-primary truncate focus-within:whitespace-normal focus:whitespace-normal focus-within:break-words focus:break-words outline-none focus-visible:ring-1 focus-visible:ring-accent-amber rounded"
+        >
+          {copy.lane && <><span className="font-semibold tracking-wide text-accent-amber">{copy.lane}</span>{" "}</>}
+          {next.artifactId ? (
+            <button
+              type="button"
+              onClick={() => selectArtifact(next.artifactId!)}
+              className="font-medium text-text-primary hover:underline focus-visible:underline outline-none"
+            >
+              {next.title}
+            </button>
+          ) : (
+            <span className="font-medium text-text-primary">{next.title}</span>
+          )}
+          {copy.tags.map((t) => (
+            <span key={t}>
+              {" "}
+              {t === "Demo"
+                ? <DemoTag />
+                : <span className={`px-1 rounded font-semibold ${t === "HIGH" ? "bg-accent-red-dim text-accent-red" : "bg-surface-elevated text-text-secondary"}`}>{t}</span>}
+            </span>
+          ))}
+          {next.sessionLabel && <span> in {next.sessionLabel}</span>}
+          {copy.ifIgnored && <>{" "}<span data-testid="pending-if-ignored">· {copy.ifIgnored}</span></>}
+          {copy.after && <>{" "}<span data-testid="pending-after">· {copy.after}</span></>}
+          {copy.why && (
+            <>{" "}<span data-testid="pending-why">· <span className="font-medium">Why </span>{copy.why}</span></>
+          )}
+        </div>
+      )}
+      <div className="flex gap-1 ml-auto items-center min-w-0 max-w-[50%] shrink-0 overflow-x-auto">
         {shown.map((a) => (
           <span key={a.id} className="flex items-center bg-accent-amber-dim rounded shrink-0">
             <button
@@ -180,35 +223,6 @@ export function PendingBanner() {
         )}
       </div>
       </div>
-      {/* #430 slice 1 — the lead item's line: what, if you leave it, after.
-          Plain text (no controls inside, so nothing nests), wraps rather than
-          truncating, existing contrast tokens only, no opacity on text. */}
-      {next && copy && (
-        <div data-testid="pending-next" data-next-copy={copyLineText(next.title, copy)} className="text-2xs pb-0.5 min-w-0">
-          <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 min-w-0 text-text-primary">
-            {copy.lane && <span className="font-semibold tracking-wide text-accent-amber">{copy.lane}</span>}
-            <span className="font-medium text-text-primary break-words min-w-0">{next.title}</span>
-            {copy.tags.map((t) => t === "Demo"
-              ? <DemoTag key={t} />
-              : (
-                <span
-                  key={t}
-                  className={`px-1 rounded font-semibold ${t === "HIGH" ? "bg-accent-red-dim text-accent-red" : "bg-surface-elevated text-text-secondary"}`}
-                >
-                  {t}
-                </span>
-              ))}
-            {next.sessionLabel && <span>in {next.sessionLabel}</span>}
-            {copy.ifIgnored && <span data-testid="pending-if-ignored">· {copy.ifIgnored}</span>}
-            {copy.after && <span data-testid="pending-after">· {copy.after}</span>}
-          </p>
-          {copy.why && (
-            <p data-testid="pending-why" className="text-text-primary line-clamp-2 break-words" title={copy.why}>
-              <span className="font-medium">Why </span>{copy.why}
-            </p>
-          )}
-        </div>
-      )}
     </div>
   );
 }
