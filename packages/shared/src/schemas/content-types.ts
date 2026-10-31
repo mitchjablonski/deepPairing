@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { EvidenceInputSchema } from "./evidence.js";
+import { RequirementClaimsSchema } from "./requirement-claims.js";
 
 export const FindingSeveritySchema = z.enum(["info", "low", "medium", "high", "critical"]);
 export type FindingSeverity = z.infer<typeof FindingSeveritySchema>;
@@ -752,6 +753,14 @@ export const DebriefContentSchema = z.object({
    * region-comments work. Optional; before R4 it was silently stripped at parse.
    */
   visuals: z.array(PlanVisualSchema).optional(),
+  /**
+   * #572 slice B1 — the agent's requirement claims against the debrief's
+   * pinned brief (the artifact-level `briefRef`). Agent-reported account,
+   * never acceptance. Strict admission policy (requirement-claims.ts); a
+   * saved list is read through `readRequirementClaims`, never rewritten.
+   * Optional; absent → the stored JSON is byte-identical to before.
+   */
+  requirementClaims: RequirementClaimsSchema.optional(),
 });
 export type DebriefContent = z.infer<typeof DebriefContentSchema>;
 

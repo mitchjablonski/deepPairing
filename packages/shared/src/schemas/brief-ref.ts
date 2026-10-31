@@ -199,10 +199,18 @@ function grainLabel(g: BriefGrainView): string {
   return g.match === "unknown" ? `${name} (unknown)` : g.match === "ambiguous" ? `${name} (ambiguous)` : name;
 }
 
-/** One text line for a pin: `Exception to "Brief" v2 · REQ-1 (superseded)`. */
-export function formatBriefPin(view: BriefPinView): string {
+/** What the pin means on its artifact: a decision is an EXCEPTION to the
+ *  brief; a debrief (#572 B1) is the agent's ACCOUNT against it. */
+export type BriefPinRole = "exception" | "account";
+
+/** One text line for a pin: `Exception to "Brief" v2 · REQ-1 (superseded)`,
+ *  or for a debrief `Agent's account against "Brief" v2 (approved)`. */
+export function formatBriefPin(view: BriefPinView, role: BriefPinRole = "exception"): string {
   const grains = view.grains.length > 0 ? ` · ${view.grains.map(grainLabel).join(", ")}` : "";
-  if (!view.available) return `Exception to brief ${view.artifactId} (version unknown, brief unavailable)${grains}`;
-  const closed = view.closed ? ` (${view.status})` : "";
-  return `Exception to "${view.title}" v${view.version}${grains}${closed}`;
+  const lead = role === "account" ? "Agent's account against" : "Exception to";
+  if (!view.available) return `${lead} brief ${view.artifactId} (version unknown, brief unavailable)${grains}`;
+  // A debrief always names the pinned version's status; an exception card
+  // names it only once the version is historical (unchanged slice-A copy).
+  const status = role === "account" ? ` (${view.status})` : view.closed ? ` (${view.status})` : "";
+  return `${lead} "${view.title}" v${view.version}${grains}${status}`;
 }

@@ -1,5 +1,5 @@
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
-import { suggestionSummary, describeRequestScope, findSpecEdgePath } from "@deeppairing/shared";
+import { suggestionSummary, describeRequestScope, findSpecEdgePath, decodeClaimSectionKey } from "@deeppairing/shared";
 import { describeSkeletonLine } from "../skeleton-line.js";
 
 /**
@@ -186,6 +186,10 @@ function debriefItemTitle(art: Artifact | undefined, lane: string, i: number): s
  */
 function describeDebriefSection(sectionId: string, art?: Artifact): string {
   const key = sectionId.slice("debrief:".length);
+  // #572 B1 — a requirement-claim row (`claim:<escaped raw id>`), BEFORE the
+  // per-item lane regex so a numeric-looking id never reads as "claim item #n".
+  if (key.startsWith("claim:")) return `requirement claim ${JSON.stringify(decodeClaimSectionKey(key.slice("claim:".length)))} (the agent's account)`;
+  if (key === "claims") return "requirement claims (the agent's account)";
   // Ordered-walk sections: `0` / `section:2` → 1-based "section #n".
   const numeric = /^(?:section:)?(\d+)$/.exec(key);
   if (numeric) return `section #${Number(numeric[1]) + 1}`;

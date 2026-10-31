@@ -1,5 +1,6 @@
 import {
   BriefRefSchema,
+  briefRefDiagnosticFor,
   briefRefProblems,
   describeBriefPin,
   formatBriefPin,
@@ -7,6 +8,8 @@ import {
   type Artifact,
   type BriefPinView,
   type BriefRef,
+  type BriefRefDiagnostic,
+  type DroppedPinReason,
 } from "@deeppairing/shared";
 import { stableStringify } from "./proposal-resolution.js";
 
@@ -174,3 +177,64 @@ export function frozenBriefRefOf(candidates: ReadonlyArray<Record<string, unknow
   }
   return value ? { found: true, ref: value } : { found: true };
 }
+
+// --- #572 slice B1 — the debrief pin ----------------------------------------
+
+/** A debrief pin's admission: the pin to save, or the diagnostic to save. */
+export interface DebriefBriefRefNormalization {
+  ref?: BriefRef;
+  /** Set exactly when a supplied pin was dropped (server-set, bounded). */
+  diagnostic?: BriefRefDiagnostic;
+  notes: string[];
+}
+
+const DEBRIEF_DROPPED = "briefRef dropped, so this debrief has no brief link:";
+
+const DROP_TEXT: Record<DroppedPinReason, (id: string) => string> = {
+  invalid_ref: () => "the ref is malformed",
+  grain_ids_not_allowed: () => "a debrief's briefRef is {artifactId} only. Report per-requirement status in requirementClaims instead of requirementIds/edgePathIds",
+  artifacts_unreadable: (id) => `this session's artifacts couldn't be read to check ${id}`,
+  not_in_session: (id) => `${id} is not an artifact in this session. Other sessions aren't searched`,
+  not_a_spec: (id) => `${id} is not a brief (a present_spec artifact)`,
+  ambiguous_target: (id) => `more than one artifact in this session has the id ${id}, so the link can't name one version`,
+};
+
+/**
+ * #572 B1 — admit a NEW debrief pin (`{artifactId}` only). The canonical A1
+ * policy decides (`briefRefProblems` + `normalizeNewBriefRef`: same session,
+ * spec only, no successor); two B1-local guards sit around it: a ref carrying
+ * `requirementIds`/`edgePathIds` is dropped whole (claims live in
+ * `requirementClaims`), and the target must be the ONLY same-session artifact
+ * with that id. Never throws, truncates or searches another session.
+ */
+export function normalizeDebriefBriefRef(raw: unknown, artifacts: readonly Artifact[] | null, sessionId: string): DebriefBriefRefNormalization {
+  if (raw === undefined) return { notes: [] };
+  const drop = (reason: DroppedPinReason, extra = ""): DebriefBriefRefNormalization => {
+    const diagnostic = briefRefDiagnosticFor(raw, reason);
+    const id = diagnostic.attemptedArtifactId ?? "the given id";
+    return { diagnostic, notes: [`${DEBRIEF_DROPPED} ${DROP_TEXT[reason](id)}${extra}. The debrief itself was presented; any requirement claims are kept as unattributed (no brief, so no coverage). The rejected link is noted on the debrief.`] };
+  };
+  const problems = briefRefProblems(raw);
+  if (problems.length > 0) return drop("invalid_ref", ` (${problems.join("; ")})`);
+  const shape = raw as { requirementIds?: unknown; edgePathIds?: unknown };
+  if (shape.requirementIds !== undefined || shape.edgePathIds !== undefined) return drop("grain_ids_not_allowed");
+  // B1 uniqueness BEFORE the canonical first-match lookup, so the verdict
+  // never depends on which same-id artifact happens to come first.
+  const id = (raw as { artifactId: string }).artifactId;
+  const sameSession = (artifacts ?? []).filter((a) => a.id === id && a.sessionId === sessionId);
+  if (sameSession.length > 1) return drop("ambiguous_target");
+  const canonical = normalizeNewBriefRef(raw, artifacts, sessionId);
+  if (!canonical.ref) {
+    if (!artifacts) return drop("artifacts_unreadable");
+    // (A same-session spec the canonical first-match lookup missed means a
+    // foreign artifact shares its id: the id doesn't name one version.)
+    return drop(sameSession.length === 0 ? "not_in_session" : sameSession[0]!.type !== "spec" ? "not_a_spec" : "ambiguous_target");
+  }
+  const view = describeBriefPin(canonical.ref, sameSession, sessionId);
+  const notes = [`Linked: ${formatBriefPin(view, "account")}. A declared link: your claims are your account, not acceptance.`];
+  if (view.closed) {
+    notes.push(`The pinned brief ${canonical.ref.artifactId} (v${view.version}) is ${view.status}. The link stays on that exact version and was not moved to a newer one.`);
+  }
+  return { ref: canonical.ref, notes };
+}
+

@@ -235,7 +235,37 @@ export {
   type BriefGrainView,
   type BriefLookupArtifact,
   type BriefPinView,
+  type BriefPinRole,
 } from "./schemas/brief-ref.js";
+
+export {
+  MAX_REQUIREMENT_CLAIMS,
+  MAX_CLAIM_EVIDENCE,
+  MAX_CLAIM_ID_LENGTH,
+  MAX_REQUIREMENT_CLAIMS_BYTES,
+  CLAIM_STRING_LIMITS,
+  ClaimEvidenceSchema,
+  RequirementClaimSchema,
+  RequirementClaimsSchema,
+  requirementClaimsByteLength,
+  CLAIMS_ORIGIN_KEY,
+  BRIEF_REF_DIAGNOSTIC_KEY,
+  SERVER_SET_DEBRIEF_KEYS,
+  DROPPED_PIN_REASONS,
+  briefRefDiagnosticFor,
+  readBriefRefDiagnostic,
+  readRequirementClaims,
+  claimSectionKey,
+  decodeClaimSectionKey,
+  resolveDebriefPin,
+  uniqueSessionArtifact,
+  type ClaimEvidence,
+  type RequirementClaim,
+  type DroppedPinReason,
+  type BriefRefDiagnostic,
+  type ReadClaims,
+  type DebriefPinState,
+} from "./schemas/requirement-claims.js";
 
 export {
   PreflightConsideredConceptSchema,
