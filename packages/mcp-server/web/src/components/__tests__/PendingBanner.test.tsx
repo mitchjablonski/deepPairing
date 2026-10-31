@@ -262,6 +262,9 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
     expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toBe(HELD_LINE);
     expect(screen.queryByText(/waiting for you/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
+    // No chip: the held row is the focusable, named stop and keeps the terminal instruction.
+    const row = screen.getByRole("group", { name: /answer in the terminal — approving here does not release it/i });
+    expect(row).toHaveAttribute("tabindex", "0");
   });
 
   it("a terminal-held lead is not suppressed by a selected sole draft (artifact-only step-down)", () => {
@@ -284,6 +287,10 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
     const user = userEvent.setup();
     await user.tab();
     expect(document.activeElement).toHaveAttribute("title", "Worker-stop notice");
+    // The lead chip carries the compact lead line as its description, and the
+    // row unwraps while the chip has focus.
+    expect(document.activeElement).toHaveAccessibleDescription(expect.stringContaining("Approval required before this work proceeds"));
+    expect(screen.getByTestId("pending-next").className).not.toMatch(/\btruncate\b/);
     await user.keyboard("{Enter}");
     expect(useArtifactStore.getState().selectedArtifactId).toBe("brief");
     act(() => { useArtifactStore.getState().selectArtifact(null); });

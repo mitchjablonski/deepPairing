@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
@@ -90,6 +90,12 @@ export function PendingBanner() {
   // are artifact-only, so they never hide a held lead (it has no card to be
   // the call to action). Draft count membership is unchanged.
   const heldLead = next?.kind === "held" && next.terminal === true;
+  // The lead line is ONE truncated row; it unwraps while the lead chip (the
+  // single keyboard stop for the lead) or the held row has focus, and the
+  // chip names the line as its description so the full what/after/why text
+  // (incl. the terminal instruction) is announced on focus.
+  const leadLineId = useId();
+  const [leadFocused, setLeadFocused] = useState(false);
   const bannerHidden = !heldLead && (total === 0 || suppressed);
   useEffect(() => {
     if (bannerHidden) setConfirmingId(null);
@@ -122,19 +128,27 @@ export function PendingBanner() {
           tree, and the row unwraps while its title control has focus. The
           title opens the lead artifact (a held hook ask has none — plain text,
           focusable so keyboard users can unwrap it too). Existing contrast
-          tokens only, no opacity on text. */}
+          tokens only, no opacity on text. Full text is also announced: the
+          lead chip's aria-describedby names this row; a held row is a named
+          group. */}
       {next && copy && (
         <div
           data-testid="pending-next"
           data-next-copy={copyLineText(next.title, copy)}
           title={copy.why ? `${copyLineText(next.title, copy)} · Why ${copy.why}` : copyLineText(next.title, copy)}
-          tabIndex={next.artifactId ? undefined : 0}
-          className="flex-1 min-w-0 text-2xs text-text-primary truncate focus-within:whitespace-normal focus:whitespace-normal focus-within:break-words focus:break-words outline-none focus-visible:ring-1 focus-visible:ring-accent-amber rounded"
+          id={leadLineId}
+          // A held hook ask has no chip: the row itself is the keyboard stop,
+          // a named group so its full text (the terminal instruction) is read.
+          {...(next.artifactId ? {} : { tabIndex: 0, role: "group", "aria-label": copy.why ? `${copyLineText(next.title, copy)} · Why ${copy.why}` : copyLineText(next.title, copy) })}
+          className={`flex-1 min-w-0 text-2xs text-text-primary focus:whitespace-normal focus:break-words outline-none focus-visible:ring-1 focus-visible:ring-accent-amber rounded ${leadFocused ? "whitespace-normal break-words" : "truncate"}`}
         >
           {copy.lane && <><span className="font-semibold tracking-wide text-accent-amber">{copy.lane}</span>{" "}</>}
           {next.artifactId ? (
+            // Mouse convenience: the lead CHIP is the keyboard stop for the
+            // same artifact, so this redundant control stays out of tab order.
             <button
               type="button"
+              tabIndex={-1}
               onClick={() => selectArtifact(next.artifactId!)}
               className="font-medium text-text-primary hover:underline focus-visible:underline outline-none"
             >
@@ -164,6 +178,11 @@ export function PendingBanner() {
           <span key={a.id} className="flex items-center bg-accent-amber-dim rounded shrink-0">
             <button
               onClick={() => selectArtifact(a.id)}
+              {...(a === lead && next && copy ? {
+                "aria-describedby": leadLineId,
+                onFocus: () => setLeadFocused(true),
+                onBlur: () => setLeadFocused(false),
+              } : {})}
               className="px-2 py-0.5 text-accent-amber rounded-l text-2xs hover:bg-accent-amber-dim/80 transition-colors"
               title={a.title}
             >
