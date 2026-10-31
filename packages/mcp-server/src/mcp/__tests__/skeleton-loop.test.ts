@@ -13,6 +13,7 @@ import { SKELETON_ANCHOR_LIMITS } from "@deeppairing/shared";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { skeletonLeftovers } from "../skeleton-finalize.js";
+import { writeReshapeScope } from "../skeleton-reshape.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -171,6 +172,39 @@ describe("reshape and lifted fences", () => {
     await callTool("revise_artifact", { artifactId: d1.id, mode: "supersede", reason: "address comments", content: { steps: STEPS, estimatedChanges: 1 } });
     const d2 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
     expect(JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "skeleton-scopes", `${d2.id}.json`), "utf-8")).reshape.restoreApproved).toBe(false);
+  });
+
+  it("#611: v1's progress after a rejected reshape refreshes the restore, and v1 completing clears it", async () => {
+    const id = await presentApproved();
+    await progress(id, 0, "in_progress");
+    await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "Skeleton change: x", content: { steps: STEPS, estimatedChanges: 1 } });
+    const v2 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+    store.updateArtifactStatus(v2.id, "rejected", "ui_reject_button");
+    const scopeFile = path.join(root, ".deeppairing", "skeleton-scopes", `${v2.id}.json`);
+    const read = () => JSON.parse(fs.readFileSync(scopeFile, "utf-8"));
+    expect(read().reshape).toMatchObject({ fromId: id, restoreApproved: true, restoreSkelIds: ["1"] });
+    // v1 resets its step: nothing in progress to restore.
+    await progress(id, 0, "pending");
+    expect(read().reshape).toMatchObject({ restoreApproved: true, restoreSkelIds: [] });
+    // v1 resumes: the restore follows it.
+    await progress(id, 0, "in_progress");
+    expect(read().reshape).toMatchObject({ restoreApproved: true, restoreSkelIds: ["1"] });
+    // v1 completes: the restore is cleared.
+    fs.writeFileSync(path.join(root, "a.ts"), FILLED);
+    await progress(id, 0, "done");
+    expect(read().reshape).toMatchObject({ fromId: id, restoreApproved: false, restoreSkelIds: [] });
+  });
+
+  it("#611: superseding the same version again takes over the restore", async () => {
+    const id = await presentApproved();
+    await progress(id, 0, "in_progress");
+    await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "Skeleton change: x", content: { steps: STEPS, estimatedChanges: 1 } });
+    const v2 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+    const v1 = store.getArtifacts().find((a) => a.id === id)!;
+    writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id, status: "approved", content: v1.content }, newId: "art_v3", newTitle: "v3", newContent: { steps: STEPS } });
+    const dir = path.join(root, ".deeppairing", "skeleton-scopes");
+    expect(JSON.parse(fs.readFileSync(path.join(dir, `${v2.id}.json`), "utf-8")).reshape).toMatchObject({ restoreApproved: false, restoreSkelIds: [] });
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "art_v3.json"), "utf-8")).reshape).toMatchObject({ fromId: id, restoreApproved: true, restoreSkelIds: ["1"] });
   });
 
   it("#608 (a): leaving in_progress without done posts a notice on the plan and warns the agent", async () => {

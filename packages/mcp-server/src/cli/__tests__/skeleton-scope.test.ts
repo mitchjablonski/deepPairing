@@ -18,6 +18,7 @@ import {
   evaluateSkeletonEdit,
   planDeclaredFiles,
   readSkeletonScopes,
+  refreshReshapeRestores,
   scanSkeletonFences,
   scanSkeletonText,
   selectSkeletonScope,
@@ -383,6 +384,92 @@ describe("through evaluatePreflightHook", () => {
       reshape();
       expect(readSkeletonScopes(root, NOW).find((x) => x.artifactId === V2)?.reshape).toMatchObject({ fromId: "art_plan", restoreApproved: true, restoreSkelIds: ["1"] });
     });
+
+    describe("#611: a rejected reshape restores v1's CURRENT fences, not the ones frozen at pause time", () => {
+      type Step = { skelId: string; status: string };
+      const v1 = (steps: Step[], status = "superseded", owner = fallbackSession) => seedPlan(root, owner, "art_plan", status, { steps });
+      const SIG = { old_string: "interpolate(a", new_string: "interp(a" };
+      const FILL2 = {
+        old_string: '// SKEL[2] catmull-rom between a and b\n  throw new Error("SKEL_TODO");',
+        new_string: "// SKEL[2] catmull-rom between a and b\n  return [a, b];",
+      };
+      const done = (id: string): Step => ({ skelId: id, status: "done" });
+
+      it("v1 moved on to step 2: fence 2 is enforced (ask and strict-stop), the frozen fence 1 is not", () => {
+        v1([done("1"), { skelId: "2", status: "in_progress" }]);
+        reshape({ restoreSkelIds: ["1"] }, "rejected"); // frozen at pause time: step 1
+        expect(hook(SIG)).toMatchObject({ fire: true, source: "skeleton", skeleton: { skelIds: ["2"] } });
+        expect(hook(SIG).reason).toContain("[SKELETON_SCOPE");
+        expect(hook(SIG, { mode: "strict-stop" })).toMatchObject({ fire: true, skeleton: { skelIds: ["2"] } });
+        expect(hook(SIG, { mode: "strict-stop" }).reason).toMatch(/stopped before execution \(strict-stop mode\)/);
+        expect(hook(FILL2).fire).toBe(false); // the current step's fill passes
+        // Step 1 is done: its old fence is no longer the one being filled.
+        expect(hook(STUB_FILL)).toMatchObject({ fire: true, skeleton: { skelIds: ["2"] } });
+      });
+
+      it("v1 complete, skipped or reset: no stale ask, and no stale deny under strict-stop", () => {
+        const cases: Step[][] = [
+          [done("1"), done("2")],
+          [done("1"), { skelId: "2", status: "skipped" }],
+          [{ skelId: "1", status: "pending" }, { skelId: "2", status: "pending" }],
+        ];
+        for (const steps of cases) {
+          v1(steps);
+          reshape({ restoreSkelIds: ["1"] }, "rejected");
+          for (const mode of ["ask", "strict-stop"] as const) {
+            expect(hook(SIG, { mode }).fire, `${JSON.stringify(steps)} ${mode}`).toBe(false);
+            expect(hook(OUTSIDE, { mode }).fire, `${JSON.stringify(steps)} ${mode}`).toBe(false);
+          }
+        }
+        // The same frozen record WITH v1 still on step 1 does fence (control).
+        v1([{ skelId: "1", status: "in_progress" }, { skelId: "2", status: "pending" }]);
+        expect(hook(SIG, { mode: "strict-stop" })).toMatchObject({ fire: true, skeleton: { skelIds: ["1"] } });
+      });
+
+      it("v1 retracted or obsolete, or superseded again by a later version: nothing is restored", () => {
+        for (const status of ["retracted", "obsolete"]) {
+          v1([{ skelId: "1", status: "in_progress" }], status);
+          reshape({}, "rejected");
+          expect(hook(SIG).fire, status).toBe(false);
+        }
+        reshape({}, "rejected");
+        const file = path.join(root, ".deeppairing", "sessions", fallbackSession, "artifacts.json");
+        fs.writeFileSync(file, JSON.stringify([
+          { id: "art_plan", type: "plan", status: "superseded", content: { steps: [{ skelId: "1", status: "in_progress" }] } },
+          { id: V2, type: "plan", status: "rejected", parentId: "art_plan" },
+          { id: "art_v3", type: "plan", status: "approved", parentId: "art_plan", content: { steps: [{ skelId: "1", status: "pending" }] } },
+        ]));
+        expect(hook(SIG).fire).toBe(false);
+      });
+
+      it("v1 not in this session's file (cross-session revise): the record is used, and v1's progress refreshes or clears it", () => {
+        reshape({ restoreSkelIds: ["1"] }, "rejected");
+        expect(hook(SIG)).toMatchObject({ fire: true, skeleton: { skelIds: ["1"] } });
+        const plan = (steps: Step[], status = "superseded") => ({ id: "art_plan", status, content: { steps } });
+        refreshReshapeRestores(root, plan([done("1"), { skelId: "2", status: "in_progress" }]), NOW);
+        expect(readSkeletonScopes(root, NOW).find((x) => x.artifactId === V2)?.reshape).toMatchObject({ restoreApproved: true, restoreSkelIds: ["2"] });
+        expect(hook(SIG)).toMatchObject({ fire: true, skeleton: { skelIds: ["2"] } });
+        refreshReshapeRestores(root, plan([done("1"), done("2")]), NOW);
+        expect(readSkeletonScopes(root, NOW).find((x) => x.artifactId === V2)?.reshape).toMatchObject({ restoreApproved: false, restoreSkelIds: [] });
+        expect(hook(SIG, { mode: "strict-stop" }).fire).toBe(false);
+        // Retracting v1 clears it too.
+        reshape({ restoreSkelIds: ["1"] }, "rejected");
+        refreshReshapeRestores(root, plan([{ skelId: "1", status: "in_progress" }], "retracted"), NOW);
+        expect(hook(SIG).fire).toBe(false);
+      });
+
+      it("no cross-session effect: another session's restore never fences this one, and another plan's progress never touches it", () => {
+        const owner = deriveSessionId(root, CLAUDE_SID).sessionId;
+        v1([{ skelId: "1", status: "in_progress" }], "superseded", owner);
+        reshape({}, "rejected", undefined, owner);
+        expect(hook(SIG, { sessionId: CLAUDE_SID })).toMatchObject({ fire: true, skeleton: { skelIds: ["1"] } });
+        expect(hook(SIG).fire).toBe(false); // the fallback session
+        expect(hook(SIG, { sessionId: "99999999-2222-3333-4444-555555555555", mode: "strict-stop" }).fire).toBe(false);
+        const before = fs.readFileSync(path.join(root, ".deeppairing", "skeleton-scopes", `${V2}.json`), "utf-8");
+        refreshReshapeRestores(root, { id: "art_other", status: "approved", content: { steps: [{ skelId: "1", status: "done" }] } }, NOW);
+        expect(fs.readFileSync(path.join(root, ".deeppairing", "skeleton-scopes", `${V2}.json`), "utf-8")).toBe(before);
+      });
+    });
   });
 
   it("ignores a stale scope and removes the file when nothing is in progress", () => {
@@ -426,10 +513,13 @@ describe.each([
     expect(ensurePreflightHook(dir).ok).toBe(true);
     return JSON.parse(fs.readFileSync(path.join(dir, ".claude", "settings.local.json"), "utf8")).hooks.PreToolUse[0].hooks[0].command as string;
   };
-  const launch = (cmd: string, payload: unknown) => {
+  const launch = (cmd: string, payload: unknown, mode?: "strict-stop") => {
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: dir, FORCE_COLOR: "0", [GUARDRAIL_BACKSTOP_ENV]: "" };
+    delete env.DEEPPAIRING_PREFLIGHT_MODE;
+    if (mode) env.DEEPPAIRING_PREFLIGHT_MODE = mode;
     const r = spawnSync("/bin/sh", ["-c", cmd], {
       cwd: parent,
-      env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: dir, FORCE_COLOR: "0", [GUARDRAIL_BACKSTOP_ENV]: "" },
+      env,
       input: JSON.stringify(payload),
       encoding: "utf8",
       timeout: 15_000,
@@ -473,5 +563,39 @@ describe.each([
     expect(out?.hookSpecificOutput.permissionDecision).toBe("ask");
     expect(out?.hookSpecificOutput.permissionDecisionReason).toContain("[SKELETON_PAUSED");
     expect(launch(cmd, ev("99999999-2222-3333-4444-555555555555"))).toBeNull();
+  }, 120_000);
+
+  it.skipIf(!built)("#611: a rejected reshape fences v1's CURRENT step; once v1 moves on, no stale ask or strict-stop deny", () => {
+    const cmd = command();
+    const sid = "11111111-2222-3333-4444-555555555555";
+    const owner = deriveSessionId(dir, sid).sessionId;
+    seedPlan(dir, owner, "art_plan", "superseded", { steps: [{ skelId: "1", status: "done" }, { skelId: "2", status: "in_progress" }] });
+    seedPlan(dir, owner, "art_v2", "rejected");
+    writeSkeletonScope(dir, {
+      ...scope([], { artifactId: "art_v2" }),
+      updatedAt: new Date().toISOString(),
+      sessionId: owner,
+      workspaceRoot: dir,
+      // Frozen at pause time: step 1. v1 has since moved on to step 2.
+      reshape: { fromId: "art_plan", files: ["src/a.ts"], restoreApproved: true, restoreSkelIds: ["1"] },
+    });
+    const file = path.join(dir, "src", "a.ts");
+    const ev = (old_string: string, new_string: string, session_id?: string) => ({ tool_name: "Edit", session_id, tool_input: { file_path: file, old_string, new_string } });
+    const SIG = ev("interpolate(a", "interp(a", sid);
+
+    const asked = launch(cmd, SIG);
+    expect(asked?.hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(asked?.hookSpecificOutput.permissionDecisionReason).toContain("[SKELETON_SCOPE");
+    expect(asked?.hookSpecificOutput.permissionDecisionReason).toContain("SKEL[2]");
+    expect(launch(cmd, SIG, "strict-stop")?.hookSpecificOutput.permissionDecision).toBe("deny");
+    // The current step's fill passes.
+    expect(launch(cmd, ev('// SKEL[2] catmull-rom between a and b\n  throw new Error("SKEL_TODO");', "// SKEL[2] catmull-rom between a and b\n  return [a, b];", sid))).toBeNull();
+    // Another session is never fenced.
+    expect(launch(cmd, ev("interpolate(a", "interp(a", "99999999-2222-3333-4444-555555555555"), "strict-stop")).toBeNull();
+
+    // v1 completes: no stale ask, no stale deny.
+    seedPlan(dir, owner, "art_plan", "superseded", { steps: [{ skelId: "1", status: "done" }, { skelId: "2", status: "done" }] });
+    expect(launch(cmd, SIG)).toBeNull();
+    expect(launch(cmd, SIG, "strict-stop")).toBeNull();
   }, 120_000);
 });

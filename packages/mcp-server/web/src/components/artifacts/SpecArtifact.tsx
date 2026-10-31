@@ -8,6 +8,7 @@ import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { ExecutionStrip, StepStatusMarker, NON_EXECUTABLE_STATUSES, SupersededProgressCue, RevisionRequestedProgressCue, isClosedWithSuccessor } from "./ExecutionProgress";
 import { useChainComments } from "../../hooks/useChainComments";
 import { useWriteLock } from "../../hooks/useWriteLock";
+import { BriefExceptionsSection } from "../BriefExceptions";
 
 interface Props {
   artifact: Artifact;
@@ -100,6 +101,11 @@ export function SpecArtifact({ artifact }: Props) {
           ))}
         </div>
       </div>
+
+      {/* #572 slice A2 — cards that declare this brief version (or a verified
+          earlier one) as the thing they're an exception to. Read-only
+          navigation beside the requirements; requirement rows are untouched. */}
+      <BriefExceptionsSection briefId={artifact.id} sessionId={artifact.sessionId} />
 
       {spec.design && (
         <div>

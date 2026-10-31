@@ -1,4 +1,4 @@
-import { planDeclaredFiles, scanSkeletonFences, writeSkeletonScope } from "../skeleton-scope.js";
+import { clearReshapeRestores, planDeclaredFiles, scanSkeletonFences, writeSkeletonScope } from "../skeleton-scope.js";
 import { resolveProjectRoot } from "../project-root.js";
 
 /**
@@ -34,6 +34,8 @@ export function writeReshapeScope(args: {
     const restoreSkelIds = oldSteps
       .filter((st) => typeof st?.skelId === "string" && st.skelId && st.status === "in_progress")
       .map((st) => st.skelId as string);
+    // #611 — superseded again: an older reshape of the same version no longer restores it.
+    clearReshapeRestores(root.projectRoot, args.oldPlan.id, args.newId);
     writeSkeletonScope(root.projectRoot, {
       artifactId: args.newId,
       planTitle: args.newTitle,

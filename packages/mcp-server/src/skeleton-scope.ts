@@ -338,11 +338,107 @@ export function resolveSkeletonScopes(projectRoot: string, scopes: SkeletonScope
     } else if (plan.status === "approved") {
       const ids = [...new Set([...s.activeSkelIds, ...plan.inProgressSkelIds])];
       if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
-    } else if ((plan.status === "rejected" || plan.status === "retracted") && s.reshape.restoreApproved && s.reshape.restoreSkelIds.length > 0) {
-      fenced.push({ ...s, activeSkelIds: s.reshape.restoreSkelIds });
+    } else if ((plan.status === "rejected" || plan.status === "retracted") && s.reshape.restoreApproved) {
+      const ids = restoredSkelIds(projectRoot, s.sessionId, s.artifactId, s.reshape);
+      if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
     }
   }
   return { fenced, paused };
+}
+
+/** Statuses of a superseded version whose restored fence can still be live. */
+const RESTORABLE = new Set(["superseded", "approved"]);
+
+/**
+ * #611 — the restored v1 fence after a rejected or retracted reshape comes
+ * from v1's CURRENT step statuses, read from the same session's
+ * artifacts.json at hook time, not the ids frozen when v2 paused it. So:
+ *   - finishing, skipping or resetting v1's step lifts its fence at once, and
+ *     a newly in-progress v1 step is fenced;
+ *   - nothing is restored once v1 has no step in progress (complete), is
+ *     retracted or obsolete, or is superseded AGAIN (a later sibling version
+ *     of v1 exists, and that version's own scope governs from then on).
+ * When v1 isn't in this session's file (a cross-session revise), the
+ * reshape record is used; update_plan_progress keeps that record current
+ * (refreshReshapeRestores), and the 8h age still ends it.
+ */
+function restoredSkelIds(projectRoot: string, sessionId: string, reshapeId: string, reshape: SkeletonReshape): string[] {
+  const arr = readSessionArtifacts(projectRoot, sessionId);
+  if (!arr) return [];
+  const idx = arr.findIndex((a) => a.id === reshape.fromId);
+  if (idx === -1) return reshape.restoreSkelIds;
+  const v1 = arr[idx]!;
+  if (v1.type !== "plan" || typeof v1.status !== "string" || !RESTORABLE.has(v1.status)) return [];
+  const mine = arr.findIndex((a) => a.id === reshapeId);
+  if (arr.some((a, i) => a.parentId === reshape.fromId && a.id !== reshapeId && i > mine)) return [];
+  return inProgressSkelIdsOf(v1.content);
+}
+
+type DiskArtifact = { id?: unknown; type?: unknown; status?: unknown; parentId?: unknown; content?: unknown };
+
+function readSessionArtifacts(projectRoot: string, sessionId: string): DiskArtifact[] | null {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
+  try {
+    const arr = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
+    return Array.isArray(arr) ? arr.filter((a): a is DiskArtifact => !!a && typeof a === "object") : null;
+  } catch {
+    return null;
+  }
+}
+
+function inProgressSkelIdsOf(content: unknown): string[] {
+  const steps = (content as { steps?: unknown } | undefined)?.steps;
+  if (!Array.isArray(steps)) return [];
+  return steps
+    .filter((st): st is { skelId: string; status: unknown } => !!st && typeof st.skelId === "string" && st.skelId.length > 0 && st.status === "in_progress")
+    .map((st) => st.skelId);
+}
+
+/**
+ * #611 — progress on a superseded skeleton plan (v1) refreshes every reshape
+ * scope that would restore it: `restoreSkelIds` becomes v1's current
+ * in-progress fences and the scope's age restarts. Once v1 is complete (every
+ * skeleton step done or skipped), retracted or obsolete, the restore is
+ * cleared (`restoreApproved: false`). Matched by v1's artifact id, which is
+ * unique, so no other plan's scope is touched. Atomic per file; never throws.
+ */
+export function refreshReshapeRestores(
+  projectRoot: string,
+  plan: { id: string; status: string; content: unknown },
+  now: number = Date.now(),
+): void {
+  try {
+    const steps = ((plan.content ?? {}) as { steps?: Array<{ skelId?: unknown; status?: unknown }> }).steps ?? [];
+    const skel = steps.filter((st) => !!st && typeof st.skelId === "string" && st.skelId.length > 0);
+    if (skel.length === 0) return;
+    const complete = skel.every((st) => st.status === "done" || st.status === "skipped");
+    const closed = plan.status === "retracted" || plan.status === "obsolete";
+    const ids = inProgressSkelIdsOf(plan.content);
+    for (const s of readSkeletonScopes(projectRoot, now)) {
+      if (s.reshape?.fromId !== plan.id) continue;
+      const reshape: SkeletonReshape = complete || closed
+        ? { ...s.reshape, restoreApproved: false, restoreSkelIds: [] }
+        : { ...s.reshape, restoreSkelIds: ids };
+      writeSkeletonScope(projectRoot, { ...s, reshape, updatedAt: new Date(now).toISOString() });
+    }
+  } catch {
+    /* fail open */
+  }
+}
+
+/**
+ * #611 — a newer supersede of the same version takes over its restore: every
+ * other reshape scope that would restore `fromId` stops restoring it.
+ */
+export function clearReshapeRestores(projectRoot: string, fromId: string, exceptId: string, now: number = Date.now()): void {
+  try {
+    for (const s of readSkeletonScopes(projectRoot, now)) {
+      if (s.reshape?.fromId !== fromId || s.artifactId === exceptId || !s.reshape.restoreApproved) continue;
+      writeSkeletonScope(projectRoot, { ...s, reshape: { ...s.reshape, restoreApproved: false, restoreSkelIds: [] } });
+    }
+  } catch {
+    /* fail open */
+  }
 }
 
 /** Read one plan's scope file (null when absent, stale or unreadable). */
