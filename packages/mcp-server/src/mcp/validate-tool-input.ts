@@ -37,6 +37,8 @@ import {
   MAX_SPEC_ID_LENGTH,
   MAX_BRIEF_REF_IDS,
   MAX_BRIEF_REF_ARTIFACT_ID_LENGTH,
+  SERVER_SET_DEBRIEF_KEYS,
+  RequirementClaimsSchema,
 } from "@deeppairing/shared";
 import { specIdError } from "./spec-ids.js";
 
@@ -1093,6 +1095,38 @@ export function validatePresentDebriefInput(args: any): ValidationResult<z.infer
   if (!titleParse.success) {
     return { ok: false, error: formatValidationError("present_debrief", titleParse.error, EXAMPLE_DEBRIEF, args) };
   }
+  // #572 B1 — claim-set provenance and the dropped-pin diagnostic are
+  // SERVER-set. A caller (present_debrief args, or revise_artifact content,
+  // which arrives here merged) can never set them: reject, never honor.
+  const forged = SERVER_SET_DEBRIEF_KEYS.filter((k) => args && typeof args === "object" && Object.prototype.hasOwnProperty.call(args, k));
+  if (forged.length > 0) {
+    return {
+      ok: false,
+      error: {
+        content: [{ type: "text", text: `INPUT_VALIDATION_FAILED: present_debrief refused — ${forged.map((k) => `\`${k}\``).join(", ")} ${forged.length === 1 ? "is" : "are"} set by the server, never by the caller. Remove ${forged.length === 1 ? "it" : "them"} (when revising, don't echo ${forged.length === 1 ? "it" : "them"} back from the earlier version) and call again. The artifact was NOT created.` }],
+        isError: true,
+        _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true },
+      },
+    };
+  }
+  // #572 B1 — claims get their own refusal so every reason (duplicate id,
+  // met without evidence, the byte cap) is named, not folded into a generic
+  // "wrong type" line. One bad claim refuses the whole call; nothing partial.
+  if (args && typeof args === "object" && args.requirementClaims !== undefined) {
+    const claims = RequirementClaimsSchema.safeParse(args.requirementClaims);
+    if (!claims.success) {
+      const lines = claims.error.issues.slice(0, 6).map((i) => `  • requirementClaims${i.path.map((p) => (typeof p === "number" ? `[${p}]` : `.${String(p)}`)).join("")}: ${i.message}`);
+      const more = claims.error.issues.length > 6 ? `\n  • …and ${claims.error.issues.length - 6} more` : "";
+      return {
+        ok: false,
+        error: {
+          content: [{ type: "text", text: `INPUT_VALIDATION_FAILED: present_debrief refused — requirementClaims is invalid, so nothing was saved (a claim list is accepted whole or not at all):\n${lines.join("\n")}${more}\nEach claim: {requirementId, claim: "met"|"unmet"|"unknown", evidence?, notRun?, explanation?}; met needs evidence; unmet/unknown need evidence, notRun or explanation; one claim per requirementId; no extra keys or nulls. Fix it and call again. The artifact was NOT created.` }],
+          isError: true,
+          _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true },
+        },
+      };
+    }
+  }
   const contentParse = DebriefContentSchema.safeParse({
     summary: args?.summary,
     // S1 — accept the explainer's `heading` spelling on a debrief section and
@@ -1105,6 +1139,9 @@ export function validatePresentDebriefInput(args: any): ValidationResult<z.infer
     openQuestions: args?.openQuestions,
     // R4 P-B — visuals framing the debrief.
     visuals: aliasPlanVisuals(args?.visuals),
+    // #572 B1 — strict, whole-list admission (requirement-claims.ts): a
+    // malformed, duplicate or over-cap claim fails the call; nothing partial.
+    requirementClaims: args?.requirementClaims,
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF, args) };
@@ -1216,6 +1253,15 @@ const BRIEF_REF = z.object({
 }).optional()
   .describe("Exception to a brief: name the governing brief version and the requirement it deviates from. A declared link, not drift detection. A bad or unknown ref is dropped with a warning; the card is still presented. To re-brief, present a new card against the new brief's id.");
 
+// #572 B1 — a debrief's pin is ONE exact brief version, no grain lists (the
+// per-requirement account lives in requirementClaims). Advertisement-only like
+// BRIEF_REF: the handler admits it and a bad pin drops the LINK, not the debrief.
+const DEBRIEF_BRIEF_REF = z.object({
+  artifactId: z.string().min(1).max(MAX_BRIEF_REF_ARTIFACT_ID_LENGTH)
+    .describe("The brief's EXACT artifact id (a present_spec art_ id; each revision has its own id, so this pins one version)"),
+}).strict().optional()
+  .describe("The brief this debrief accounts against. Pair it with requirementClaims. A bad or unknown ref is dropped with a warning (noted on the debrief); the debrief is still presented.");
+
 // `satisfies` (not a Record annotation) keeps the literal keys, so property
 // access stays exact under noUncheckedIndexedAccess.
 export const TOOL_INPUT_SCHEMAS = {
@@ -1260,7 +1306,7 @@ export const TOOL_INPUT_SCHEMAS = {
   present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY, briefRef: DEBRIEF_BRIEF_REF }),
   // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
   // non-empty `sections[]` are the required core; `title` lives IN the content
   // schema (it doubles as the artifact title). G1 (#198b) adds the optional
