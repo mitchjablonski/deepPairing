@@ -34,6 +34,10 @@ import { DemoTag } from "./ProvenanceMarker";
  * revises PR 3's "OFF exactly as before" for the lead item only (Astra's scope
  * review, condition 4).
  */
+/** Focus expansion is BOUNDED (≈4 lines, then the row scrolls) so a long
+ *  why/after can never push the composer or the content off screen. */
+const EXPANDED_LEAD = "whitespace-normal break-words max-h-16 overflow-y-auto";
+
 export function PendingBanner() {
   const offline = useOfflineReason(); // #467 review — the dismiss chip is an act
   const artifacts = useArtifactStore((s) => s.artifacts);
@@ -94,8 +98,13 @@ export function PendingBanner() {
   // single keyboard stop for the lead) or the held row has focus, and the
   // chip names the line as its description so the full what/after/why text
   // (incl. the terminal instruction) is announced on focus.
+  // Sol a341 P2 — track WHICH chip has focus, not a bare boolean: when a new
+  // lead arrives while the old lead's chip is focused, expansion is derived
+  // against the current lead (false), and the old chip keeps its own blur
+  // handler, so ownership clears on Tab away without moving focus.
   const leadLineId = useId();
-  const [leadFocused, setLeadFocused] = useState(false);
+  const [focusedChipId, setFocusedChipId] = useState<string | null>(null);
+  const leadExpanded = !!lead && focusedChipId === lead.id;
   const bannerHidden = !heldLead && (total === 0 || suppressed);
   useEffect(() => {
     if (bannerHidden) setConfirmingId(null);
@@ -115,7 +124,10 @@ export function PendingBanner() {
       data-testid="pending-banner"
       className="px-3 py-1 bg-accent-amber-dim/50 border-b border-accent-amber/15"
     >
-      <div className="flex items-center gap-2 min-w-0">
+      {/* Below `sm` the lead line takes its own full-width row (order-last,
+          basis-full) so narrow widths never squeeze it to a sliver beside the
+          count and chips; at sm+ it shares the one row (S2 chrome budget). */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
       {/* #430 slice 1 — no pulse: the lead line beside says what waits, in words. */}
       {total > 0 && (
         <span className="text-2xs text-accent-amber font-medium shrink-0">
@@ -140,7 +152,7 @@ export function PendingBanner() {
           // A held hook ask has no chip: the row itself is the keyboard stop,
           // a named group so its full text (the terminal instruction) is read.
           {...(next.artifactId ? {} : { tabIndex: 0, role: "group", "aria-label": copy.why ? `${copyLineText(next.title, copy)} · Why ${copy.why}` : copyLineText(next.title, copy) })}
-          className={`flex-1 min-w-0 text-2xs text-text-primary focus:whitespace-normal focus:break-words outline-none focus-visible:ring-1 focus-visible:ring-accent-amber rounded ${leadFocused ? "whitespace-normal break-words" : "truncate"}`}
+          className={`order-last basis-full sm:order-none sm:basis-0 sm:flex-1 min-w-0 text-2xs text-text-primary focus:whitespace-normal focus:break-words focus:max-h-16 focus:overflow-y-auto outline-none focus-visible:ring-1 focus-visible:ring-accent-amber rounded ${leadExpanded ? EXPANDED_LEAD : "truncate"}`}
         >
           {copy.lane && <><span className="font-semibold tracking-wide text-accent-amber">{copy.lane}</span>{" "}</>}
           {next.artifactId ? (
@@ -178,11 +190,9 @@ export function PendingBanner() {
           <span key={a.id} className="flex items-center bg-accent-amber-dim rounded shrink-0">
             <button
               onClick={() => selectArtifact(a.id)}
-              {...(a === lead && next && copy ? {
-                "aria-describedby": leadLineId,
-                onFocus: () => setLeadFocused(true),
-                onBlur: () => setLeadFocused(false),
-              } : {})}
+              {...(a === lead && next && copy ? { "aria-describedby": leadLineId } : {})}
+              onFocus={() => setFocusedChipId(a.id)}
+              onBlur={() => setFocusedChipId((id) => (id === a.id ? null : id))}
               className="px-2 py-0.5 text-accent-amber rounded-l text-2xs hover:bg-accent-amber-dim/80 transition-colors"
               title={a.title}
             >

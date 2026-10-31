@@ -280,6 +280,34 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
     expect(screen.queryByRole("region", { name: "Waiting for you" })).not.toBeInTheDocument();
   });
 
+  it("Sol a341 P2 — a new lead arriving while the old lead's chip is focused does not leave the new line expanded", async () => {
+    seed(finding);
+    render(<PendingBanner />);
+    const user = userEvent.setup();
+    await user.tab();
+    expect(document.activeElement).toHaveAttribute("title", "Old finding");
+    expect(screen.getByTestId("pending-next").className).not.toMatch(/\btruncate\b/);
+    // A blocking brief arrives and becomes the lead; focus stays on the old chip.
+    act(() => { useArtifactStore.setState({ artifacts: [finding, brief].map((a) => ({ sessionId: "s1", ...a })) }); });
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toBe(BRIEF_LINE);
+    expect(document.activeElement).toHaveAttribute("title", "Old finding");
+    expect(screen.getByTestId("pending-next").className).toMatch(/\btruncate\b/);
+    // Tab away: nothing stays expanded.
+    await user.tab();
+    expect(document.activeElement).not.toHaveAttribute("title", "Old finding");
+    await user.tab();
+    expect(screen.getByTestId("pending-next").className).toMatch(/\btruncate\b/);
+  });
+
+  it("g1 regression (run 40797201995) — clicking the lead line's title opens that artifact, never a dead click", async () => {
+    seed(finding, brief);
+    render(<PendingBanner />);
+    const title = within(screen.getByTestId("pending-next")).getByText("Worker-stop notice");
+    expect(title.tagName).toBe("BUTTON");
+    await userEvent.click(title);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("brief");
+  });
+
   it("keyboard: the lead chip opens with Enter; dismiss is two-step by keyboard and focus stays on the chip", async () => {
     seed(finding, brief);
     const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue();
