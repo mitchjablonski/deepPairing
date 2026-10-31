@@ -1,6 +1,8 @@
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
+import { isDemoSessionId } from "@deeppairing/shared";
 import { isDraftAwaitingReview } from "./pending";
 import { unansweredQuestionIds } from "./unanswered";
+import { parseReviewMode } from "./governingBrief";
 
 /**
  * #430 PR 1a — the ONE attention model (docs/design/attention-hierarchy.md §4.1,
@@ -24,7 +26,20 @@ import { unansweredQuestionIds } from "./unanswered";
  *     same split PR 0's sidebar dot uses.
  *   - The `revised` status is Waiting here (the agent owes a revision); its
  *     violet sidebar colour is unchanged until PR 1d.
- *   - `why`/`after` copy (§4.4) is derived in PR 2 with the bar that shows it.
+ *   - `why`/`after` copy (§4.4) lives in lib/attentionCopy (#430 slice 1), the
+ *     one module both PendingBanner (bar OFF) and the Next-up bar (bar ON) read.
+ *
+ * #430 slice 1 (issue comments 6391697159 + Mitch's 6392254571) changes ONE
+ * ordering rule and nothing that is counted:
+ *   - `next` (and the Decide lane's order) is MOST CONSEQUENTIAL FIRST: the
+ *     blocking tier (a decision, or a draft plan / changeset / code_change /
+ *     delegate brief) before a non-blocking review, oldest first within a tier,
+ *     ties broken by id. This revises design §10 decision 3 (oldest-first).
+ *   - A delegate brief is `review-blocking` (the semantic `Review:` marker the
+ *     governing-brief strip also reads, `parseReviewMode` — not the strip's
+ *     approved/started eligibility), so a DRAFT brief is recognised too.
+ *   - Items from a demo/sample session carry `demo: true` — a visible label
+ *     only, never a priority, count or routing input.
  */
 
 export type DecideKind = "decision" | "review-blocking" | "review";
@@ -40,6 +55,13 @@ export interface AttentionItem {
   kind: DecideKind | WaitingKind | "read" | "flag" | "held";
   /** Decisions only: the decision content's optional `stakes`. */
   stakes?: "high" | "medium" | "low";
+  /** #430 slice 1 — held items only: a hook `ask` — Claude Code put the
+   *  question at the TERMINAL, so it is answered there, never here. Such a hold
+   *  joins the blocking tier for `next` (Astra condition 3); counts unchanged. */
+  terminal?: true;
+  /** #430 slice 1 — the item belongs to a demo/sample session (#597's
+   *  `isDemoSessionId`, or the client-side sample fixture). Label only. */
+  demo?: true;
   /** Annotations, never a separate Decide item (§4.3). */
   flags?: "possible-secret"[];
   /** #457 D2 (§4.1, §4.6) — the owning session's name, set ONLY when the store
@@ -59,6 +81,11 @@ export interface AttentionInput {
    *  labelled even when it is the only session contributing (the D6 case: an
    *  empty bound session, one sibling holding the work). */
   boundSessionId?: string | null;
+  /** #430 slice 1 — the client-side sample fixture (artifact store
+   *  `sampleContent` + `sampleSessionIds`), labelled exactly as
+   *  lib/provenance's classifyProvenance labels it: only the fixture's own
+   *  sessions (or a session-less preview), never a real session. */
+  sample?: { content?: boolean; sessionIds?: readonly string[] };
   system?: {
     disconnected?: boolean;
     staleDaemon?: boolean;
@@ -66,7 +93,7 @@ export interface AttentionInput {
     snapshotUnavailable?: boolean;
     sessionConflict?: boolean;
     /** Unread stance holds (preflight blocks) to keep as a read-only record. */
-    holds?: { id: string; title: string; at: string }[];
+    holds?: { id: string; title: string; at: string; terminal?: boolean }[];
   };
 }
 
@@ -74,7 +101,8 @@ export type PrimaryLane = "decide" | "flag" | "waiting" | "held" | "nothing";
 export type SummaryLane = "high-decision" | "decide" | "flags" | "waiting" | "held" | "read";
 
 export interface Attention {
-  /** Oldest Decide item (oldest-first, the user's decision). */
+  /** The most consequential Decide item: blocking tier first, then oldest
+   *  (#430 slice 1 — Mitch's decision, revising §10 decision 3). */
   next: AttentionItem | null;
   /** Open decisions with `stakes === "high"` other than `next` ("+N high decision"). */
   highDecisionsBeyondNext: number;
@@ -99,9 +127,43 @@ export interface Attention {
 /** Decide kinds: a decision; drafts the agent is BLOCKED on; drafts that owe a
  *  verdict but don't block it (§0 lane table). */
 const BLOCKING_REVIEW = new Set(["plan", "changeset", "code_change"]);
+
+/** #430 slice 1 — a delegate brief (`/deeppairing:delegate` move 2): a spec
+ *  whose `context` carries the headed `Review:` line. The SAME semantic marker
+ *  lib/governingBrief reads (`parseReviewMode`), so the strip and the line can
+ *  never disagree about what a brief is. Since #594 a posted brief always
+ *  gates the build, so it is blocking. An ordinary spec stays a `review`. */
+export function isDelegateBriefArtifact(a: Artifact): boolean {
+  if (a.type !== "spec") return false;
+  const context = (a.content as { context?: unknown } | null)?.context;
+  return parseReviewMode(context) !== undefined;
+}
+
 function decideKind(a: Artifact): DecideKind {
   if (a.type === "decision") return "decision";
+  if (isDelegateBriefArtifact(a)) return "review-blocking";
   return BLOCKING_REVIEW.has(a.type) ? "review-blocking" : "review";
+}
+
+/** #430 slice 1 — consequence tiers for `next`. 0: blocking (the agent stops
+ *  for it). 1: a question owed to the agent — dp has no agent-to-human question
+ *  lane today (your own questions are the agent's turn, Waiting), so no Decide
+ *  item lands here; the slot is kept so the order is written down once.
+ *  2: a non-blocking review. Informational items (Read) are never in Decide. */
+const TIER: Record<DecideKind, number> = { decision: 0, "review-blocking": 0, review: 2 };
+
+/** Tier, then oldest, then id — deterministic on timestamp ties. */
+const tierOf = (it: AttentionItem): number =>
+  it.kind === "held" ? (it.terminal ? 0 : 9) : (TIER[it.kind as DecideKind] ?? 9);
+const byConsequence = (x: AttentionItem, y: AttentionItem) =>
+  tierOf(x) - tierOf(y)
+  || (x.createdAt ?? "").localeCompare(y.createdAt ?? "")
+  || x.id.localeCompare(y.id);
+
+/** Same rule as lib/provenance's classifyProvenance ("demo" or "sample"). */
+function isDemoSession(sid: string | undefined, sample: AttentionInput["sample"]): boolean {
+  if (sample?.content && (!sid || (sample.sessionIds ?? []).includes(sid))) return true;
+  return isDemoSessionId(sid);
 }
 
 function stakesOf(a: Artifact): AttentionItem["stakes"] {
@@ -156,7 +218,7 @@ export function computeAttention(input: AttentionInput): Attention {
     // on a dead artifact belongs in the summary only.
     if (secret) flags.push({ id: a.id, title: a.title, artifactId: a.id, createdAt: a.createdAt, kind: "flag" });
   }
-  decide.sort(byOldest);
+  decide.sort(byConsequence);
   read.sort(byOldest);
   flags.sort(byOldest);
 
@@ -177,10 +239,12 @@ export function computeAttention(input: AttentionInput): Attention {
   const waiting = [...questions, ...requests, ...revisions].sort(byOldest);
 
   const held: AttentionItem[] = (system.holds ?? [])
-    .map((h) => ({ id: h.id, title: h.title, createdAt: h.at, kind: "held" as const }))
+    .map((h): AttentionItem => ({ id: h.id, title: h.title, createdAt: h.at, kind: "held", ...(h.terminal ? { terminal: true as const } : {}) }))
     .sort(byOldest);
 
-  const next = decide[0] ?? null;
+  // #430 slice 1 — `next` is the most consequential item: the Decide head, or
+  // a terminal-held hook `ask` (blocking tier too), oldest first between them.
+  const next = [...decide.slice(0, 1), ...held.filter((h) => h.terminal)].sort(byConsequence)[0] ?? null;
   const highDecisionsBeyondNext = decide.filter(
     (d) => d !== next && d.kind === "decision" && d.stakes === "high",
   ).length;
@@ -190,7 +254,7 @@ export function computeAttention(input: AttentionInput): Attention {
 
   // Rule 2 — the primary slot.
   const primary: Attention["line"]["primary"] =
-    next ? { lane: "decide", item: next }
+    next ? { lane: next.kind === "held" ? "held" : "decide", item: next }
     : flags.length ? { lane: "flag", item: flags[0]! }
     : waiting.length ? { lane: "waiting", item: waiting[0]! }
     : held.length ? { lane: "held", item: held[0]! }
@@ -200,7 +264,7 @@ export function computeAttention(input: AttentionInput): Attention {
   // is non-empty (the worked table's first row: `+N high decision · Decide N`);
   // every OTHER lane is omitted only when it holds the primary slot.
   const summary: Attention["line"]["summary"] = [];
-  if (primary.lane === "decide" && highDecisionsBeyondNext > 0) {
+  if (next && highDecisionsBeyondNext > 0) {
     summary.push({ lane: "high-decision", count: highDecisionsBeyondNext });
   }
   if (decide.length) summary.push({ lane: "decide", count: decide.length });
@@ -208,6 +272,14 @@ export function computeAttention(input: AttentionInput): Attention {
   if (waiting.length && primary.lane !== "waiting") summary.push({ lane: "waiting", count: waiting.length });
   if (held.length && primary.lane !== "held") summary.push({ lane: "held", count: held.length });
   if (read.length) summary.push({ lane: "read", count: read.length });
+
+  // #430 slice 1 — demo/sample provenance, a label on the item (never a
+  // priority: `next` was chosen above without it).
+  const sessionOfArtifact = new Map(artifacts.map((a) => [a.id, a.sessionId] as const));
+  for (const it of [...decide, ...read, ...flags, ...waiting]) {
+    if (!it.artifactId || !sessionOfArtifact.has(it.artifactId)) continue;
+    if (isDemoSession(sessionOfArtifact.get(it.artifactId) || undefined, input.sample)) it.demo = true;
+  }
 
   // #457 D2 — name the session on every item when more than one is merged.
   // #465 N1 — …and on any item NOT from the tab's bound session, even when that

@@ -204,7 +204,8 @@ export function TurnIndicator({
           // min-w-0 + truncate lets it yield; the full text stays in the title.
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-amber-dim text-accent-amber min-w-0 hover:brightness-110 transition-[filter] cursor-pointer"
         >
-          <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse shrink-0" />
+          {/* #430 slice 1 — a still dot: salience comes from words, not motion. */}
+          <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-accent-amber shrink-0" />
           {/* M4 — PendingBanner (right below the header) lists these items with
               jump + dismiss chips, so when it's visible the header pill drops
               its verbatim "1 finding, 1 decision" breakdown; the full text stays

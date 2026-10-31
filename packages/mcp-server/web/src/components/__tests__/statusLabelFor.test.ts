@@ -21,9 +21,12 @@ describe("#193 E2 — statusLabelFor (the type-aware header chip)", () => {
     expect(statusLabelFor(art({ type: "explainer", status: "approved" }))).toBe("Read");
   });
 
+  it("#430 slice 1 (#585) — a DRAFT debrief is informational: 'New — for you to read', matching its ○ Read sidebar mark", () => {
+    expect(statusLabelFor(art({ type: "debrief", status: "draft" }))).toBe("New — for you to read");
+  });
+
   it("every other type/status keeps the default label (a draft research is still 'Draft, awaiting review')", () => {
     expect(statusLabelFor(art({ type: "research", status: "draft" }))).toBe("Draft, awaiting review");
-    expect(statusLabelFor(art({ type: "debrief", status: "draft" }))).toBe("Draft, awaiting review");
     expect(statusLabelFor(art({ type: "research", status: "approved" }))).toBe("Approved");
     expect(statusLabelFor(art({ type: "debrief", status: "approved" }))).toBe("Approved");
   });

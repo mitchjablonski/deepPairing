@@ -1,14 +1,25 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PendingBanner } from "../PendingBanner";
+import { NextUpBar } from "../NextUpBar";
+import { TurnIndicator } from "../TurnIndicator";
 import { useArtifactStore } from "../../stores/artifact";
+import { useConnectionStore } from "../../stores/connection";
+import { usePreflightBlockStore } from "../../stores/preflightBlocks";
+import { useReplayStore } from "../../stores/replay";
 
 const art = (over: any) =>
   ({ id: "a", type: "research", title: "t", status: "draft", version: 1, createdAt: "2026-01-01T00:00:00.000Z", content: { summary: "s", findings: [] }, ...over }) as any;
 
 beforeEach(() => {
   useArtifactStore.getState().reset();
+});
+// #430 slice 1 (Sol review) — store reset() resets data, not methods: a spy on
+// `updateArtifactStatus` would otherwise carry an earlier test's call history
+// into the next one. Restore every spy so each test sees a fresh method.
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("PendingBanner", () => {
@@ -132,3 +143,193 @@ describe("PendingBanner", () => {
     expect(spy).toHaveBeenCalledWith("d1", "obsolete");
   });
 });
+
+/**
+ * #430 slice 1 — the default view's needs-you line. The lead chip is the
+ * attention model's `next` (most consequential first), with why / if-ignored /
+ * after copy from lib/attentionCopy — the SAME copy the opt-in Next-up bar
+ * shows. Counts, the 3-chip cap, "+N more" and the two-step dismiss stay.
+ */
+describe("#430 slice 1 — PendingBanner's lead line", () => {
+  const BRIEF_CONTEXT = "Decide alone: naming\nWill ask: none\nRisk class: escalated\nWhy: touches the Stop hook\nReview: packet";
+  const finding = art({ id: "f_old", type: "research", title: "Old finding", createdAt: "2026-01-01T00:00:00.000Z", content: { summary: "Cache misses 88%", findings: [] } });
+  const brief = art({
+    id: "brief", type: "spec", title: "Worker-stop notice", createdAt: "2026-01-02T00:00:00.000Z",
+    content: { objective: "Tell the lead when a worker stops", requirements: [], context: BRIEF_CONTEXT, tasks: [{ title: "a" }, { title: "b" }, { title: "c" }] },
+  });
+  const BRIEF_LINE = "REVIEW Worker-stop notice · Risk: escalated · Approval required before this work proceeds · Approve → the brief's 3 tasks can proceed · Request changes → Claude revises the brief";
+
+  beforeEach(() => {
+    useConnectionStore.setState({
+      connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true }],
+      staleDaemon: false, snapshotUnavailable: false, sessionConflict: false,
+    } as any);
+    usePreflightBlockStore.setState({ blocks: [], lastSeenAt: null } as any);
+    useReplayStore.setState({ active: false } as any);
+  });
+  const seed = (...artifacts: any[]) => useArtifactStore.setState({ artifacts: artifacts.map((a) => ({ sessionId: "s1", ...a })), selectedArtifactId: null });
+
+  it("the delegate brief is blocking: it leads over an OLDER finding, with risk and conditional 'Approve → … N tasks can proceed'", () => {
+    seed(finding, brief);
+    render(<PendingBanner />);
+    const lead = screen.getByTestId("pending-next");
+    expect(lead.getAttribute("data-next-copy")).toBe(BRIEF_LINE);
+    expect(lead).toHaveTextContent("Risk: escalated");
+    expect(lead).toHaveTextContent("Approval required before this work proceeds");
+    expect(screen.getByTestId("pending-why")).toHaveTextContent("Why Tell the lead when a worker stops");
+    // The lead CHIP is `next` too (first chip), and the count is unchanged.
+    const chips = screen.getByRole("region", { name: "Waiting for you" }).querySelectorAll("button[title]");
+    expect(chips[0]!.getAttribute("title")).toBe("Worker-stop notice");
+    expect(screen.getByText(/2 items waiting for you/)).toBeInTheDocument();
+  });
+
+  it("a later decision outranks an older finding; the finding chip stays and its line says it is not blocking when alone", () => {
+    const d = art({ id: "d1", type: "decision", title: "Pick a store", createdAt: "2026-01-03T00:00:00.000Z", content: { context: "Two stores fit", options: [], decisionId: "dec" } });
+    seed(finding, d);
+    const { unmount } = render(<PendingBanner />);
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toMatch(/^DECIDE Pick a store · Your choice is needed before this work proceeds · Claude continues with the option you pick$/);
+    expect(screen.getByRole("button", { name: /^dismiss old finding$/i })).toBeInTheDocument();
+    unmount();
+    seed(finding, art({ id: "other", status: "approved", title: "Done" }));
+    render(<PendingBanner />);
+    expect(screen.getByTestId("pending-if-ignored")).toHaveTextContent("Not blocking — Claude can keep working");
+  });
+
+  it("a demo item is tagged Demo; a live one is not; the count is unchanged", () => {
+    seed(art({ id: "demo_d", sessionId: "demo_1", type: "research", title: "Scripted finding", content: { summary: "s", findings: [] } }), art({ id: "other", status: "approved", title: "Done" }));
+    const { unmount } = render(<PendingBanner />);
+    expect(within(screen.getByTestId("pending-next")).getByTestId("demo-tag")).toHaveTextContent("Demo");
+    expect(screen.getByText(/1 item waiting for you/)).toBeInTheDocument();
+    unmount();
+    seed(finding, art({ id: "other", status: "approved", title: "Done" }));
+    render(<PendingBanner />);
+    expect(screen.queryByTestId("demo-tag")).not.toBeInTheDocument();
+  });
+
+  it("no pulse — on the banner or on TurnIndicator's 'Your turn' pill", () => {
+    seed(finding, brief);
+    const { container } = render(<><PendingBanner /><TurnIndicator /></>);
+    expect(container.querySelector(".animate-pulse")).toBeNull();
+    expect(screen.getByRole("button", { name: /Your turn/ })).toBeInTheDocument();
+  });
+
+  it("PendingBanner (bar OFF) and the Next-up bar (bar ON) render the SAME copy for the same item", () => {
+    seed(finding, brief);
+    const { unmount } = render(<PendingBanner />);
+    const banner = screen.getByTestId("pending-next").getAttribute("data-next-copy");
+    const bannerAfter = screen.getByTestId("pending-after").textContent;
+    unmount();
+    render(<NextUpBar />);
+    const bar = screen.getByTestId("next-up-bar");
+    expect(bar.getAttribute("data-next-copy")).toBe(banner);
+    expect(banner).toBe(BRIEF_LINE);
+    expect(screen.getByTestId("next-up-if-ignored")).toHaveTextContent("Approval required before this work proceeds");
+    expect(screen.getByTestId("next-up-risk")).toHaveTextContent("Risk: escalated");
+    expect(within(bar).getByText(bannerAfter!)).toBeInTheDocument();
+  });
+
+  it("reach governs the copy: exited / replay never promise the build", () => {
+    seed(finding, brief);
+    useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false }] } as any);
+    const { unmount } = render(<PendingBanner />);
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).not.toContain("can proceed");
+    expect(screen.getByTestId("pending-if-ignored")).toHaveTextContent("Claude has exited — this waits for the session to resume");
+    unmount();
+    useReplayStore.setState({ active: true } as any);
+    render(<PendingBanner />);
+    expect(screen.getByTestId("pending-after")).toHaveTextContent("Replay is read-only");
+  });
+
+  it("a terminal-held hook `ask` is blocking: it leads over an older finding, says answer in the terminal, has no chip; the count is drafts only", () => {
+    seed(finding, art({ id: "other", status: "approved", title: "Done" }));
+    usePreflightBlockStore.setState({ blocks: [{ id: "b1", at: "2026-01-05T00:00:00.000Z", source: "session", concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/m.sql" }], lastSeenAt: null } as any);
+    render(<PendingBanner />);
+    const lead = screen.getByTestId("pending-next");
+    expect(lead.getAttribute("data-next-copy")).toBe('HELD IN TERMINAL "migrations": Claude Code asked about db/m.sql · Claude Code asked in the terminal — answer it there; nothing here releases it · Answer in the terminal — approving here does not release it');
+    expect(screen.getByText(/1 item waiting for you/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /migrations/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^dismiss old finding$/i })).toBeInTheDocument();
+  });
+
+  const terminalAsk = { id: "b1", at: "2026-01-05T00:00:00.000Z", source: "session", concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/m.sql" };
+  const HELD_LINE = 'HELD IN TERMINAL "migrations": Claude Code asked about db/m.sql · Claude Code asked in the terminal — answer it there; nothing here releases it · Answer in the terminal — approving here does not release it';
+
+  it("a terminal-held lead shows with ZERO draft cards (no count, no chips)", () => {
+    seed(art({ id: "other", status: "approved", title: "Done" }));
+    usePreflightBlockStore.setState({ blocks: [terminalAsk], lastSeenAt: null } as any);
+    render(<PendingBanner />);
+    expect(screen.getByRole("region", { name: "Waiting for you" })).toBeInTheDocument();
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toBe(HELD_LINE);
+    expect(screen.queryByText(/waiting for you/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
+    // No chip: the held row is the focusable, named stop and keeps the terminal instruction.
+    const row = screen.getByRole("group", { name: /answer in the terminal — approving here does not release it/i });
+    expect(row).toHaveAttribute("tabindex", "0");
+  });
+
+  it("a terminal-held lead is not suppressed by a selected sole draft (artifact-only step-down)", () => {
+    seed(finding);
+    act(() => { useArtifactStore.getState().selectArtifact("f_old"); });
+    usePreflightBlockStore.setState({ blocks: [terminalAsk], lastSeenAt: null } as any);
+    const { rerender } = render(<PendingBanner />);
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toBe(HELD_LINE);
+    expect(screen.getByText(/1 item waiting for you/)).toBeInTheDocument();
+    // Without the hold, the ordinary J2b step-down still applies.
+    act(() => usePreflightBlockStore.setState({ blocks: [], lastSeenAt: null } as any));
+    rerender(<PendingBanner />);
+    expect(screen.queryByRole("region", { name: "Waiting for you" })).not.toBeInTheDocument();
+  });
+
+  it("Sol a341 P2 — a new lead arriving while the old lead's chip is focused does not leave the new line expanded", async () => {
+    seed(finding);
+    render(<PendingBanner />);
+    const user = userEvent.setup();
+    await user.tab();
+    expect(document.activeElement).toHaveAttribute("title", "Old finding");
+    expect(screen.getByTestId("pending-next").className).not.toMatch(/\btruncate\b/);
+    // A blocking brief arrives and becomes the lead; focus stays on the old chip.
+    act(() => { useArtifactStore.setState({ artifacts: [finding, brief].map((a) => ({ sessionId: "s1", ...a })) }); });
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toBe(BRIEF_LINE);
+    expect(document.activeElement).toHaveAttribute("title", "Old finding");
+    expect(screen.getByTestId("pending-next").className).toMatch(/\btruncate\b/);
+    // Tab away: nothing stays expanded.
+    await user.tab();
+    expect(document.activeElement).not.toHaveAttribute("title", "Old finding");
+    await user.tab();
+    expect(screen.getByTestId("pending-next").className).toMatch(/\btruncate\b/);
+  });
+
+  it("g1 regression (run 40797201995) — clicking the lead line's title opens that artifact, never a dead click", async () => {
+    seed(finding, brief);
+    render(<PendingBanner />);
+    const title = within(screen.getByTestId("pending-next")).getByText("Worker-stop notice");
+    expect(title.tagName).toBe("BUTTON");
+    await userEvent.click(title);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("brief");
+  });
+
+  it("keyboard: the lead chip opens with Enter; dismiss is two-step by keyboard and focus stays on the chip", async () => {
+    seed(finding, brief);
+    const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue();
+    render(<PendingBanner />);
+    const user = userEvent.setup();
+    await user.tab();
+    expect(document.activeElement).toHaveAttribute("title", "Worker-stop notice");
+    // The lead chip carries the compact lead line as its description, and the
+    // row unwraps while the chip has focus.
+    expect(document.activeElement).toHaveAccessibleDescription(expect.stringContaining("Approval required before this work proceeds"));
+    expect(screen.getByTestId("pending-next").className).not.toMatch(/\btruncate\b/);
+    await user.keyboard("{Enter}");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("brief");
+    act(() => { useArtifactStore.getState().selectArtifact(null); });
+    const dismiss = screen.getByRole("button", { name: /^dismiss worker-stop notice$/i });
+    dismiss.focus();
+    await user.keyboard("{Enter}");
+    expect(spy).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("button", { name: /^confirm dismiss worker-stop notice$/i });
+    expect(document.activeElement).toBe(confirm);
+    await user.keyboard("{Enter}");
+    expect(spy).toHaveBeenCalledWith("brief", "obsolete");
+  });
+});
+

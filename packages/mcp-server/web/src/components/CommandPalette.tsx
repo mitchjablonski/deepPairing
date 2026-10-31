@@ -64,7 +64,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     const draftSessionCount = new Set(approvableDrafts.map((a) => a.sessionId)).size;
     // #430 PR 3 — attention commands, both routed through computeAttention.
     // "Next pending" is available with the Next-up bar on OR off: it only moves
-    // the selection (like `n`), in the bar's oldest-first Decide order, and needs
+    // the selection (like `n`), in the bar's Decide order (most consequential first, #430 slice 1), and needs
     // no bar to be useful. "Open review queue" opens the BAR's expanded queue,
     // so it is offered only when the bar is on — with it off there is no queue
     // surface to open, and a command that does nothing would lie.
@@ -72,7 +72,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     if (decideQueue.length > 0) {
       items.push({
         id: "action_next_pending",
-        label: `Next pending (${decideQueue.length} waiting on you, oldest first)`,
+        label: `Next pending (${decideQueue.length} waiting on you, most consequential first)`,
         type: "action",
         action: () => {
           const idx = decideQueue.findIndex((d) => d.id === selectedArtifactId);
