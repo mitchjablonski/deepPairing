@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore, artifactStoreGeneration, isBackfilled } from "../stores/artifact";
 import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
-import { usePreflightBlockStore, type PreflightBlockRecord } from "../stores/preflightBlocks";
+import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { useAnnounceStore } from "../stores/announce";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
@@ -12,6 +11,8 @@ import { useSiblingSyncStore } from "../lib/siblingSync";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { LANE_MARKS, NOTHING_GLYPH } from "../lib/laneMarks";
+import { attentionHolds, copyFor, copyLineText, reachFrom, LANE_WORD } from "../lib/attentionCopy";
+import { DemoTag } from "./ProvenanceMarker";
 import { resumePromptFor } from "./ResumeQuestionsBanner";
 import { RequestPips, RequestResumeButton, useRequestResumeBridge } from "./RequestComposerBanner";
 
@@ -19,7 +20,8 @@ import { RequestPips, RequestResumeButton, useRequestResumeBridge } from "./Requ
  * #430 PR 2 — THE NEXT-UP BAR (docs/design/attention-hierarchy.md §4). One line
  * under the session tabs that answers: what is next, why it matters, and what
  * happens after you respond. Rendered ONLY from `computeAttention` (PR 1a) —
- * lanes, the oldest-first `next`, "+N high decision" and the §4.3 precedence —
+ * lanes, the most-consequential-first `next` (#430 slice 1), "+N high
+ * decision" and the §4.3 precedence —
  * so it can never disagree with the model the rest of the redesign reads.
  *
  * PR 2 scope: behind the `nextUpBar` preference (default OFF), shown IN
@@ -31,6 +33,7 @@ import { RequestPips, RequestResumeButton, useRequestResumeBridge } from "./Requ
  *   - a change of `next` never moves selection, focus or scroll;
  *   - the line is one row; "+N high decision", the lane word/glyph, the failure
  *     prefix and the counts never truncate — `why`, then `after`, then the
+ *     if-ignored line, then the
  *     title do (flex-shrink ratios below);
  *   - one polite announcement, only when `next.id` changes;
  *   - every state has a glyph AND a word, never colour alone.
@@ -52,6 +55,10 @@ const SUMMARY_TEXT: Record<SummaryLane, (n: number) => string> = {
   held: (n) => `Held ${n}`,
   read: (n) => `Read ${n}`,
 };
+
+/** #430 slice 1 — informational items are off the line: `Read N` stays only in
+ *  the ⌄ queue (the Read lane itself, and every count, is unchanged). */
+const onLine = (s: { lane: SummaryLane }) => s.lane !== "read";
 
 /** The primary token, in the doc's §4.3 wording (the line tests pin these). */
 function primaryToken(line: Attention["line"]): string {
@@ -86,85 +93,13 @@ export function attentionLineText(a: Attention): string {
   return [
     a.line.prefix ? PREFIX_TEXT[a.line.prefix] : null,
     primaryToken(a.line),
-    ...a.line.summary.map((s) => SUMMARY_TEXT[s.lane](s.count)),
+    ...a.line.summary.filter(onLine).map((s) => SUMMARY_TEXT[s.lane](s.count)),
   ].filter(Boolean).join(" · ");
 }
 
-/** §4.4 — "why it matters", from the item's own content. Never invented. */
-/** #470 (§4a) — the Decide "Why" line for an artifact admitted under your
- *  allowance. The label names the door (UI/CLI), never a person. */
-export function admittedWhy(a: Artifact | undefined, blocks: PreflightBlockRecord[]): string | null {
-  const adm = a?.admission;
-  if (!adm) return null;
-  const via = adm.grantedVia === "cli" ? "CLI" : "UI";
-  const receipt = blocks.find((b) => b.allowance && adm.exceptionIds.includes(b.allowance.id));
-  const stance = receipt ? ` for '${receipt.concept}'` : "";
-  const reason = receipt?.allowance?.reason ? `: ${receipt.allowance.reason}` : "";
-  return `Admitted under your allowance (${via})${stance}${reason}`;
-}
-
-function whyFor(item: AttentionItem, artifacts: Artifact[], blocks: PreflightBlockRecord[] = []): string {
-  const a = item.artifactId ? artifacts.find((x) => x.id === item.artifactId) : undefined;
-  const admitted = admittedWhy(a, blocks);
-  if (admitted) return admitted;
-  if (item.kind === "decision") {
-    const ctx = (a?.content as { context?: unknown } | undefined)?.context;
-    return typeof ctx === "string" ? ctx : "";
-  }
-  if (item.kind === "question") return `You asked: ${item.title}`;
-  if (item.kind === "request") return `You asked for: ${item.title}`;
-  if (item.kind === "revision") return `You requested changes to ${item.title}`;
-  return "";
-}
-
-/** Whether Claude can act on a response right now (#457 D3). */
-export type AgentReach = "live" | "gone" | "disconnected" | "replay";
-
-/** §4.4 — "what happens after you respond", reusing the app's honest copy.
- *  #457 D3 — never promise what an absent agent will do: replay is read-only,
- *  a disconnected tab can't deliver, and an exited agent acts on resume. */
-function afterFor(item: AttentionItem, artifacts: Artifact[], reach: AgentReach): string {
-  const a = item.artifactId ? artifacts.find((x) => x.id === item.artifactId) : undefined;
-  const agentGone = reach === "gone";
-  if (reach === "replay" && item.kind !== "flag") return "Replay is read-only — nothing you do here reaches Claude";
-  // #465 N3 — it is THIS TAB that lost the daemon, not Claude.
-  if (reach === "disconnected" && item.kind !== "flag") return "This tab is offline — your response can be sent once it reconnects to deepPairing";
-  switch (item.kind) {
-    case "decision":
-      return agentGone
-        ? "Saved — Claude sees your choice when the session resumes"
-        : "Claude continues with the option you pick";
-    case "review-blocking": {
-      if (agentGone) return "Saved — Claude acts on your verdict when the session resumes";
-      if (a?.type === "plan") {
-        const n = ((a.content as { steps?: unknown[] } | null)?.steps ?? []).length;
-        return `Approve → Claude executes ${n} step${n === 1 ? "" : "s"} · Request changes → Claude revises the plan`;
-      }
-      return "Your verdicts go back as one review; Claude is waiting on it";
-    }
-    case "review":
-      return agentGone
-        ? "Saved — Claude sees your verdict when the session resumes"
-        : "Your verdict reaches Claude on its next check (usually < 30s)";
-    case "flag":
-      return "Already stored and will appear in exports — if it's a real credential, rotate it";
-    case "question":
-    case "request":
-    case "revision":
-      return agentGone
-        ? "Claude exited — it's answered when the session resumes"
-        : "Claude answers on its next check";
-    default:
-      return "";
-  }
-}
-
-const LANE_WORD: Partial<Record<AttentionItem["kind"], string>> = {
-  decision: "DECIDE",
-  "review-blocking": "REVIEW",
-  review: "REVIEW",
-  flag: "POSSIBLE SECRET",
-};
+// #430 slice 1 — why / if-ignored / after copy lives in lib/attentionCopy, the
+// one module PendingBanner (bar OFF) reads too. Re-exported for callers.
+export { admittedWhy, type AgentReach } from "../lib/attentionCopy";
 
 /** #430 PR 5 — the bar-ON home of the demo CTA and the wrap card (design §5):
  *  App decides WHETHER each shows (today's conditions); the bar decides WHERE —
@@ -181,6 +116,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const comments = useArtifactStore((s) => s.comments);
   const requests = useArtifactStore((s) => s.requests);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const sampleContent = useArtifactStore((s) => s.sampleContent);
+  const sampleSessionIds = useArtifactStore((s) => s.sampleSessionIds);
   const connected = useConnectionStore((s) => s.connected);
   const tabOffline = useTabOffline();
   const staleDaemon = useConnectionStore((s) => s.staleDaemon);
@@ -200,6 +137,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
     requests,
     sessionLabels,
     boundSessionId,
+    sample: { content: sampleContent, sessionIds: sampleSessionIds },
     system: {
       // #467 review — the shared offline answer (first-connect grace): a page
       // load is not an outage.
@@ -208,20 +146,11 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       snapshotUnavailable,
       sessionConflict,
       replay: replayActive,
-      // Unread stance holds (the same boundary the ⋯ gate log uses).
-      holds: blocks
-        // #470 (§4a) — a block you allowed is seen (daemon-written seenAt).
-        .filter((b) => !b.seenAt && (!lastSeenAt || b.at > lastSeenAt))
-        .map((b) => ({
-          id: b.id,
-          // #544 — a hook firing names the file Claude Code asked about.
-          title: b.lane === "hook" && b.targetPath
-            ? `"${b.concept}": Claude Code ${b.decision === "deny" ? "stopped" : "asked about"} ${b.targetPath}${b.agentType ? ` (${b.agentType} subagent)` : b.agentId ? " (subagent)" : ""}`
-            : b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`,
-          at: b.at,
-        })),
+      // Unread stance holds (the same boundary the ⋯ gate log uses); a hook
+      // `ask` is terminal-held (#430 slice 1 — lib/attentionCopy).
+      holds: attentionHolds(blocks, lastSeenAt),
     },
-  }), [artifacts, comments, requests, sessionLabels, boundSessionId, tabOffline, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
+  }), [artifacts, comments, requests, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, tabOffline, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
 
   const agentGone = noAgentLive(activeSessions);
   // #457 state G — the outage clock (ticks only while disconnected).
@@ -288,6 +217,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   // The holds whose "Why" was opened: shown in the expansion after they are
   // marked seen (which, like opening the ⋯ gate log, clears them from the lane).
   const [whyHolds, setWhyHolds] = useState<AttentionItem[]>([]);
+  const heldShown = attention.lanes.held.length > 0 ? attention.lanes.held : whyHolds;
   const primary = attention.line.primary;
   const item = primary.item;
   // #430 PR 3 — absorbing ResumeQuestionsBanner: when the agent exited with
@@ -302,15 +232,20 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const openQuestionCount = openQuestions.length;
   const resumeCase = agentGone && openQuestionCount > 0;
   const oldestQuestion = openQuestions[0]; // waiting is oldest-first
-  const why = item ? whyFor(item, artifacts, blocks) : "";
-  const reach: AgentReach = replayActive ? "replay" : tabOffline ? "disconnected" : agentGone ? "gone" : "live";
-  const after = item ? afterFor(item, artifacts, reach) : "";
+  const reach = reachFrom({ replay: replayActive, tabOffline, agentGone });
+  // #430 slice 1 — the SAME copy PendingBanner shows for its lead item.
+  const copy = item ? copyFor(item, artifacts, reach, blocks) : null;
+  const why = copy?.why ?? "";
+  const ifIgnored = copy?.ifIgnored ?? "";
+  const after = copy?.after ?? "";
+  const riskTag = copy?.tags.find((t) => t.startsWith("Risk: "));
   // #430 PR 5 — the request pips + resume bridge (moved here from the
   // composer row when the bar is ON; same hook, same rules).
   const requestBridge = useRequestResumeBridge();
   // #430 PR 5 — "quiet" = nothing needs your judgment right now: the demo CTA
   // and wrap card sit inline only then (never pushing a decision off the line).
-  const quiet = primary.lane === "nothing" || primary.lane === "waiting" || primary.lane === "held";
+  // #430 slice 1 — a terminal-held `ask` is blocking, not quiet.
+  const quiet = primary.lane === "nothing" || primary.lane === "waiting" || (primary.lane === "held" && !item?.terminal);
   const [demoDismissed, setDemoDismissed] = useState(false);
   const demoInline = !!quietCards.demo && quiet && !demoDismissed;
   const wrapInline = !!quietCards.wrap && quiet;
@@ -365,7 +300,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
     // is not news either (only a genuinely new artifact is).
     if (prevNext.current !== undefined && prevNext.current !== nextId && !settling() && !(nextId && isBackfilled(nextId))) {
       const n = attention.next;
-      setAnnouncement(n ? `Next up: ${(LANE_WORD[n.kind] ?? "").toLowerCase()} — ${n.title}` : "Next up: nothing needs you");
+      const word = n?.kind === "held" ? "held in the terminal" : (n ? LANE_WORD[n.kind] ?? "" : "").toLowerCase();
+      setAnnouncement(n ? `Next up: ${word} — ${n.title}` : "Next up: nothing needs you");
     }
     prevNext.current = nextId;
     // attention.next is derived from the same memo as nextId.
@@ -465,6 +401,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       aria-label="Next up"
       data-testid="next-up-bar"
       data-line={lineText}
+      data-next-copy={item && copy ? copyLineText(item.title, copy) : undefined}
       onKeyDown={queueKeyDown}
       onFocusCapture={(event) => {
         const target = event.target as HTMLElement;
@@ -497,18 +434,27 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         {item && LANE_WORD[item.kind] && (
           <span className={`shrink-0 font-semibold tracking-wide ${tone}`}>{LANE_WORD[item.kind]}</span>
         )}
-        {/* Truncation order: why (shrink 1000) → after (shrink 100) → title (shrink 1). */}
+        {/* Truncation order: why (shrink 1000) → after (shrink 100) → if-ignored (shrink 10) → title (shrink 1). */}
         <span data-token className={`min-w-0 truncate font-medium ${tone}`} style={{ flexShrink: 1 }} title={primaryText}>
           {primaryText}
         </span>
         {item?.stakes === "high" && (
           <span className="shrink-0 px-1 rounded bg-accent-red-dim text-accent-red font-semibold">HIGH</span>
         )}
+        {/* #430 slice 1 — the brief's own `Risk class:` and the demo label, as
+            text (never colour alone). */}
+        {riskTag && (
+          <span data-testid="next-up-risk" className="shrink-0 px-1 rounded bg-surface-elevated text-text-secondary font-semibold">{riskTag}</span>
+        )}
+        {item?.demo && <DemoTag />}
         {/* #457 D2 — which session this is (only when >1 is merged). */}
         {item?.sessionLabel && (
           <span data-testid="next-up-session" className="shrink-0 max-w-[12rem] truncate text-text-muted" title={`Session: ${item.sessionLabel}`}>
             in {item.sessionLabel}
           </span>
+        )}
+        {ifIgnored && (
+          <span data-testid="next-up-if-ignored" className="min-w-0 truncate text-text-secondary" style={{ flexShrink: 10 }} title={ifIgnored}>· {ifIgnored}</span>
         )}
         {why && (
           <span className="min-w-0 truncate text-text-muted" style={{ flexShrink: 1000 }} title={why}>· {why}</span>
@@ -562,7 +508,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
           </span>
         )}
         <RequestResumeButton bridge={requestBridge} className="" label="Copy request resume prompt" />
-        {attention.line.summary.map((s) =>
+        {attention.line.summary.filter(onLine).map((s) =>
           s.lane === "high-decision" ? (
             <button
               key={s.lane}
@@ -630,6 +576,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       {expanded && (
         <div id="next-up-details" className="px-3 pb-2 space-y-1 text-2xs text-text-secondary">
           {why && <div><span className="text-text-muted">Why </span>{why}</div>}
+          {ifIgnored && <div><span className="text-text-muted">If you leave it </span>{ifIgnored}</div>}
           {after && <div><span className="text-text-muted">After </span>{after}</div>}
           {expanded === "high" ? (
             <Queue
@@ -647,9 +594,20 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
                 <div>
                   <div className="text-text-muted">Held by your stance</div>
                   <ul className="ml-3 list-disc">
-                    {(attention.lanes.held.length > 0 ? attention.lanes.held : whyHolds).map((h) => <li key={h.id}>{h.title}</li>)}
+                    {heldShown.map((h) => (
+                      <li key={h.id}>
+                        {h.title}
+                        {/* #430 slice 1 (Sol P2) — a terminal ask keeps its instruction
+                            here too, after Why marks the record seen. */}
+                        {h.terminal && <span data-testid="next-up-held-terminal"> — answer it in the terminal; approving here does not release it</span>}
+                      </li>
+                    ))}
                   </ul>
-                  <div className="text-text-muted">Nothing to do unless you want to retire the stance — that lives in the ⋯ gate log.</div>
+                  <div className="text-text-muted">
+                    {heldShown.some((h) => h.terminal)
+                      ? "A terminal ask is answered in the terminal. A stance hold needs nothing unless you want to retire the stance — that lives in the ⋯ gate log."
+                      : "Nothing to do unless you want to retire the stance — that lives in the ⋯ gate log."}
+                  </div>
                 </div>
               )}
               <Queue title="Read" items={attention.lanes.read} onOpen={selectArtifact} />
@@ -693,6 +651,7 @@ function Queue({ title, items, onOpen }: { title: string; items: AttentionItem[]
               <span>{it.title}</span>
             )}
             {it.stakes === "high" && <span className="ml-1 text-accent-red font-semibold">HIGH</span>}
+            {it.demo && <span className="ml-1 inline-flex"><DemoTag /></span>}
             {it.sessionLabel && <span className="ml-1 text-text-muted">— {it.sessionLabel}</span>}
           </li>
         ))}

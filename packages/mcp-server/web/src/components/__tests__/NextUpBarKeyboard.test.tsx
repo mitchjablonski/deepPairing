@@ -71,13 +71,16 @@ describe("#529 — Next-up disclosure keyboard ownership", () => {
   it("returns to the high-decision opener while it remains available", () => {
     useArtifactStore.setState({ artifacts: [artifact("one", 1), artifact("two", 2, true), artifact("three", 3, true)] });
     render(<NextUpBar />);
-    const high = screen.getByRole("button", { name: "+2 high decision" });
+    // #430 slice 1 — most consequential first: "two" (the older high decision)
+    // is `next`, so only "three" lies beyond it.
+    const high = screen.getByRole("button", { name: "+1 high decision" });
     high.focus();
     fireEvent.click(high);
     expect(high).toHaveAttribute("aria-expanded", "true");
-    const two = queueButton();
-    two.focus();
-    fireEvent.keyDown(two, { key: "Escape" });
+    const three = queueButton();
+    expect(three).toHaveTextContent("Review three");
+    three.focus();
+    fireEvent.keyDown(three, { key: "Escape" });
     expect(high).toHaveFocus();
     expect(high).toHaveAttribute("aria-expanded", "false");
   });

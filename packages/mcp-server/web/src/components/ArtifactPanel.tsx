@@ -138,6 +138,9 @@ function sidebarStatus(a: Artifact, lanes: Record<string, LaneMark>): { dot: str
  *  is unchanged. */
 export function statusLabelFor(artifact: Artifact): string {
   if (artifact.type === "explainer" && artifact.status === "draft") return "New — for you to read";
+  // #430 slice 1 (#585/#570) — a draft debrief is informational too: its
+  // sidebar mark is ○ Read, so the header chip says the same, not "awaiting review".
+  if (artifact.type === "debrief" && artifact.status === "draft") return "New — for you to read";
   // #193 E2 — after "Got it" the explainer is approved under the hood, but the
   // verdict word "Approved" is exactly the framing this surface drops. Say
   // "Read" — the SAME word the footer's acknowledge chip uses — so the state
