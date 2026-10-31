@@ -124,9 +124,10 @@ export function PendingBanner() {
       data-testid="pending-banner"
       className="px-3 py-1 bg-accent-amber-dim/50 border-b border-accent-amber/15"
     >
-      {/* Below `sm` the lead line takes its own full-width row (order-last,
-          basis-full) so narrow widths never squeeze it to a sliver beside the
-          count and chips; at sm+ it shares the one row (S2 chrome budget). */}
+      {/* The lead line shares the one row (S2 chrome budget) only while it gets
+          a readable 15rem; whenever it would be narrower it wraps to the next
+          row (flex-wrap + min-width), decided by the AVAILABLE width — not a
+          viewport breakpoint, so 200% zoom at exactly 640px wraps too (e2e). */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
       {/* #430 slice 1 — no pulse: the lead line beside says what waits, in words. */}
       {total > 0 && (
@@ -152,7 +153,7 @@ export function PendingBanner() {
           // A held hook ask has no chip: the row itself is the keyboard stop,
           // a named group so its full text (the terminal instruction) is read.
           {...(next.artifactId ? {} : { tabIndex: 0, role: "group", "aria-label": copy.why ? `${copyLineText(next.title, copy)} · Why ${copy.why}` : copyLineText(next.title, copy) })}
-          className={`order-last basis-full sm:order-none sm:basis-0 sm:flex-1 min-w-0 text-2xs text-text-primary focus:whitespace-normal focus:break-words focus:max-h-16 focus:overflow-y-auto outline-none focus-visible:ring-1 focus-visible:ring-accent-amber rounded ${leadExpanded ? EXPANDED_LEAD : "truncate"}`}
+          className={`basis-0 grow min-w-[min(15rem,100%)] text-2xs text-text-primary focus:whitespace-normal focus:break-words focus:max-h-16 focus:overflow-y-auto outline-none focus-visible:ring-1 focus-visible:ring-accent-amber rounded ${leadExpanded ? EXPANDED_LEAD : "truncate"}`}
         >
           {copy.lane && <><span className="font-semibold tracking-wide text-accent-amber">{copy.lane}</span>{" "}</>}
           {next.artifactId ? (
