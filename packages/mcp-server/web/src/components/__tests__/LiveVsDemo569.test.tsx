@@ -161,8 +161,8 @@ describe("#569 P1 — a demo session shows the demo treatment everywhere it appe
     } as any);
     render(<ArtifactPanel />);
     expect(screen.getByTestId("demo-banner")).toBeInTheDocument();
-    // The Agents row names the demo session in text.
-    expect(within(screen.getByText("Agents:").parentElement!).getByTestId("demo-tag")).toBeInTheDocument();
+    // The Agents menu names the demo session in its option text (#430 slice 2).
+    expect(within(screen.getByTestId("agents-filter-menu")).getByRole("option", { name: /^Agent \d · Demo \(1\)$/ })).toBeInTheDocument();
 
     act(() => { useArtifactStore.getState().selectArtifact("real"); });
     expect(screen.queryByTestId("demo-banner")).not.toBeInTheDocument();

@@ -1,6 +1,21 @@
 # Attention hierarchy — one next-action surface (proposal, #430)
 
 > **Status: PROPOSAL, revision 3. No UI code changes are included.**
+> **Slice 2 amendment (#430, Sol's review, comment 6647393646):** two changes
+> to the default view, neither of which changes a count.
+> **D1:** with the sidebar expanded, the `Agents:` row is the sidebar filter menu
+> whether the bar is ON or OFF (§4.6). This is the one exception to the earlier
+> "unrelated OFF behaviour unchanged" condition. It stays a filter: same totals,
+> same Demo text, no pending badges. The row stays when the sidebar is collapsed
+> or the window is narrow (900px or less).
+> **D2:** a held terminal ask in the default view gets a `Why` button that opens
+> the gate log at that entry. Why means viewed, never answered: as with any
+> opening of the log, every record currently held is marked seen, and nothing
+> reaches the terminal or the daemon. A hold that arrives afterwards stays unread.
+> Why is withheld during replay and replay-exit recovery, because the log isn't
+> read-only. Closing with Esc or a trigger returns focus to the gate chip or `⋯`.
+> The ordering of `n`, the pill and the chips, and the stale-ask lifecycle, are
+> separate follow-ups.
 > **Slice 1 amendment (#430, Mitch 10-25, comment 6392254571):** §10 decision 3
 > is revised. `next` is **most consequential first**: the blocking tier (a
 > decision, or a draft plan / changeset / code_change / delegate brief) before a
@@ -419,6 +434,7 @@ allowance (UI/CLI) for '*stance*': *reason*".
 The bar orders across **all merged sessions** (today's sidebar already merges
 them) and names the session on the item in the expansion. The `Agents:` row
 becomes a filter menu in the sidebar header (it filters, it does not signal).
+Since slice 2 this applies with the bar OFF too, whenever the sidebar is expanded.
 Cross-project attention stays in **Threads** (server-derived, unchanged), which
 is the model this bar mirrors in-session.
 

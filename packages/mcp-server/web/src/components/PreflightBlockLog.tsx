@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  MAX_BLOCKS_KEPT,
   usePreflightBlockStore,
   unreadBlockCount,
   type PreflightBlockRecord,
@@ -102,6 +103,7 @@ export function PreflightBlockLog() {
   useOverlayPresence(open); // UX4 — only while the popover is open (the chip is always mounted)
   const setLogOpen = usePreflightBlockStore((s) => s.setLogOpen);
   useEffect(() => { setLogOpen(open); return () => setLogOpen(false); }, [open, setLogOpen]);
+  const clearFocusRequest = usePreflightBlockStore((s) => s.clearFocusRequest);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -115,10 +117,20 @@ export function PreflightBlockLog() {
       if (triggerRef.current?.contains(target ?? null)) return;
       // #470 — the Allow-once dialog this log opened is not "outside".
       if ((target as Element | null)?.closest?.("[data-allow-once-dialog]")) return;
+      // Focus goes to whatever was clicked, so it isn't moved here.
       setOpen(false);
+      clearFocusRequest();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      // #430 slice 2 — the focused entry is about to unmount, so focus returns
+      // to the chip. Focus somewhere else (the composer, say) stays put. Inside
+      // the ⋯ menu, its own Escape handler runs first and takes focus to ⋯.
+      const active = document.activeElement;
+      const focusInside = !active || active === document.body || !!popoverRef.current?.contains(active);
+      setOpen(false);
+      clearFocusRequest();
+      if (focusInside) triggerRef.current?.focus();
     };
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
@@ -126,13 +138,15 @@ export function PreflightBlockLog() {
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, clearFocusRequest]);
 
   // #470 — "More options" on the toast and the changed-state links open this
   // log at one entry and move focus to it (an explicit request).
   const focusRequest = usePreflightBlockStore((s) => s.focusRequest);
-  const clearFocusRequest = usePreflightBlockStore((s) => s.clearFocusRequest);
   const [showAll, setShowAll] = useState(false);
+  // #430 slice 2 — the requested entry isn't in the log: say so, in the log.
+  const [targetMissing, setTargetMissing] = useState(false);
+  useEffect(() => { if (!open) setTargetMissing(false); }, [open]);
   useEffect(() => {
     if (!focusRequest) return;
     setOpen(true);
@@ -140,18 +154,24 @@ export function PreflightBlockLog() {
     if (id && blocks.findIndex((b) => (b.serverId ?? b.id) === id) >= POPOVER_LIMIT) setShowAll(true);
   }, [focusRequest, blocks]);
   useEffect(() => {
-    if (!open || !focusRequest) return;
+    // #430 slice 2 — wait for hydration. Before it lands the entry can be absent,
+    // or be pushed past the initial list by older rows arriving. The effect above
+    // re-runs with the hydrated blocks and widens the list first.
+    if (!open || !focusRequest || !loaded) return;
     const id = focusRequest.blockId;
     const t = setTimeout(() => {
       const el = id ? document.getElementById(gateEntryDomId(id)) : null;
+      setTargetMissing(!!id && !el);
       if (el) {
         el.focus();
         el.scrollIntoView?.({ block: "nearest" });
+      } else {
+        popoverRef.current?.focus();
       }
       clearFocusRequest();
     }, 0);
     return () => clearTimeout(t);
-  }, [open, focusRequest, showAll, clearFocusRequest]);
+  }, [open, loaded, focusRequest, showAll, clearFocusRequest]);
 
   const hasBlocks = blocks.length > 0;
   const unread = unreadBlockCount({ blocks, lastSeenAt });
@@ -162,7 +182,13 @@ export function PreflightBlockLog() {
     <div className="relative">
       <button
         ref={triggerRef}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (!open) { setOpen(true); return; }
+          setOpen(false);
+          clearFocusRequest();
+          // Not every browser focuses a clicked button (Safari doesn't).
+          triggerRef.current?.focus();
+        }}
         className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
         title={
           unread > 0
@@ -203,6 +229,7 @@ export function PreflightBlockLog() {
           role="dialog"
           aria-label="Recent gate blocks"
           data-testid="gate-block-log"
+          tabIndex={-1}
           /* R2 — IN FLOW, not floating. Round 13: this panel was
              `absolute right-0 mt-1 w-80 z-50`, and since #189 demoted the chip
              into the ⋯ diagnostics menu its siblings ("hooks", the Ledger pill)
@@ -217,7 +244,7 @@ export function PreflightBlockLog() {
              every viewport width — which the alternative (flipping the float to
              the left of the menu) is not, since a narrow window has no room on
              that side either. */
-          className="relative z-[1] mt-1 w-full rounded-md border border-border-default bg-surface-elevated overflow-hidden"
+          className="relative z-[1] mt-1 w-full rounded-md border border-border-default bg-surface-elevated overflow-hidden outline-none"
         >
           <div className="px-3 py-2 border-b border-border-default flex items-center justify-between">
             <span className="text-2xs font-medium text-text-secondary">
@@ -230,14 +257,21 @@ export function PreflightBlockLog() {
               this project
             </span>
           </div>
+          {targetMissing && (
+            <div role="status" data-testid="gate-entry-missing" className="px-3 py-2 border-b border-border-default text-2xs text-text-secondary">
+              That hold isn't in this log any more. The log keeps the newest {MAX_BLOCKS_KEPT}. If Claude Code is still asking, answer in your terminal.
+            </div>
+          )}
           {recent.length === 0 ? (
-            <div className="px-3 py-4 text-2xs text-text-muted">
+            !targetMissing && <div className="px-3 py-4 text-2xs text-text-muted">
               No blocks yet — when deepPairing refuses a proposal that matches a
               stance you already rejected, it will appear here. Blocks are kept
               even if this tab wasn’t open when the gate fired.
             </div>
           ) : (
-            <ul className="max-h-72 overflow-y-auto divide-y divide-border-default">
+            // #430 slice 2 — on a short window (200% zoom) the list stops short of
+            // the viewport's bottom, so an entry focused at its end stays on screen.
+            <ul className="max-h-[max(6rem,min(18rem,calc(100dvh-12rem)))] overflow-y-auto divide-y divide-border-default">
               {recent.map((block) => (
                 <GateBlockEntry key={block.id} block={block} blocks={blocks} />
               ))}
@@ -295,6 +329,9 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
           <div className="mt-0.5 text-text-secondary break-words" data-testid="gate-hook-line">
             {copy.subagent && <span className="font-semibold text-text-primary" data-testid="gate-hook-subagent">{copy.subagent} · </span>}
             {copy.title}
+            {/* #430 slice 2 — Why takes the terminal instruction off the line,
+                so the entry it opens has to carry it. */}
+            {block.decision === "ask" && <div className="mt-0.5 text-text-primary" data-testid="gate-hook-next">{copy.next}</div>}
           </div>
         );
       })()}

@@ -11,6 +11,7 @@ import { noAgentLive } from "../lib/liveness";
 import { useTabOffline } from "../lib/connectionGrace";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { openGateLogEntry } from "../lib/stanceException";
 import { DemoTag } from "./ProvenanceMarker";
 
 /**
@@ -52,6 +53,7 @@ export function PendingBanner() {
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const boundSessionId = useConnectionStore((s) => s.sessionId);
   const replayActive = useReplayStore((s) => s.active);
+  const replayExiting = useReplayStore((s) => s.exiting);
   const tabOffline = useTabOffline();
   const blocks = usePreflightBlockStore((s) => s.blocks);
   const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
@@ -102,6 +104,21 @@ export function PendingBanner() {
   // lead arrives while the old lead's chip is focused, expansion is derived
   // against the current lead (false), and the old chip keeps its own blur
   // handler, so ownership clears on Tab away without moving focus.
+  // #430 slice 2 (D2) — the held row's way off the line: the gate log the bar's
+  // `Why` already reaches. Viewed, never answered: nothing here reaches the
+  // terminal or the daemon. Withheld in replay and replay-exit recovery, because
+  // opening the live log advances the read boundary and exposes its live actions
+  // (Sol's condition 3). The row itself stays.
+  const canAskWhy = heldLead && !replayActive && !replayExiting;
+  const askWhy = () => {
+    if (!next) return;
+    const store = usePreflightBlockStore.getState();
+    // The log marks its blocks seen as it OPENS. If it is already open (a hold
+    // arrived after it opened), that moment has passed, so this request is it.
+    if (store.logOpen && store.loaded) store.markSeen();
+    const block = store.blocks.find((b) => b.id === next.id);
+    openGateLogEntry(block?.serverId ?? next.id);
+  };
   const leadLineId = useId();
   const [focusedChipId, setFocusedChipId] = useState<string | null>(null);
   const leadExpanded = !!lead && focusedChipId === lead.id;
@@ -185,6 +202,19 @@ export function PendingBanner() {
             <>{" "}<span data-testid="pending-why">· <span className="font-medium">Why </span>{copy.why}</span></>
           )}
         </div>
+      )}
+      {canAskWhy && (
+        // Outside the chip group, on the same row. No border, so the row keeps
+        // the chips' height and the S2 ceiling doesn't move.
+        <button
+          type="button"
+          onClick={askWhy}
+          aria-label="Why this is held"
+          title="Open the gate log at this hold. It doesn't answer the terminal."
+          className="px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
+        >
+          Why
+        </button>
       )}
       <div className="flex gap-1 ml-auto items-center min-w-0 max-w-[50%] shrink-0 overflow-x-auto">
         {shown.map((a) => (
