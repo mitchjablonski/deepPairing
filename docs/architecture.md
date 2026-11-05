@@ -15,7 +15,7 @@ becomes a typed entry that this project's pre-flight gate checks later
 `present_*` proposals against, refusing a match (a direct edit that matches
 gets a permission prompt instead). Matching is on stemmed words plus a short
 curated synonym list, not meaning, so a rewording that shares no words
-gets through; see the README's "Your taste compounds". If the project has opted in
+gets through; see ["Your taste compounds"](features.md#your-taste-compounds). If the project has opted in
 to publish (one prompt at `init`, default OFF), the rejection also
 mirrors into a cross-project Philosophy Ledger — which other projects
 surface as an **advisory** nudge, never a hard block.
@@ -115,6 +115,8 @@ in `src/mcp/server.ts`. The split:
 - `get_companion_url` — read-only: report this project's companion UI
   port + URL so the agent can hand the human the exact review-surface
   URL (shares the CLI's `deeppairing port` / `status` resolver)
+
+Plus two MCP prompts (`recall` and `seed`) for slash-style queries.
 
 Tool calls return prose `content`; `check_feedback` additionally ships a
 machine-readable mirror (`outputSchema` + `structuredContent`) so clients
