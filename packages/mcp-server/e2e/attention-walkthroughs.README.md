@@ -8,9 +8,11 @@ directory and ordinary CI neither runs this matrix nor uploads its output.
 `.github/workflows/attention-evidence.yml` runs it on demand
 (`gh workflow run attention-evidence.yml --ref <branch-or-tag>`) after a cold
 `pnpm build:clean`, read-only and with no secrets. It uploads only what
-`scripts/stage-attention-evidence.mjs` copies out: PNGs named by a validated
-`evidence.v1.json`, and that file with absolute paths replaced. Compare runs by
-the recorded commit, `recipeDigest`, `seedDigest` and runtime fingerprints.
+`scripts/stage-attention-evidence.mjs` copies out: PNGs named by a
+`evidence.v1.json` that passes its closed schema, and that file with absolute and
+home-relative paths replaced. Compare runs by the recorded commit, `recipeDigest`,
+`seedDigest` and the Node, browser, lockfile, harness and built-runtime
+fingerprints: Node 22 is a moving major, so equal runtimes can't be assumed.
 
 From a clean checkout with Node 22 and the repository's pinned pnpm:
 

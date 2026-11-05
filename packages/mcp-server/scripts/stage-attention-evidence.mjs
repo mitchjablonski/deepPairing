@@ -4,9 +4,11 @@
  * uploaded artifact. It copies into a fresh directory, so the workflow can't
  * upload anything this script didn't validate:
  *
- *  - each evidence.v1.json must match the known shape and the dispatched SHA;
- *  - absolute paths in any string are replaced (a failure message or the
- *    project-root UI text can carry the mkdtemp sandbox or runner workspace);
+ *  - each evidence.v1.json must match the known shape, at every depth, and the
+ *    dispatched SHA;
+ *  - absolute and home-relative paths in any string are replaced (a failure
+ *    message or the project-root UI text can carry the mkdtemp sandbox or runner
+ *    workspace). URLs, relative text and a short list of app routes are kept;
  *  - a PNG is copied only when a validated evidence file names it, so an
  *    unreferenced image, trace, log or attachment never leaves the runner.
  *
@@ -22,73 +24,176 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const GIT_SHA = /^[0-9a-f]{40}$/;
 const SCREENSHOT = /^[A-Za-z0-9._-]+\.png$/;
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const REDACTED_PATH = "<absolute-path>";
 const PATH_END = "[^\\s\"'`<>()\\[\\]{},;]*";
-const ABSOLUTE_PATHS = [
-  new RegExp(`\\bfile:/{2,3}${PATH_END}`, "gi"),
-  new RegExp(`(?<![\\w.:/~-])/(?:home|Users|root|tmp|var|private|mnt|opt|etc|usr|run|srv|media|nix|runner|github|workspace|Volumes|__w)(?![\\w-])(?:/${PATH_END})?`, "g"),
-  new RegExp(`(?<![A-Za-z0-9])[A-Za-z]:[\\\\/]${PATH_END}`, "g"),
-  new RegExp(`(?<![\\w\\\\])\\\\\\\\[^\\s\\\\]+\\\\${PATH_END}`, "g"),
+
+// Scans left to right, so a URL is consumed whole before its path can look like
+// a filesystem path. Everything else that is rooted is a path whatever its root
+// is called. Relative text (a/b, ./x, ../x, OFF/ON, 1/2) never matches.
+const PATH_CANDIDATE = new RegExp([
+  `(?<url>\\b(?:https?|wss?)://${PATH_END})`,
+  `\\bfile:/{1,3}${PATH_END}`,
+  `(?<rooted>(?<![\\w.~/<\\\\-])/${PATH_END})`,
+  `(?<![\\w/.-])~[\\w-]*[/\\\\]${PATH_END}`,
+  `(?<!\\w)(?:\\$HOME|\\$\\{HOME\\}|%USERPROFILE%|%HOMEPATH%)${PATH_END}`,
+  `(?<![A-Za-z0-9])[A-Za-z]:[\\\\/]${PATH_END}`,
+  `(?<![\\w\\\\.])\\\\{1,2}[^\\s\\\\]+\\\\${PATH_END}`,
+].join("|"), "gi");
+// The rooted strings the UI legitimately shows. Anything else rooted is redacted.
+const ALLOWED_ROOTED = [
+  /^\/+$/, // A bare separator: "Escape / Home".
+  /^\/\?[^/]*$/, // This app's own deep link: "/?session=abc".
+  /^\/api(?:\/(?!\.\.?(?:\/|$))[\w.:~%-]+)*\/?(?:\?\S*)?$/, // A daemon route, never a traversal.
+  /^\/ws(?:\?\S*)?$/,
+  /^\/(?:url|placeholder|children):$/, // Playwright aria-snapshot properties.
+  /^\/deeppairing:[a-z-]+$/, // A slash command named in UI copy.
 ];
 const CREDENTIAL = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|Bearer\s+(?!\[REDACTED\])[A-Za-z0-9._~+/-]{16,})/;
 
-export const EVIDENCE_TOP_LEVEL_KEYS = [
-  "schemaVersion", "runtime", "syntheticOnly", "status", "cleanup", "mode", "theme", "viewport", "scenario", "matrix",
-  "seedDigest", "seedOperations", "recipeDigest", "keyboard", "clocks", "assertions", "captures", "liveRegions", "limitations",
-];
-const OPTIONAL_TOP_LEVEL_KEYS = ["layout", "failure"];
-const RUNTIME_KEYS = ["gitSha", "node", "platform", "playwright", "browser", "startups", "atSave", "builtRuntimeStable", "provenanceLimit"];
-const PROVENANCE_DIGESTS = ["trackedDiffSha256", "daemonEntrySha256", "distManifestSha256", "webManifestSha256", "sharedManifestSha256", "harnessSourceSha256", "lockfileSha256"];
-const PROVENANCE_KEYS = ["gitSha", "trackedWorktreeDirty", "distFiles", "webFiles", ...PROVENANCE_DIGESTS];
+function redactPaths(text, onReplace = () => undefined) {
+  return text.replace(PATH_CANDIDATE, (match, ...rest) => {
+    const groups = rest[rest.length - 1];
+    if (groups.url) return match;
+    if (groups.rooted && ALLOWED_ROOTED.some((allowed) => allowed.test(match))) return match;
+    onReplace();
+    return REDACTED_PATH;
+  });
+}
 
+// A small typed schema: every object is a closed key list and every string,
+// array and dynamic field is bounded. Bounds are about twice the harness LIMITS
+// because the harness redacts after truncating, which can lengthen a string.
+const fail = (at, why) => { throw new Error(`${at} ${why}`); };
+const string = (max = 1000) => (value, at) => {
+  if (typeof value !== "string") fail(at, "must be a string");
+  if (value.length > max) fail(at, `is longer than ${max}`);
+};
+const number = (value, at) => { if (typeof value !== "number" || !Number.isFinite(value)) fail(at, "must be a number"); };
+const boolean = (value, at) => { if (typeof value !== "boolean") fail(at, "must be a boolean"); };
+const literal = (expected) => (value, at) => { if (value !== expected) fail(at, `must be ${expected}`); };
+const nullable = (check) => (value, at) => { if (value !== null) check(value, at); };
+const oneOf = (...allowed) => (value, at) => { if (!allowed.includes(value)) fail(at, `is not one of ${allowed.join("/")}`); };
+const pattern = (regex, description) => (value, at) => { if (typeof value !== "string" || !regex.test(value)) fail(at, `must be ${description}`); };
+const array = (check, max) => (value, at) => {
+  if (!Array.isArray(value)) fail(at, "must be an array");
+  if (value.length > max) fail(at, `has more than ${max} entries`);
+  value.forEach((item, i) => check(item, `${at}[${i}]`));
+};
 const isRecord = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+const object = (required, optional = {}) => (value, at) => {
+  if (!isRecord(value)) fail(at, "must be an object");
+  for (const key of Object.keys(value)) if (!Object.hasOwn(required, key) && !Object.hasOwn(optional, key)) fail(at, `has unexpected key "${key}"`);
+  for (const [key, check] of Object.entries(required)) {
+    if (!Object.hasOwn(value, key)) fail(at, `is missing "${key}"`);
+    check(value[key], `${at}.${key}`);
+  }
+  for (const [key, check] of Object.entries(optional)) if (Object.hasOwn(value, key)) check(value[key], `${at}.${key}`);
+};
 
-function exactKeys(value, required, optional, label) {
-  if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  const allowed = new Set([...required, ...optional]);
-  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`${label} has unexpected key "${key}"`);
-  for (const key of required) if (!Object.hasOwn(value, key)) throw new Error(`${label} is missing "${key}"`);
+// Seed bodies are the one free-form tree: synthetic artifact content. They stay
+// bounded, and a key that names an out-of-scope payload is refused at any depth.
+const SEED_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const OUT_OF_SCOPE_KEY = /^(?:env|environment|headers?|cookies?|trace|traces|har|network|logs?|stdout|stderr|video|tokens?|authorization|password|secrets?|credentials?|api_?key)$/i;
+const SEED_BODY_LIMITS = { depth: 10, nodes: 2000, string: 4000 };
+function seedBody(value, at) {
+  let nodes = 0;
+  const visit = (node, depth) => {
+    if (++nodes > SEED_BODY_LIMITS.nodes) fail(at, `has more than ${SEED_BODY_LIMITS.nodes} values`);
+    if (depth > SEED_BODY_LIMITS.depth) fail(at, `is deeper than ${SEED_BODY_LIMITS.depth}`);
+    if (node === null || typeof node === "boolean" || typeof node === "number") return;
+    if (typeof node === "string") { string(SEED_BODY_LIMITS.string)(node, at); return; }
+    if (Array.isArray(node)) { node.forEach((item) => visit(item, depth + 1)); return; }
+    if (!isRecord(node)) fail(at, "holds a non-JSON value");
+    for (const [key, item] of Object.entries(node)) {
+      if (!SEED_KEY.test(key)) fail(at, "has a key that isn't a plain field name");
+      if (OUT_OF_SCOPE_KEY.test(key)) fail(at, `has out-of-scope key "${key}"`);
+      visit(item, depth + 1);
+    }
+  };
+  if (!isRecord(value)) fail(at, "must be an object");
+  visit(value, 0);
+}
+function seedOperation(value, at) {
+  if (isRecord(value) && Object.hasOwn(value, "operation")) { object({ operation: literal("restart") })(value, at); return; }
+  object({
+    session: pattern(/^[a-z0-9_-]{1,64}$/i, "a synthetic session id"),
+    route: pattern(/^[a-z][a-z0-9_/-]{0,127}$/i, "a daemon route"),
+    body: seedBody,
+  })(value, at);
 }
 
-function oneOf(value, allowed, label) {
-  if (!allowed.includes(value)) throw new Error(`${label} is not one of ${allowed.join("/")}`);
-}
+const digest = pattern(HEX64, "a sha256 digest");
+export const PROVENANCE_KEYS = {
+  gitSha: pattern(GIT_SHA, "a full commit id"), trackedWorktreeDirty: boolean, trackedDiffSha256: digest,
+  daemonEntrySha256: digest, distManifestSha256: digest, distFiles: number, webManifestSha256: digest, webFiles: number,
+  sharedManifestSha256: digest, harnessSourceSha256: digest, lockfileSha256: digest,
+};
+const provenance = object(PROVENANCE_KEYS);
+const ariaText = string(32_768);
+export const ARIA_KEYS = { nextUp: ariaText, pending: ariaText, sessions: ariaText, main: ariaText };
+const top = nullable(number);
+const shortText = nullable(string(1200));
+export const LAYOUT_KEYS = {
+  step: string(100), atMs: number, settled: boolean, viewportHeight: number,
+  mainTop: top, mainTopPct: top, sidebarTop: top, sidebarFirstContentTop: top, detailPaneTop: top, detailFirstContentTop: top,
+  agentsFilterSurface: oneOf("menu", "row", "none"), sidebarRows: number,
+  openArtifactId: nullable(string(200)), pendingLead: shortText, nextUpText: shortText,
+};
+const REQUIRED_KEYS = {
+  schemaVersion: literal(1),
+  runtime: object({
+    gitSha: pattern(GIT_SHA, "a full commit id"), node: string(40), platform: string(40), playwright: string(40), browser: string(80),
+    startups: array(provenance, 16), atSave: provenance, builtRuntimeStable: boolean, provenanceLimit: string(),
+  }),
+  syntheticOnly: literal(true),
+  status: oneOf("passed", "failed"),
+  cleanup: oneOf("removed", "retained"),
+  mode: oneOf("OFF", "ON"),
+  theme: oneOf("dark", "light"),
+  viewport: object({ width: number, height: number }),
+  scenario: object({ id: string(100), task: string(300), boundSession: string(64) }),
+  matrix: object({ caseCount: number, cases: array(string(200), 200) }),
+  seedDigest: digest,
+  seedOperations: array(seedOperation, 200),
+  recipeDigest: digest,
+  keyboard: object({
+    presses: number, truncated: boolean,
+    events: array(object({
+      key: string(40), atMs: number,
+      focused: object({ tag: string(40), role: nullable(string(80)), name: string(1200), testId: nullable(string(200)), disabled: boolean }),
+    }), 1024),
+  }),
+  clocks: object({ keyboardAndCaptures: string(), liveRegions: string() }),
+  assertions: array(object({ label: string(), passed: boolean }), 500),
+  captures: array(object({
+    step: string(100), atMs: number, screenshot: pattern(SCREENSHOT, "a bare .png file name"),
+    aria: object({}, ARIA_KEYS), visibleText: string(24_000),
+  }), 50),
+  liveRegions: object(
+    { entries: array(object({ atMs: number, role: nullable(string(80)), live: nullable(string(40)), text: string(1200) }), 256), truncated: boolean },
+    { unavailable: literal(true) },
+  ),
+  limitations: array(string(), 20),
+};
+export const EVIDENCE_TOP_LEVEL_KEYS = Object.keys(REQUIRED_KEYS);
+const evidenceSchema = object(REQUIRED_KEYS, { layout: array(object(LAYOUT_KEYS), 20), failure: string(4000) });
 
-function validateProvenance(value, sha, label) {
-  exactKeys(value, PROVENANCE_KEYS, [], label);
-  if (value.gitSha !== sha) throw new Error(`${label}.gitSha is not the dispatched SHA`);
-  for (const key of PROVENANCE_DIGESTS) if (!HEX64.test(value[key])) throw new Error(`${label}.${key} is not a sha256 digest`);
-}
-
-/** Throws on anything but the shape AttentionEvidence.save writes. */
+/** Throws on anything but the shape AttentionEvidence.save writes, at any depth. */
 export function validateEvidence(evidence, sha) {
   if (!GIT_SHA.test(sha)) throw new Error("Expected SHA must be a full 40-character commit id");
-  exactKeys(evidence, EVIDENCE_TOP_LEVEL_KEYS, OPTIONAL_TOP_LEVEL_KEYS, "evidence");
-  if (evidence.schemaVersion !== 1) throw new Error("evidence.schemaVersion must be 1");
-  if (evidence.syntheticOnly !== true) throw new Error("evidence.syntheticOnly must be true");
-  oneOf(evidence.status, ["passed", "failed"], "evidence.status");
-  oneOf(evidence.cleanup, ["removed", "retained"], "evidence.cleanup");
-  oneOf(evidence.mode, ["OFF", "ON"], "evidence.mode");
-  oneOf(evidence.theme, ["dark", "light"], "evidence.theme");
-  exactKeys(evidence.runtime, RUNTIME_KEYS, [], "evidence.runtime");
-  if (evidence.runtime.gitSha !== sha) throw new Error("evidence.runtime.gitSha is not the dispatched SHA");
-  validateProvenance(evidence.runtime.atSave, sha, "evidence.runtime.atSave");
-  if (!Array.isArray(evidence.runtime.startups)) throw new Error("evidence.runtime.startups must be an array");
-  evidence.runtime.startups.forEach((start, i) => validateProvenance(start, sha, `evidence.runtime.startups[${i}]`));
-  for (const key of ["seedDigest", "recipeDigest"]) if (!HEX64.test(evidence[key])) throw new Error(`evidence.${key} is not a sha256 digest`);
-  if (!Array.isArray(evidence.captures)) throw new Error("evidence.captures must be an array");
-  for (const capture of evidence.captures) {
-    exactKeys(capture, ["step", "atMs", "screenshot", "aria", "visibleText"], [], "evidence.captures[]");
-    if (typeof capture.screenshot !== "string" || !SCREENSHOT.test(capture.screenshot)) throw new Error("evidence.captures[].screenshot must be a bare .png file name");
+  evidenceSchema(evidence, "evidence");
+  const { runtime } = evidence;
+  for (const [at, value] of [["runtime", runtime], ["runtime.atSave", runtime.atSave], ...runtime.startups.map((start, i) => [`runtime.startups[${i}]`, start])]) {
+    if (value.gitSha !== sha) throw new Error(`evidence.${at}.gitSha is not the dispatched SHA`);
   }
-  for (const key of ["seedOperations", "assertions", "limitations"]) if (!Array.isArray(evidence[key])) throw new Error(`evidence.${key} must be an array`);
 }
 
-/** Replaces absolute paths in every string and key; throws on a credential shape. */
+/** Replaces private paths in every string and key; throws on a credential shape. */
 export function sanitizeEvidence(evidence) {
   let replaced = 0;
   const clean = (value) => {
     if (CREDENTIAL.test(value)) throw new Error("evidence contains a credential-shaped string");
-    return ABSOLUTE_PATHS.reduce((text, pattern) => text.replace(pattern, () => { replaced++; return "<absolute-path>"; }), value);
+    return redactPaths(value, () => { replaced++; });
   };
   const walk = (value) => {
     if (typeof value === "string") return clean(value);
@@ -158,8 +263,7 @@ export function stageEvidence({ from, to, sha }) {
 }
 
 function sanitizeReason(error) {
-  const text = String(error instanceof Error ? error.message : error).slice(0, 300);
-  return ABSOLUTE_PATHS.reduce((value, pattern) => value.replace(pattern, "<absolute-path>"), text);
+  return redactPaths(String(error instanceof Error ? error.message : error).slice(0, 300));
 }
 
 /** Markdown for the run page. Goes to the step summary, never into the artifact. */
