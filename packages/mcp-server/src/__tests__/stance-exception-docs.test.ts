@@ -18,7 +18,6 @@ describe("#470 docs match the behaviour", () => {
     expect(readme).toContain("Choose **Allow this proposal once** to let that exact proposal through and keep the stance; **Retire this stance** deletes it.");
     expect(readme).not.toContain('One click on "Retire this stance"');
     expect(readme).not.toMatch(/one-click override/);
-    expect(readme).toContain("behind a confirm");
   });
 
   // #616 — the detail moved out of the README with the same wording. The
@@ -47,6 +46,8 @@ describe("#470 docs match the behaviour", () => {
       "not a security boundary",
       "Not a security boundary.",
       "Editors other than Claude Code.",
+      "writes to migrations, CI config, infrastructure and secret files (`.env`)",
+      "SECURITY.md#hooks-what-the-plugin-runs-on-your-machine",
       "**Poor fit:**",
       "docs/features.md#your-taste-compounds",
     ]) expect(readme, limit).toContain(limit);

@@ -41,9 +41,11 @@ runs, and the full rules and limits of the rejection gate.
   — the narrative, decisions, debrief, and the diffs by default — from the
   companion UI's **Share as page (.html)** menu or `/deeppairing:share`. It
   travels to teammates who never install deepPairing, and it warns before it
-  ships anything that looks like a secret. Pass `--redact-code` (or
-  `includeCode: false`) to strip every code body and diff when the code
-  shouldn't leave the building.
+  ships anything that looks like a secret. To strip every code body and diff when the code
+  shouldn't leave the building, untick **Include code in the page** in the
+  companion's export menu, or ask Claude for `includeCode: false` with
+  `/deeppairing:share`. From a source build's CLI, it's
+  `deeppairing export html --redact-code`.
   <!-- user-field: a `docs/assets/share-page.png` crop of the rendered page header would go here -->
 - **Review a PR in tandem.** `/deeppairing:review-pr <N>` pulls a colleague's
   GitHub PR onto the review surface — the diff per hunk, walk-me-through, and
@@ -103,6 +105,12 @@ separate orchestrator) and serves the UI on a deterministic per-project port in
 ![A reasoning artifact — the concept named for learning ("the pattern at play: single-flight / request coalescing"), the roads not taken, and an "Ask why" on each.](assets/reasoning-card.png)
 
 ## Your taste compounds
+
+![The enforcement moment — the agent re-proposes a concept you rejected ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave.](assets/enforcement.png)
+
+*This capture is out of date. It shows **Retire this stance** on the card and
+no **Allow this proposal once** button. Today Allow once is the card's main
+button, and Retire lives in the ⋯ gate log, behind a confirm.*
 
 So you never have to make the same call twice:
 
@@ -192,10 +200,13 @@ So you never have to make the same call twice:
     [tool-helpers-global-advisory](../packages/mcp-server/src/mcp/__tests__/tool-helpers-global-advisory.test.ts).
 - **A backstop on the paths you can't undo.** The same PreToolUse hook also
   watches your guardrail paths — migrations, CI config, infrastructure, `.env`
-  and other secret files. If the agent starts writing to one of them without
-  having presented *any* findings, options, spec, or plan first, you get a
-  prompt naming the path and the class before the edit lands. Do the pairing and
-  it never fires; by default it asks rather than hard-blocking, it fails open, and
+  and other secret files. If the agent starts writing to one of them and no
+  approved, recent, non-demo findings, options, spec, or plan covers the edit,
+  you get a prompt naming the path and the class before the edit lands. Covering
+  means the artifact declares that exact file path, or, with no declared scope,
+  an approved spec or plan in the same session. A scopeless findings or options
+  card never authorizes the edit, so presenting one doesn't stop the prompt. By
+  default it asks rather than hard-blocking, it fails open, and
   `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` turns it off.
   If your Claude Code permission UI omits the reason, opt into
   `DEEPPAIRING_PREFLIGHT_MODE=strict-stop` to deny matching edits and stop for

@@ -22,7 +22,8 @@ to follow, and its own docs point to a `PreToolUse` hook for a hard stop
 edit that tries to skip the protocol and surfaces it for your decision.
 The same hook carries a second prompt class — a *guardrail backstop* that
 asks before a write lands on a migration, CI config, infrastructure, or a
-secret file with no findings/options/spec/plan presented first.
+secret file when no approved, recent, non-demo findings, options, spec or plan
+covers the edit.
 
 The "ledger is a JSON file" critique is the same critique you could
 level at git ("a tree of text diffs"), `package.json` ("a JSON
@@ -179,8 +180,9 @@ a stance that's checked the next time the agent reaches for the same thing:
 - **On your other projects**, it's an advisory nudge, and only if you enabled
   cross-project publishing.
 - The same hook backstops your guardrail paths (migrations, CI, infra,
-  secrets). A write there with no findings, options, spec, or plan presented
-  first asks you before it lands.
+  secrets). A write there that no approved, recent, non-demo findings, options,
+  spec, or plan covers asks you before it lands. A findings or options card
+  with no declared file scope never counts as covering it.
 
 The review also continues past the plan, through specs, diffs, and a
 closing debrief. When the work changes hands, export it as an ADR

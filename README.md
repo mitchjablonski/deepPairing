@@ -22,7 +22,7 @@ still needs your eyes.
 
 *No account · no telemetry · everything stays on your disk.*
 
-![The enforcement moment — the agent re-proposes a concept you rejected ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave. This capture predates the card's **Allow this proposal once** button; Retire now lives in the gate log, behind a confirm.](docs/assets/enforcement.png)
+![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and the agent's turn up top.](docs/assets/review-surface.png)
 
 **Poor fit:** one-line fixes and throwaway scripts (the review is heavier than
 the change). Fully unattended runs where nobody will look at the UI. Teams that
@@ -46,6 +46,12 @@ boundary. Editors other than Claude Code.
   decide. It doesn't check `Bash` or notebook edits against your stances, and
   if it breaks, it lets the edit through. The prompt depends on how Claude Code
   is running: `bypassPermissions` skips it and `dontAsk` refuses instead.
+- **The plugin's hooks ask about more than stances.** They also ask before
+  writes to migrations, CI config, infrastructure and secret files (`.env`) that
+  no approved, recent work covers, and before an agent edit to deepPairing's own
+  state files. `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` turns off the first kind, not
+  the second. Claude Code's dialog can omit the reason; the companion shows why.
+  See [what the hooks do](SECURITY.md#hooks-what-the-plugin-runs-on-your-machine).
 - **Other projects — a nudge only.** It's off until you turn on cross-project
   publishing, and it never blocks.
 - **Not a security boundary.** [SECURITY.md](SECURITY.md) has the threat model.
@@ -61,8 +67,9 @@ The full rules and limits are in
 - **A record.** A project-wide view of what was chosen and why, plus session
   replay.
 - **Sharing.** Export a session as one self-contained page. It carries
-  diffs by default and warns before it ships anything that looks like a secret;
-  `--redact-code` strips every code body and diff.
+  diffs by default and warns before it ships anything that looks like a secret.
+  To leave code out, untick **Include code in the page** in the companion's
+  export menu, or ask Claude for `includeCode: false` with `/deeppairing:share`.
 - **PR review.** `/deeppairing:review-pr <N>` brings a colleague's PR onto the
   same surface. Your verdict stays local until you run `/deeppairing:post-pr`.
 
