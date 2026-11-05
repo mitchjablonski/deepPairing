@@ -133,6 +133,39 @@ test("live changes and disappearing queue focus", async ({ page }, info) => {
   }
 });
 
+// The journey above only hits this when its Tab walk finishes inside the old
+// pane's exit animation, so it can pass with the bug present. Moving focus by
+// script here is timing control: Approve fires while the pane is still leaving.
+test("approving just after switching keeps focus on the open artifact", async ({ page }, info) => {
+  const e = new AttentionEvidence(page, info, { scenario, mode: "ON", viewport: { width: 1280, height: 800 }, manifest: ["approve-during-exit"] });
+  let daemon: AttentionDaemon | undefined;
+  let failure: unknown;
+  let cleanup: "removed" | "retained" = "retained";
+  try {
+    daemon = await AttentionDaemon.create(info);
+    await daemon.seed(scenario.seed);
+    await e.observe();
+    await page.goto(`${daemon.baseURL}/?session=probe`);
+    await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review one");
+    await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
+    // Focus is off <body> when the open artifact is approved elsewhere, so its chip stays unfocused.
+    await e.activate(page.getByRole("button", { name: "Expand next-up details", exact: true }));
+    await daemon.post("probe", "artifacts/one/status", { status: "approved" });
+    await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review two");
+    await e.activate(page.locator("#next-up-details").getByRole("button", { name: "Synthetic review two", exact: true }));
+    await page.locator('[data-artifact-id="two"]').getByRole("button", { name: "Approve", exact: true }).focus();
+    await e.press("Enter");
+    await e.check("approval persists", () => expect.poll(async () => (await daemon!.artifacts("probe")).find((artifact) => artifact.id === "two")?.status).toBe("approved"));
+    await expect(page.locator('[data-artifact-id="one"]')).toHaveCount(0);
+    await e.capture("after-old-pane-left");
+    await e.check("focus stays in the open artifact after the old pane leaves", async () => expect(await page.evaluate(() => document.activeElement?.closest("[data-artifact-id]")?.getAttribute("data-artifact-id"))).toBe("two"));
+  } catch (error) { failure = error; await e.capture("failure").catch(() => undefined); }
+  finally {
+    if (daemon) { try { await daemon.close(info); cleanup = "removed"; } catch (error) { failure ??= error; } }
+    await finishWalkthrough(failure, () => e.save(failure ? "failed" : "passed", cleanup, failure, daemon?.seedJournal, daemon?.runtimes));
+  }
+});
+
 const op = (route: string, body: unknown) => ({ session: "probe", route, body });
 const finding = (id: string, title: string) => op("artifacts", { id, type: "research", title, content: { summary: "Synthetic gate fixture", findings: [{ category: "Probe", detail: "No production data", significance: "high" }] } });
 const decision = (id: string, title: string) => op("artifacts", { id, type: "decision", title, content: { context: "Synthetic choice context", decisionId: id, stakes: "high", options: [
