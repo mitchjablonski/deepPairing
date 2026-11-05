@@ -1,7 +1,7 @@
 # Installing deepPairing
 
 Three ways in, all giving you the same MCP tools + companion UI. They differ
-only in what's set up for you. The [README](README.md#install-in-claude-code)
+only in what's set up for you. The [README](README.md#get-started)
 has the short version; this page is the detail, the caveats, and the
 `init`-vs-plugin comparison.
 
@@ -9,7 +9,8 @@ has the short version; this page is the detail, the caveats, and the
 > [sample demo](README.md#try-the-sample-demo-no-build) plays a scripted review
 > against a real companion UI. Run `node claude-plugin/server/demo.mjs` from a
 > download of this repo; it needs only Node (22 or 24 recommended), with no build
-> and no Claude Code. It runs in a temporary sandbox that is deleted when you press Enter.
+> and no Claude Code. It runs in a temporary sandbox that is deleted when you press Enter;
+> see [The sample demo sandbox](#the-sample-demo-sandbox).
 
 All the "from a clone" paths need the build first — that requires **Node 20.19+, 22.13+, or 24+** (pnpm 10+), the floor set by the locked toolchain: `pnpm build` alone only needs Vite 8/rolldown's `^20.19.0 || >=22.12.0`, but `pnpm install` also pulls in eslint (run by `pnpm lint`, which CI runs on every PR), whose locked `^20.19.0 || ^22.13.0 || >=24` is tighter on the 22.x line — so Node 22.12.x and all of Node 23.x are *not* supported by the contributor toolchain even though they'd satisfy Vite alone. This is stricter than the runtime the *prebuilt* plugin below needs (Node 20.11+, see [option 1](#1-marketplace-plugin-recommended)) — building from source and running the shipped bundle have different Node requirements. See [Node.js support policy](#nodejs-support-policy) below for the full recommended/tested/deprecated breakdown:
 
@@ -58,7 +59,7 @@ GitHub SSH keys. The `owner/repo` shorthand can resolve to SSH and fail with
      plugin hooks. -->
 
 This adds the slash commands (`/deeppairing:start`, `:review`, `:stance`,
-`:share`, `:review-pr`, `:post-pr`, `:doctor`), the proactively-loaded `pairing-protocol` skill, and
+`:reject`, `:share`, `:review-pr`, `:post-pr`, `:doctor`), the proactively-loaded `pairing-protocol` skill, and
 — as of v0.1.1 — the **PreToolUse rejection-gate + Stop checkpoint hooks
 natively** (declared in `claude-plugin/hooks/hooks.json`, active the moment the
 plugin loads — no `init`, no `.mcp.json`, no session restart).
@@ -131,6 +132,31 @@ from your very first session.
 > the repo already ships a dev `.mcp.json`, so `init` there is a no-op on that
 > file (it detects deeppairing is already configured and leaves it alone).
 
+### CLI
+
+Pre-1.0, no npm publish yet — invoke the built CLI by path, or `pnpm link
+--global` once for the short `deeppairing` command:
+
+```bash
+deeppairing demo                          # fire the hero flow
+deeppairing init                          # set up in this project (interactive)
+deeppairing doctor [--fix]                # diagnose / heal install issues
+deeppairing port                          # bare daemon port to stdout (scriptable; !-friendly in Claude Code)
+deeppairing status                        # friendly daemon picture: port, URL, pid, version, running/alive
+deeppairing team init                     # scaffold .deeppairing/team.json
+deeppairing philosophy export | import f --merge | publish on|off | remove <concept>
+deeppairing post-pr-review <pr> --session-id ID  # post the explicitly reviewed session
+deeppairing review-posts <session-id>     # inspect / recover an unresolved review post
+deeppairing export <full|pr-comments|adr|replay|learnings>
+```
+
+`review-posts` also ships whole as a standalone operator entry in the plugin
+bundle (`node claude-plugin/server/review-posts.mjs --help`), because a
+marketplace install has no `deeppairing` binary. Five of its verbs are offline;
+`reconcile` reads GitHub and only reads — the entry carries no way to submit a
+review. See
+[docs/pr-posting-contract.md](docs/pr-posting-contract.md#where-the-operator-commands-live).
+
 ## `init` vs. the plugin — what differs
 
 Under the plugin, the per-project `.mcp.json` is unnecessary (the plugin
@@ -161,6 +187,33 @@ those two hooks. Clean up the redundant `settings.local.json` rows with:
 ```bash
 node "/path/to/installed/claude-plugin/server/doctor.mjs" --fix
 ```
+
+## The sample demo sandbox
+
+The demo plays a **scripted sample**. No AI agent or model runs; a script plays
+the agent's part on synthetic content. In the companion you'll see:
+
+- an agent's proposal, which you reject with a reason;
+- the remembered consequence: the same approach, re-proposed in new words, is
+  refused by the gate;
+- an explainer and a closing debrief that summarise the run.
+
+It opens the companion in your browser, or prints the URL when
+`DEEPPAIRING_NO_OPEN=1` is set. **Press Enter (or Ctrl+C) to end it.**
+
+The demo runs in a sandbox:
+
+- **Storage:** a temporary HOME and a synthetic sample project, created under
+  your system temp directory and **deleted when the demo ends**.
+- **Daemon:** its own daemon on its own port range (`41000-41063`). It never
+  starts or contacts the daemon for your projects, and never uses their
+  `3847-3974` range.
+- **Your data:** it never writes to your projects, their preferences or your
+  `~/.deeppairing` cross-project ledger. It sends no telemetry and calls no
+  external model.
+
+`node packages/mcp-server/dist/cli/init.js demo` from a source build runs the
+same sandboxed demo.
 
 ## After install
 

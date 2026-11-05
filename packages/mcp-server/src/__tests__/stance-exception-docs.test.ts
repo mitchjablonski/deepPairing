@@ -18,12 +18,39 @@ describe("#470 docs match the behaviour", () => {
     expect(readme).toContain("Choose **Allow this proposal once** to let that exact proposal through and keep the stance; **Retire this stance** deletes it.");
     expect(readme).not.toContain('One click on "Retire this stance"');
     expect(readme).not.toMatch(/one-click override/);
+  });
+
+  // #616 — the detail moved out of the README with the same wording. The
+  // assertions moved with it, at the same strength.
+  it("docs/features.md: the Allow once and Retire detail, and no 'one click' Retire left", () => {
+    const features = read("docs/features.md");
+    expect(features).not.toContain('One click on "Retire this stance"');
+    expect(features).not.toMatch(/one-click override/);
     expect(ALLOWANCE_CEILING_MS).toBe(72 * 3600_000);
-    expect(readme).toContain("after 72 hours");
-    expect(readme).toContain("never mirrored to the cross-project ledger");
-    expect(readme).toContain("behind a confirm");
-    expect(readme).toMatch(/one narrow `Bash` check asks/i);
-    expect(readme).toContain("not tamper-evident");
+    expect(features).toContain("after 72 hours");
+    expect(features).toContain("never mirrored to the cross-project ledger");
+    expect(features).toContain("behind a confirm");
+    expect(features).toMatch(/one narrow `Bash` check asks/i);
+    expect(features).toContain("not tamper-evident");
+  });
+
+  // #616 — the short README keeps the safety-relevant limits itself, and points
+  // at the moved detail.
+  it("README: the honest limits stay in the README", () => {
+    const readme = read("README.md");
+    for (const limit of [
+      "Matching is on words, not meaning.",
+      "you're asked, not refused.",
+      "if it breaks, it lets the edit through",
+      "`bypassPermissions` skips it",
+      "not a security boundary",
+      "Not a security boundary.",
+      "Editors other than Claude Code.",
+      "writes to migrations, CI config, infrastructure and secret files (`.env`)",
+      "SECURITY.md#hooks-what-the-plugin-runs-on-your-machine",
+      "**Poor fit:**",
+      "docs/features.md#your-taste-compounds",
+    ]) expect(readme, limit).toContain(limit);
   });
 
   it("FAQ: no 'one-click overridable'; Allow once isn't mirrored and records no approval", () => {
@@ -52,11 +79,11 @@ describe("#470 docs match the behaviour", () => {
     // #503 round 2 (Luna) — the docs say what Claude Code's own docs say, no
     // more: dontAsk DENIES, auto still prompts, -p depends on the host.
     const flat = (rel: string) => read(rel).replace(/\s+/g, " ");
-    for (const rel of ["README.md", "SECURITY.md", "claude-plugin/skills/pairing-protocol/SKILL.md"]) {
+    for (const rel of ["README.md", "docs/features.md", "SECURITY.md", "claude-plugin/skills/pairing-protocol/SKILL.md"]) {
       const doc = flat(rel);
       expect(doc, rel).not.toMatch(/treated as `allow`|that prompt is skipped|auto mode it becomes `deny`/);
     }
-    expect(flat("README.md")).toContain("`bypassPermissions` skips prompts, so the command can run without one; `dontAsk` denies it instead of asking; and a `-p` run with no one to answer denies it");
+    expect(flat("docs/features.md")).toContain("`bypassPermissions` skips prompts, so the command can run without one; `dontAsk` denies it instead of asking; and a `-p` run with no one to answer denies it");
     const security = flat("SECURITY.md");
     for (const quote of [
       "\"Auto-denies every call that would otherwise prompt\"",

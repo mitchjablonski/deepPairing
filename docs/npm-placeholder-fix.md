@@ -57,7 +57,7 @@ go, and whose `repository` field is correct.
      /plugin install deeppairing@deeppairing
 
    Or from a source clone — see:
-     https://github.com/mitchjablonski/deepPairing#install-in-claude-code
+     https://github.com/mitchjablonski/deepPairing#get-started
    `);
    ```
 

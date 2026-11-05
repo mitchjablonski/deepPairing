@@ -22,7 +22,8 @@ to follow, and its own docs point to a `PreToolUse` hook for a hard stop
 edit that tries to skip the protocol and surfaces it for your decision.
 The same hook carries a second prompt class — a *guardrail backstop* that
 asks before a write lands on a migration, CI config, infrastructure, or a
-secret file with no findings/options/spec/plan presented first.
+secret file when no approved, recent, non-demo findings, options, spec or plan
+covers the edit.
 
 The "ledger is a JSON file" critique is the same critique you could
 level at git ("a tree of text diffs"), `package.json` ("a JSON
@@ -175,12 +176,13 @@ a stance that's checked the next time the agent reaches for the same thing:
   refused (`REJECTED_APPROACH_BLOCKED`), and a direct `Edit`/`Write` that
   matches gets a `PreToolUse` permission prompt. Matching is on words plus a
   short synonym list, not meaning, and the hook fails open. See
-  [the README's limits](../README.md#your-taste-compounds).
+  [the gate's limits](features.md#your-taste-compounds).
 - **On your other projects**, it's an advisory nudge, and only if you enabled
   cross-project publishing.
 - The same hook backstops your guardrail paths (migrations, CI, infra,
-  secrets). A write there with no findings, options, spec, or plan presented
-  first asks you before it lands.
+  secrets). A write there that no approved, recent, non-demo findings, options,
+  spec, or plan covers asks you before it lands. A findings or options card
+  with no declared file scope never counts as covering it.
 
 The review also continues past the plan, through specs, diffs, and a
 closing debrief. When the work changes hands, export it as an ADR
@@ -188,6 +190,46 @@ closing debrief. When the work changes hands, export it as an ADR
 (**Share as page (.html)**). Plan mode and deepPairing aren't exclusive. You
 can plan in your tool's plan mode and still route the consequential calls
 through deepPairing.
+
+|                                     | Claude Code plan mode                 | Cursor Plan Mode               | VS Code edit review                          | deepPairing                                                         |
+| ----------------------------------- | ------------------------------------- | ------------------------------ | -------------------------------------------- | ------------------------------------------------------------------- |
+| What you review                     | A plan, before edits                  | A plan, before building        | The agent's code edits                       | Findings, options, specs, plans, diffs, debrief                     |
+| How you respond                     | Approve, keep planning, or `Ctrl+G` edit | Edit in chat or Markdown    | Accept/reject per change, Add Feedback       | Anchored comments, option picks, "why" questions, reject with reason |
+| Where it's kept                     | `~/.claude/plans/` files              | Home dir, or saved to workspace | The session's changes                       | `.deeppairing/` in the repo, plus a decisions view                  |
+| A rejected approach, next time      | Not covered on the cited page         | Not covered on the cited page  | Not covered on the cited page                | Matched by words: `present_*` refused, direct edit asks             |
+
+*Each cell for another tool describes only what its cited page said on
+2026-10-07. "Not covered" means that page doesn't describe it, not that the
+tool can't do it.*
+
+Planning, memory, blocking, and inline diff feedback each exist elsewhere
+already (sources checked 2026-10-07). Claude Code
+[plan mode](https://code.claude.com/docs/en/permission-modes#review-and-approve-a-plan)
+and Cursor [Plan Mode](https://cursor.com/docs/agent/plan-mode) produce
+editable, saved plans. VS Code lets you
+[comment on agent edits](https://code.visualstudio.com/docs/agents/run/review-code-edits).
+Claude Code's [memory](https://code.claude.com/docs/en/memory) carries your
+instructions across sessions, and its
+[hooks](https://code.claude.com/docs/en/hooks-guide) can deterministically
+block a tool call. deepPairing doesn't claim any one of those. What it adds is
+decision continuity: the evidence, the decision you made on a card, the review
+of the change, and your rejection come back as a checked stance the next time
+the agent reaches for the same thing. (The limits of the word match are in
+[Your taste compounds](features.md#your-taste-compounds).)
+
+## "What isn't it?"
+
+- **Not a code-review bot** (CodeRabbit, Greptile). It pairs *with* you while
+  the code is being written; a PR is just a surface to share what you paired on.
+- **Not an autonomous agent.** The Autonomy dial goes Full / Light / Minimal —
+  and even Minimal stops at the architectural decisions.
+- **Not just a memory file.** Claude Code's CLAUDE.md and auto memory are
+  context the model is asked to follow, and its docs point you to a
+  `PreToolUse` hook when you need a hard stop
+  ([memory docs](https://code.claude.com/docs/en/memory), checked 2026-09-27).
+  deepPairing ties the rejection to the decision you made in the review UI and
+  checks every later proposal in that repo against it. The check is a word
+  matcher, so it's a strong default, not a guarantee.
 
 ## "How is the Philosophy Ledger different from Claude Code's auto-memory?"
 
@@ -294,19 +336,51 @@ See [SECURITY.md](../SECURITY.md) for the threat model in full.
   6.0 s (506 packages downloaded), the build took 8.3 s and the demo took 1.9 s.
   With a warm store, install took 2.1 s.
 
-The full table and how it was measured are in
-[the README](../README.md#how-long-it-takes). Those figures come from
-2026-09-27, on Linux (WSL2 ext4, Node 20.20, 16 cores) and Windows (Node 24.18),
-using throwaway directories. A slow network, a slow disk, or a first start on
+The figures come from 2026-09-27, on Linux (WSL2 ext4, Node 20.20, 16 cores)
+and Windows (Node 24.18), using throwaway directories. A slow network, a slow disk, or a first start on
 WSL `/mnt/c` takes noticeably longer. If your numbers are dramatically worse,
 please open an issue.
+
+**Indicative only.** Once the plugin is installed, its server, the daemon and
+the companion are ready in about half a second on Linux and in under 2 s on
+Windows. Times vary by machine: an independent re-run on the same kind of setup
+was 20–40% slower.
+
+The ranges below are exactly what three runs measured on 2026-09-27, using
+throwaway `HOME` and project directories. Your times depend on your network,
+disk and machine.
+
+| Step | Linux (WSL2 ext4, Node 20.20) | Windows (Node 24.18, project on a `\\wsl.localhost` share) |
+|---|---|---|
+| Fetch the repo (what `/plugin marketplace add` downloads) | 1.1–1.4 s | not measured |
+| Plugin server and daemon up, MCP `initialize` answered | 406–428 ms | 1047–1113 ms |
+| Companion page served | 467–489 ms | 1234–1307 ms |
+| First artifact visible in the companion | 487–514 ms | 1349–1482 ms |
+| A companion comment reaches Claude's `check_feedback` | 509–538 ms | 1644–1741 ms |
+| Sample demo from the shipped bundle (`node claude-plugin/server/demo.mjs`) until the companion is ready | 0.76–1.14 s | 2.8–4.5 s, one 48 s outlier (sandbox temp dir on the `\\wsl.localhost` share) |
+| Source build, cold pnpm store: clone, install, build, demo | 1.4 + 6.0 + 8.3 + 1.9 ≈ 18 s | not measured |
+| Source build, warm pnpm store | 1.3 + 2.1 + 8.3 + 1.9 ≈ 14 s | not measured |
+
+How these were measured:
+
+- **Plugin rows:** the times are from launching the plugin's `server.mjs` with
+  plain `node`. A scripted MCP client stood in for Claude Code and an HTTP
+  client stood in for the browser. A separate headless-browser check confirmed
+  that the companion renders the artifact.
+- **What they leave out:** installing the plugin inside Claude Code, Claude
+  Code's own start-up, and the model's thinking time.
+- **Cold install:** it downloaded 506 packages on a fast connection. A slow
+  network adds to it.
+- **WSL `/mnt/c`:** a first start there is much slower; see
+  [troubleshooting](troubleshooting.md#claude-codes-mcp-startup-times-out-on-mntc).
 
 ## "Is it stable enough for daily use?"
 
 Pre-1.0 honest answer: it works for the team that built it on real
 projects, but it's not battle-tested. Over 3,000 tests, an explicit threat
-model in SECURITY.md, atomic writes on the data plane, structured
-error codes — the foundations are solid. The next ~weeks are about
+model in SECURITY.md, a fully-live accessibility gate (axe, zero
+disabled rules), strict TypeScript throughout, atomic writes on the
+data plane, structured error codes — the foundations are solid. The next ~weeks are about
 real-user signals telling us where the false-positive rate, the
 companion-UI ergonomics, and the agent-protocol seams are
 under-baked.

@@ -1,4 +1,4 @@
-# README assets
+# Documentation screenshots
 
 Real screenshots of the running companion UI (not mockups):
 
