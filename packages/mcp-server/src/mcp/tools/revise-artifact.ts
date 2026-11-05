@@ -9,6 +9,7 @@ import { attachSkeletonSnapshot } from "../skeleton-snapshot.js";
 import { writeReshapeScope } from "../skeleton-reshape.js";
 import { carriedBriefRef, deriveReviseContent, finalizeReviseContent, reviseSnapshot, reviseTargetPrecondition } from "../proposal-resolution.js";
 import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
+import { reviseDebriefPin, carryDebriefClaims, debriefReviseNotes, type DebriefPinRevision } from "../requirement-claims.js";
 import {
   validatePresentFindingsInput,
   validatePresentSpecInput,
@@ -98,6 +99,18 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       };
     }
 
+    // #572 B1 — a debrief's pin and claims revise as an ATOMIC pair, decided
+    // here before anything is written: reserved/server-set keys in content
+    // reject; an explicit pin must be admissible (a dropped pin rejects the
+    // revision rather than carrying old claims under no pin), null/remove is
+    // unsupported, and a CHANGED pin needs supplied replacement claims ([] ok).
+    let debriefPin: DebriefPinRevision | undefined;
+    if (old.type === "debrief") {
+      const pinRevision = reviseDebriefPin(old, args, suppliedContent, all);
+      if ("error" in pinRevision) return { content: [{ type: "text", text: pinRevision.error }], isError: true };
+      debriefPin = pinRevision;
+    }
+
     // An external changeset stays somebody else's PR when it is revised. The
     // revise contract asks for replacement content, so callers commonly omit
     // the review-only metadata. Preserve that identity and its display
@@ -116,9 +129,11 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // (defeating the "bad shape never lands on disk" invariant). The
     // validators read fields off one args object, so merge in the title.
     const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
+    let validatedContent: unknown;
     if (supersedeValidator) {
       const v = supersedeValidator({ title: args?.title ?? old.title, ...(content as Record<string, unknown>) });
       if (!v.ok) return v.error;
+      validatedContent = v.data;
     }
     // #589 — for a spec, the validator above also refuses duplicate, blank,
     // oversized or ambiguous ids and dangling task links, BEFORE preflight,
@@ -180,6 +195,12 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
 
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid(10)}`;
+    // #572 B1 — omitted claims carry the predecessor's exact list and origin;
+    // supplied claims (the validated list) replace them whole with this
+    // revision as their origin. Resolved from the `old` read above, never
+    // from a later lookup. (A debrief revision never reaches the stance-
+    // admission branch: debrief preflight is advisory-only, so pre.ok.)
+    if (old.type === "debrief") carryDebriefClaims(old, content, newId, debriefPin, validatedContent);
     // F1 — a superseded decision needs a fresh server-minted decisionId
     // baked into content BEFORE persistence. The supersede input shape
     // (present_options) carries none, so without this the new decision had
@@ -226,7 +247,9 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       // newer brief (no implicit latest lookup). Re-briefing = a new card.
       // The admitted path carries the same pin via reviseSnapshot, bound by
       // reviseInheritedHash.
-      ...(carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}),
+      // #572 B1 — a debrief revision with an explicit, admitted pin saves
+      // that pin; otherwise the exact predecessor pin carries as above.
+      ...(debriefPin?.ref ? { briefRef: debriefPin.ref } : carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}),
     });
     // Parity PR 4 (#610 review M1) — a reshaped skeleton's fills are PAUSED
     // (enforced by the preflight hook) until the human approves the new version.
@@ -300,7 +323,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       ? `\n\n⚠ Recalled stance — advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}`
       : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${old.type === "debrief" ? debriefReviseNotes(newArtifact, debriefPin, await store.getArtifacts()) : ""}${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }],
     };
   }
 

@@ -469,6 +469,15 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(run).toContain("a declared link, not drift detection");
   });
 
+  it("#572 slice B1: move 4 adds the pin and requirement claims and keeps the prose sections", () => {
+    const packet = text.slice(text.indexOf("(4) Packet"), text.indexOf("(5) Wait"));
+    expect(packet).toContain("`briefRef: {artifactId}`");
+    expect(packet).toContain("`requirementClaims[]`");
+    expect(packet).toContain("`notRun`");
+    expect(packet).toContain("not my acceptance");
+    for (const kept of ["`Done when`", "`Proof`", "`Not sure about`"]) expect(packet, kept).toContain(kept);
+  });
+
   it("#569 pilot B: move 3 tracks the brief's tasks with update_plan_progress, not log_reasoning per task", () => {
     const run = text.slice(text.indexOf("(3) Run"), text.indexOf("(4) Packet"));
     expect(run).toContain("`update_plan_progress`");

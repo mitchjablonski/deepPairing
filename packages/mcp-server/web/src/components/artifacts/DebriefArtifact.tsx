@@ -14,6 +14,7 @@ import { OpenQuestionSection } from "./OpenQuestionSection";
 import { useWriteLock } from "../../hooks/useWriteLock";
 import { WalkMeThroughButton } from "../WalkMeThrough";
 import { SpeechIcon } from "../icons/ArtifactIcons";
+import { DebriefClaims } from "./DebriefClaims";
 
 /**
  * #190 — the end-of-feature DEBRIEF renderer (the comprehension surface).
@@ -40,6 +41,7 @@ import { SpeechIcon } from "../icons/ArtifactIcons";
  *   - decisionsMade    → `debrief:decisions`
  *   - needsYourEyes    → `debrief:needs-your-eyes`
  *   - deferred         → `debrief:deferred`
+ *   - #572 B1 claims   → `debrief:claims` / `debrief:claim:<escaped id>`
  */
 
 interface DebriefArtifactProps {
@@ -261,6 +263,16 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
       >
         <SimpleMarkdown text={content.summary} className="prose-field text-sm text-text-secondary space-y-2" />
       </DebriefBlock>
+
+      {/* #572 B1 — the agent's account against its pinned brief (claims, not
+          acceptance). Self-hides on a legacy debrief (no pin, claims or link
+          diagnostic), in replay, and until the current binding hydrates. */}
+      <DebriefClaims
+        artifact={artifact}
+        grain={(sectionId, label) => (
+          <BlockGrain artifactId={artifact.id} sectionId={sectionId} label={label} comments={comments} readOnly={writeLocked} />
+        )}
+      />
 
       {/* R4 P-B (#284) — visuals framing the debrief ("here's the shape of what
           we built"). Self-hides when absent; the shared component carries

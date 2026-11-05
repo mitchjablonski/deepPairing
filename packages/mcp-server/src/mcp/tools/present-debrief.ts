@@ -5,6 +5,9 @@ import { validatePresentDebriefInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
+import { hasRawBriefRef, normalizeDebriefBriefRef, type DebriefBriefRefNormalization } from "../brief-ref.js";
+import { claimWriteNotes } from "../requirement-claims.js";
+import { BRIEF_REF_DIAGNOSTIC_KEY, CLAIMS_ORIGIN_KEY, type Artifact } from "@deeppairing/shared";
 
 /**
  * #190 — present ONE debrief at the end of a feature / autonomous run: what
@@ -22,7 +25,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentDebriefInput(args);
   if (!validated.ok) return validated.error;
-  const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions, visuals } = validated.data;
+  const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions, visuals, requirementClaims } = validated.data;
 
   // Preflight against rejected approaches. Feed the title, the narrative
   // summary, the section titles, and any named concepts so a debrief re-proposing
@@ -39,6 +42,16 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
+  // #572 B1 — admit the pin ONCE, here, for this write (a call without a
+  // `briefRef` key reads nothing extra). A dropped pin leaves a bounded,
+  // server-set diagnostic on the saved debrief so the rejection survives a
+  // reload; the debrief itself is always presented.
+  let sessionArtifacts: Artifact[] | null = null;
+  let brief: DebriefBriefRefNormalization = { notes: [] };
+  if (hasRawBriefRef(args)) {
+    try { sessionArtifacts = await ctx.store.getArtifacts(); } catch { sessionArtifacts = null; }
+    brief = normalizeDebriefBriefRef(args.briefRef, sessionArtifacts, ctx.store.getSessionId());
+  }
   const content = {
     summary,
     ...(sections && sections.length > 0 ? { sections } : {}),
@@ -48,6 +61,11 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
     ...(openQuestions && openQuestions.length > 0 ? { openQuestions } : {}),
     // R4 P-B (#284) — visuals framing the debrief; thread to the store.
     ...(visuals && visuals.length > 0 ? { visuals } : {}),
+    // #572 B1 — the agent's claims (validated whole) plus the server-set
+    // origin naming THIS report. An empty list records nothing. Absent →
+    // byte-identical to a pre-B1 debrief.
+    ...(requirementClaims && requirementClaims.length > 0 ? { requirementClaims, [CLAIMS_ORIGIN_KEY]: id } : {}),
+    ...(brief.diagnostic ? { [BRIEF_REF_DIAGNOSTIC_KEY]: brief.diagnostic } : {}),
   };
   // #162 parity — the secret scan runs INSIDE createArtifact; a debrief narrates
   // real code and may inline a snippet, so it's a scan surface like the others.
@@ -62,6 +80,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
       feature: args?.feature,
       // #533 — the presenting agent's label (check_feedback ownership filter).
       presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : undefined,
+      ...(brief.ref ? { briefRef: brief.ref } : {}),
     });
   } catch (e) {
     dedup.abort?.();
@@ -145,6 +164,14 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
       ? ` ⚠ ${dangling.length} reference${dangling.length === 1 ? "" : "s"} don't resolve to a live artifact: ${dangling.join(", ")} — the drill-in link${dangling.length === 1 ? "" : "s"} will go nowhere. Fix the id${dangling.length === 1 ? "" : "s"} (or drop the ref) with revise_artifact if that wasn't intentional.`
       : "";
 
+  // #572 B1 — write-time notes for THIS write only: the pin verdict, then the
+  // semantic claim diagnostics (unknown / ambiguous id, no usable pin).
+  const claimNotes = [
+    ...brief.notes,
+    ...claimWriteNotes(requirementClaims ?? [], brief.ref, allArtifacts, ctx.store.getSessionId()),
+  ];
+  const claimNotesText = claimNotes.length > 0 ? `\n\n${claimNotes.join("\n")}` : "";
+
   return {
     content: [{
       type: "text",
@@ -152,7 +179,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
         `Debrief "${artifact.title}" presented for review (${id}) — ${sectionCount} section${sectionCount === 1 ? "" : "s"}` +
         `${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. ` +
         `This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. ` +
-        `Call check_feedback for their questions, comments, and verdict.${danglingNote}${skeletonFinalize}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their questions, comments, and verdict.${claimNotesText}${danglingNote}${skeletonFinalize}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

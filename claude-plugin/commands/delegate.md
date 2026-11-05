@@ -148,7 +148,13 @@ same `feature`:
 - a `Not sure about` section — what you doubt, or "none";
 - a `Proof` section — the commands you ran and what came back. `not-run` is a
   valid outcome, with a reason;
-- `deferred[]`.
+- `deferred[]`;
+- with a brief: `briefRef: {artifactId}` set to the approved brief's exact id,
+  and `requirementClaims[]`, one per requirement id — `claim` is `met`,
+  `unmet` or `unknown`; `met` needs `evidence[]` (a `check` with `ran`,
+  `outcome` and the `sourceRevision` you ran against, if you know it); use
+  `notRun` for what you didn't run and why. These are your account, not my
+  acceptance. Keep `Done when`, `Proof` and `Not sure about` as well.
 
 **(5) Wait, then summarize.** Call `check_feedback`, answer what I raise, and if I
 ask for a walk-through, serve it with a scoped `present_explainer`. If the debrief
