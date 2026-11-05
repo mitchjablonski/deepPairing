@@ -1,0 +1,73 @@
+name: Attention evidence
+
+# #430 — the opt-in attention walkthrough matrix, on demand, for comparing a
+# baseline and a head with the same recipe:
+#   gh workflow run attention-evidence.yml --ref <branch-or-tag>
+# GitHub lists a dispatchable workflow only once this file is on the default
+# branch. The dispatched ref's commit is what runs (github.sha) and evidence
+# whose gitSha differs from it is refused at staging.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Queue rather than cancel: a cancelled run would throw away finished evidence.
+  group: attention-evidence-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    # Same pin as ci.yml's e2e job (Playwright has no Chromium for ubuntu 26.04).
+    runs-on: ubuntu-24.04
+    # Above the sum of the step limits, so the upload still runs after a hung matrix.
+    timeout-minutes: 125
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Confirm the exact commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - run: pnpm install --frozen-lockfile
+        timeout-minutes: 10
+
+      - name: Cold build
+        timeout-minutes: 15
+        run: pnpm build:clean
+
+      - name: Install Chromium
+        timeout-minutes: 10
+        run: pnpm --filter @deeppairing/mcp-server exec playwright install --with-deps chromium
+
+      - name: Attention walkthroughs
+        timeout-minutes: 75
+        run: pnpm --filter @deeppairing/mcp-server exec playwright test --config playwright.attention.config.ts
+
+      # Copies only validated evidence to a fresh directory. Absolute paths are
+      # replaced, and an invalid file is dropped and turns this step red.
+      - name: Stage validated evidence
+        if: always()
+        timeout-minutes: 3
+        run: node packages/mcp-server/scripts/stage-attention-evidence.mjs --from packages/mcp-server/test-results/attention-walkthroughs --to "$RUNNER_TEMP/attention-evidence" --sha "$GITHUB_SHA"
+
+      - name: Upload evidence
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: attention-evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/attention-evidence/**/*.png
+            ${{ runner.temp }}/attention-evidence/**/evidence.v1.json
+          if-no-files-found: warn
+          retention-days: 30

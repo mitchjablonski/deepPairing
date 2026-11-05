@@ -3,7 +3,16 @@
 Ordinary PR CI now runs the bounded three-test keyboard/accessibility smoke in
 [`attention-ci-smoke.README.md`](attention-ci-smoke.README.md). The larger matrix
 below remains opt-in; normal E2E output uses its separate `test-results/e2e`
-directory and CI does not upload this matrix's screenshots/evidence JSON.
+directory and ordinary CI neither runs this matrix nor uploads its output.
+
+`.github/workflows/attention-evidence.yml` runs it on demand
+(`gh workflow run attention-evidence.yml --ref <branch-or-tag>`) after a cold
+`pnpm build:clean`, read-only and with no secrets. It uploads only what
+`scripts/stage-attention-evidence.mjs` copies out: PNGs named by a
+`evidence.v1.json` that passes its closed schema, and that file with absolute and
+home-relative paths replaced. Compare runs by the recorded commit, `recipeDigest`,
+`seedDigest` and the Node, browser, lockfile, harness and built-runtime
+fingerprints: Node 22 is a moving major, so equal runtimes can't be assumed.
 
 From a clean checkout with Node 22 and the repository's pinned pnpm:
 
@@ -38,11 +47,22 @@ two dark/light keyboard journeys, one live arrival/status/removal/action journey
 and nine bar states in each theme (A–G, empty and replay). Each state scans the
 whole page with axe both collapsed and expanded. These use the same isolated
 daemon/evidence helpers at 1280×800 and verify the actual applied theme. The
-complete attention command therefore runs 71 tests. For only this regression:
+complete attention command therefore runs 91 tests with the 20 evidence rows
+below. For only this regression:
 
 ```sh
 pnpm --filter @deeppairing/mcp-server exec playwright test --config playwright.attention.config.ts attention-keyboard --output test-results/attention-keyboard
 ```
+
+`attention-evidence.walkthrough.ts` adds 5 variants × OFF/ON × two viewports =
+**20 rows** for #430 slice 2's before/after comparison: a terminal ask with zero
+drafts, with a newer decision and with the sole draft selected; three sessions
+with the filter used; a 13-item queue with two high decisions. They observe and
+do not judge: each records `main` top and the sidebar and detail first-content
+tops separately, plus the lead text. Their checks only prove the seed landed.
+Terminal asks are a test-written `hooks-state.json` fire through the real daemon
+watcher, because the internal `preflight-block` route keeps no lane or decision
+in the durable log.
 
 Use different output directories for concurrent invocations: Playwright clears
 its selected output directory at startup. Queue arrows (Up/Down, Home/End) only
