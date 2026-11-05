@@ -8,6 +8,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { MAX_BRIEF_REF_ARTIFACT_ID_LENGTH } from "@deeppairing/shared";
 import type { IStore } from "../store/store-interface.js";
 import { buildFirstCallHint } from "./first-call-hint.js";
 import {
@@ -564,7 +565,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         description:
           "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason." +
           "\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted — an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted." +
-          "\n\nREVISING AN EXTERNAL CHANGESET (#343): preserve its full GitHub source provenance, including the exact `headSha`, only when the revised surface still represents that same commit. If the PR changed, fetch the new `headRefOid`, present the new diff with that SHA, and get a fresh verdict. Never carry an old SHA onto new code or omit it to fall back to the branch head.",
+          "\n\nREVISING AN EXTERNAL CHANGESET (#343): preserve its full GitHub source provenance, including the exact `headSha`, only when the revised surface still represents that same commit. If the PR changed, fetch the new `headRefOid`, present the new diff with that SHA, and get a fresh verdict. Never carry an old SHA onto new code or omit it to fall back to the branch head." +
+          "\n\nREVISING A DEBRIEF (#572): its brief pin and requirementClaims change as one atomic pair. The pin is the top-level `briefRef: {artifactId}` argument, debrief only; a pin inside `content` is refused. Omit both and the pin and claims carry unchanged. `content.requirementClaims` replaces the whole list (`[]` clears it; nothing is merged), and an omitted `briefRef` keeps the pin. A changed pin needs replacement `content.requirementClaims` in the same call. That omission, an unadmissible pin or `briefRef: null` refuses the whole revision: nothing is written and the earlier version is unchanged.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -578,7 +580,21 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
             title: { type: "string", description: "(supersede only) Updated title. Defaults to the original title when omitted." },
             content: {
               type: "object",
-              description: "(supersede only) Full content for the new version — same shape as the original present_* tool accepts.",
+              description: "(supersede only) Full content for the new version — same shape as the original present_* tool accepts. For a debrief, `briefRef` is not content: use the top-level argument.",
+            },
+            briefRef: {
+              type: "object",
+              description: "(supersede, debrief only) Re-pin the debrief to this exact brief version. Changing the pin needs replacement `content.requirementClaims` in the same call (`[]` is fine). Omit it to keep the current pin. Ignored for other artifact types.",
+              properties: {
+                artifactId: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: MAX_BRIEF_REF_ARTIFACT_ID_LENGTH,
+                  description: "The brief's EXACT artifact id (a present_spec art_ id in this session; each revision has its own id, so this pins one version).",
+                },
+              },
+              required: ["artifactId"],
+              additionalProperties: false,
             },
           },
           required: ["artifactId", "mode", "reason"],

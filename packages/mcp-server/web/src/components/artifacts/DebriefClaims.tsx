@@ -78,15 +78,19 @@ function PinLine({ view }: { view: DebriefClaimsView }) {
     return (
       <h3 className="text-xs font-semibold text-text-muted tracking-wide break-words" data-testid="debrief-claims-heading" data-pin-state={pin.closed ? "closed" : "current"}>
         {CLAIM_COPY.heading} against{" "}
-        <button
-          type="button"
-          onClick={() => selectExact(pin.artifactId)}
-          className="underline cursor-pointer text-accent-violet"
-          title={`Open this exact brief version (${pin.artifactId})`}
-          data-testid="debrief-claims-open-pin"
-        >
-          "{pin.title}" v{pin.version}
-        </button>{" "}
+        {pin.openable ? (
+          <button
+            type="button"
+            onClick={() => selectExact(pin.artifactId)}
+            className="underline cursor-pointer text-accent-violet"
+            title={`Open this exact brief version (${pin.artifactId})`}
+            data-testid="debrief-claims-open-pin"
+          >
+            "{pin.title}" v{pin.version}
+          </button>
+        ) : (
+          <span title={CLAIM_COPY.openWithheld} data-testid="debrief-claims-pin-title">"{pin.title}" v{pin.version}</span>
+        )}{" "}
         ({pin.status}) — {CLAIM_COPY.notAcceptance}
       </h3>
     );
@@ -149,9 +153,13 @@ function EvidenceItem({ e }: { e: EvidenceView }) {
       ? (
         <span className="break-words">
           artifact:{" "}
-          <button type="button" className="underline cursor-pointer" onClick={() => selectExact(target.id)} data-testid="debrief-claim-artifact" title={`Open ${target.id}`}>
-            {target.title}
-          </button>
+          {target.openable ? (
+            <button type="button" className="underline cursor-pointer" onClick={() => selectExact(target.id)} data-testid="debrief-claim-artifact" title={`Open ${target.id}`}>
+              {target.title}
+            </button>
+          ) : (
+            <span title={CLAIM_COPY.openWithheld} data-testid="debrief-claim-artifact-title">{target.title}</span>
+          )}
           {item.note !== undefined ? ` — ${item.note}` : ""}
         </span>
       )
@@ -159,7 +167,7 @@ function EvidenceItem({ e }: { e: EvidenceView }) {
   }
   return (
     <li className="text-2xs text-text-secondary" data-testid="debrief-claim-evidence" data-kind={e.kind}>
-      <span className="text-text-muted">[{e.tag}{e.source ? ` · ${e.source}` : ""}]</span> {body}
+      <span className="text-text-muted">[{e.tag} · {e.source}]</span> {body}
     </li>
   );
 }

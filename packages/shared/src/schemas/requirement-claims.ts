@@ -15,9 +15,10 @@ import { MAX_SPEC_ID_LENGTH, describeBriefPin, readBriefRef, type BriefLookupArt
  * Two policies, kept apart on purpose:
  *  - ADMISSION (`RequirementClaimsSchema`): strict objects (unknown keys
  *    reject), nonblank bounded strings, ≤32 claims, ≤8 evidence items each,
- *    no duplicate raw requirement ids, ≤64 KiB serialized. A supplied list is
- *    accepted whole or the call fails; nothing is truncated, trimmed, merged
- *    or partially kept.
+ *    no duplicate raw requirement ids, ≤64 KiB serialized (measured on the RAW
+ *    value, before the existing EvidenceInput child schema strips its unknown
+ *    keys). A supplied list is accepted whole or the call fails; nothing is
+ *    truncated, trimmed, merged or partially kept.
  *  - READING (`readRequirementClaims`): a saved list is never rewritten. One
  *    that no longer meets the admission policy (a legacy or foreign writer) is
  *    reported as UNREADABLE (or duplicate), never shown as valid-looking rows.
@@ -104,13 +105,18 @@ export const RequirementClaimSchema = z.object({
 });
 export type RequirementClaim = z.infer<typeof RequirementClaimSchema>;
 
-/** UTF-8 byte length of the serialized list (TextEncoder: Node and browsers). */
+/**
+ * UTF-8 byte length of the serialized value (TextEncoder: Node and browsers).
+ * A value that can't be serialized at all measures as over any cap, so a
+ * schema or reader refuses it instead of throwing.
+ */
 export function requirementClaimsByteLength(raw: unknown): number {
-  const json = JSON.stringify(raw);
+  let json: string | undefined;
+  try { json = JSON.stringify(raw); } catch { return Number.POSITIVE_INFINITY; }
   return json === undefined ? 0 : new TextEncoder().encode(json).length;
 }
 
-export const RequirementClaimsSchema = z.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list, ctx) => {
+const RequirementClaimListSchema = z.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list, ctx) => {
   const seen = new Map<string, number>();
   list.forEach((c, i) => {
     const first = seen.get(c.requirementId);
@@ -118,11 +124,20 @@ export const RequirementClaimsSchema = z.array(RequirementClaimSchema).max(MAX_R
       ctx.addIssue({ code: "custom", path: [i, "requirementId"], message: `duplicate requirementId (also claim ${first}); one claim per requirement` });
     } else seen.set(c.requirementId, i);
   });
-  const bytes = requirementClaimsByteLength(list);
+});
+
+/**
+ * The byte cap runs on the RAW supplied value, ahead of the list schema: a
+ * nested EvidenceInput object or locator strips unknown keys, so a refinement
+ * on the parsed list would measure less than the caller actually sent.
+ */
+export const RequirementClaimsSchema = z.preprocess((raw, ctx) => {
+  const bytes = requirementClaimsByteLength(raw);
   if (bytes > MAX_REQUIREMENT_CLAIMS_BYTES) {
     ctx.addIssue({ code: "custom", path: [], message: `requirementClaims is ${bytes} bytes serialized (at most ${MAX_REQUIREMENT_CLAIMS_BYTES})` });
   }
-}).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
+  return raw;
+}, RequirementClaimListSchema).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
 
 // --- server-set debrief content keys ----------------------------------------
 
@@ -177,13 +192,14 @@ export type ReadClaims =
 /**
  * Classify a SAVED `requirementClaims` value. Never rewrites it. A list that
  * fails the admission policy is unreadable (duplicate raw ids get their own
- * diagnostic): never first/last winner, never partial rows.
+ * diagnostic, unless the raw list is also over the byte cap): never first/last
+ * winner, never partial rows.
  */
 export function readRequirementClaims(raw: unknown): ReadClaims {
   if (raw === undefined) return { kind: "none" };
   const parsed = RequirementClaimsSchema.safeParse(raw);
   if (parsed.success) return { kind: "ok", claims: parsed.data };
-  if (Array.isArray(raw)) {
+  if (Array.isArray(raw) && requirementClaimsByteLength(raw) <= MAX_REQUIREMENT_CLAIMS_BYTES) {
     const ids = raw.map((c) => (c && typeof c === "object" ? (c as { requirementId?: unknown }).requirementId : undefined));
     const dup = [...new Set(ids.filter((id, i): id is string => typeof id === "string" && ids.indexOf(id) !== i))];
     // Duplicate only: every row reads on its own, only the ids collide.

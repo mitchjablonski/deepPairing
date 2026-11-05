@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { Artifact } from "@deeppairing/shared";
 import { claimSectionKey } from "@deeppairing/shared";
 import { debriefArtifact } from "@deeppairing/shared/__fixtures__/artifacts";
@@ -137,6 +137,21 @@ describe("ready — the account table", () => {
     expect(screen.queryByTestId("debrief-claim-none")).toBeNull();
   });
 
+  it("source and artifact evidence have no revision to declare: every row says source version unknown", () => {
+    const cs = art({ id: "cs1", type: "changeset", title: "Auth changeset" });
+    show(debrief({ content: { requirementClaims: [
+      { requirementId: "REQ-1", claim: "met", evidence: [{ kind: "source", evidence: { filePath: "auth/login.ts", snippet: "login()", explanation: "the login path" } }] },
+      { requirementId: "REQ-2", claim: "met", evidence: [{ kind: "artifact", artifactId: "cs1", note: "the diff" }] },
+      { requirementId: "REQ-3", claim: "unknown", evidence: [{ kind: "source", evidence: "auth/reset.ts" }, { kind: "artifact", artifactId: "gone" }] },
+    ] } }), [brief("b1"), cs]);
+    const [sourceRow, artifactRow, mixedRow] = screen.getAllByTestId("debrief-claim-row");
+    const tagged = "[agent-reported · source version unknown]";
+    expect(within(sourceRow!).getByTestId("debrief-claim-evidence")).toHaveTextContent(tagged);
+    expect(within(artifactRow!).getByTestId("debrief-claim-evidence")).toHaveTextContent(tagged);
+    for (const item of within(mixedRow!).getAllByTestId("debrief-claim-evidence")) expect(item).toHaveTextContent(tagged);
+    for (const row of [sourceRow!, artifactRow!, mixedRow!]) expect(within(row).getByTestId("debrief-claim-no-check")).toHaveTextContent("no check reported");
+  });
+
   it("unknown and ambiguous requirement ids are marked, never positionally matched", () => {
     const b = brief("b1", { content: { objective: "o", requirements: [{ id: "REQ-1" }, { id: "REQ-1" }, { statement: "id-less" }] } });
     show(debrief({ content: { requirementClaims: [
@@ -207,6 +222,59 @@ describe("clause 3 — pin availability is unique and session-local", () => {
     // artifact-only proof: code changed, nothing more
     expect(screen.getByTestId("debrief-claim-no-check")).toBeInTheDocument();
   });
+
+  describe("a drill-in opens the intended artifact or is withheld", () => {
+    const selected = () => useArtifactStore.getState().selectedArtifactId;
+    /** What ArtifactPanel opens for the current selection: the first global id match. */
+    const opened = () => useArtifactStore.getState().artifacts.find((a) => a.id === selected());
+    const ARTIFACT_CLAIM = { requirementClaims: [{ requirementId: "REQ-1", claim: "met", evidence: [{ kind: "artifact", artifactId: "cs1" }] }] };
+    const localCs = art({ id: "cs1", type: "changeset", title: "Auth changeset" });
+    const foreignCs = art({ id: "cs1", type: "changeset", title: "Foreign changeset", sessionId: "s2" });
+    const foreignBrief = brief("b1", { sessionId: "s2", title: "Foreign brief" });
+
+    it.each([
+      ["foreign first", [foreignBrief, brief("b1")]],
+      ["local first", [brief("b1"), foreignBrief]],
+    ])("pin id shared with another session (%s): the local title is text and a click selects nothing", (_order, others) => {
+      show(debrief(), others);
+      expect(screen.queryByTestId("debrief-claims-open-pin")).toBeNull();
+      const title = screen.getByTestId("debrief-claims-pin-title");
+      expect(title).toHaveTextContent('"Auth brief" v1');
+      expect(title).toHaveAttribute("title", CLAIM_COPY.openWithheld);
+      expect(screen.queryByText(/Foreign brief/)).toBeNull();
+      fireEvent.click(title);
+      expect(selected()).toBeNull();
+    });
+
+    it.each([
+      ["foreign first", [brief("b1"), foreignCs, localCs]],
+      ["local first", [brief("b1"), localCs, foreignCs]],
+    ])("evidence id shared with another session (%s): the local title is text and a click selects nothing", (_order, others) => {
+      show(debrief({ content: ARTIFACT_CLAIM }), others);
+      expect(screen.queryByTestId("debrief-claim-artifact")).toBeNull();
+      const title = screen.getByTestId("debrief-claim-artifact-title");
+      expect(title).toHaveTextContent("Auth changeset");
+      expect(screen.queryByText(/Foreign changeset/)).toBeNull();
+      fireEvent.click(title);
+      expect(selected()).toBeNull();
+    });
+
+    it("a globally unique pin opens that exact local artifact, whatever else other sessions hold", () => {
+      show(debrief(), [art({ id: "other", type: "spec", title: "Foreign other", sessionId: "s2" }), brief("b1")]);
+      expect(screen.queryByTestId("debrief-claims-pin-title")).toBeNull();
+      fireEvent.click(screen.getByTestId("debrief-claims-open-pin"));
+      expect(selected()).toBe("b1");
+      expect(opened()).toMatchObject({ id: "b1", sessionId: "s1", title: "Auth brief" });
+    });
+
+    it("globally unique evidence opens that exact local artifact; a shared pin id doesn't withhold it", () => {
+      show(debrief({ content: ARTIFACT_CLAIM }), [foreignBrief, brief("b1"), localCs]);
+      expect(screen.getByTestId("debrief-claims-pin-title")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("debrief-claim-artifact"));
+      expect(selected()).toBe("cs1");
+      expect(opened()).toMatchObject({ id: "cs1", sessionId: "s1", title: "Auth changeset" });
+    });
+  });
 });
 
 describe("clause 2 — saved diagnostics on reload", () => {
@@ -222,6 +290,14 @@ describe("clause 2 — saved diagnostics on reload", () => {
     show(debrief({ content: { requirementClaims: [{ requirementId: "REQ-1", claim: "met" }] } }));
     expect(screen.getByTestId("debrief-claims-unreadable")).toHaveAttribute("data-kind", "unreadable");
     expect(screen.getByTestId("debrief-claims-unreadable")).toHaveTextContent('"requirementId": "REQ-1"');
+    expect(screen.queryByTestId("debrief-claim-row")).toBeNull();
+    expect(screen.queryByTestId("debrief-claim-none")).toBeNull();
+    expect(sections()).toEqual(["debrief:claims"]);
+  });
+
+  it("a saved list over the raw byte cap is unreadable, even though it would strip to a small valid list", () => {
+    show(debrief({ content: { requirementClaims: [{ requirementId: "REQ-1", claim: "met", evidence: [{ kind: "source", evidence: { snippet: "x", explanation: "x", padding: "x".repeat(70_000) } }] }] } }));
+    expect(screen.getByTestId("debrief-claims-unreadable")).toHaveAttribute("data-kind", "unreadable");
     expect(screen.queryByTestId("debrief-claim-row")).toBeNull();
     expect(screen.queryByTestId("debrief-claim-none")).toBeNull();
     expect(sections()).toEqual(["debrief:claims"]);

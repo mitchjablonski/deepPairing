@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import type { Artifact } from "@deeppairing/shared";
-import { claimSectionKey } from "@deeppairing/shared";
+import { claimSectionKey, readRequirementClaims } from "@deeppairing/shared";
 import { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 
@@ -32,6 +32,10 @@ const seedSpec = (id: string, over: Record<string, unknown> = {}) =>
 const CHECK = { kind: "check", ran: "pnpm vitest run auth", outcome: "passed", sourceRevision: "abc1234" } as const;
 const MET = (requirementId: string, extra: Record<string, unknown> = {}) => ({ requirementId, claim: "met", evidence: [CHECK], ...extra });
 const BASE = { title: "Debrief — auth flow", summary: "We shipped the login and reset flow; here is my account against the brief." };
+
+/** Over the 64 KiB cap only as SUPPLIED: EvidenceInput strips the padding, so the parsed list is small. */
+const PADDED_EVIDENCE = [{ requirementId: "REQ-1", claim: "met", evidence: [{ kind: "source", evidence: { snippet: "x", explanation: "x", padding: "x".repeat(70_000) } }] }];
+const PADDED_LOCATOR = [{ requirementId: "REQ-1", claim: "met", evidence: [{ kind: "source", evidence: { snippet: "x", explanation: "x", locator: { kind: "quote", value: "q", padding: "x".repeat(70_000) } } }] }];
 
 const debriefs = (): Artifact[] => store.getArtifacts().filter((a) => a.type === "debrief");
 const only = (): Artifact => { const d = debriefs(); expect(d).toHaveLength(1); return d[0]!; };
@@ -121,6 +125,11 @@ describe("clause 1 — strict whole-list admission", () => {
     await refused([{ requirementId: "REQ-1", claim: "met", evidence: Array.from({ length: 9 }, () => CHECK) }]);
     // 20 × a 4,000-unit observation: each string is in range, the list is not.
     await refused(Array.from({ length: 20 }, (_, i) => ({ requirementId: `R${i}`, claim: "met", evidence: [{ kind: "observation", text: "o".repeat(4000) }] })), /bytes serialized/);
+  });
+
+  it("the byte cap measures the raw list: padding in nested evidence or a locator refuses the call", async () => {
+    await refused(PADDED_EVIDENCE, /bytes serialized/);
+    await refused(PADDED_LOCATOR, /bytes serialized/);
   });
 
   it("32 claims and 8 evidence items each are admitted", async () => {
@@ -329,6 +338,19 @@ describe("clause 4 — atomic revision and original provenance", () => {
     expect(store.getArtifacts().find((a) => a.id === v1.id)!.status).toBe("draft");
   });
 
+  it("supplied claims over the raw byte cap refuse the revision atomically", async () => {
+    const { debrief: v1 } = await presentPinned();
+    const before = JSON.stringify(v1);
+    for (const requirementClaims of [PADDED_EVIDENCE, PADDED_LOCATOR]) {
+      const r = await revise(v1.id, { content: { ...SUMMARY, requirementClaims } });
+      expect(r.isError).toBe(true);
+      expect(r._meta?.code).toBe("INPUT_VALIDATION_FAILED");
+      expect(r.text).toMatch(/bytes serialized/);
+    }
+    expect(successor(v1.id)).toBeUndefined();
+    expect(JSON.stringify(store.getArtifacts().find((a) => a.id === v1.id))).toBe(before);
+  });
+
   it("an echoed predecessor content (with its server-set origin) is refused with a fix-it message", async () => {
     const { debrief: v1 } = await presentPinned();
     const r = await revise(v1.id, { content: { ...content(v1) } });
@@ -346,6 +368,16 @@ describe("clause 4 — atomic revision and original provenance", () => {
     const v2 = successor(v1.id)!;
     expect(JSON.stringify(content(v2).requirementClaims)).toBe(JSON.stringify(legacy));
     expect("claimsOriginArtifactId" in content(v2)).toBe(false);
+  });
+
+  it("a stored list over the raw byte cap reads as unreadable and still carries byte-identical", async () => {
+    await callTool("present_debrief", BASE);
+    const v1 = only();
+    (v1.content as Record<string, unknown>).requirementClaims = PADDED_EVIDENCE;
+    expect(readRequirementClaims(PADDED_EVIDENCE)).toEqual({ kind: "unreadable" });
+    const r = await revise(v1.id, { content: SUMMARY });
+    expect(r.isError).toBeFalsy();
+    expect(JSON.stringify(content(successor(v1.id)!).requirementClaims)).toBe(JSON.stringify(PADDED_EVIDENCE));
   });
 
   it("the dropped-pin diagnostic follows the pin: carried with an omitted pin, cleared by an admitted one", async () => {
@@ -441,5 +473,25 @@ describe("clause 7 / matrix — comments, hostile input, authority floors", () =
     expect(Object.keys(schema.properties.briefRef.properties)).toEqual(["artifactId"]);
     expect(schema.properties.requirementClaims.maxItems).toBe(32);
     expect(JSON.stringify(schema)).not.toMatch(/claimsOriginArtifactId|briefRefDiagnostic/);
+  });
+
+  it("the advertised revise_artifact schema carries an optional top-level briefRef {artifactId} and the atomic re-pin rules", async () => {
+    const list = await ctx.client.listTools();
+    const tool = list.tools.find((t) => t.name === "revise_artifact")!;
+    const schema = tool.inputSchema as { properties: Record<string, any>; required: string[] };
+    expect(schema.required).toEqual(["artifactId", "mode", "reason"]);
+    const ref = schema.properties.briefRef;
+    expect(ref.type).toBe("object");
+    expect(ref.required).toEqual(["artifactId"]);
+    expect(ref.additionalProperties).toBe(false);
+    expect(Object.keys(ref.properties)).toEqual(["artifactId"]);
+    expect(ref.properties.artifactId).toMatchObject({ type: "string", minLength: 1, maxLength: 64 });
+    expect(ref.description).toMatch(/debrief only/);
+    expect(ref.description).toMatch(/requirementClaims/);
+    expect(schema.properties.content.description).toMatch(/`briefRef` is not content/);
+    expect(tool.description).toMatch(/REVISING A DEBRIEF/);
+    expect(tool.description).toMatch(/`briefRef: \{artifactId\}`/);
+    expect(tool.description).toMatch(/replaces the whole list/);
+    expect(tool.description).toMatch(/refuses the whole revision/);
   });
 });

@@ -56,6 +56,7 @@ export const CLAIM_COPY = {
   agentUnknown: "agent unknown",
   idlessRows: "requirement rows on the pinned brief have no unique id, so they can't carry a claim",
   artifactUnavailable: "artifact unavailable here",
+  openWithheld: "can't open: another session has an artifact with the same id",
 } as const;
 
 const REJECT_REASON_TEXT: Record<DroppedPinReason, string> = {
@@ -72,17 +73,17 @@ export type PinView =
   | { kind: "rejected"; attemptedId?: string; reason: string }
   | { kind: "unreadable"; rawId?: string }
   | { kind: "unavailable"; artifactId: string; text: string }
-  | { kind: "ready"; artifactId: string; title: string; version: number; status: string; closed: boolean };
+  | { kind: "ready"; artifactId: string; title: string; version: number; status: string; closed: boolean; openable: boolean };
 
 export interface EvidenceView {
   kind: ClaimEvidence["kind"];
   /** Always "agent-reported". */
   tag: string;
   /** The declared source revision / run, or "source version unknown". */
-  source?: string;
+  source: string;
   item: ClaimEvidence;
   /** For artifact evidence: exactly one same-session artifact, else null. */
-  target?: { id: string; title: string } | null;
+  target?: { id: string; title: string; openable: boolean } | null;
 }
 
 export interface ClaimRow {
@@ -121,13 +122,22 @@ export interface DebriefClaimsView {
 
 const record = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
 
-function evidenceSource(e: ClaimEvidence): string | undefined {
+/**
+ * The panel's selection is a bare id resolved by the first global match, so a
+ * drill-in can only promise its target when no other session holds that id.
+ * Otherwise the link is withheld (the title stays as text) in every store order.
+ */
+const opensExactly = (artifacts: readonly Artifact[], id: string): boolean =>
+  artifacts.filter((a) => a.id === id).length === 1;
+
+function evidenceSource(e: ClaimEvidence): string {
   if (e.kind === "check") return e.sourceRevision ? `source ${e.sourceRevision}${e.runId ? ` · run ${e.runId}` : ""}` : `${CLAIM_COPY.sourceUnknown}${e.runId ? ` · run ${e.runId}` : ""}`;
   if (e.kind === "observation") return e.sourceRevision ? `source ${e.sourceRevision}` : CLAIM_COPY.sourceUnknown;
-  return undefined;
+  // Source and artifact evidence have no revision field to declare one in.
+  return CLAIM_COPY.sourceUnknown;
 }
 
-function pinView(state: DebriefPinState): PinView {
+function pinView(state: DebriefPinState, artifacts: readonly Artifact[]): PinView {
   switch (state.state) {
     case "none": return { kind: "none" };
     case "unreadable": return { kind: "unreadable", ...(state.rawId !== undefined ? { rawId: state.rawId } : {}) };
@@ -139,7 +149,7 @@ function pinView(state: DebriefPinState): PinView {
       };
     case "ready": {
       const v = state.view;
-      return { kind: "ready", artifactId: state.artifactId, title: v.title ?? "", version: v.version ?? 1, status: v.status ?? "unknown", closed: v.closed };
+      return { kind: "ready", artifactId: state.artifactId, title: v.title ?? "", version: v.version ?? 1, status: v.status ?? "unknown", closed: v.closed, openable: opensExactly(artifacts, state.artifactId) };
     }
   }
 }
@@ -183,7 +193,7 @@ export function classifyDebriefClaims(debrief: Artifact, artifacts: readonly Art
   const c = record(debrief.content);
   const sessionId = debrief.sessionId;
   const pinState = resolveDebriefPin(debrief.briefRef, artifacts, sessionId);
-  let pin = pinView(pinState);
+  let pin = pinView(pinState, artifacts);
   if (pin.kind === "none") {
     const diag = readBriefRefDiagnostic(c[BRIEF_REF_DIAGNOSTIC_KEY]);
     if (diag) pin = { kind: "rejected", ...(diag.attemptedArtifactId !== undefined ? { attemptedId: diag.attemptedArtifactId } : {}), reason: diag.reason ? REJECT_REASON_TEXT[diag.reason] : "reason unknown" };
@@ -200,11 +210,10 @@ export function classifyDebriefClaims(debrief: Artifact, artifacts: readonly Art
       kind: "rows",
       rows: read.claims.map((cl) => {
         const evidence = (cl.evidence ?? []).map((e): EvidenceView => {
-          const src = evidenceSource(e);
           const target = e.kind === "artifact"
-            ? (() => { const t = uniqueSessionArtifact(artifacts, e.artifactId, sessionId); return t ? { id: t.id, title: t.title } : null; })()
+            ? (() => { const t = uniqueSessionArtifact(artifacts, e.artifactId, sessionId); return t ? { id: t.id, title: t.title, openable: opensExactly(artifacts, t.id) } : null; })()
             : undefined;
-          return { kind: e.kind, tag: CLAIM_COPY.agentReported, item: e, ...(src !== undefined ? { source: src } : {}), ...(target !== undefined ? { target } : {}) };
+          return { kind: e.kind, tag: CLAIM_COPY.agentReported, source: evidenceSource(e), item: e, ...(target !== undefined ? { target } : {}) };
         });
         return {
           requirementId: cl.requirementId,

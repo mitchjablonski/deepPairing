@@ -16,6 +16,7 @@ import {
   requirementClaimsByteLength,
   resolveDebriefPin,
 } from "../requirement-claims.js";
+import { EvidenceInputSchema } from "../evidence.js";
 import { DebriefContentSchema } from "../content-types.js";
 import { describeBriefPin, formatBriefPin, type BriefLookupArtifact } from "../brief-ref.js";
 
@@ -62,6 +63,41 @@ describe("admission caps (UTF-16 units)", () => {
     expect(requirementClaimsByteLength(list)).toBeGreaterThan(MAX_REQUIREMENT_CLAIMS_BYTES);
     expect(ok(list)).toBe(false);
     expect(ok(list.slice(0, 10))).toBe(true);
+  });
+
+  describe("the cap measures the RAW list, before EvidenceInput strips unknown keys", () => {
+    const padded = (padding: string): unknown[] => [{ requirementId: "R", claim: "met", evidence: [{ kind: "source", evidence: { snippet: "x", explanation: "x", padding } }] }];
+    const paddedLocator = (padding: string): unknown[] => [{ requirementId: "R", claim: "met", evidence: [{ kind: "source", evidence: { snippet: "x", explanation: "x", locator: { kind: "quote", value: "q", padding } } }] }];
+    const fill = (build: (s: string) => unknown, extra: number) => build("x".repeat(MAX_REQUIREMENT_CLAIMS_BYTES - requirementClaimsByteLength(build("")) + extra));
+
+    it.each([["nested evidence", padded], ["a nested locator", paddedLocator]])("padding in %s: exactly at the cap admits, one byte over rejects", (_where, build) => {
+      expect(requirementClaimsByteLength(fill(build, 0))).toBe(MAX_REQUIREMENT_CLAIMS_BYTES);
+      expect(ok(fill(build, 0))).toBe(true);
+      expect(requirementClaimsByteLength(fill(build, 1))).toBe(MAX_REQUIREMENT_CLAIMS_BYTES + 1);
+      const over = RequirementClaimsSchema.safeParse(fill(build, 1));
+      expect(over.success).toBe(false);
+      expect(over.error?.issues[0]?.message).toMatch(/bytes serialized/);
+      expect(DebriefContentSchema.safeParse({ summary: "s", requirementClaims: fill(build, 1) }).success).toBe(false);
+    });
+
+    it("the existing EvidenceInput schema still strips unknown keys", () => {
+      expect(EvidenceInputSchema.parse({ snippet: "x", explanation: "x", padding: "p" })).toEqual({ snippet: "x", explanation: "x" });
+    });
+
+    it("the reader reports an over-cap stored list as unreadable, even when it strips small or names a duplicate", () => {
+      expect(readRequirementClaims(fill(padded, 1))).toEqual({ kind: "unreadable" });
+      expect(readRequirementClaims(fill(paddedLocator, 1))).toEqual({ kind: "unreadable" });
+      expect(readRequirementClaims(fill(padded, 0)).kind).toBe("ok");
+      const dup = [...padded("x".repeat(70_000)), ...padded("")];
+      expect(readRequirementClaims(dup)).toEqual({ kind: "unreadable" });
+    });
+
+    it("a value that can't be serialized is refused, never thrown", () => {
+      const cycle: unknown[] = [];
+      cycle.push(cycle);
+      expect(ok(cycle)).toBe(false);
+      expect(readRequirementClaims(cycle)).toEqual({ kind: "unreadable" });
+    });
   });
 });
 
