@@ -95,7 +95,8 @@ export function parseStanceArguments(raw: string | readonly string[]): { what: s
   }
   const m = /^([\s\S]*?)\s--(?:\s+|$)([\s\S]*)$/.exec(` ${raw as string}`);
   if (!m) return { what: raw as string, why: "" };
-  return { what: m[1]!, why: m[2]! };
+  // Drop the one space prepended above (it lets a bare leading `-- why` split).
+  return { what: m[1]!.slice(1), why: m[2]! };
 }
 
 /**
