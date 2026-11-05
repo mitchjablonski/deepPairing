@@ -93,8 +93,13 @@ describe("Approved chip focus recovery stays on the open artifact (#430 keyboard
 
   it("focus goes to the open artifact's chip, not an exiting pane's earlier chip", () => {
     useArtifactStore.setState({ selectedArtifactId: "three" });
+    // Focus is elsewhere when the earlier pane mounts, as it was when the agent
+    // approved it, so its one-shot chip focus is still unspent.
+    const outside = document.body.appendChild(document.createElement("button"));
+    outside.focus();
     const { rerender } = render(panes(artifact({ id: "three", status: "draft" })));
     screen.getByRole("button", { name: "Approve" }).focus();
+    outside.remove();
     rerender(panes(artifact({ id: "three", status: "approved" })));
     const openChip = within(screen.getByTestId("open-pane")).getByText("Approved").parentElement;
     expect(document.activeElement).toBe(openChip);
