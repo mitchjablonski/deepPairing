@@ -247,7 +247,21 @@ export interface RejectedApproach {
    * gets blocked after "Deploy to Railway" was rejected for the same reason.
    */
   concept?: string;
+  /** #620 — which door recorded a stance added from the terminal (`cli` =
+   *  `deeppairing stance add`, `mcp` = the `record_stance` tool behind
+   *  `/deeppairing:reject`). Absent on stances born from a rejected artifact.
+   *  Provenance only: nothing matches on it. */
+  addedVia?: StanceAddedVia;
+  /** #620 — who asked for it, SELF-REPORTED by that door. Names the door's
+   *  claim, never authenticates anyone. */
+  requestedBy?: StanceRequestedBy;
 }
+
+export type StanceAddedVia = "cli" | "mcp";
+/** `user` = the door says a human asked (the MCP tool accepts nothing else; the
+ *  CLI says so only from a TTY outside Claude Code). `unknown` = the CLI could
+ *  not tell. Self-reported either way. */
+export type StanceRequestedBy = "user" | "unknown";
 
 /**
  * Store interface — implemented by both FileStore (sync) and DaemonClient (async HTTP).
@@ -542,6 +556,9 @@ export interface IStore {
     reason?: string;
     sourceArtifactId?: string;
     concept?: string;
+    /** #620 — provenance for a stance added from the terminal (store/stance-add.ts). */
+    addedVia?: StanceAddedVia;
+    requestedBy?: StanceRequestedBy;
   }): MaybePromise<void>;
   recordApprovedPattern(params: {
     description: string;

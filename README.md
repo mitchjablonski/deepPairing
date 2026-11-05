@@ -27,6 +27,16 @@ still needs your eyes.
 - **In-protocol (`present_*` tools) — refused.** Reject *"global mutable state
   for config"*, and *"keep config in global mutable states"* is refused before
   the artifact is recorded.
+- **Record one from the terminal.** `/deeppairing:reject global mutable state
+  for config -- keep configuration explicit` (or `deeppairing stance add …`
+  from a source install) records the same kind of project stance a rejected
+  artifact does, with the reason required. It shows you what it saved, its
+  scope (this project only) and what it will and won't catch. It only adds:
+  correct or remove a stance with **Retire this stance** in the gate log, or
+  by editing `.deeppairing/preferences.json` yourself. The agent is told to
+  call it only with your words, when you ask; the server can't verify who
+  typed them, so each stance records how it was added and `/deeppairing:stance`
+  lists it.
 - **Matching is on words, not meaning.** It uses stemmed words plus a small,
   hand-audited synonym list (*delete*↔*remove*, *directory*↔*folder*). *"A
   module-level mutable settings object"* shares too few words with that
@@ -422,7 +432,7 @@ We don't claim time savings for any of these.
   pnpm, a clone or a build.
 - **What you get:** the plugin runs the server bundle committed in
   `claude-plugin/server/`. It also installs the MCP tools, the slash commands
-  (`/deeppairing:start`, `:review`, `:stance`, `:share`, `:review-pr`,
+  (`/deeppairing:start`, `:review`, `:stance`, `:reject`, `:share`, `:review-pr`,
   `:post-pr`) and
   the rejection-gate and checkpoint hooks.
 - **What it is not:** there is no npm package. deepPairing is distributed only
@@ -580,12 +590,12 @@ research brief is [docs/research-brief.md](docs/research-brief.md) (historical).
   (React + Vite + Zustand).
 - **`packages/shared/`** — Zod schemas + fixtures both server and UI import.
 - **`claude-plugin/`** — the Claude Code plugin: `.mcp.json`, slash commands
-  (`/deeppairing:start`, `:review`, `:stance`, `:share`, `:review-pr`, `:post-pr`), the
+  (`/deeppairing:start`, `:review`, `:stance`, `:reject`, `:share`, `:review-pr`, `:post-pr`), the
   `pairing-protocol` skill, and the rejection-gate + checkpoint hooks.
 
-18 MCP tools: `present_findings`, `present_options`, `present_spec`,
+19 MCP tools: `present_findings`, `present_options`, `present_spec`,
 `present_plan`, `present_code_change`, `present_changeset`, `present_debrief`,
-`present_explainer`, `update_plan_progress`, `log_reasoning`, `recall`, `revise_artifact`,
+`present_explainer`, `update_plan_progress`, `log_reasoning`, `recall`, `record_stance`, `revise_artifact`,
 `withdraw_artifact`, `answer_question`, `post_pr_review`, `export_session`, `check_feedback`,
 `get_companion_url` — plus two MCP prompts (`recall` and `seed`) for
 slash-style queries.

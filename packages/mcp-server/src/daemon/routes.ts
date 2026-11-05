@@ -51,6 +51,9 @@ const RecordRejectedBody = z.object({
   reason: z.string().optional(),
   sourceArtifactId: z.string().optional(),
   concept: z.string().optional(),
+  // #620 — provenance of a terminal-added stance (store/stance-add.ts).
+  addedVia: z.enum(["cli", "mcp"]).optional(),
+  requestedBy: z.enum(["user", "unknown"]).optional(),
 });
 const RecordApprovedBody = z.object({
   description: z.string().min(1),

@@ -30,7 +30,10 @@ import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy } from "./store-interface.js";
+
+const isStanceAddedVia = (v: unknown): v is StanceAddedVia => v === "cli" || v === "mcp";
+const isStanceRequestedBy = (v: unknown): v is StanceRequestedBy => v === "user" || v === "unknown";
 import { canonicalizeWorktreePath } from "../git-worktree.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -2047,8 +2050,10 @@ export class FileStore implements IStore {
     reason?: string;
     sourceArtifactId?: string;
     concept?: string;
+    addedVia?: StanceAddedVia;
+    requestedBy?: StanceRequestedBy;
   }): void {
-    const { description, reason, sourceArtifactId, concept } = params;
+    const { description, reason, sourceArtifactId, concept, addedVia, requestedBy } = params;
     // #193 E2 — STORE-AUTHORITATIVE ledger guard (mirrors the #187 follow-up
     // stamping: the store owns the invariant so the client can neither forge
     // nor suppress it). The comprehension artifacts are NOT proposed approaches:
@@ -2128,6 +2133,10 @@ export class FileStore implements IStore {
         concept: concept || undefined,
         rejectedAt: new Date().toISOString(),
         sourceArtifactId,
+        // #620 — provenance of a terminal-added stance. Only on a NEW row: an
+        // existing row's origin is never relabelled by a later write.
+        ...(addedVia ? { addedVia } : {}),
+        ...(requestedBy ? { requestedBy } : {}),
       });
       prefs.rejectedApproaches = rejected;
       return true;
@@ -2232,6 +2241,10 @@ export class FileStore implements IStore {
             rejectedAt: (entry as any)?.rejectedAt,
             sourceArtifactId: (entry as any)?.sourceArtifactId,
             concept: (entry as any)?.concept,
+            // #620 — carried through so a later write (another rejection, a
+            // retire of a different row) doesn't strip a stance's provenance.
+            ...(isStanceAddedVia((entry as any)?.addedVia) ? { addedVia: (entry as any).addedVia } : {}),
+            ...(isStanceRequestedBy((entry as any)?.requestedBy) ? { requestedBy: (entry as any).requestedBy } : {}),
           },
     ).filter((r) => r.description);
   }

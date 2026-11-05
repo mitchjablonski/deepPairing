@@ -135,6 +135,19 @@ model assumes:
   lists) are **not tamper-evident**, and the `UI`/`CLI` label is a
   self-reported header: it names the door used, never who used it.
 
+- **Terminal-added stances (`/deeppairing:reject`, `deeppairing stance add`)
+  only add, and "requested by" is self-reported.** Both write one ordinary
+  row to this project's `.deeppairing/preferences.json` through the store
+  (the `record_stance` MCP tool goes through the daemon, so the
+  `deeppairing-state` Edit/Write prompt below doesn't see it). Neither can
+  remove, retire or rewrite a stance; an existing stance is reported, never
+  changed. A stance that would match deepPairing's own recovery commands or
+  buttons is refused. The tool is described to the agent as human-request
+  only and accepts only `requestedBy: "user"`, but the server can't tell who
+  typed the words, so an agent could still add a stance you didn't ask for.
+  The worst it can do is make the gate stop the agent more often; each row
+  records which door added it, and `/deeppairing:stance` lists them.
+
 ## Sensitive surfaces to be aware of
 
 - `~/.deeppairing/philosophy/v1.json` — global cross-project ledger.

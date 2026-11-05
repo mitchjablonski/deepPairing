@@ -51,7 +51,7 @@ Three processes:
 - **Claude Code** is the LLM client. It speaks the Model Context
   Protocol over stdio.
 - **MCP server wrapper** (`src/standalone.ts`) — one per Claude Code
-  session. Implements the 18 MCP tools (see below). Talks to the
+  session. Implements the 19 MCP tools (see below). Talks to the
   daemon over HTTP for state read/write so multiple sessions share a
   single source of truth.
 - **deepPairing daemon** (`src/daemon/index.ts`) — one per project, bound to
@@ -69,7 +69,7 @@ with it and DaemonClient (`src/daemon/client.ts`) implements `IStore`
 over HTTP so the same code paths work in standalone or daemon mode. The
 companion UI can aggregate across several projects' daemons.
 
-## The MCP tool surface (18 tools)
+## The MCP tool surface (19 tools)
 
 Tools live in `packages/mcp-server/src/mcp/tools/` and are registered
 in `src/mcp/server.ts`. The split:
@@ -99,8 +99,13 @@ in `src/mcp/server.ts`. The split:
   while executing an approved plan (live checklist in the UI)
 
 **Memory + memory queries**:
-- `recall` — search `mode='philosophy' | 'sessions' | 'ledger' | 'any'`
-  with optional `stance` and `source` filters
+- `recall` — search `mode='philosophy' | 'sessions' | 'ledger' | 'project' | 'any'`
+  with optional `stance` and `source` filters (`project` lists this
+  project's enforced stances and how each was added)
+- `record_stance` — add-only: records a project stance the human asked for,
+  from their verbatim `"<what> -- <why>"` (the door behind
+  `/deeppairing:reject`; shares `store/stance-add.ts` with
+  `deeppairing stance add`)
 - `log_reasoning` — record agent reasoning (low-stakes journal entry)
 - `revise_artifact` — supersede, retract, or obsolete a prior artifact
 - `withdraw_artifact` — retract your OWN still-`draft` artifact with a

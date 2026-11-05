@@ -1445,6 +1445,8 @@ ${helpInvocations}
                                           operator entry inside the plugin bundle — run
                                           \`node <plugin>/server/review-posts.mjs --help\`; a
                                           marketplace install has no \`dp\` binary.)
+    dp stance add <what> -- <why>          Record a stance in THIS project from the terminal (add-only;
+                                           the reason is required and quoted back when it fires)
     dp stance allow <blockId>              Allow ONE blocked proposal past your stance, once (interactive
                                            only: shows the proposal in your pager, asks for a reason and
                                            a typed "allow"; the stance stays on for everything else)
@@ -1544,6 +1546,22 @@ ${helpInvocations}
   listCmd().catch((err) => {
     console.error(`  ${red("✗")} list failed: ${errorMessage(err)}`);
     process.exit(1);
+  });
+} else if (cmd === "stance" && args[1] === "add") {
+  // #620 — add-only, project-local; shares store/stance-add.ts with the
+  // record_stance MCP tool behind /deeppairing:reject.
+  import("./stance-add.js").then(async ({ runStanceAddCommand }) => {
+    process.exitCode = await runStanceAddCommand(args.slice(2), {
+      projectRoot: cwd,
+      env: process.env,
+      stdinIsTTY: !!process.stdin.isTTY,
+      write: (t) => { process.stdout.write(t); },
+      writeErr: (t) => { process.stderr.write(t); },
+      openStore: () => openSeedStore(cwd),
+    });
+  }).catch((err) => {
+    console.error(`  ${red("✗")} stance add failed: ${errorMessage(err)}`);
+    process.exitCode = 1;
   });
 } else if (cmd === "stance") {
   // #470 — daemon-routed; the daemon's registry decides (A1). Interactive only.
