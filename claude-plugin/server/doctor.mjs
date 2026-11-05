@@ -14928,10 +14928,15 @@ var RequirementClaimSchema = external_exports.object({
   }
 });
 function requirementClaimsByteLength(raw) {
-  const json2 = JSON.stringify(raw);
+  let json2;
+  try {
+    json2 = JSON.stringify(raw);
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
   return json2 === void 0 ? 0 : new TextEncoder().encode(json2).length;
 }
-var RequirementClaimsSchema = external_exports.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list, ctx) => {
+var RequirementClaimListSchema = external_exports.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list, ctx) => {
   const seen = /* @__PURE__ */ new Map();
   list.forEach((c, i) => {
     const first = seen.get(c.requirementId);
@@ -14940,11 +14945,14 @@ var RequirementClaimsSchema = external_exports.array(RequirementClaimSchema).max
     } else
       seen.set(c.requirementId, i);
   });
-  const bytes = requirementClaimsByteLength(list);
+});
+var RequirementClaimsSchema = external_exports.preprocess((raw, ctx) => {
+  const bytes = requirementClaimsByteLength(raw);
   if (bytes > MAX_REQUIREMENT_CLAIMS_BYTES) {
     ctx.addIssue({ code: "custom", path: [], message: `requirementClaims is ${bytes} bytes serialized (at most ${MAX_REQUIREMENT_CLAIMS_BYTES})` });
   }
-}).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
+  return raw;
+}, RequirementClaimListSchema).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
 
 // ../shared/dist/schemas/content-types.js
 var FindingSeveritySchema = external_exports.enum(["info", "low", "medium", "high", "critical"]);

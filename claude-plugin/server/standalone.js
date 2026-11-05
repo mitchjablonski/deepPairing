@@ -24670,279 +24670,6 @@ var StdioServerTransport = class {
   }
 };
 
-// src/store/global-store.ts
-import fs3 from "node:fs";
-import { createHash } from "node:crypto";
-import os2 from "node:os";
-import path2 from "node:path";
-
-// src/store/atomic-write.ts
-import fs from "node:fs";
-import { randomBytes } from "node:crypto";
-function writeJsonAtomic(filePath, value, indent = 2, opts) {
-  writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
-}
-function writeStringAtomic(filePath, data, opts) {
-  const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
-  try {
-    if (opts?.mode !== void 0) {
-      const O_NOFOLLOW2 = fs.constants.O_NOFOLLOW ?? 0;
-      const fd = fs.openSync(
-        tmp,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW2,
-        opts.mode
-      );
-      try {
-        fs.fchmodSync(fd, opts.mode);
-        fs.writeFileSync(fd, data);
-      } finally {
-        fs.closeSync(fd);
-      }
-    } else {
-      fs.writeFileSync(tmp, data);
-    }
-    fs.renameSync(tmp, filePath);
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-    }
-    throw err;
-  }
-}
-
-// src/store/file-lock.ts
-import fs2 from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomBytes as randomBytes2 } from "node:crypto";
-import { performance } from "node:perf_hooks";
-var DEFAULT_FILE_LOCK_TIMEOUT_MS = 250;
-var heldLocks = /* @__PURE__ */ new Set();
-function readStartTime(pid) {
-  if (process.platform !== "linux") return null;
-  try {
-    const stat = fs2.readFileSync(`/proc/${pid}/stat`, "utf8");
-    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    return fields[22 - 3] ?? null;
-  } catch {
-    return null;
-  }
-}
-function currentHostIdentity() {
-  try {
-    if (process.platform === "linux") {
-      return {
-        platform: "linux",
-        hostname: os.hostname(),
-        bootId: fs2.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
-        pidNamespace: fs2.readlinkSync("/proc/self/ns/pid")
-      };
-    }
-    return {
-      platform: process.platform,
-      hostname: os.hostname(),
-      bootId: `uptime-boot:${Math.round((Date.now() / 1e3 - os.uptime()) / 60)}`,
-      pidNamespace: "host"
-    };
-  } catch {
-    return null;
-  }
-}
-var selfIdentity;
-function self() {
-  if (!selfIdentity) selfIdentity = { host: currentHostIdentity(), startTime: readStartTime(process.pid) };
-  return selfIdentity;
-}
-function ownLockIdentity() {
-  const me = self();
-  if (!me.host) return null;
-  return { pid: process.pid, ...me.host, processStartTime: me.startTime };
-}
-function ownBody() {
-  const id = ownLockIdentity();
-  return JSON.stringify({
-    ...id ?? { pid: process.pid },
-    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-    nonce: randomBytes2(8).toString("hex")
-  });
-}
-var IDENTITY_FIELDS = ["platform", "hostname", "bootId", "pidNamespace"];
-function ownerState(raw) {
-  let v2;
-  try {
-    v2 = JSON.parse(raw);
-  } catch {
-    return { state: "unknown", owner: null, why: "unreadable lock body" };
-  }
-  if (!v2 || typeof v2 !== "object" || !Number.isInteger(v2.pid) || v2.pid <= 0) {
-    return { state: "unknown", owner: null, why: "unreadable lock body (no pid)" };
-  }
-  const here = self().host;
-  if (!here) return { state: "unknown", owner: v2, why: "this process cannot determine its own host identity" };
-  for (const field2 of IDENTITY_FIELDS) {
-    if (typeof v2[field2] !== "string" || !v2[field2]) {
-      return { state: "unknown", owner: v2, why: `legacy lock body (no ${field2}) \u2014 owner unverifiable` };
-    }
-    if (v2[field2] !== here[field2]) {
-      return { state: "unknown", owner: v2, why: `owned by another ${field2 === "hostname" ? "host" : field2 === "platform" ? "OS" : field2 === "bootId" ? "boot / kernel (e.g. WSL vs Windows, or a VM)" : "pid namespace (e.g. a container)"} \u2014 owner unverifiable` };
-    }
-  }
-  const owner = v2;
-  try {
-    process.kill(owner.pid, 0);
-  } catch (err) {
-    const code = err.code;
-    if (code === "ESRCH") return { state: "dead", owner, why: `pid ${owner.pid} is not running` };
-    if (code === "EPERM") return { state: "alive", owner };
-    return { state: "unknown", owner, why: `liveness probe failed (${code ?? String(err)})` };
-  }
-  if (typeof owner.processStartTime === "string" && owner.processStartTime) {
-    const current = readStartTime(owner.pid);
-    if (current && current !== owner.processStartTime) {
-      return { state: "dead", owner, why: `pid ${owner.pid} was reused by a newer process` };
-    }
-  }
-  return { state: "alive", owner };
-}
-function claim(file2) {
-  let fd;
-  try {
-    fd = fs2.openSync(file2, "wx", 384);
-  } catch (err) {
-    if (err.code === "EEXIST") return null;
-    throw err;
-  }
-  const body = ownBody();
-  try {
-    fs2.writeFileSync(fd, body);
-  } catch (err) {
-    fs2.closeSync(fd);
-    try {
-      fs2.unlinkSync(file2);
-    } catch {
-    }
-    throw err;
-  }
-  fs2.closeSync(fd);
-  return body;
-}
-function release(file2, body, label) {
-  let current;
-  try {
-    current = fs2.readFileSync(file2, "utf8");
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-    current = null;
-  }
-  if (current !== body) {
-    console.error(
-      `[deepPairing] WARNING: ${label} at ${file2} was ${current === null ? "removed" : "replaced"} while this process held it. The write under it completed; another writer may have overlapped it. Stop all writers and check the protected file if this repeats.`
-    );
-    return false;
-  }
-  fs2.unlinkSync(file2);
-  return true;
-}
-function unlinkIfUnchanged(file2, judged, guard) {
-  const mine = claim(guard);
-  if (mine === null) return false;
-  try {
-    let now;
-    try {
-      now = fs2.readFileSync(file2, "utf8");
-    } catch (err) {
-      if (err.code === "ENOENT") return false;
-      throw err;
-    }
-    if (now !== judged) return false;
-    fs2.unlinkSync(file2);
-    return true;
-  } finally {
-    release(guard, mine, "lock-break guard");
-  }
-}
-function readIfExists(file2) {
-  try {
-    return fs2.readFileSync(file2, "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT") return null;
-    throw err;
-  }
-}
-function breakDeadLock(lockPath) {
-  const raw = readIfExists(lockPath);
-  if (raw === null) return { broken: false, state: null };
-  const state = ownerState(raw);
-  if (state.state !== "dead") return { broken: false, state };
-  const guard = `${lockPath}.break`;
-  if (unlinkIfUnchanged(lockPath, raw, guard)) {
-    console.error(`[deepPairing] recovered lock ${lockPath}: ${state.why} (created ${state.owner.createdAt || "?"}).`);
-    return { broken: true, state };
-  }
-  const guardRaw = readIfExists(guard);
-  if (guardRaw !== null && ownerState(guardRaw).state === "dead") {
-    unlinkIfUnchanged(guard, guardRaw, `${guard}.recover`);
-  }
-  return { broken: false, state };
-}
-function withFileLock(lockPath, run2, opts = {}) {
-  const key = path.resolve(lockPath);
-  if (opts.reentrant && heldLocks.has(key)) return run2();
-  const label = opts.label ?? "File lock";
-  const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
-  const waitArray = new Int32Array(new SharedArrayBuffer(4));
-  let body;
-  let lastState = null;
-  for (; ; ) {
-    body = claim(lockPath);
-    if (body !== null) break;
-    const attempt = breakDeadLock(lockPath);
-    if (attempt.broken) continue;
-    lastState = attempt.state ?? lastState;
-    if (performance.now() >= deadline) {
-      const owner = lastState?.owner;
-      const who = owner?.pid ? ` Held by pid ${owner.pid}${owner.hostname ? ` on ${owner.hostname}` : ""} since ${owner.createdAt || "?"}.` : "";
-      throw Object.assign(
-        new Error(
-          `${label} busy: ${lockPath}.${who} If no deepPairing daemon or CLI is running, run \`deeppairing doctor\` to inspect it; remove an abandoned lock only after stopping all writers.`
-        ),
-        { code: "ELOCKED", path: lockPath }
-      );
-    }
-    Atomics.wait(waitArray, 0, 0, 10);
-  }
-  heldLocks.add(key);
-  let result;
-  let failed = false;
-  let failure;
-  try {
-    result = run2();
-  } catch (err) {
-    failed = true;
-    failure = err;
-  }
-  heldLocks.delete(key);
-  try {
-    release(lockPath, body, label);
-  } catch (err) {
-    if (!failed) {
-      failed = true;
-      failure = err;
-    }
-  }
-  if (failed) throw failure;
-  return result;
-}
-
-// src/store/salvage.ts
-var salvageLogged = /* @__PURE__ */ new Set();
-function salvageLog(label, message) {
-  if (salvageLogged.has(label)) return;
-  salvageLogged.add(label);
-  console.error(`[deepPairing] ${label}: ${message}`);
-}
-
 // ../shared/dist/schemas/session.js
 var SessionStatusSchema = external_exports.enum([
   "idle",
@@ -25185,10 +24912,15 @@ var RequirementClaimSchema = external_exports.object({
   }
 });
 function requirementClaimsByteLength(raw) {
-  const json2 = JSON.stringify(raw);
+  let json2;
+  try {
+    json2 = JSON.stringify(raw);
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
   return json2 === void 0 ? 0 : new TextEncoder().encode(json2).length;
 }
-var RequirementClaimsSchema = external_exports.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list2, ctx) => {
+var RequirementClaimListSchema = external_exports.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list2, ctx) => {
   const seen = /* @__PURE__ */ new Map();
   list2.forEach((c, i) => {
     const first = seen.get(c.requirementId);
@@ -25197,11 +24929,14 @@ var RequirementClaimsSchema = external_exports.array(RequirementClaimSchema).max
     } else
       seen.set(c.requirementId, i);
   });
-  const bytes = requirementClaimsByteLength(list2);
+});
+var RequirementClaimsSchema = external_exports.preprocess((raw, ctx) => {
+  const bytes = requirementClaimsByteLength(raw);
   if (bytes > MAX_REQUIREMENT_CLAIMS_BYTES) {
     ctx.addIssue({ code: "custom", path: [], message: `requirementClaims is ${bytes} bytes serialized (at most ${MAX_REQUIREMENT_CLAIMS_BYTES})` });
   }
-}).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
+  return raw;
+}, RequirementClaimListSchema).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
 var CLAIMS_ORIGIN_KEY = "claimsOriginArtifactId";
 var BRIEF_REF_DIAGNOSTIC_KEY = "briefRefDiagnostic";
 var SERVER_SET_DEBRIEF_KEYS = [CLAIMS_ORIGIN_KEY, BRIEF_REF_DIAGNOSTIC_KEY];
@@ -25215,7 +24950,7 @@ function readRequirementClaims(raw) {
   const parsed = RequirementClaimsSchema.safeParse(raw);
   if (parsed.success)
     return { kind: "ok", claims: parsed.data };
-  if (Array.isArray(raw)) {
+  if (Array.isArray(raw) && requirementClaimsByteLength(raw) <= MAX_REQUIREMENT_CLAIMS_BYTES) {
     const ids = raw.map((c) => c && typeof c === "object" ? c.requirementId : void 0);
     const dup = [...new Set(ids.filter((id, i) => typeof id === "string" && ids.indexOf(id) !== i))];
     if (dup.length > 0 && raw.every((c) => RequirementClaimSchema.safeParse(c).success))
@@ -28667,6 +28402,279 @@ function isLivePlanVersion(art, artifacts) {
   if (art.type !== "plan" || CLOSED_FOR_PROGRESS.has(art.status))
     return false;
   return !artifacts.some((a) => a.parentId === art.id);
+}
+
+// src/store/global-store.ts
+import fs3 from "node:fs";
+import { createHash } from "node:crypto";
+import os2 from "node:os";
+import path2 from "node:path";
+
+// src/store/atomic-write.ts
+import fs from "node:fs";
+import { randomBytes } from "node:crypto";
+function writeJsonAtomic(filePath, value, indent = 2, opts) {
+  writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
+}
+function writeStringAtomic(filePath, data, opts) {
+  const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
+  try {
+    if (opts?.mode !== void 0) {
+      const O_NOFOLLOW2 = fs.constants.O_NOFOLLOW ?? 0;
+      const fd = fs.openSync(
+        tmp,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW2,
+        opts.mode
+      );
+      try {
+        fs.fchmodSync(fd, opts.mode);
+        fs.writeFileSync(fd, data);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(tmp, data);
+    }
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+    }
+    throw err;
+  }
+}
+
+// src/store/file-lock.ts
+import fs2 from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { performance } from "node:perf_hooks";
+var DEFAULT_FILE_LOCK_TIMEOUT_MS = 250;
+var heldLocks = /* @__PURE__ */ new Set();
+function readStartTime(pid) {
+  if (process.platform !== "linux") return null;
+  try {
+    const stat = fs2.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[22 - 3] ?? null;
+  } catch {
+    return null;
+  }
+}
+function currentHostIdentity() {
+  try {
+    if (process.platform === "linux") {
+      return {
+        platform: "linux",
+        hostname: os.hostname(),
+        bootId: fs2.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
+        pidNamespace: fs2.readlinkSync("/proc/self/ns/pid")
+      };
+    }
+    return {
+      platform: process.platform,
+      hostname: os.hostname(),
+      bootId: `uptime-boot:${Math.round((Date.now() / 1e3 - os.uptime()) / 60)}`,
+      pidNamespace: "host"
+    };
+  } catch {
+    return null;
+  }
+}
+var selfIdentity;
+function self() {
+  if (!selfIdentity) selfIdentity = { host: currentHostIdentity(), startTime: readStartTime(process.pid) };
+  return selfIdentity;
+}
+function ownLockIdentity() {
+  const me = self();
+  if (!me.host) return null;
+  return { pid: process.pid, ...me.host, processStartTime: me.startTime };
+}
+function ownBody() {
+  const id = ownLockIdentity();
+  return JSON.stringify({
+    ...id ?? { pid: process.pid },
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    nonce: randomBytes2(8).toString("hex")
+  });
+}
+var IDENTITY_FIELDS = ["platform", "hostname", "bootId", "pidNamespace"];
+function ownerState(raw) {
+  let v2;
+  try {
+    v2 = JSON.parse(raw);
+  } catch {
+    return { state: "unknown", owner: null, why: "unreadable lock body" };
+  }
+  if (!v2 || typeof v2 !== "object" || !Number.isInteger(v2.pid) || v2.pid <= 0) {
+    return { state: "unknown", owner: null, why: "unreadable lock body (no pid)" };
+  }
+  const here = self().host;
+  if (!here) return { state: "unknown", owner: v2, why: "this process cannot determine its own host identity" };
+  for (const field2 of IDENTITY_FIELDS) {
+    if (typeof v2[field2] !== "string" || !v2[field2]) {
+      return { state: "unknown", owner: v2, why: `legacy lock body (no ${field2}) \u2014 owner unverifiable` };
+    }
+    if (v2[field2] !== here[field2]) {
+      return { state: "unknown", owner: v2, why: `owned by another ${field2 === "hostname" ? "host" : field2 === "platform" ? "OS" : field2 === "bootId" ? "boot / kernel (e.g. WSL vs Windows, or a VM)" : "pid namespace (e.g. a container)"} \u2014 owner unverifiable` };
+    }
+  }
+  const owner = v2;
+  try {
+    process.kill(owner.pid, 0);
+  } catch (err) {
+    const code = err.code;
+    if (code === "ESRCH") return { state: "dead", owner, why: `pid ${owner.pid} is not running` };
+    if (code === "EPERM") return { state: "alive", owner };
+    return { state: "unknown", owner, why: `liveness probe failed (${code ?? String(err)})` };
+  }
+  if (typeof owner.processStartTime === "string" && owner.processStartTime) {
+    const current = readStartTime(owner.pid);
+    if (current && current !== owner.processStartTime) {
+      return { state: "dead", owner, why: `pid ${owner.pid} was reused by a newer process` };
+    }
+  }
+  return { state: "alive", owner };
+}
+function claim(file2) {
+  let fd;
+  try {
+    fd = fs2.openSync(file2, "wx", 384);
+  } catch (err) {
+    if (err.code === "EEXIST") return null;
+    throw err;
+  }
+  const body = ownBody();
+  try {
+    fs2.writeFileSync(fd, body);
+  } catch (err) {
+    fs2.closeSync(fd);
+    try {
+      fs2.unlinkSync(file2);
+    } catch {
+    }
+    throw err;
+  }
+  fs2.closeSync(fd);
+  return body;
+}
+function release(file2, body, label) {
+  let current;
+  try {
+    current = fs2.readFileSync(file2, "utf8");
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+    current = null;
+  }
+  if (current !== body) {
+    console.error(
+      `[deepPairing] WARNING: ${label} at ${file2} was ${current === null ? "removed" : "replaced"} while this process held it. The write under it completed; another writer may have overlapped it. Stop all writers and check the protected file if this repeats.`
+    );
+    return false;
+  }
+  fs2.unlinkSync(file2);
+  return true;
+}
+function unlinkIfUnchanged(file2, judged, guard) {
+  const mine = claim(guard);
+  if (mine === null) return false;
+  try {
+    let now;
+    try {
+      now = fs2.readFileSync(file2, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") return false;
+      throw err;
+    }
+    if (now !== judged) return false;
+    fs2.unlinkSync(file2);
+    return true;
+  } finally {
+    release(guard, mine, "lock-break guard");
+  }
+}
+function readIfExists(file2) {
+  try {
+    return fs2.readFileSync(file2, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+function breakDeadLock(lockPath) {
+  const raw = readIfExists(lockPath);
+  if (raw === null) return { broken: false, state: null };
+  const state = ownerState(raw);
+  if (state.state !== "dead") return { broken: false, state };
+  const guard = `${lockPath}.break`;
+  if (unlinkIfUnchanged(lockPath, raw, guard)) {
+    console.error(`[deepPairing] recovered lock ${lockPath}: ${state.why} (created ${state.owner.createdAt || "?"}).`);
+    return { broken: true, state };
+  }
+  const guardRaw = readIfExists(guard);
+  if (guardRaw !== null && ownerState(guardRaw).state === "dead") {
+    unlinkIfUnchanged(guard, guardRaw, `${guard}.recover`);
+  }
+  return { broken: false, state };
+}
+function withFileLock(lockPath, run2, opts = {}) {
+  const key = path.resolve(lockPath);
+  if (opts.reentrant && heldLocks.has(key)) return run2();
+  const label = opts.label ?? "File lock";
+  const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
+  const waitArray = new Int32Array(new SharedArrayBuffer(4));
+  let body;
+  let lastState = null;
+  for (; ; ) {
+    body = claim(lockPath);
+    if (body !== null) break;
+    const attempt = breakDeadLock(lockPath);
+    if (attempt.broken) continue;
+    lastState = attempt.state ?? lastState;
+    if (performance.now() >= deadline) {
+      const owner = lastState?.owner;
+      const who = owner?.pid ? ` Held by pid ${owner.pid}${owner.hostname ? ` on ${owner.hostname}` : ""} since ${owner.createdAt || "?"}.` : "";
+      throw Object.assign(
+        new Error(
+          `${label} busy: ${lockPath}.${who} If no deepPairing daemon or CLI is running, run \`deeppairing doctor\` to inspect it; remove an abandoned lock only after stopping all writers.`
+        ),
+        { code: "ELOCKED", path: lockPath }
+      );
+    }
+    Atomics.wait(waitArray, 0, 0, 10);
+  }
+  heldLocks.add(key);
+  let result;
+  let failed = false;
+  let failure;
+  try {
+    result = run2();
+  } catch (err) {
+    failed = true;
+    failure = err;
+  }
+  heldLocks.delete(key);
+  try {
+    release(lockPath, body, label);
+  } catch (err) {
+    if (!failed) {
+      failed = true;
+      failure = err;
+    }
+  }
+  if (failed) throw failure;
+  return result;
+}
+
+// src/store/salvage.ts
+var salvageLogged = /* @__PURE__ */ new Set();
+function salvageLog(label, message) {
+  if (salvageLogged.has(label)) return;
+  salvageLogged.add(label);
+  console.error(`[deepPairing] ${label}: ${message}`);
 }
 
 // src/store/global-store.ts
@@ -40097,7 +40105,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "revise_artifact",
         annotations: { title: "Revise artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted \u2014 an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted.\n\nREVISING AN EXTERNAL CHANGESET (#343): preserve its full GitHub source provenance, including the exact `headSha`, only when the revised surface still represents that same commit. If the PR changed, fetch the new `headRefOid`, present the new diff with that SHA, and get a fresh verdict. Never carry an old SHA onto new code or omit it to fall back to the branch head.",
+        description: "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted \u2014 an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted.\n\nREVISING AN EXTERNAL CHANGESET (#343): preserve its full GitHub source provenance, including the exact `headSha`, only when the revised surface still represents that same commit. If the PR changed, fetch the new `headRefOid`, present the new diff with that SHA, and get a fresh verdict. Never carry an old SHA onto new code or omit it to fall back to the branch head.\n\nREVISING A DEBRIEF (#572): its brief pin and requirementClaims change as one atomic pair. The pin is the top-level `briefRef: {artifactId}` argument, debrief only; a pin inside `content` is refused. Omit both and the pin and claims carry unchanged. `content.requirementClaims` replaces the whole list (`[]` clears it; nothing is merged), and an omitted `briefRef` keeps the pin. A changed pin needs replacement `content.requirementClaims` in the same call. That omission, an unadmissible pin or `briefRef: null` refuses the whole revision: nothing is written and the earlier version is unchanged.",
         inputSchema: {
           type: "object",
           properties: {
@@ -40111,7 +40119,21 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             title: { type: "string", description: "(supersede only) Updated title. Defaults to the original title when omitted." },
             content: {
               type: "object",
-              description: "(supersede only) Full content for the new version \u2014 same shape as the original present_* tool accepts."
+              description: "(supersede only) Full content for the new version \u2014 same shape as the original present_* tool accepts. For a debrief, `briefRef` is not content: use the top-level argument."
+            },
+            briefRef: {
+              type: "object",
+              description: "(supersede, debrief only) Re-pin the debrief to this exact brief version. Changing the pin needs replacement `content.requirementClaims` in the same call (`[]` is fine). Omit it to keep the current pin. Ignored for other artifact types.",
+              properties: {
+                artifactId: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: MAX_BRIEF_REF_ARTIFACT_ID_LENGTH,
+                  description: "The brief's EXACT artifact id (a present_spec art_ id in this session; each revision has its own id, so this pins one version)."
+                }
+              },
+              required: ["artifactId"],
+              additionalProperties: false
             }
           },
           required: ["artifactId", "mode", "reason"]
