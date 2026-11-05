@@ -24,6 +24,15 @@ export interface FocusStop {
 }
 interface Capture { step: string; atMs: number; screenshot: string; aria: Record<string, string>; visibleText: string }
 interface Assertion { label: string; passed: boolean }
+/** Observational geometry: CSS px from the viewport top, null when not rendered. */
+interface LayoutMeasure {
+  step: string; atMs: number; settled: boolean; viewportHeight: number;
+  mainTop: number | null; mainTopPct: number | null;
+  sidebarTop: number | null; sidebarFirstContentTop: number | null;
+  detailPaneTop: number | null; detailFirstContentTop: number | null;
+  agentsFilterSurface: "menu" | "row" | "none"; sidebarRows: number;
+  openArtifactId: string | null; pendingLead: string | null; nextUpText: string | null;
+}
 interface RuntimeProvenance {
   gitSha: string; trackedWorktreeDirty: boolean; trackedDiffSha256: string;
   daemonEntrySha256: string; distManifestSha256: string; distFiles: number;
@@ -75,7 +84,7 @@ async function runtimeProvenance(): Promise<RuntimeProvenance> {
   const web = await directoryDigest(path.join(packageRoot, "dist/web"));
   const shared = await directoryDigest(path.resolve(packageRoot, "../shared/dist"));
   const harness = [];
-  for (const relative of ["playwright.attention.config.ts", "e2e/attention-walkthrough-harness.ts", "e2e/attention-walkthroughs.walkthrough.ts", "e2e/attention-keyboard.walkthrough.ts"]) {
+  for (const relative of ["playwright.attention.config.ts", "e2e/attention-walkthrough-harness.ts", "e2e/attention-walkthroughs.walkthrough.ts", "e2e/attention-keyboard.walkthrough.ts", "e2e/attention-evidence.walkthrough.ts"]) {
     harness.push({ path: relative, sha256: digest(await fs.readFile(path.join(packageRoot, relative))) });
   }
   return {
@@ -250,6 +259,7 @@ export class AttentionEvidence {
   readonly keys: Array<{ key: string; atMs: number; focused: FocusStop }> = [];
   readonly captures: Capture[] = [];
   readonly assertions: Assertion[] = [];
+  readonly layouts: LayoutMeasure[] = [];
   private readonly started = Date.now();
   private keyboardTruncated = false;
   private pressCount = 0;
@@ -257,6 +267,7 @@ export class AttentionEvidence {
 
   constructor(readonly page: Page, readonly info: TestInfo, readonly row: {
     scenario: WalkthroughCase; mode: "OFF" | "ON"; viewport: { width: number; height: number }; manifest: string[];
+    limitations?: string[];
   }) {}
 
   async observe(theme: "dark" | "light" = "dark"): Promise<void> {
@@ -332,6 +343,49 @@ export class AttentionEvidence {
     this.captures.push({ step, atMs: Date.now() - this.started, screenshot, aria, visibleText: redactDiagnostic(await this.page.locator("body").innerText()).slice(0, LIMITS.visibleText) });
   }
 
+  /** Records geometry without judging it: main top, sidebar and detail
+   * first-content tops stay separate, because a band moved inside <main> changes
+   * the latter two and leaves the first alone. Waits for two identical samples
+   * so an entrance transform isn't measured; `settled` says whether it got them. */
+  async measure(step: string): Promise<void> {
+    const sample = () => this.page.evaluate((limit: number): Omit<LayoutMeasure, "step" | "atMs" | "settled"> => {
+      const topOf = (el: Element | null | undefined): number | null => {
+        const rect = el?.getBoundingClientRect();
+        return rect && rect.height > 0 ? Math.round(rect.top * 100) / 100 : null;
+      };
+      const text = (value: string | null | undefined) => value ? value.replace(/\s+/g, " ").trim().slice(0, limit) : null;
+      const sidebar = document.querySelector('nav[aria-label="Artifacts"]');
+      const panes = document.querySelectorAll("[data-artifact-id]");
+      const pane = panes[panes.length - 1];
+      const firstContent = pane ? Array.from(pane.children).find((child) => child.getBoundingClientRect().height > 0) : undefined;
+      const mainTop = topOf(document.querySelector("main"));
+      return {
+        viewportHeight: window.innerHeight,
+        mainTop,
+        mainTopPct: mainTop === null ? null : Math.round((mainTop / window.innerHeight) * 10_000) / 100,
+        sidebarTop: topOf(sidebar),
+        sidebarFirstContentTop: topOf(sidebar?.querySelector("[data-artifact-item]")),
+        detailPaneTop: topOf(pane),
+        detailFirstContentTop: topOf(firstContent),
+        agentsFilterSurface: document.querySelector('[data-testid="agents-filter-menu"]') ? "menu"
+          : Array.from(document.querySelectorAll("span")).some((span) => span.textContent === "Agents:") ? "row" : "none",
+        sidebarRows: sidebar?.querySelectorAll("[data-artifact-item]").length ?? 0,
+        openArtifactId: pane?.getAttribute("data-artifact-id") ?? null,
+        pendingLead: text(document.querySelector('[data-testid="pending-next"]')?.getAttribute("data-next-copy")),
+        nextUpText: text(document.querySelector('[data-testid="next-up-bar"]')?.textContent),
+      };
+    }, LIMITS.liveText);
+    let current = await sample();
+    let settled = false;
+    for (let i = 0; i < 20 && !settled; i++) {
+      await sleep(100);
+      const next = await sample();
+      settled = JSON.stringify(next) === JSON.stringify(current);
+      current = next;
+    }
+    this.layouts.push({ step, atMs: Date.now() - this.started, settled, ...current });
+  }
+
   async save(status: "passed" | "failed", cleanup: "removed" | "retained", failure?: unknown, executedSeed: readonly unknown[] = [], startups: readonly RuntimeProvenance[] = []): Promise<void> {
     const liveRegions = await this.page.evaluate(() =>
       (window as unknown as { __attentionEvidence?: unknown }).__attentionEvidence ?? { entries: [], truncated: false },
@@ -363,7 +417,9 @@ export class AttentionEvidence {
         "ARIA/live DOM changes are bounded potential-announcement proxies, not accessibility speech; aria-live=off is excluded.",
         "Disconnected sampled after browser-observed outage; the 60-second escalation is not measured.",
         "Tab-search journeys are reproducible automation, not optimal human paths or legacy keystroke-count replication.",
+        ...(this.row.limitations ?? []),
       ],
+      ...(this.layouts.length ? { layout: this.layouts } : {}),
       ...(failure ? { failure: redactDiagnostic(String(failure)).slice(0, 2000) } : {}),
     };
     const file = this.info.outputPath("evidence.v1.json");

@@ -465,9 +465,13 @@ export function ArtifactStatusActions({
           // Review — ONE-SHOT: inline refs re-attach on every render, and
           // re-focusing whenever activeElement is <body> yanked focus (and
           // scroll) back to the chip on any WS-driven re-render.
+          // Only the open artifact's chip may claim it: the previous pane stays
+          // mounted through its exit animation and re-renders on store changes.
+          // Taking focus there loses it to <body> again when that pane unmounts.
           if (
             el &&
             !approvedChipFocusedRef.current &&
+            useArtifactStore.getState().selectedArtifactId === artifact.id &&
             (document.activeElement === document.body || document.activeElement === null)
           ) {
             approvedChipFocusedRef.current = true;
