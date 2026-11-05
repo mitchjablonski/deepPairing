@@ -22,7 +22,7 @@ still needs your eyes.
 
 *No account · no telemetry · everything stays on your disk.*
 
-![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and the agent's turn up top.](docs/assets/review-surface.png)
+![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and whose turn it is up top.](docs/assets/review-surface.png)
 
 **Poor fit:** one-line fixes and throwaway scripts (the review is heavier than
 the change). Fully unattended runs where nobody will look at the UI. Teams that
