@@ -14859,6 +14859,93 @@ var EvidenceSchema = external_exports.object({
 });
 var EvidenceInputSchema = external_exports.union([external_exports.string(), EvidenceSchema]);
 
+// ../shared/dist/schemas/brief-ref.js
+var MAX_SPEC_ID_LENGTH = 64;
+var BriefRefSchema = external_exports.object({
+  artifactId: external_exports.string(),
+  requirementIds: external_exports.array(external_exports.string()).optional(),
+  edgePathIds: external_exports.array(external_exports.string()).optional()
+}).strict();
+
+// ../shared/dist/schemas/requirement-claims.js
+var MAX_REQUIREMENT_CLAIMS = 32;
+var MAX_CLAIM_EVIDENCE = 8;
+var MAX_CLAIM_ID_LENGTH = MAX_SPEC_ID_LENGTH;
+var MAX_REQUIREMENT_CLAIMS_BYTES = 65536;
+var CLAIM_STRING_LIMITS = {
+  ran: 512,
+  sourceRevision: 256,
+  runId: 256,
+  excerpt: 4096,
+  text: 4096,
+  note: 1024,
+  explanation: 2048,
+  notRun: 2048
+};
+var nonblank = (max) => external_exports.string().min(1).max(max).refine((s) => s.trim().length > 0, { message: "must not be blank" });
+var CheckEvidenceSchema = external_exports.object({
+  kind: external_exports.literal("check"),
+  ran: nonblank(CLAIM_STRING_LIMITS.ran).describe("What you ran (command or check name)"),
+  outcome: external_exports.enum(["passed", "failed", "errored", "partial"]),
+  sourceRevision: nonblank(CLAIM_STRING_LIMITS.sourceRevision).optional().describe("The commit / revision you ran it against, if you know it. Omit when you don't: it shows as 'source version unknown'."),
+  runId: nonblank(CLAIM_STRING_LIMITS.runId).optional().describe("A CI run id or similar, if any"),
+  excerpt: nonblank(CLAIM_STRING_LIMITS.excerpt).optional().describe("A short excerpt of the output")
+}).strict();
+var SourceEvidenceSchema = external_exports.object({
+  kind: external_exports.literal("source"),
+  /** Where the work lives. Not whether it works. */
+  evidence: EvidenceInputSchema
+}).strict();
+var ArtifactEvidenceSchema = external_exports.object({
+  kind: external_exports.literal("artifact"),
+  artifactId: nonblank(MAX_CLAIM_ID_LENGTH).describe("An artifact in this session (e.g. the changeset): shows the code changed, nothing more"),
+  note: nonblank(CLAIM_STRING_LIMITS.note).optional()
+}).strict();
+var ObservationEvidenceSchema = external_exports.object({
+  kind: external_exports.literal("observation"),
+  text: nonblank(CLAIM_STRING_LIMITS.text).describe("What you observed"),
+  sourceRevision: nonblank(CLAIM_STRING_LIMITS.sourceRevision).optional()
+}).strict();
+var ClaimEvidenceSchema = external_exports.discriminatedUnion("kind", [
+  CheckEvidenceSchema,
+  SourceEvidenceSchema,
+  ArtifactEvidenceSchema,
+  ObservationEvidenceSchema
+]);
+var RequirementClaimSchema = external_exports.object({
+  requirementId: nonblank(MAX_CLAIM_ID_LENGTH).describe("The pinned brief's requirements[].id, exactly as written (no trimming; matched exactly, never by position)"),
+  claim: external_exports.enum(["met", "unmet", "unknown"]).describe("Your account: met = you believe you handled it (needs evidence); unmet = you didn't; unknown = you can't tell"),
+  evidence: external_exports.array(ClaimEvidenceSchema).max(MAX_CLAIM_EVIDENCE).optional(),
+  notRun: nonblank(CLAIM_STRING_LIMITS.notRun).optional().describe("What you did NOT run and why. May sit next to evidence (a partial run). Never replaces evidence on a met claim."),
+  explanation: nonblank(CLAIM_STRING_LIMITS.explanation).optional()
+}).strict().superRefine((c, ctx) => {
+  const hasEvidence = (c.evidence?.length ?? 0) > 0;
+  if (c.claim === "met" && !hasEvidence) {
+    ctx.addIssue({ code: "custom", path: ["evidence"], message: "a met claim needs at least one evidence item (notRun or explanation never substitutes)" });
+  }
+  if (c.claim !== "met" && !hasEvidence && c.notRun === void 0 && c.explanation === void 0) {
+    ctx.addIssue({ code: "custom", path: ["claim"], message: `an ${c.claim} claim needs evidence, notRun or explanation` });
+  }
+});
+function requirementClaimsByteLength(raw) {
+  const json2 = JSON.stringify(raw);
+  return json2 === void 0 ? 0 : new TextEncoder().encode(json2).length;
+}
+var RequirementClaimsSchema = external_exports.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list, ctx) => {
+  const seen = /* @__PURE__ */ new Map();
+  list.forEach((c, i) => {
+    const first = seen.get(c.requirementId);
+    if (first !== void 0) {
+      ctx.addIssue({ code: "custom", path: [i, "requirementId"], message: `duplicate requirementId (also claim ${first}); one claim per requirement` });
+    } else
+      seen.set(c.requirementId, i);
+  });
+  const bytes = requirementClaimsByteLength(list);
+  if (bytes > MAX_REQUIREMENT_CLAIMS_BYTES) {
+    ctx.addIssue({ code: "custom", path: [], message: `requirementClaims is ${bytes} bytes serialized (at most ${MAX_REQUIREMENT_CLAIMS_BYTES})` });
+  }
+}).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
+
 // ../shared/dist/schemas/content-types.js
 var FindingSeveritySchema = external_exports.enum(["info", "low", "medium", "high", "critical"]);
 var FindingSchema = external_exports.object({
@@ -15294,7 +15381,15 @@ var DebriefContentSchema = external_exports.object({
    * we built"). Reuses PlanVisualSchema via the shared <ArtifactVisuals> so
    * region-comments work. Optional; before R4 it was silently stripped at parse.
    */
-  visuals: external_exports.array(PlanVisualSchema).optional()
+  visuals: external_exports.array(PlanVisualSchema).optional(),
+  /**
+   * #572 slice B1 — the agent's requirement claims against the debrief's
+   * pinned brief (the artifact-level `briefRef`). Agent-reported account,
+   * never acceptance. Strict admission policy (requirement-claims.ts); a
+   * saved list is read through `readRequirementClaims`, never rewritten.
+   * Optional; absent → the stored JSON is byte-identical to before.
+   */
+  requirementClaims: RequirementClaimsSchema.optional()
 });
 var ExplainerSectionSchema = external_exports.object({
   // `.min(1)` — an untitled section in an ordered reading-list is degenerate
@@ -15346,13 +15441,6 @@ var ExplainerContentSchema = external_exports.object({
    */
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
-
-// ../shared/dist/schemas/brief-ref.js
-var BriefRefSchema = external_exports.object({
-  artifactId: external_exports.string(),
-  requirementIds: external_exports.array(external_exports.string()).optional(),
-  edgePathIds: external_exports.array(external_exports.string()).optional()
-}).strict();
 
 // ../shared/dist/schemas/stance-exception.js
 var StanceRefSchema = external_exports.object({

@@ -25008,6 +25008,244 @@ var EvidenceSchema = external_exports.object({
 });
 var EvidenceInputSchema = external_exports.union([external_exports.string(), EvidenceSchema]);
 
+// ../shared/dist/schemas/brief-ref.js
+var MAX_SPEC_ID_LENGTH = 64;
+var MAX_BRIEF_REF_IDS = 8;
+var MAX_BRIEF_REF_ARTIFACT_ID_LENGTH = 64;
+var BriefRefSchema = external_exports.object({
+  artifactId: external_exports.string(),
+  requirementIds: external_exports.array(external_exports.string()).optional(),
+  edgePathIds: external_exports.array(external_exports.string()).optional()
+}).strict();
+var REF_KEYS = /* @__PURE__ */ new Set(["artifactId", "requirementIds", "edgePathIds"]);
+function show(s) {
+  return JSON.stringify(s.length > 40 ? `${s.slice(0, 40)}\u2026` : s);
+}
+function listProblems(raw, field2, problems) {
+  if (raw === void 0)
+    return;
+  if (!Array.isArray(raw)) {
+    problems.push(`${field2} must be an array of ids`);
+    return;
+  }
+  if (raw.length > MAX_BRIEF_REF_IDS)
+    problems.push(`${field2} has ${raw.length} ids (at most ${MAX_BRIEF_REF_IDS})`);
+  const seen = /* @__PURE__ */ new Set();
+  raw.forEach((id, i) => {
+    if (typeof id !== "string") {
+      problems.push(`${field2}[${i}] must be a string`);
+      return;
+    }
+    if (id.trim().length === 0)
+      problems.push(`${field2}[${i}] is blank`);
+    else if (id.length > MAX_SPEC_ID_LENGTH)
+      problems.push(`${field2}[${i}] ${show(id)} is ${id.length} characters (at most ${MAX_SPEC_ID_LENGTH})`);
+    if (seen.has(id))
+      problems.push(`${field2}[${i}] ${show(id)} is listed twice`);
+    seen.add(id);
+  });
+}
+function briefRefProblems(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return ["briefRef must be an object {artifactId, requirementIds?, edgePathIds?}"];
+  }
+  const obj2 = raw;
+  const problems = [];
+  for (const k of Object.keys(obj2))
+    if (!REF_KEYS.has(k))
+      problems.push(`unknown key ${show(k)}`);
+  const id = obj2.artifactId;
+  if (typeof id !== "string")
+    problems.push("artifactId must be a string");
+  else if (id.trim().length === 0)
+    problems.push("artifactId is blank");
+  else if (id.length > MAX_BRIEF_REF_ARTIFACT_ID_LENGTH)
+    problems.push(`artifactId is ${id.length} characters (at most ${MAX_BRIEF_REF_ARTIFACT_ID_LENGTH})`);
+  listProblems(obj2.requirementIds, "requirementIds", problems);
+  listProblems(obj2.edgePathIds, "edgePathIds", problems);
+  return problems;
+}
+function readBriefRef(raw) {
+  if (raw === void 0)
+    return void 0;
+  const parsed = BriefRefSchema.safeParse(raw);
+  if (parsed.success && briefRefProblems(raw).length === 0)
+    return { ok: true, ref: parsed.data };
+  const rawId = raw && typeof raw === "object" && typeof raw.artifactId === "string" ? raw.artifactId : void 0;
+  return { ok: false, ...rawId !== void 0 ? { rawId } : {} };
+}
+function carryableBriefRef(raw) {
+  if (raw === void 0)
+    return void 0;
+  const parsed = BriefRefSchema.safeParse(raw);
+  return parsed.success ? parsed.data : void 0;
+}
+function matchBriefGrain(rows, id) {
+  if (!Array.isArray(rows))
+    return "unknown";
+  let n = 0;
+  for (const row of rows) {
+    if (row && typeof row === "object" && row.id === id)
+      n++;
+  }
+  return n === 0 ? "unknown" : n === 1 ? "known" : "ambiguous";
+}
+var BRIEF_CLOSED_STATUSES = /* @__PURE__ */ new Set(["superseded", "rejected", "retracted", "obsolete"]);
+function describeBriefPin(ref, artifacts, sessionId) {
+  const brief = artifacts.find((a) => a.id === ref.artifactId && a.sessionId === sessionId && a.type === "spec");
+  const ids = (list2, kind, rows) => (list2 ?? []).map((id) => brief ? { kind, id, match: matchBriefGrain(rows, id) } : { kind, id });
+  const content = brief?.content;
+  const grains = [
+    ...ids(ref.requirementIds, "requirement", content?.requirements),
+    ...ids(ref.edgePathIds, "edgePath", content?.edgePaths)
+  ];
+  if (!brief)
+    return { artifactId: ref.artifactId, available: false, closed: false, grains };
+  return {
+    artifactId: ref.artifactId,
+    available: true,
+    title: brief.title,
+    version: brief.version,
+    status: brief.status,
+    closed: BRIEF_CLOSED_STATUSES.has(brief.status),
+    grains
+  };
+}
+function grainLabel(g) {
+  const name = g.kind === "edgePath" ? `edge path ${g.id}` : g.id;
+  return g.match === "unknown" ? `${name} (unknown)` : g.match === "ambiguous" ? `${name} (ambiguous)` : name;
+}
+function formatBriefPin(view, role = "exception") {
+  const grains = view.grains.length > 0 ? ` \xB7 ${view.grains.map(grainLabel).join(", ")}` : "";
+  const lead = role === "account" ? "Agent's account against" : "Exception to";
+  if (!view.available)
+    return `${lead} brief ${view.artifactId} (version unknown, brief unavailable)${grains}`;
+  const status = role === "account" ? ` (${view.status})` : view.closed ? ` (${view.status})` : "";
+  return `${lead} "${view.title}" v${view.version}${grains}${status}`;
+}
+
+// ../shared/dist/schemas/requirement-claims.js
+var MAX_REQUIREMENT_CLAIMS = 32;
+var MAX_CLAIM_EVIDENCE = 8;
+var MAX_CLAIM_ID_LENGTH = MAX_SPEC_ID_LENGTH;
+var MAX_REQUIREMENT_CLAIMS_BYTES = 65536;
+var CLAIM_STRING_LIMITS = {
+  ran: 512,
+  sourceRevision: 256,
+  runId: 256,
+  excerpt: 4096,
+  text: 4096,
+  note: 1024,
+  explanation: 2048,
+  notRun: 2048
+};
+var nonblank = (max) => external_exports.string().min(1).max(max).refine((s) => s.trim().length > 0, { message: "must not be blank" });
+var CheckEvidenceSchema = external_exports.object({
+  kind: external_exports.literal("check"),
+  ran: nonblank(CLAIM_STRING_LIMITS.ran).describe("What you ran (command or check name)"),
+  outcome: external_exports.enum(["passed", "failed", "errored", "partial"]),
+  sourceRevision: nonblank(CLAIM_STRING_LIMITS.sourceRevision).optional().describe("The commit / revision you ran it against, if you know it. Omit when you don't: it shows as 'source version unknown'."),
+  runId: nonblank(CLAIM_STRING_LIMITS.runId).optional().describe("A CI run id or similar, if any"),
+  excerpt: nonblank(CLAIM_STRING_LIMITS.excerpt).optional().describe("A short excerpt of the output")
+}).strict();
+var SourceEvidenceSchema = external_exports.object({
+  kind: external_exports.literal("source"),
+  /** Where the work lives. Not whether it works. */
+  evidence: EvidenceInputSchema
+}).strict();
+var ArtifactEvidenceSchema = external_exports.object({
+  kind: external_exports.literal("artifact"),
+  artifactId: nonblank(MAX_CLAIM_ID_LENGTH).describe("An artifact in this session (e.g. the changeset): shows the code changed, nothing more"),
+  note: nonblank(CLAIM_STRING_LIMITS.note).optional()
+}).strict();
+var ObservationEvidenceSchema = external_exports.object({
+  kind: external_exports.literal("observation"),
+  text: nonblank(CLAIM_STRING_LIMITS.text).describe("What you observed"),
+  sourceRevision: nonblank(CLAIM_STRING_LIMITS.sourceRevision).optional()
+}).strict();
+var ClaimEvidenceSchema = external_exports.discriminatedUnion("kind", [
+  CheckEvidenceSchema,
+  SourceEvidenceSchema,
+  ArtifactEvidenceSchema,
+  ObservationEvidenceSchema
+]);
+var RequirementClaimSchema = external_exports.object({
+  requirementId: nonblank(MAX_CLAIM_ID_LENGTH).describe("The pinned brief's requirements[].id, exactly as written (no trimming; matched exactly, never by position)"),
+  claim: external_exports.enum(["met", "unmet", "unknown"]).describe("Your account: met = you believe you handled it (needs evidence); unmet = you didn't; unknown = you can't tell"),
+  evidence: external_exports.array(ClaimEvidenceSchema).max(MAX_CLAIM_EVIDENCE).optional(),
+  notRun: nonblank(CLAIM_STRING_LIMITS.notRun).optional().describe("What you did NOT run and why. May sit next to evidence (a partial run). Never replaces evidence on a met claim."),
+  explanation: nonblank(CLAIM_STRING_LIMITS.explanation).optional()
+}).strict().superRefine((c, ctx) => {
+  const hasEvidence = (c.evidence?.length ?? 0) > 0;
+  if (c.claim === "met" && !hasEvidence) {
+    ctx.addIssue({ code: "custom", path: ["evidence"], message: "a met claim needs at least one evidence item (notRun or explanation never substitutes)" });
+  }
+  if (c.claim !== "met" && !hasEvidence && c.notRun === void 0 && c.explanation === void 0) {
+    ctx.addIssue({ code: "custom", path: ["claim"], message: `an ${c.claim} claim needs evidence, notRun or explanation` });
+  }
+});
+function requirementClaimsByteLength(raw) {
+  const json2 = JSON.stringify(raw);
+  return json2 === void 0 ? 0 : new TextEncoder().encode(json2).length;
+}
+var RequirementClaimsSchema = external_exports.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list2, ctx) => {
+  const seen = /* @__PURE__ */ new Map();
+  list2.forEach((c, i) => {
+    const first = seen.get(c.requirementId);
+    if (first !== void 0) {
+      ctx.addIssue({ code: "custom", path: [i, "requirementId"], message: `duplicate requirementId (also claim ${first}); one claim per requirement` });
+    } else
+      seen.set(c.requirementId, i);
+  });
+  const bytes = requirementClaimsByteLength(list2);
+  if (bytes > MAX_REQUIREMENT_CLAIMS_BYTES) {
+    ctx.addIssue({ code: "custom", path: [], message: `requirementClaims is ${bytes} bytes serialized (at most ${MAX_REQUIREMENT_CLAIMS_BYTES})` });
+  }
+}).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
+var CLAIMS_ORIGIN_KEY = "claimsOriginArtifactId";
+var BRIEF_REF_DIAGNOSTIC_KEY = "briefRefDiagnostic";
+var SERVER_SET_DEBRIEF_KEYS = [CLAIMS_ORIGIN_KEY, BRIEF_REF_DIAGNOSTIC_KEY];
+function briefRefDiagnosticFor(raw, reason) {
+  const id = raw && typeof raw === "object" && !Array.isArray(raw) ? raw.artifactId : void 0;
+  return typeof id === "string" && id.length > 0 && id.length <= MAX_CLAIM_ID_LENGTH ? { attemptedArtifactId: id, reason } : { reason };
+}
+function readRequirementClaims(raw) {
+  if (raw === void 0)
+    return { kind: "none" };
+  const parsed = RequirementClaimsSchema.safeParse(raw);
+  if (parsed.success)
+    return { kind: "ok", claims: parsed.data };
+  if (Array.isArray(raw)) {
+    const ids = raw.map((c) => c && typeof c === "object" ? c.requirementId : void 0);
+    const dup = [...new Set(ids.filter((id, i) => typeof id === "string" && ids.indexOf(id) !== i))];
+    if (dup.length > 0 && raw.every((c) => RequirementClaimSchema.safeParse(c).success))
+      return { kind: "duplicate", ids: dup };
+  }
+  return { kind: "unreadable" };
+}
+function decodeClaimSectionKey(key) {
+  return key.replace(/%([0-9A-F]{4})/g, (_m, hex3) => String.fromCharCode(parseInt(hex3, 16)));
+}
+function resolveDebriefPin(rawRef, artifacts, sessionId) {
+  const read = readBriefRef(rawRef);
+  if (read === void 0)
+    return { state: "none" };
+  if (!read.ok)
+    return { state: "unreadable", ...read.rawId !== void 0 ? { rawId: read.rawId } : {} };
+  const ref = read.ref;
+  if (ref.requirementIds !== void 0 || ref.edgePathIds !== void 0)
+    return { state: "unreadable", rawId: ref.artifactId };
+  const matches = artifacts.filter((a) => a.sessionId === sessionId && a.id === ref.artifactId);
+  if (matches.length === 0)
+    return { state: "unavailable", artifactId: ref.artifactId, why: "missing" };
+  if (matches.length > 1)
+    return { state: "unavailable", artifactId: ref.artifactId, why: "duplicate" };
+  const brief = matches[0];
+  if (brief.type !== "spec")
+    return { state: "unavailable", artifactId: ref.artifactId, why: "not_a_spec" };
+  return { state: "ready", artifactId: ref.artifactId, view: describeBriefPin(ref, [brief], sessionId), brief };
+}
+
 // ../shared/dist/schemas/content-types.js
 var FindingSeveritySchema = external_exports.enum(["info", "low", "medium", "high", "critical"]);
 var FindingSchema = external_exports.object({
@@ -25447,7 +25685,15 @@ var DebriefContentSchema = external_exports.object({
    * we built"). Reuses PlanVisualSchema via the shared <ArtifactVisuals> so
    * region-comments work. Optional; before R4 it was silently stripped at parse.
    */
-  visuals: external_exports.array(PlanVisualSchema).optional()
+  visuals: external_exports.array(PlanVisualSchema).optional(),
+  /**
+   * #572 slice B1 — the agent's requirement claims against the debrief's
+   * pinned brief (the artifact-level `briefRef`). Agent-reported account,
+   * never acceptance. Strict admission policy (requirement-claims.ts); a
+   * saved list is read through `readRequirementClaims`, never rewritten.
+   * Optional; absent → the stored JSON is byte-identical to before.
+   */
+  requirementClaims: RequirementClaimsSchema.optional()
 });
 var ExplainerSectionSchema = external_exports.object({
   // `.min(1)` — an untitled section in an ordered reading-list is degenerate
@@ -25499,121 +25745,6 @@ var ExplainerContentSchema = external_exports.object({
    */
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
-
-// ../shared/dist/schemas/brief-ref.js
-var MAX_SPEC_ID_LENGTH = 64;
-var MAX_BRIEF_REF_IDS = 8;
-var MAX_BRIEF_REF_ARTIFACT_ID_LENGTH = 64;
-var BriefRefSchema = external_exports.object({
-  artifactId: external_exports.string(),
-  requirementIds: external_exports.array(external_exports.string()).optional(),
-  edgePathIds: external_exports.array(external_exports.string()).optional()
-}).strict();
-var REF_KEYS = /* @__PURE__ */ new Set(["artifactId", "requirementIds", "edgePathIds"]);
-function show(s) {
-  return JSON.stringify(s.length > 40 ? `${s.slice(0, 40)}\u2026` : s);
-}
-function listProblems(raw, field2, problems) {
-  if (raw === void 0)
-    return;
-  if (!Array.isArray(raw)) {
-    problems.push(`${field2} must be an array of ids`);
-    return;
-  }
-  if (raw.length > MAX_BRIEF_REF_IDS)
-    problems.push(`${field2} has ${raw.length} ids (at most ${MAX_BRIEF_REF_IDS})`);
-  const seen = /* @__PURE__ */ new Set();
-  raw.forEach((id, i) => {
-    if (typeof id !== "string") {
-      problems.push(`${field2}[${i}] must be a string`);
-      return;
-    }
-    if (id.trim().length === 0)
-      problems.push(`${field2}[${i}] is blank`);
-    else if (id.length > MAX_SPEC_ID_LENGTH)
-      problems.push(`${field2}[${i}] ${show(id)} is ${id.length} characters (at most ${MAX_SPEC_ID_LENGTH})`);
-    if (seen.has(id))
-      problems.push(`${field2}[${i}] ${show(id)} is listed twice`);
-    seen.add(id);
-  });
-}
-function briefRefProblems(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return ["briefRef must be an object {artifactId, requirementIds?, edgePathIds?}"];
-  }
-  const obj2 = raw;
-  const problems = [];
-  for (const k of Object.keys(obj2))
-    if (!REF_KEYS.has(k))
-      problems.push(`unknown key ${show(k)}`);
-  const id = obj2.artifactId;
-  if (typeof id !== "string")
-    problems.push("artifactId must be a string");
-  else if (id.trim().length === 0)
-    problems.push("artifactId is blank");
-  else if (id.length > MAX_BRIEF_REF_ARTIFACT_ID_LENGTH)
-    problems.push(`artifactId is ${id.length} characters (at most ${MAX_BRIEF_REF_ARTIFACT_ID_LENGTH})`);
-  listProblems(obj2.requirementIds, "requirementIds", problems);
-  listProblems(obj2.edgePathIds, "edgePathIds", problems);
-  return problems;
-}
-function readBriefRef(raw) {
-  if (raw === void 0)
-    return void 0;
-  const parsed = BriefRefSchema.safeParse(raw);
-  if (parsed.success && briefRefProblems(raw).length === 0)
-    return { ok: true, ref: parsed.data };
-  const rawId = raw && typeof raw === "object" && typeof raw.artifactId === "string" ? raw.artifactId : void 0;
-  return { ok: false, ...rawId !== void 0 ? { rawId } : {} };
-}
-function carryableBriefRef(raw) {
-  if (raw === void 0)
-    return void 0;
-  const parsed = BriefRefSchema.safeParse(raw);
-  return parsed.success ? parsed.data : void 0;
-}
-function matchBriefGrain(rows, id) {
-  if (!Array.isArray(rows))
-    return "unknown";
-  let n = 0;
-  for (const row of rows) {
-    if (row && typeof row === "object" && row.id === id)
-      n++;
-  }
-  return n === 0 ? "unknown" : n === 1 ? "known" : "ambiguous";
-}
-var BRIEF_CLOSED_STATUSES = /* @__PURE__ */ new Set(["superseded", "rejected", "retracted", "obsolete"]);
-function describeBriefPin(ref, artifacts, sessionId) {
-  const brief = artifacts.find((a) => a.id === ref.artifactId && a.sessionId === sessionId && a.type === "spec");
-  const ids = (list2, kind, rows) => (list2 ?? []).map((id) => brief ? { kind, id, match: matchBriefGrain(rows, id) } : { kind, id });
-  const content = brief?.content;
-  const grains = [
-    ...ids(ref.requirementIds, "requirement", content?.requirements),
-    ...ids(ref.edgePathIds, "edgePath", content?.edgePaths)
-  ];
-  if (!brief)
-    return { artifactId: ref.artifactId, available: false, closed: false, grains };
-  return {
-    artifactId: ref.artifactId,
-    available: true,
-    title: brief.title,
-    version: brief.version,
-    status: brief.status,
-    closed: BRIEF_CLOSED_STATUSES.has(brief.status),
-    grains
-  };
-}
-function grainLabel(g) {
-  const name = g.kind === "edgePath" ? `edge path ${g.id}` : g.id;
-  return g.match === "unknown" ? `${name} (unknown)` : g.match === "ambiguous" ? `${name} (ambiguous)` : name;
-}
-function formatBriefPin(view) {
-  const grains = view.grains.length > 0 ? ` \xB7 ${view.grains.map(grainLabel).join(", ")}` : "";
-  if (!view.available)
-    return `Exception to brief ${view.artifactId} (version unknown, brief unavailable)${grains}`;
-  const closed = view.closed ? ` (${view.status})` : "";
-  return `Exception to "${view.title}" v${view.version}${grains}${closed}`;
-}
 
 // ../shared/dist/schemas/stance-exception.js
 var StanceRefSchema = external_exports.object({
@@ -29298,6 +29429,8 @@ function debriefItemTitle(art, lane, i) {
 }
 function describeDebriefSection(sectionId, art) {
   const key = sectionId.slice("debrief:".length);
+  if (key.startsWith("claim:")) return `requirement claim ${JSON.stringify(decodeClaimSectionKey(key.slice("claim:".length)))} (the agent's account)`;
+  if (key === "claims") return "requirement claims (the agent's account)";
   const numeric = /^(?:section:)?(\d+)$/.exec(key);
   if (numeric) return `section #${Number(numeric[1]) + 1}`;
   const item = /^([a-z][a-z-]*):(\d+)$/.exec(key);
@@ -32085,6 +32218,35 @@ function validatePresentDebriefInput(args) {
   if (!titleParse.success) {
     return { ok: false, error: formatValidationError("present_debrief", titleParse.error, EXAMPLE_DEBRIEF, args) };
   }
+  const forged = SERVER_SET_DEBRIEF_KEYS.filter((k) => args && typeof args === "object" && Object.prototype.hasOwnProperty.call(args, k));
+  if (forged.length > 0) {
+    return {
+      ok: false,
+      error: {
+        content: [{ type: "text", text: `INPUT_VALIDATION_FAILED: present_debrief refused \u2014 ${forged.map((k) => `\`${k}\``).join(", ")} ${forged.length === 1 ? "is" : "are"} set by the server, never by the caller. Remove ${forged.length === 1 ? "it" : "them"} (when revising, don't echo ${forged.length === 1 ? "it" : "them"} back from the earlier version) and call again. The artifact was NOT created.` }],
+        isError: true,
+        _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
+      }
+    };
+  }
+  if (args && typeof args === "object" && args.requirementClaims !== void 0) {
+    const claims = RequirementClaimsSchema.safeParse(args.requirementClaims);
+    if (!claims.success) {
+      const lines = claims.error.issues.slice(0, 6).map((i) => `  \u2022 requirementClaims${i.path.map((p) => typeof p === "number" ? `[${p}]` : `.${String(p)}`).join("")}: ${i.message}`);
+      const more = claims.error.issues.length > 6 ? `
+  \u2022 \u2026and ${claims.error.issues.length - 6} more` : "";
+      return {
+        ok: false,
+        error: {
+          content: [{ type: "text", text: `INPUT_VALIDATION_FAILED: present_debrief refused \u2014 requirementClaims is invalid, so nothing was saved (a claim list is accepted whole or not at all):
+${lines.join("\n")}${more}
+Each claim: {requirementId, claim: "met"|"unmet"|"unknown", evidence?, notRun?, explanation?}; met needs evidence; unmet/unknown need evidence, notRun or explanation; one claim per requirementId; no extra keys or nulls. Fix it and call again. The artifact was NOT created.` }],
+          isError: true,
+          _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
+        }
+      };
+    }
+  }
   const contentParse = DebriefContentSchema.safeParse({
     summary: args?.summary,
     // S1 — accept the explainer's `heading` spelling on a debrief section and
@@ -32096,7 +32258,10 @@ function validatePresentDebriefInput(args) {
     deferred: args?.deferred,
     openQuestions: args?.openQuestions,
     // R4 P-B — visuals framing the debrief.
-    visuals: aliasPlanVisuals(args?.visuals)
+    visuals: aliasPlanVisuals(args?.visuals),
+    // #572 B1 — strict, whole-list admission (requirement-claims.ts): a
+    // malformed, duplicate or over-cap claim fails the call; nothing partial.
+    requirementClaims: args?.requirementClaims
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF, args) };
@@ -32149,6 +32314,9 @@ var BRIEF_REF = external_exports.object({
   requirementIds: external_exports.array(BRIEF_ID).max(MAX_BRIEF_REF_IDS).optional().describe("The brief's requirements[].id values this card deviates from"),
   edgePathIds: external_exports.array(BRIEF_ID).max(MAX_BRIEF_REF_IDS).optional().describe("The brief's edgePaths[].id values this card concerns")
 }).optional().describe("Exception to a brief: name the governing brief version and the requirement it deviates from. A declared link, not drift detection. A bad or unknown ref is dropped with a warning; the card is still presented. To re-brief, present a new card against the new brief's id.");
+var DEBRIEF_BRIEF_REF = external_exports.object({
+  artifactId: external_exports.string().min(1).max(MAX_BRIEF_REF_ARTIFACT_ID_LENGTH).describe("The brief's EXACT artifact id (a present_spec art_ id; each revision has its own id, so this pins one version)")
+}).strict().optional().describe("The brief this debrief accounts against. Pair it with requirementClaims. A bad or unknown ref is dropped with a warning (noted on the debrief); the debrief is still presented.");
 var TOOL_INPUT_SCHEMAS = {
   // #206 (I1) — `feature` is advertised on EVERY artifact-creating tool (the
   // whole point of slice 2: tag at the source so grouping recall stops leaking).
@@ -32191,7 +32359,7 @@ var TOOL_INPUT_SCHEMAS = {
   present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY, briefRef: DEBRIEF_BRIEF_REF }),
   // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
   // non-empty `sections[]` are the required core; `title` lives IN the content
   // schema (it doubles as the artifact title). G1 (#198b) adds the optional
@@ -33277,7 +33445,7 @@ function beat(at, seq, html) {
   return { at: at ?? "", seq, html };
 }
 function artifactBeat(a, ctx, seq) {
-  const own = (ctx.commentsByArtifact.get(a.id) ?? []).slice();
+  const own2 = (ctx.commentsByArtifact.get(a.id) ?? []).slice();
   const notShipped = NOT_SHIPPED.has(a.status);
   const unapproved = unapprovedNote(a.status);
   const title = escText(a.title || a.type);
@@ -33286,12 +33454,12 @@ function artifactBeat(a, ctx, seq) {
   const unapprovedChip = unapproved ? `<span class="chip chip--unapproved">${esc2(unapproved.badge)}</span>` : "";
   const external = externalSourceOf(a);
   const externalBanner = external ? `<p class="external-note">External review \u2014 this is <strong>${esc2(prLabel(external))}</strong>, someone else's code read on this surface. Any verdict below was the reviewer's opinion, recorded locally; it did not land, merge or post anything unless it was posted to the PR separately.</p>` : "";
-  const body = artifactBody(a, ctx, own);
+  const body = artifactBody(a, ctx, own2);
   const classes = `beat beat--artifact${notShipped ? " beat--not-shipped" : ""}${unapproved ? " beat--unapproved" : ""}${external ? " beat--external" : ""}`;
   return beat(
     a.createdAt,
     seq,
-    `<li class="${classes}" id="artifact-${esc2(a.id)}"><div class="beat-head"><time>${esc2(fmtTimestamp(a.createdAt))}</time><span class="chip chip--type">${esc2(a.type)}</span>${version2}${unapprovedChip}${external ? `<span class="chip chip--external">external review</span>` : ""}</div><h3>${heading}</h3>${verdictLine(a, ctx.state)}${externalBanner}<div class="beat-body">${body}</div>` + threadHtml(own, ctx.includeCode, ctx.projectRoot) + `</li>`
+    `<li class="${classes}" id="artifact-${esc2(a.id)}"><div class="beat-head"><time>${esc2(fmtTimestamp(a.createdAt))}</time><span class="chip chip--type">${esc2(a.type)}</span>${version2}${unapprovedChip}${external ? `<span class="chip chip--external">external review</span>` : ""}</div><h3>${heading}</h3>${verdictLine(a, ctx.state)}${externalBanner}<div class="beat-body">${body}</div>` + threadHtml(own2, ctx.includeCode, ctx.projectRoot) + `</li>`
   );
 }
 function statusBeat(event, seq) {
@@ -35091,6 +35259,41 @@ function frozenBriefRefOf(candidates) {
   }
   return value ? { found: true, ref: value } : { found: true };
 }
+var DEBRIEF_DROPPED = "briefRef dropped, so this debrief has no brief link:";
+var DROP_TEXT = {
+  invalid_ref: () => "the ref is malformed",
+  grain_ids_not_allowed: () => "a debrief's briefRef is {artifactId} only. Report per-requirement status in requirementClaims instead of requirementIds/edgePathIds",
+  artifacts_unreadable: (id) => `this session's artifacts couldn't be read to check ${id}`,
+  not_in_session: (id) => `${id} is not an artifact in this session. Other sessions aren't searched`,
+  not_a_spec: (id) => `${id} is not a brief (a present_spec artifact)`,
+  ambiguous_target: (id) => `more than one artifact in this session has the id ${id}, so the link can't name one version`
+};
+function normalizeDebriefBriefRef(raw, artifacts, sessionId) {
+  if (raw === void 0) return { notes: [] };
+  const drop = (reason, extra = "") => {
+    const diagnostic = briefRefDiagnosticFor(raw, reason);
+    const id2 = diagnostic.attemptedArtifactId ?? "the given id";
+    return { diagnostic, notes: [`${DEBRIEF_DROPPED} ${DROP_TEXT[reason](id2)}${extra}. The debrief itself was presented; any requirement claims are kept as unattributed (no brief, so no coverage). The rejected link is noted on the debrief.`] };
+  };
+  const problems = briefRefProblems(raw);
+  if (problems.length > 0) return drop("invalid_ref", ` (${problems.join("; ")})`);
+  const shape = raw;
+  if (shape.requirementIds !== void 0 || shape.edgePathIds !== void 0) return drop("grain_ids_not_allowed");
+  const id = raw.artifactId;
+  const sameSession = (artifacts ?? []).filter((a) => a.id === id && a.sessionId === sessionId);
+  if (sameSession.length > 1) return drop("ambiguous_target");
+  const canonical2 = normalizeNewBriefRef(raw, artifacts, sessionId);
+  if (!canonical2.ref) {
+    if (!artifacts) return drop("artifacts_unreadable");
+    return drop(sameSession.length === 0 ? "not_in_session" : sameSession[0].type !== "spec" ? "not_a_spec" : "ambiguous_target");
+  }
+  const view = describeBriefPin(canonical2.ref, sameSession, sessionId);
+  const notes = [`Linked: ${formatBriefPin(view, "account")}. A declared link: your claims are your account, not acceptance.`];
+  if (view.closed) {
+    notes.push(`The pinned brief ${canonical2.ref.artifactId} (v${view.version}) is ${view.status}. The link stays on that exact version and was not moved to a newer one.`);
+  }
+  return { ref: canonical2.ref, notes };
+}
 
 // src/mcp/stance-admission.ts
 var STANCE_MESSAGES = {
@@ -35611,14 +35814,14 @@ function feedbackStoreView(store, opts) {
     };
   }
   if (filter) {
-    const own = (read, artifactOf) => async () => {
+    const own2 = (read, artifactOf) => async () => {
       const rows = await read() ?? [];
       const owner = await ownership();
       return rows.filter((x) => owner(artifactOf(x)) === null);
     };
-    overrides.getArtifacts = own(() => allArtifacts(), (a) => a.id);
-    overrides.getPendingDecisions = own(() => store.getPendingDecisions(), (d) => d.artifactId);
-    overrides.getPendingPlanReviews = own(() => store.getPendingPlanReviews(), (p) => p.artifactId);
+    overrides.getArtifacts = own2(() => allArtifacts(), (a) => a.id);
+    overrides.getPendingDecisions = own2(() => store.getPendingDecisions(), (d) => d.artifactId);
+    overrides.getPendingPlanReviews = own2(() => store.getPendingPlanReviews(), (p) => p.artifactId);
     overrides.getFullState = async () => {
       const full = await store.getFullState();
       const owner = await ownership();
@@ -37520,6 +37723,75 @@ function writeReshapeScope(args) {
   }
 }
 
+// src/mcp/requirement-claims.ts
+function claimWriteNotes(claims, ref, artifacts, sessionId) {
+  if (claims.length === 0) return [];
+  const n = `${claims.length} requirement claim${claims.length === 1 ? "" : "s"}`;
+  const pin = ref ? resolveDebriefPin(ref, artifacts, sessionId) : { state: "none" };
+  if (pin.state !== "ready") {
+    return [`${n} saved with no usable brief link, so ${claims.length === 1 ? "it shows" : "they show"} as unattributed, never as coverage. Pin the brief (briefRef) on a revision to attribute them.`];
+  }
+  const rows = pin.brief.content.requirements;
+  const notes = [`${n} saved as your account against ${pin.artifactId} v${pin.view.version}. Your pair sees them as agent-reported claims, not acceptance.`];
+  for (const c of claims) {
+    const match = matchBriefGrain(rows, c.requirementId);
+    if (match === "unknown") notes.push(`requirement ${JSON.stringify(c.requirementId)} isn't in ${pin.artifactId} v${pin.view.version}. The claim is kept and marked unknown.`);
+    if (match === "ambiguous") notes.push(`requirement ${JSON.stringify(c.requirementId)} matches more than one row in ${pin.artifactId} v${pin.view.version} (a legacy duplicate id). The claim is kept and marked ambiguous.`);
+  }
+  return notes;
+}
+var own = (o, k) => !!o && typeof o === "object" && Object.prototype.hasOwnProperty.call(o, k);
+var NOTHING_CHANGED = "Nothing was created and the earlier version is unchanged.";
+function reviseDebriefPin(old, args, supplied, artifacts) {
+  const reserved = ["briefRef", ...SERVER_SET_DEBRIEF_KEYS].filter((k) => own(supplied, k));
+  if (reserved.length > 0) {
+    return { error: `revise_artifact: ${reserved.map((k) => `content.${k}`).join(", ")} can't be set in content. A debrief's brief pin is the top-level \`briefRef\` argument; claim origin and link diagnostics are set by the server (don't echo them from the earlier version). ${NOTHING_CHANGED}` };
+  }
+  if (!hasRawBriefRef(args)) return { changed: false, notes: [] };
+  const raw = args.briefRef;
+  if (raw === null) {
+    return { error: `revise_artifact: removing a debrief's brief pin (briefRef: null) is unsupported. Omit briefRef to keep the pin, or pass a new {artifactId} with replacement requirementClaims. ${NOTHING_CHANGED}` };
+  }
+  const n = normalizeDebriefBriefRef(raw, [...artifacts], old.sessionId);
+  if (!n.ref) {
+    return { error: `revise_artifact: the new briefRef can't be admitted, so the revision was refused (a revision never keeps old claims after dropping a new pin). ${n.notes.join(" ")} ${NOTHING_CHANGED}` };
+  }
+  const changed = stableStringify(n.ref) !== stableStringify(carriedBriefRef(old) ?? null);
+  if (changed && !own(supplied, "requirementClaims")) {
+    return { error: `revise_artifact: changing a debrief's brief pin (to ${n.ref.artifactId}) needs replacement requirementClaims in content (an empty array is fine), so claims made against the old version never attach to the new one. ${NOTHING_CHANGED}` };
+  }
+  return { ref: n.ref, changed, notes: n.notes };
+}
+function carryDebriefClaims(old, content, newId, pin, validated) {
+  const prior = old.content ?? {};
+  if (own(content, "requirementClaims")) {
+    const list2 = validated?.requirementClaims ?? content.requirementClaims;
+    if (Array.isArray(list2) && list2.length > 0) {
+      content.requirementClaims = list2;
+      content[CLAIMS_ORIGIN_KEY] = newId;
+    } else {
+      delete content.requirementClaims;
+    }
+  } else if (prior.requirementClaims !== void 0) {
+    content.requirementClaims = structuredClone(prior.requirementClaims);
+    if (prior[CLAIMS_ORIGIN_KEY] !== void 0) content[CLAIMS_ORIGIN_KEY] = structuredClone(prior[CLAIMS_ORIGIN_KEY]);
+  }
+  if (!pin?.ref && prior[BRIEF_REF_DIAGNOSTIC_KEY] !== void 0) content[BRIEF_REF_DIAGNOSTIC_KEY] = structuredClone(prior[BRIEF_REF_DIAGNOSTIC_KEY]);
+}
+function debriefReviseNotes(saved, pin, artifacts) {
+  const c = saved.content ?? {};
+  const notes = [...pin?.notes ?? []];
+  const read = readRequirementClaims(c.requirementClaims);
+  if (read.kind === "ok" && c[CLAIMS_ORIGIN_KEY] === saved.id) {
+    notes.push(...claimWriteNotes(read.claims, saved.briefRef, artifacts, saved.sessionId));
+  } else if (c.requirementClaims !== void 0) {
+    notes.push(`Requirement claims carried unchanged from ${typeof c[CLAIMS_ORIGIN_KEY] === "string" ? c[CLAIMS_ORIGIN_KEY] : "an earlier report (origin unknown)"}; they keep their original report provenance.`);
+  }
+  return notes.length > 0 ? `
+
+${notes.join("\n")}` : "";
+}
+
 // src/mcp/tools/revise-artifact.ts
 var SUPERSEDE_VALIDATORS = {
   research: validatePresentFindingsInput,
@@ -37578,12 +37850,20 @@ async function handleReviseArtifact(ctx, args) {
         isError: true
       };
     }
+    let debriefPin;
+    if (old.type === "debrief") {
+      const pinRevision = reviseDebriefPin(old, args, suppliedContent, all);
+      if ("error" in pinRevision) return { content: [{ type: "text", text: pinRevision.error }], isError: true };
+      debriefPin = pinRevision;
+    }
     const content = deriveReviseContent(old, suppliedContent);
     const oldStatusAtRevise = old.status;
     const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
+    let validatedContent;
     if (supersedeValidator) {
       const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
       if (!v2.ok) return v2.error;
+      validatedContent = v2.data;
     }
     const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });
     if (pre && !pre.ok) {
@@ -37609,6 +37889,7 @@ async function handleReviseArtifact(ctx, args) {
     const styleContent = content;
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid3(10)}`;
+    if (old.type === "debrief") carryDebriefClaims(old, content, newId, debriefPin, validatedContent);
     const decisionContent = old.type === "decision" ? content : null;
     if (decisionContent && Array.isArray(decisionContent.options)) {
       decisionContent.decisionId = `dec_${nanoid3(10)}`;
@@ -37638,7 +37919,9 @@ async function handleReviseArtifact(ctx, args) {
       // newer brief (no implicit latest lookup). Re-briefing = a new card.
       // The admitted path carries the same pin via reviseSnapshot, bound by
       // reviseInheritedHash.
-      ...carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
+      // #572 B1 — a debrief revision with an explicit, admitted pin saves
+      // that pin; otherwise the exact predecessor pin carries as above.
+      ...debriefPin?.ref ? { briefRef: debriefPin.ref } : carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
     });
     if (old.type === "plan") {
       writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id: old.id, status: oldStatusAtRevise, content: old.content }, newId, newTitle: title, newContent: skeletonSnap.content });
@@ -37674,7 +37957,7 @@ Skeleton change: your pair re-reviews the reshaped skeleton on the card. Fills a
 
 \u26A0 Recalled stance \u2014 advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}` : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }]
+      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${old.type === "debrief" ? debriefReviseNotes(newArtifact, debriefPin, await store.getArtifacts()) : ""}${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }]
     };
   }
   const artifacts = await store.getArtifacts();
@@ -38935,13 +39218,23 @@ Raise it WITH THEM, not on the PR: one present_findings entry with audience: "in
 async function handlePresentDebrief(ctx, args) {
   const validated = validatePresentDebriefInput(args);
   if (!validated.ok) return validated.error;
-  const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions, visuals } = validated.data;
+  const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions, visuals, requirementClaims } = validated.data;
   const pre = await preflightArtifact(ctx, "present_debrief", "debrief", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_debrief", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const id = `art_${nanoid3(10)}`;
+  let sessionArtifacts = null;
+  let brief = { notes: [] };
+  if (hasRawBriefRef(args)) {
+    try {
+      sessionArtifacts = await ctx.store.getArtifacts();
+    } catch {
+      sessionArtifacts = null;
+    }
+    brief = normalizeDebriefBriefRef(args.briefRef, sessionArtifacts, ctx.store.getSessionId());
+  }
   const content = {
     summary,
     ...sections && sections.length > 0 ? { sections } : {},
@@ -38950,7 +39243,12 @@ async function handlePresentDebrief(ctx, args) {
     ...deferred && deferred.length > 0 ? { deferred } : {},
     ...openQuestions && openQuestions.length > 0 ? { openQuestions } : {},
     // R4 P-B (#284) — visuals framing the debrief; thread to the store.
-    ...visuals && visuals.length > 0 ? { visuals } : {}
+    ...visuals && visuals.length > 0 ? { visuals } : {},
+    // #572 B1 — the agent's claims (validated whole) plus the server-set
+    // origin naming THIS report. An empty list records nothing. Absent →
+    // byte-identical to a pre-B1 debrief.
+    ...requirementClaims && requirementClaims.length > 0 ? { requirementClaims, [CLAIMS_ORIGIN_KEY]: id } : {},
+    ...brief.diagnostic ? { [BRIEF_REF_DIAGNOSTIC_KEY]: brief.diagnostic } : {}
   };
   let artifact;
   try {
@@ -38962,7 +39260,8 @@ async function handlePresentDebrief(ctx, args) {
       relatedArtifactIds: args?.relatedFindings,
       feature: args?.feature,
       // #533 — the presenting agent's label (check_feedback ownership filter).
-      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0,
+      ...brief.ref ? { briefRef: brief.ref } : {}
     });
   } catch (e) {
     dedup.abort?.();
@@ -39004,10 +39303,17 @@ Do not leave that unsaid. Name the stance in the debrief itself \u2014 revise_ar
   const skeletonFinalize = finalizeCheckNote(allArtifacts);
   const dangling = [...new Set(refIds)].filter((r) => !knownIds.has(r));
   const danglingNote = dangling.length > 0 ? ` \u26A0 ${dangling.length} reference${dangling.length === 1 ? "" : "s"} don't resolve to a live artifact: ${dangling.join(", ")} \u2014 the drill-in link${dangling.length === 1 ? "" : "s"} will go nowhere. Fix the id${dangling.length === 1 ? "" : "s"} (or drop the ref) with revise_artifact if that wasn't intentional.` : "";
+  const claimNotes = [
+    ...brief.notes,
+    ...claimWriteNotes(requirementClaims ?? [], brief.ref, allArtifacts, ctx.store.getSessionId())
+  ];
+  const claimNotesText = claimNotes.length > 0 ? `
+
+${claimNotes.join("\n")}` : "";
   return {
     content: [{
       type: "text",
-      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${skeletonFinalize}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${claimNotesText}${danglingNote}${skeletonFinalize}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -39598,7 +39904,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_debrief",
         annotations: { title: "Present debrief", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: 'At the end of a feature or autonomous run (with one size carve-out \u2014 see Workflow), present ONE debrief summarizing what changed and why \u2014 this is the primary comprehension surface. It carries the narrative `summary`, an ordered `sections[]` walk (each with a `title`, `body`, optional named `concepts[]`, `evidence[]`, and `changesetRef`/`artifactRefs` linking the underlying artifacts), optional `visuals[]` (the shape of what you built \u2014 a diagram carries it faster than prose), `decisionsMade[]` (the calls you made WITHOUT the human \u2014 the accountability block), `needsYourEyes[]` (the prioritized review list), `deferred[]` (what you left undone and why), and optional `openQuestions[]`. The human reads it and can ask ANYTHING in the thread.\n\nSchema note: `title` (artifact-level) and `summary` are REQUIRED; each `sections[]` entry needs a `title`; everything else is optional-tolerant. Put the FULL deliberation IN the content \u2014 writing "details in chat" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: END EVERY feature/autonomous-run with exactly one present_debrief (revise_artifact to supersede if it changes) \u2014 exception: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change (no separate debrief). SINGLE REVIEW SURFACE \u2014 don\'t re-summarize in chat. Non-blocking: it records + returns immediately. Call check_feedback for their questions, comments, and verdict.',
+        description: "At the end of a feature or autonomous run (with one size carve-out \u2014 see Workflow), present ONE debrief summarizing what changed and why \u2014 this is the primary comprehension surface. It carries the narrative `summary`, an ordered `sections[]` walk (each with a `title`, `body`, optional named `concepts[]`, `evidence[]`, and `changesetRef`/`artifactRefs` linking the underlying artifacts), optional `visuals[]` (the shape of what you built \u2014 a diagram carries it faster than prose), `decisionsMade[]` (the calls you made WITHOUT the human \u2014 the accountability block), `needsYourEyes[]` (the prioritized review list), `deferred[]` (what you left undone and why), and optional `openQuestions[]`. The human reads it and can ask ANYTHING in the thread.\n\nSchema note: `title` (artifact-level) and `summary` are REQUIRED; each `sections[]` entry needs a `title`; everything else is optional-tolerant. Put the FULL deliberation IN the content \u2014 writing \"details in chat\" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nAccount against a brief (optional): `briefRef: {artifactId}` pins the exact brief version you worked to, and `requirementClaims[]` gives your account per requirement id \u2014 `claim` is met / unmet / unknown; met needs `evidence[]` (e.g. `{kind: 'check', ran, outcome, sourceRevision?}`, `{kind: 'source', evidence}`, `{kind: 'artifact', artifactId}`, `{kind: 'observation', text}`), and `notRun` says what you did not run and why. One claim per id; a bad claim refuses the call. Your pair sees these as agent-reported claims, never as acceptance.\n\nWorkflow: END EVERY feature/autonomous-run with exactly one present_debrief (revise_artifact to supersede if it changes) \u2014 exception: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change (no separate debrief). SINGLE REVIEW SURFACE \u2014 don't re-summarize in chat. Non-blocking: it records + returns immediately. Call check_feedback for their questions, comments, and verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_debrief)
