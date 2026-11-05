@@ -143,7 +143,10 @@ const waiting = [finding("answered", "Previously reviewed finding"), op("artifac
 const hold = op("preflight-block", { type: "preflight_blocked", id: "synthetic_keyboard_hold", source: "session", match: { concept: "global mutable state", description: "Synthetic hold", proposal: "Synthetic singleton", reason: "Prefer dependencies", via: "concept", rejectedAt: "2026-01-01T00:00:00.000Z" } });
 const barStates = [
   { id: "A-high", expected: "DECIDE", seed: [decision("high", "Synthetic urgent choice"), decision("second_high", "Another high choice")] },
-  { id: "B-review", expected: "REVIEW", seed: [finding("review", "Synthetic review oldest"), decision("high", "Synthetic urgent choice")] },
+  // #430 slice 1 (docs/design/attention-hierarchy.md §4.3 + §10.3): a blocking
+  // item outranks an older review, so REVIEW leads only with nothing blocking.
+  { id: "B-review", expected: "REVIEW", seed: [finding("review", "Synthetic review oldest"), finding("review_newer", "Synthetic review newer")] },
+  { id: "B-decision-outranks-older-review", expected: "DECIDE", seed: [finding("review", "Synthetic review oldest"), decision("high", "Synthetic urgent choice")] },
   { id: "C-info", expected: "Nothing needs you", seed: [op("artifacts", { id: "info", type: "explainer", title: "Synthetic informational artifact", content: { title: "Synthetic informational artifact", overview: "Synthetic overview", sections: [{ heading: "Read", body: "Synthetic information" }] } })] },
   { id: "D-waiting", expected: "WAITING ON CLAUDE", seed: waiting },
   { id: "E-exited", expected: "Exited with 1 of your question open", seed: [...waiting, op("unregister", {})] },
