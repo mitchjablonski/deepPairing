@@ -201,6 +201,13 @@ export interface GuardrailMatch {
   note: string;
 }
 
+/** `abs` relative to `root` with `/` separators, or null when it isn't strictly
+ *  inside `root` (the root itself, a parent, a sibling, another drive). */
+function relativeInside(root: string, abs: string): string | null {
+  const rel = path.relative(root, abs).replace(/\\/g, "/");
+  return !rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel) ? null : rel;
+}
+
 /**
  * Authoritative match: is this edit's target under a guardrail rule of THIS
  * project? A path outside the project root never matches.
@@ -221,16 +228,16 @@ export function matchGuardrailPath(projectRoot: string, paths: string[]): Guardr
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
       const abs = path.resolve(projectRoot, raw);
-      let rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) {
+      let rel = relativeInside(projectRoot, abs);
+      if (!rel) {
         // #532 — outside the root, but maybe inside a git linked worktree of
         // it: the root is canonicalised to the main checkout, and an absolute
         // edit in `<worktree>/migrations/…` must still be the guardrail path
         // it is. Map it to the same repo-relative path in the main checkout.
         const mapped = canonicalizeWorktreePath(abs);
         if (!mapped.worktree) continue; // outside the project
-        rel = path.relative(projectRoot, mapped.path).replace(/\\/g, "/");
-        if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;
+        rel = relativeInside(projectRoot, mapped.path);
+        if (!rel) continue;
       }
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
@@ -397,6 +404,52 @@ function physicalResolve(base: string, spelling: string): string | null {
     return cur;
   } catch {
     return null;
+  }
+}
+
+/**
+ * #621 — the spellings of an edit target that a team rule's `scope.paths` glob
+ * is tested against. Those globs are written relative to the project
+ * (`packages/api/**`) and matchesGlob is anchored, while Claude Code's edit
+ * tools send absolute paths. Empty for a target outside the project, so a
+ * scoped rule doesn't apply there (findTeamPreferenceViolation skips a scoped
+ * rule with no paths). Never throws: a fault is "no path", which fails open.
+ *
+ * Inside a linked worktree the path maps to the main checkout first, even when
+ * the worktree sits inside the checkout (`.claude/worktrees/x/…` is lexically
+ * inside the root, but `packages/api/**` is what it means). Unlike the
+ * any-depth guardrail rules, an anchored glob can't absorb that prefix.
+ *
+ * Symlinks: the path as written and the path the write really lands on both
+ * count, against the root as written and its realpath. So a link into the scope
+ * fires, a project reached through a link works either way round, and a link
+ * leading out of the project adds nothing. The guardrail backstop stays lexical.
+ *
+ * Each path also comes with a leading `/`. matchesGlob's `**` + `/` needs a
+ * separator, so `**` + `/api/**` can't match `api/x.ts` without it, and the
+ * absolute path used to satisfy those globs. The cost is that `*` + `/x.ts`
+ * also matches a root-level `x.ts`.
+ */
+export function teamScopePaths(projectRoot: string, raw: string): string[] {
+  try {
+    const abs = path.resolve(projectRoot, raw);
+    const roots = new Set([projectRoot]);
+    const realRoot = realpathish(path.resolve(projectRoot));
+    if (realRoot) roots.add(realRoot);
+    const targets = new Set([abs]);
+    const realTarget = realpathish(abs);
+    if (realTarget) targets.add(realTarget);
+    const out = new Set<string>();
+    for (const target of targets) {
+      const mapped = canonicalizeWorktreePath(target);
+      for (const root of roots) {
+        const rel = (mapped.worktree ? relativeInside(root, mapped.path) : null) ?? relativeInside(root, target);
+        if (rel) out.add(rel).add(`/${rel}`);
+      }
+    }
+    return [...out];
+  } catch {
+    return [];
   }
 }
 

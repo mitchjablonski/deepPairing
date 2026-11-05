@@ -215,6 +215,9 @@ function tokenCoverage(concept: string, proposal: string): number {
 
 /** Threshold above which a partial match is surfaced as "near miss". */
 const NEAR_MISS_THRESHOLD = 0.5;
+/** #621 — how much of a stance raw edit text must cover for the reverse phrase
+ *  check to count it. See findRejectedApproachMatch. */
+const REVERSE_EDIT_MIN_COVERAGE = 0.5;
 /** Cap on `consideredConcepts` so the JSON stays small. */
 const CONSIDERED_CAP = 20;
 
@@ -467,6 +470,7 @@ function containsAsPhrase(haystack: string, needle: string): boolean {
 export function findRejectedApproachMatch(
   proposalStrings: string[],
   rejected: RejectedApproach[],
+  opts: { rawEditText?: boolean } = {},
 ): { proposal: string; rejected: RejectedApproach; via: "surface" | "concept" } | null {
   const clean = (s: string) => s.trim().toLowerCase();
   for (const rej of rejected) {
@@ -503,7 +507,18 @@ export function findRejectedApproachMatch(
       // human-named reject concept, team prefs) are untouched. "redis" still
       // blocks under a "redis for caching" key; a prefix word no longer blocks
       // anything on its own.
-      if (containsAsPhrase(specificNoun, p)) {
+      //
+      // #621 — a present_* string NAMES an approach, so a short title inside a
+      // stance ("Redis" in "Use Redis for the session cache") is a real
+      // re-proposal. Raw edit text names nothing: `new_string: "client"` inside
+      // "Add retry to the payment client" is just a word the stance happens to
+      // use. So raw text must also cover enough of the stance to stand for it.
+      // "redis" still asks under "redis cache"; a lone word from a long stance
+      // doesn't. The concept lane below remains the catch for a paraphrase.
+      if (
+        containsAsPhrase(specificNoun, p) &&
+        (!opts.rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)
+      ) {
         return { proposal, rejected: rej, via: "surface" };
       }
       // Specific noun of the rejection (post-colon), as a whole word.
@@ -554,6 +569,12 @@ export interface PreflightInput {
    * project's own rejections AND approvals/overrides before passing it in.
    */
   globalAdvisoryConcepts?: Array<{ concept: string; project?: string; reason?: string }>;
+  /**
+   * #621 — `proposalStrings` are a raw Edit/Write's text (the PreToolUse hook),
+   * not an artifact's named proposal. Tightens only the reverse phrase check;
+   * see findRejectedApproachMatch. Absent on every present_* call.
+   */
+  rawEditText?: boolean;
 }
 
 export interface PreflightBlock {
@@ -606,7 +627,7 @@ export type PreflightResult =
  * recent stance and is what their brain expects to be enforced.
  */
 export function runPreflight(input: PreflightInput): PreflightResult {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [] } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false } = input;
 
   // (A) Near-miss + concept↔concept both benefit from also weighing the
   // agent's NAMED concept(s), not just the prose. The named concept is short
@@ -710,7 +731,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
 
   // Lane 1 — session-scoped rejected approaches.
   if (rejectedApproaches.length > 0) {
-    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText });
     // (A) concept↔concept fallback: if the prose path didn't catch it but the
     // agent NAMED a concept, compare that short string against each stored
     // rejected concept (exact normalized key OR full stemmed token
