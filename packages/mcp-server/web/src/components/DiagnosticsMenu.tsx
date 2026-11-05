@@ -90,6 +90,7 @@ export function DiagnosticsMenu({ onOpenLedger }: { onOpenLedger: () => void }) 
     <div className="relative">
       <button
         ref={triggerRef}
+        data-diagnostics-trigger=""
         onClick={() => {
           if (!open) { setOpen(true); return; }
           setOpen(false);

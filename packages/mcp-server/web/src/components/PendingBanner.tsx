@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
@@ -127,6 +127,23 @@ export function PendingBanner() {
     if (bannerHidden) setConfirmingId(null);
   }, [bannerHidden]);
 
+  // #430 slice 2 review — Why also unmounts without being pressed: an older
+  // draft takes the lead, a grant writes seenAt, or the cap prunes the ask. Read
+  // before this commit removes it; if it held focus and focus falls to <body>,
+  // hand focus to the banner's first stop, or to ⋯ when the banner is gone.
+  // A pending log request means Why was pressed: the log takes focus itself.
+  const bannerRef = useRef<HTMLDivElement>(null);
+  const whyRef = useRef<HTMLButtonElement>(null);
+  const whyHeldFocus = !!whyRef.current && whyRef.current === document.activeElement;
+  useEffect(() => {
+    if (!whyHeldFocus || whyRef.current) return;
+    if (usePreflightBlockStore.getState().focusRequest) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const stop = bannerRef.current?.querySelector<HTMLElement>('[tabindex="0"], button:not([tabindex="-1"])');
+    (stop ?? document.querySelector<HTMLElement>("[data-diagnostics-trigger]"))?.focus();
+  });
+
   if (bannerHidden) return null;
 
   return (
@@ -136,6 +153,7 @@ export function PendingBanner() {
     // screen-reader user could not jump to the one surface that says what to
     // do next.
     <div
+      ref={bannerRef}
       role="region"
       aria-label="Waiting for you"
       data-testid="pending-banner"
@@ -204,10 +222,12 @@ export function PendingBanner() {
         </div>
       )}
       {canAskWhy && (
-        // Outside the chip group, on the same row. No border, so the row keeps
-        // the chips' height and the S2 ceiling doesn't move.
+        // Outside the chip group, on the same row. No border, so it matches the
+        // chips' height. With no drafts there are no chips, so the button sets
+        // the row's height and adds about 4px (evidence run: +3.9 to +4.5px).
         <button
           type="button"
+          ref={whyRef}
           onClick={askWhy}
           aria-label="Why this is held"
           title="Open the gate log at this hold. It doesn't answer the terminal."

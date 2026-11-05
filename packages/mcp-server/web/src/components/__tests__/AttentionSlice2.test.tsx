@@ -451,6 +451,55 @@ describe("#430 slice 2 D2 — Why on a held terminal ask", () => {
     expect(why()).toBeNull();
   });
 
+  describe("Why unmounting without being pressed", () => {
+    // Blocking, like the ask, and older, so it takes the lead (oldest first in the tier).
+    const olderDecision = () => art("old", "Older sibling decision", {
+      type: "decision", status: "draft", sessionId: "s2", createdAt: "2026-06-01T00:30:00.000Z",
+      content: { context: "c", options: [], decisionId: "dec_old" },
+    });
+    const focusedWhy = (blocks: PreflightBlockRecord[], artifacts: unknown[]) => {
+      fakeDaemon();
+      setArtifacts(artifacts);
+      seedBlocks(blocks);
+      render(<Harness />);
+      const button = why()!;
+      button.focus();
+      expect(button).toHaveFocus();
+      return button;
+    };
+
+    it("an older draft taking the lead moves focus to the banner's first stop", () => {
+      const button = focusedWhy([ask("b1", minute(1))], [draft()]);
+      setArtifacts([draft(), olderDecision()]);
+      expect(button.isConnected).toBe(false);
+      expect(document.activeElement).toBe(within(screen.getByRole("region", { name: "Waiting for you" })).getByTitle("Older sibling decision"));
+    });
+
+    it("a grant writing seenAt with no drafts left moves focus to ⋯", () => {
+      const button = focusedWhy([ask("b1", minute(1), { serverId: "b1" })], [art("a1", "Done")]);
+      act(() => usePreflightBlockStore.getState().applyReceipt("b1", { id: "sx_1", state: "allowed" } as any, minute(2)));
+      expect(button.isConnected).toBe(false);
+      expect(screen.queryByRole("region", { name: "Waiting for you" })).not.toBeInTheDocument();
+      expect(diagnostics()).toHaveFocus();
+    });
+
+    it("the cap pruning the ask moves focus to the banner's first stop", () => {
+      const button = focusedWhy([ask("b1", minute(1))], [draft()]);
+      act(() => usePreflightBlockStore.setState({ blocks: Array.from({ length: 25 }, (_, i) => stance(`row${i}`, minute(30 + i))) }));
+      expect(button.isConnected).toBe(false);
+      expect(document.activeElement).toBe(within(screen.getByRole("region", { name: "Waiting for you" })).getByTitle("Next draft"));
+    });
+
+    it("focus elsewhere is left alone", () => {
+      const button = focusedWhy([ask("b1", minute(1))], [draft()]);
+      const composer = screen.getByRole("textbox", { name: "composer" });
+      composer.focus();
+      setArtifacts([draft(), olderDecision()]);
+      expect(button.isConnected).toBe(false);
+      expect(composer).toHaveFocus();
+    });
+  });
+
   describe("focus return", () => {
     const openedAtEntry = async () => {
       fakeDaemon();
