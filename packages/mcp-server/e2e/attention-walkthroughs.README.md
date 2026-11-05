@@ -42,12 +42,13 @@ diagnostic output cannot prevent real owned-daemon cleanup or hide its original
 setup error, and evidence publication cannot mask a primary row failure or
 silently pass without published evidence; neither is a walkthrough matrix row.
 
-`attention-keyboard.walkthrough.ts` adds 21 focused checks outside that manifest:
-two dark/light keyboard journeys, one live arrival/status/removal/action journey,
-and nine bar states in each theme (A–G, empty and replay). Each state scans the
+`attention-keyboard.walkthrough.ts` adds 24 focused checks outside that manifest:
+two dark/light keyboard journeys, one live arrival/status/removal/action journey, one approval during a pane exit,
+and ten bar states in each theme (A–G, a decision outranking an older review,
+empty and replay). Each state scans the
 whole page with axe both collapsed and expanded. These use the same isolated
 daemon/evidence helpers at 1280×800 and verify the actual applied theme. The
-complete attention command therefore runs 91 tests with the 20 evidence rows
+complete attention command therefore runs 94 tests with the 20 evidence rows
 below. For only this regression:
 
 ```sh

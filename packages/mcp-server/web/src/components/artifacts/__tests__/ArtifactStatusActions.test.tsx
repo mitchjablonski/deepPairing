@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Artifact } from "@deeppairing/shared";
 import { ArtifactStatusActions } from "../ArtifactStatusActions";
@@ -74,6 +74,55 @@ describe("ArtifactStatusActions — status branches", () => {
     );
     expect(screen.getByText(/retracted by agent/i)).toBeInTheDocument();
     expect(screen.getByText("wrong file")).toBeInTheDocument();
+  });
+});
+
+describe("Approved chip focus recovery stays on the open artifact (#430 keyboard walkthrough)", () => {
+  // AnimatePresence keeps the previous pane mounted while it exits, and that
+  // pane still re-renders on store changes. Its approved chip must not take the
+  // focus that approving the open artifact just dropped to <body>: the pane
+  // unmounts moments later and a keyboard user is back at the top of the page.
+  function panes(three: Artifact) {
+    return (
+      <>
+        <div data-testid="exiting-pane"><ArtifactStatusActions artifact={artifact({ id: "one", status: "approved" })} /></div>
+        <div data-testid="open-pane"><ArtifactStatusActions artifact={three} /></div>
+      </>
+    );
+  }
+
+  it("focus goes to the open artifact's chip, not an exiting pane's earlier chip", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    // Focus is elsewhere when the earlier pane mounts, as it was when the agent
+    // approved it, so its one-shot chip focus is still unspent.
+    const outside = document.body.appendChild(document.createElement("button"));
+    outside.focus();
+    const { rerender } = render(panes(artifact({ id: "three", status: "draft" })));
+    screen.getByRole("button", { name: "Approve" }).focus();
+    outside.remove();
+    rerender(panes(artifact({ id: "three", status: "approved" })));
+    const openChip = within(screen.getByTestId("open-pane")).getByText("Approved").parentElement;
+    expect(document.activeElement).toBe(openChip);
+  });
+
+  it("an exiting pane's chip leaves focus on <body> on its own", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    render(<div data-testid="exiting-pane"><ArtifactStatusActions artifact={artifact({ id: "one", status: "approved" })} /></div>);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("control: the open artifact's chip still recovers focus lost to <body>", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(screen.getByText("Approved").parentElement);
+  });
+
+  it("control: focus held elsewhere is never taken", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    render(<button>Elsewhere</button>);
+    screen.getByRole("button", { name: "Elsewhere" }).focus();
+    render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Elsewhere" }));
   });
 });
 

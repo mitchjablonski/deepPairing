@@ -1,6 +1,6 @@
 import { test, expect } from "./test.js";
 import AxeBuilder from "@axe-core/playwright";
-import type { Locator } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { AttentionDaemon, AttentionEvidence, finishWalkthrough, type WalkthroughCase } from "./attention-walkthrough-harness.js";
 
 test.use({ viewport: { width: 1280, height: 800 } });
@@ -22,6 +22,17 @@ async function tabTo(e: AttentionEvidence, target: Locator): Promise<void> {
     await e.press("Tab");
   }
   throw new Error("Queue control was not reachable through keyboard Tab");
+}
+
+// The bar renders before the WebSocket snapshot lands. Anything arriving before
+// that is history, and NextUpBar stays silent for 750ms after the store reset
+// (#457 D8), so a live-change journey has to start after both.
+async function waitForSettledStore(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(() => {
+    const state = (window as unknown as { __dpConnectionStore: { getState(): { connected: boolean; hydrated: boolean } } }).__dpConnectionStore.getState();
+    return state.connected && state.hydrated;
+  })).toBe(true);
+  await page.waitForTimeout(1_000);
 }
 
 for (const theme of ["dark", "light"] as const) {
@@ -97,6 +108,7 @@ test("live changes and disappearing queue focus", async ({ page }, info) => {
     await page.goto(`${daemon.baseURL}/?session=probe`);
     await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review one");
     await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
+    await waitForSettledStore(page);
     await e.activate(page.getByRole("button", { name: "Expand next-up details", exact: true }));
     const before = await page.evaluate(() => ({ selected: [...document.querySelectorAll('[data-artifact-id]')].map((p) => p.getAttribute("data-artifact-id")), scroll: [...document.querySelectorAll('[data-dp-pane]')].map((p) => p.scrollTop) }));
     await daemon.post("probe", "artifacts", { id: "four", type: "research", title: "Synthetic review four", content: { summary: "Synthetic arrival", findings: [] } });
@@ -133,6 +145,40 @@ test("live changes and disappearing queue focus", async ({ page }, info) => {
   }
 });
 
+// The journey above only hits this when its Tab walk finishes inside the old
+// pane's exit animation, so it can pass with the bug present. Moving focus by
+// script here is timing control: Approve fires while the pane is still leaving.
+test("approving just after switching keeps focus on the open artifact", async ({ page }, info) => {
+  const e = new AttentionEvidence(page, info, { scenario, mode: "ON", viewport: { width: 1280, height: 800 }, manifest: ["approve-during-exit"] });
+  let daemon: AttentionDaemon | undefined;
+  let failure: unknown;
+  let cleanup: "removed" | "retained" = "retained";
+  try {
+    daemon = await AttentionDaemon.create(info);
+    await daemon.seed(scenario.seed);
+    await e.observe();
+    await page.goto(`${daemon.baseURL}/?session=probe`);
+    await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review one");
+    await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
+    await waitForSettledStore(page);
+    // Focus is off <body> when the open artifact is approved elsewhere, so its chip stays unfocused.
+    await e.activate(page.getByRole("button", { name: "Expand next-up details", exact: true }));
+    await daemon.post("probe", "artifacts/one/status", { status: "approved" });
+    await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review two");
+    await e.activate(page.locator("#next-up-details").getByRole("button", { name: "Synthetic review two", exact: true }));
+    await page.locator('[data-artifact-id="two"]').getByRole("button", { name: "Approve", exact: true }).focus();
+    await e.press("Enter");
+    await e.check("approval persists", () => expect.poll(async () => (await daemon!.artifacts("probe")).find((artifact) => artifact.id === "two")?.status).toBe("approved"));
+    await expect(page.locator('[data-artifact-id="one"]')).toHaveCount(0);
+    await e.capture("after-old-pane-left");
+    await e.check("focus stays in the open artifact after the old pane leaves", async () => expect(await page.evaluate(() => document.activeElement?.closest("[data-artifact-id]")?.getAttribute("data-artifact-id"))).toBe("two"));
+  } catch (error) { failure = error; await e.capture("failure").catch(() => undefined); }
+  finally {
+    if (daemon) { try { await daemon.close(info); cleanup = "removed"; } catch (error) { failure ??= error; } }
+    await finishWalkthrough(failure, () => e.save(failure ? "failed" : "passed", cleanup, failure, daemon?.seedJournal, daemon?.runtimes));
+  }
+});
+
 const op = (route: string, body: unknown) => ({ session: "probe", route, body });
 const finding = (id: string, title: string) => op("artifacts", { id, type: "research", title, content: { summary: "Synthetic gate fixture", findings: [{ category: "Probe", detail: "No production data", significance: "high" }] } });
 const decision = (id: string, title: string) => op("artifacts", { id, type: "decision", title, content: { context: "Synthetic choice context", decisionId: id, stakes: "high", options: [
@@ -143,7 +189,10 @@ const waiting = [finding("answered", "Previously reviewed finding"), op("artifac
 const hold = op("preflight-block", { type: "preflight_blocked", id: "synthetic_keyboard_hold", source: "session", match: { concept: "global mutable state", description: "Synthetic hold", proposal: "Synthetic singleton", reason: "Prefer dependencies", via: "concept", rejectedAt: "2026-01-01T00:00:00.000Z" } });
 const barStates = [
   { id: "A-high", expected: "DECIDE", seed: [decision("high", "Synthetic urgent choice"), decision("second_high", "Another high choice")] },
-  { id: "B-review", expected: "REVIEW", seed: [finding("review", "Synthetic review oldest"), decision("high", "Synthetic urgent choice")] },
+  // #430 slice 1 (docs/design/attention-hierarchy.md §4.3 + §10.3): a blocking
+  // item outranks an older review, so REVIEW leads only with nothing blocking.
+  { id: "B-review", expected: "REVIEW", seed: [finding("review", "Synthetic review oldest"), finding("review_newer", "Synthetic review newer")] },
+  { id: "B-decision-outranks-older-review", expected: "DECIDE", seed: [finding("review", "Synthetic review oldest"), decision("high", "Synthetic urgent choice")] },
   { id: "C-info", expected: "Nothing needs you", seed: [op("artifacts", { id: "info", type: "explainer", title: "Synthetic informational artifact", content: { title: "Synthetic informational artifact", overview: "Synthetic overview", sections: [{ heading: "Read", body: "Synthetic information" }] } })] },
   { id: "D-waiting", expected: "WAITING ON CLAUDE", seed: waiting },
   { id: "E-exited", expected: "Exited with 1 of your question open", seed: [...waiting, op("unregister", {})] },
