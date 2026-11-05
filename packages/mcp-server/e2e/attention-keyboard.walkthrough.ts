@@ -1,6 +1,6 @@
 import { test, expect } from "./test.js";
 import AxeBuilder from "@axe-core/playwright";
-import type { Locator } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { AttentionDaemon, AttentionEvidence, finishWalkthrough, type WalkthroughCase } from "./attention-walkthrough-harness.js";
 
 test.use({ viewport: { width: 1280, height: 800 } });
@@ -22,6 +22,17 @@ async function tabTo(e: AttentionEvidence, target: Locator): Promise<void> {
     await e.press("Tab");
   }
   throw new Error("Queue control was not reachable through keyboard Tab");
+}
+
+// The bar renders before the WebSocket snapshot lands. Anything arriving before
+// that is history, and NextUpBar stays silent for 750ms after the store reset
+// (#457 D8), so a live-change journey has to start after both.
+async function waitForSettledStore(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(() => {
+    const state = (window as unknown as { __dpConnectionStore: { getState(): { connected: boolean; hydrated: boolean } } }).__dpConnectionStore.getState();
+    return state.connected && state.hydrated;
+  })).toBe(true);
+  await page.waitForTimeout(1_000);
 }
 
 for (const theme of ["dark", "light"] as const) {
@@ -97,6 +108,7 @@ test("live changes and disappearing queue focus", async ({ page }, info) => {
     await page.goto(`${daemon.baseURL}/?session=probe`);
     await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review one");
     await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
+    await waitForSettledStore(page);
     await e.activate(page.getByRole("button", { name: "Expand next-up details", exact: true }));
     const before = await page.evaluate(() => ({ selected: [...document.querySelectorAll('[data-artifact-id]')].map((p) => p.getAttribute("data-artifact-id")), scroll: [...document.querySelectorAll('[data-dp-pane]')].map((p) => p.scrollTop) }));
     await daemon.post("probe", "artifacts", { id: "four", type: "research", title: "Synthetic review four", content: { summary: "Synthetic arrival", findings: [] } });
@@ -148,6 +160,7 @@ test("approving just after switching keeps focus on the open artifact", async ({
     await page.goto(`${daemon.baseURL}/?session=probe`);
     await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review one");
     await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
+    await waitForSettledStore(page);
     // Focus is off <body> when the open artifact is approved elsewhere, so its chip stays unfocused.
     await e.activate(page.getByRole("button", { name: "Expand next-up details", exact: true }));
     await daemon.post("probe", "artifacts/one/status", { status: "approved" });
