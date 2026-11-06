@@ -32,6 +32,8 @@ import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "
 import { ReviewPostJournal } from "./review-post-journal.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy } from "./store-interface.js";
 
+import { isPublishableStance } from "./stance-add.js";
+
 const isStanceAddedVia = (v: unknown): v is StanceAddedVia => v === "cli" || v === "mcp";
 const isStanceRequestedBy = (v: unknown): v is StanceRequestedBy => v === "user" || v === "unknown";
 import { canonicalizeWorktreePath } from "../git-worktree.js";
@@ -2162,7 +2164,10 @@ export class FileStore implements IStore {
     // deliberate defense-in-depth, not dead code: they keep the invariant
     // even if demo prefs ever get seeded from disk. Don't strip them.
     const conceptKey = concept?.trim() || description.trim();
-    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
+    // #625 review — a terminal-added stance whose requester isn't verified
+    // (the MCP door, or a CLI run it couldn't attribute) binds this project
+    // only; it never reaches the cross-project ledger (isPublishableStance).
+    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled() && isPublishableStance(addedVia, requestedBy)) {
       try {
         // Q2 review H2 — publish the MINIMUM that makes the stance usable
         // elsewhere: the concept, the reason, and the attribution. `description`

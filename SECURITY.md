@@ -141,12 +141,20 @@ model assumes:
   (the `record_stance` MCP tool goes through the daemon, so the
   `deeppairing-state` Edit/Write prompt below doesn't see it). Neither can
   remove, retire or rewrite a stance; an existing stance is reported, never
-  changed. A stance that would match deepPairing's own recovery commands or
-  buttons is refused. The tool is described to the agent as human-request
-  only and accepts only `requestedBy: "user"`, but the server can't tell who
-  typed the words, so an agent could still add a stance you didn't ask for.
-  The worst it can do is make the gate stop the agent more often; each row
-  records which door added it, and `/deeppairing:stance` lists them.
+  changed (only a missing reason is filled in). A stance that would match
+  deepPairing's own recovery commands or buttons is refused, and this path
+  adds at most 200 stances per project. The tool is described to the agent as
+  human-request only and accepts only `requestedBy: "user"`, but the server
+  can't tell who typed the words, so an agent could still add a stance you
+  didn't ask for. In this project that stance refuses matching `present_*`
+  proposals and puts a permission prompt in front of you on every matching
+  Edit/Write/MultiEdit until you retire it. It is **not** mirrored to the
+  cross-project ledger, even when this project publishes: rows from
+  `record_stance`, and CLI rows added outside an interactive terminal or from
+  inside Claude Code, stay local, so they can't tip another project's
+  advisory stance. A `deeppairing stance add` run from your own terminal
+  publishes like a stance from a rejected artifact. Each row records which
+  door added it, and `/deeppairing:stance` lists them.
 
 ## Sensitive surfaces to be aware of
 

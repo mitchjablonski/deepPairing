@@ -37,7 +37,9 @@ boundary. Editors other than Claude Code.
 - **Record one from the terminal.** `/deeppairing:reject <what> -- <why>`
   (or `deeppairing stance add` from a source install) adds a stance to this
   project only. The reason is required. It shows what it saved and what it
-  will and won't catch, and it only adds: retire a stance from the gate log.
+  will and won't catch, and it only adds. To remove one, use **Retire this
+  stance** in the gate log once it has fired, or edit
+  `.deeppairing/preferences.json` yourself.
 - **Matching is on words, not meaning.** It uses stemmed words plus a small,
   hand-audited synonym list. *"A module-level mutable settings object"* shares
   too few words with that concept, so it gets through. False positives happen

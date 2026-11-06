@@ -26,11 +26,15 @@ import {
   parseStanceArguments,
   recordStance,
   validateStanceInput,
+  formatRecordStanceOutcome,
   RECOVERY_PROBES,
   STANCE_CONCEPT_MAX,
+  MAX_PROJECT_STANCES,
 } from "../store/stance-add.js";
 import { runStanceAddCommand, type StanceAddIo } from "../cli/stance-add.js";
 import { evaluatePreflightHook } from "../cli/preflight-hook-core.js";
+import { findRejectedApproachMatch } from "../mcp/preflight-validator.js";
+import { getGlobalStore } from "../store/global-store.js";
 
 const CONCEPT = "global mutable state for config";
 const REASON = "keep configuration explicit and testable";
@@ -118,6 +122,26 @@ describe("#620 input — parse + validation (concept hygiene)", () => {
       expect(v.ok, String(what)).toBe(false);
       if (!v.ok) expect(v.error).toMatch(re);
     }
+  });
+
+  it("#625 — the part after a colon needs a usable word too (the matcher phrase-matches it on its own)", () => {
+    // The review's exact input: `/deeppairing:reject Data: the -- because`.
+    const exact = validateStanceInput(parseStanceArguments("Data: the -- because"));
+    expect(exact.ok).toBe(false);
+    if (!exact.ok) expect(exact.error).toMatch(/part after the colon, "the"/);
+    for (const what of ["Data: the", "Cache backend: a", "Logging: is it", "Deploy:", "Deploy:   ", "Config: for the via", "a: b: the"]) {
+      const v = validateStanceInput({ what, why: REASON });
+      expect(v.ok, what).toBe(false);
+    }
+    // Controls: a real post-colon noun passes, and so does a colon later in the phrase.
+    for (const what of ["Cache backend: Redis", "Deploy: Railway", "Data: the warehouse"]) {
+      expect(validateStanceInput({ what, why: REASON }).ok, what).toBe(true);
+    }
+  });
+
+  it("#625 — the gate would really have jammed on \"Data: the\" (why the check exists)", () => {
+    const hit = findRejectedApproachMatch(["Update the README"], [{ description: "Data: the", concept: "Data: the" }]);
+    expect(hit?.via).toBe("surface");
   });
 
   it("tidies whitespace but keeps the human's words (no path stripping, no rewording)", () => {
@@ -210,6 +234,56 @@ describe("#620 record_stance (the /deeppairing:reject door)", () => {
     expect(Object.keys(stanceAdd).filter((k) => /remove|retire|delete|override/i.test(k))).toEqual([]);
   });
 
+  it("#625 — a re-add fills a MISSING reason (as the store's dedupe does), and only that", async () => {
+    const { root, store } = project();
+    store.recordRejectedApproach({ description: CONCEPT, sourceArtifactId: "art_old" });
+    const { call } = await mcpOver(store);
+    const filled = await call("record_stance", { text: `${CONCEPT} -- ${REASON}`, requestedBy: "user" });
+    expect(filled.isError).toBeFalsy();
+    expect(filled.text).toContain(`Added yours: "${REASON}"`);
+    let rows = prefsOf(root).rejectedApproaches ?? [];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ description: CONCEPT, reason: REASON, sourceArtifactId: "art_old" });
+    expect(rows[0]).not.toHaveProperty("concept");
+    expect(rows[0]).not.toHaveProperty("addedVia");
+    const again = await call("record_stance", { text: `${CONCEPT} -- something else`, requestedBy: "user" });
+    expect(again.text).toMatch(/^Nothing changed/);
+    rows = prefsOf(root).rejectedApproaches ?? [];
+    expect(rows[0]!.reason).toBe(REASON);
+  });
+
+  it(`#625 — a new add past ${MAX_PROJECT_STANCES} project stances is refused; existing rows are untouched`, async () => {
+    const { root, store } = project();
+    const prefsPath = path.join(root, ".deeppairing", "preferences.json");
+    const full = Array.from({ length: MAX_PROJECT_STANCES }, (_, i) => ({ description: `legacy stance number ${i}`, reason: "old" }));
+    fs.writeFileSync(prefsPath, JSON.stringify({ rejectedApproaches: full }));
+    const before = fs.readFileSync(prefsPath, "utf-8");
+    const out = await recordStance(store, { what: CONCEPT, why: REASON, addedVia: "mcp", requestedBy: "user" });
+    expect(out.status).toBe("invalid");
+    if (out.status === "invalid") expect(out.error).toContain(`already has ${MAX_PROJECT_STANCES} stances`);
+    expect(fs.readFileSync(prefsPath, "utf-8")).toBe(before);
+    // A re-add of an existing row is still answered (not a new row).
+    expect((await recordStance(store, { what: "legacy stance number 3", why: REASON, addedVia: "mcp", requestedBy: "user" })).status).toBe("exists");
+  });
+
+  it("#625 — with publishing on, only a stance the CLI attributes to you reaches the cross-project ledger", async () => {
+    const { store } = project();
+    store.setGlobalLedgerPublish(true);
+    const viaMcp = await recordStance(store, { what: "redis for caching", why: REASON, addedVia: "mcp", requestedBy: "user" });
+    const viaCliUnknown = await recordStance(store, { what: "global singletons", why: REASON, addedVia: "cli", requestedBy: "unknown" });
+    const viaCliUser = await recordStance(store, { what: "ORM lazy loading", why: REASON, addedVia: "cli", requestedBy: "user" });
+    expect([viaMcp, viaCliUnknown, viaCliUser].map((o) => o.status)).toEqual(["recorded", "recorded", "recorded"]);
+    const ledger = getGlobalStore().query({ limit: 100 }).map((e) => e.concept.toLowerCase());
+    expect(ledger).toContain("orm lazy loading");
+    expect(ledger).not.toContain("redis for caching");
+    expect(ledger).not.toContain("global singletons");
+    // All three still bind THIS project.
+    expect(store.getSessionMemory().rejectedApproaches.map((r) => r.concept)).toEqual(["redis for caching", "global singletons", "ORM lazy loading"]);
+    // And the readback says so.
+    if (viaMcp.status === "recorded") expect(formatRecordStanceOutcome(viaMcp, "This project").text).toMatch(/not published to the cross-project ledger/);
+    if (viaCliUser.status === "recorded") expect(formatRecordStanceOutcome(viaCliUser, "This project").text).toMatch(/only if this project publishes/);
+  });
+
   it("provenance survives a later write to the same file (another rejection, a retire of a different row)", async () => {
     const { root, store } = project();
     await recordStance(store, { what: CONCEPT, why: REASON, addedVia: "mcp", requestedBy: "user" });
@@ -294,17 +368,18 @@ describe("#620 the real PreToolUse hook", () => {
 });
 
 describe("#620 `deeppairing stance add` (CLI runner, same code path)", () => {
-  function io(root: string, over: Partial<StanceAddIo> = {}): StanceAddIo & { out: string[]; err: string[]; state: { opened: number } } {
+  function io(root: string, over: Partial<StanceAddIo> = {}): StanceAddIo & { out: string[]; err: string[]; state: { opened: number; roots: string[] } } {
     const out: string[] = [];
     const err: string[] = [];
-    const state = { opened: 0 };
+    const state = { opened: 0, roots: [] as string[] };
     const base: StanceAddIo = {
       projectRoot: root,
       env: {},
       stdinIsTTY: true,
       write: (t) => { out.push(t); },
       writeErr: (t) => { err.push(t); },
-      openStore: async () => { state.opened++; return new FileStore(root, "cli_seed"); },
+      openStore: async (r) => { state.opened++; state.roots.push(r); return new FileStore(r, "cli_seed"); },
+      homeDir: path.join(os.tmpdir(), "dp-620-no-such-home"),
       ...over,
     };
     return { ...base, out, err, state };
@@ -315,7 +390,7 @@ describe("#620 `deeppairing stance add` (CLI runner, same code path)", () => {
     const tty = io(root);
     expect(await runStanceAddCommand([...CONCEPT.split(" "), "--", ...REASON.split(" ")], tty)).toBe(0);
     expect(tty.out.join("")).toContain(`Concept: "${CONCEPT}"`);
-    expect(tty.out.join("")).toContain(`Project ${path.basename(root)} only`);
+    expect(tty.out.join("")).toContain(`Project ${path.basename(root)} (${root}) only`);
     const inside = io(root, { env: { CLAUDECODE: "1" } });
     expect(await runStanceAddCommand(["redis for caching -- serverless, no persistent cache"], inside)).toBe(0);
     const rows = prefsOf(root).rejectedApproaches ?? [];
@@ -334,6 +409,33 @@ describe("#620 `deeppairing stance add` (CLI runner, same code path)", () => {
     expect(await runStanceAddCommand([], empty)).toBe(1);
     expect(empty.state.opened).toBe(0);
     expect(prefsOf(root).rejectedApproaches ?? []).toEqual([]);
+  });
+
+  it("#625 — from a subdirectory it writes to the project's .deeppairing/, not the cwd's, and says which", async () => {
+    const { root } = project();
+    const sub = path.join(root, "packages", "api", "src");
+    fs.mkdirSync(sub, { recursive: true });
+    const run = io(sub);
+    expect(await runStanceAddCommand([CONCEPT, "--", REASON], run)).toBe(0);
+    expect(run.state.roots).toEqual([root]);
+    expect(run.out.join("")).toContain(`(${root})`);
+    expect(fs.existsSync(path.join(sub, ".deeppairing"))).toBe(false);
+    expect((prefsOf(root).rejectedApproaches ?? []).map((r) => r.concept)).toEqual([CONCEPT]);
+  });
+
+  it("#625 — no project at or above the cwd (and never the home dir's ~/.deeppairing): refuse, print where it looked, write nothing", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-620-home-"));
+    plainDirs.push(home);
+    fs.mkdirSync(path.join(home, ".deeppairing", "sessions"), { recursive: true }); // looks like a project marker, but it's home
+    fs.writeFileSync(path.join(home, ".deeppairing", "preferences.json"), "{}");
+    const proj = path.join(home, "code", "fresh");
+    fs.mkdirSync(proj, { recursive: true });
+    const run = io(proj, { homeDir: home });
+    expect(await runStanceAddCommand([CONCEPT, "--", REASON], run)).toBe(1);
+    expect(run.state.opened).toBe(0);
+    expect(run.err.join("")).toContain(`No deepPairing project at or above ${proj}`);
+    expect(fs.readFileSync(path.join(home, ".deeppairing", "preferences.json"), "utf-8")).toBe("{}");
+    expect(fs.existsSync(path.join(proj, ".deeppairing"))).toBe(false);
   });
 
   it("a failed write surfaces as a thrown error, not a silent success", async () => {

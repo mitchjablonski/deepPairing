@@ -1557,7 +1557,7 @@ ${helpInvocations}
       stdinIsTTY: !!process.stdin.isTTY,
       write: (t) => { process.stdout.write(t); },
       writeErr: (t) => { process.stderr.write(t); },
-      openStore: () => openSeedStore(cwd),
+      openStore: (root) => openSeedStore(root),
     });
   }).catch((err) => {
     console.error(`  ${red("✗")} stance add failed: ${errorMessage(err)}`);

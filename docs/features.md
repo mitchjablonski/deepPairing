@@ -158,10 +158,13 @@ So you never have to make the same call twice:
     existing stance is never rewritten, and you correct or remove one with
     **Retire this stance** in the gate log or by editing
     `.deeppairing/preferences.json` yourself. A stance that would match
-    deepPairing's own recovery commands is refused. The agent is told to
-    call it only with your words, when you ask; the server can't verify who
-    typed them, so each stance records how it was added, and
-    `/deeppairing:stance` lists them.
+    deepPairing's own recovery commands is refused, and this path adds at
+    most 200 stances per project. The agent is told to call it only with your
+    words, when you ask; the server can't verify who typed them, so each
+    stance records how it was added, and `/deeppairing:stance` lists them.
+    For the same reason, a stance added through `/deeppairing:reject` is never
+    published to the cross-project ledger; one added with `deeppairing stance
+    add` in your own terminal publishes like any other when publishing is on.
   - **What counts as a match.** Every word of the concept (after light
     stemming, so *state*/*states* match) must appear in the proposal, or the
     rejected phrase itself must. A small, hand-audited **synonym list** widens

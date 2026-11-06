@@ -43,6 +43,24 @@ export const STANCE_REASON_MAX = 280;
 
 export const STANCE_USAGE = "<what to avoid> -- <why>";
 
+/** #625 review — a ceiling on stances added through these doors. The hook
+ *  re-tokenizes each proposal once per row, and a hook that runs long enough
+ *  fails open on time. Existing rows are never touched; only a NEW add past the
+ *  ceiling is refused. */
+export const MAX_PROJECT_STANCES = 200;
+
+/**
+ * #625 review — may this stance be mirrored into the cross-project ledger (when
+ * the project publishes)? Not when its requester is unverified: a row the MCP
+ * door added (`requestedBy` is the agent's own claim) or one the CLI couldn't
+ * attribute (`unknown`). It still binds THIS project; it just can't tip
+ * another project's advisory stance. Rows with no provenance (born from a
+ * rejected artifact in the companion) publish exactly as before.
+ */
+export function isPublishableStance(addedVia: StanceAddedVia | undefined, requestedBy: StanceRequestedBy | undefined): boolean {
+  return addedVia !== "mcp" && requestedBy !== "unknown";
+}
+
 /**
  * Text deepPairing's own recovery paths put in front of the gate: the commands
  * and buttons used to get out of a wrong block, and the state files they
@@ -132,6 +150,17 @@ export function validateStanceInput(input: { what: unknown; why: unknown }): Sta
   if (meaningfulTokens(concept).length === 0) {
     return { ok: false, error: `"${concept}" has no word the gate can match on (only short or common words). Name the approach, e.g. "global mutable state for config".` };
   }
+  // #625 review — the matcher treats the text after the first colon as the
+  // stance's specific noun and phrase-matches it ON ITS OWN, with no two-word
+  // floor (findRejectedApproachMatch). "Data: the" would then stop every
+  // proposal or edit containing "the". The post-colon part needs a usable word
+  // by the matcher's own tokenizer.
+  if (concept.includes(":")) {
+    const specific = concept.split(":").slice(1).join(":").trim();
+    if (meaningfulTokens(specific).length === 0) {
+      return { ok: false, error: `The part after the colon, "${specific}", has no word the gate can match on (only short or common words). The gate matches that part on its own, so name the approach there, e.g. "Cache backend: Redis".` };
+    }
+  }
   const recovery = findRejectedApproachMatch([...RECOVERY_PROBES], [{ description: concept, concept }]);
   if (recovery) {
     return { ok: false, error: `"${concept}" would also match deepPairing's own recovery path ("${recovery.proposal}"), which a stance must never block. Name the approach more specifically.` };
@@ -162,8 +191,9 @@ export function describeStanceCoverage(concept: string): string[] {
 }
 
 export type RecordStanceOutcome =
-  | { status: "recorded"; concept: string; reason: string }
+  | { status: "recorded"; concept: string; reason: string; publishable: boolean }
   | { status: "exists"; concept: string; existing: RejectedApproach }
+  | { status: "reason_added"; concept: string; reason: string; existing: RejectedApproach }
   | { status: "invalid"; error: string };
 
 /**
@@ -182,7 +212,28 @@ export async function recordStance(
   const existing = memory.rejectedApproaches.find(
     (r) => normalizeConceptKey(r.description) === key || (typeof r.concept === "string" && normalizeConceptKey(r.concept) === key),
   );
-  if (existing) return { status: "exists", concept: v.concept, existing };
+  if (existing) {
+    if (existing.reason) return { status: "exists", concept: v.concept, existing };
+    // #625 review — the store's own dedupe fills a missing reason (never
+    // replaces one). Do the same here: the reason is display-only, so this
+    // can't change what the row matches, and its concept/provenance stay as
+    // they were. Keyed on the row's EXACT description, which is the store's
+    // dedupe key. Provenance is passed so the cross-project mirror applies the
+    // same publish rule as a new add.
+    await store.recordRejectedApproach({
+      description: existing.description,
+      reason: v.reason,
+      addedVia: input.addedVia,
+      requestedBy: input.requestedBy,
+    });
+    return { status: "reason_added", concept: v.concept, reason: v.reason, existing };
+  }
+  if (memory.rejectedApproaches.length >= MAX_PROJECT_STANCES) {
+    return {
+      status: "invalid",
+      error: `This project already has ${memory.rejectedApproaches.length} stances, the most this command adds (${MAX_PROJECT_STANCES}); more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`,
+    };
+  }
   await store.recordRejectedApproach({
     description: v.concept,
     concept: v.concept,
@@ -190,7 +241,7 @@ export async function recordStance(
     addedVia: input.addedVia,
     requestedBy: input.requestedBy,
   });
-  return { status: "recorded", concept: v.concept, reason: v.reason };
+  return { status: "recorded", concept: v.concept, reason: v.reason, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
 }
 
 /** How a project stance came to exist, for listings and readback. */
@@ -205,6 +256,12 @@ export function stanceProvenance(r: RejectedApproach): string {
 /** The text both doors print after a write. `scope` names the project. */
 export function formatRecordStanceOutcome(outcome: RecordStanceOutcome, scope: string): { ok: boolean; text: string } {
   if (outcome.status === "invalid") return { ok: false, text: `Nothing was recorded. ${outcome.error}` };
+  if (outcome.status === "reason_added") {
+    return {
+      ok: true,
+      text: `${scope} already had the stance "${outcome.existing.concept ?? outcome.existing.description}" with no reason recorded. Added yours: "${outcome.reason}". Nothing else about it changed.`,
+    };
+  }
   if (outcome.status === "exists") {
     const e = outcome.existing;
     return {
@@ -221,7 +278,10 @@ export function formatRecordStanceOutcome(outcome: RecordStanceOutcome, scope: s
       "Stance recorded.",
       `  Concept: "${outcome.concept}"`,
       `  Reason:  "${outcome.reason}" (quoted back whenever it fires)`,
-      `  Scope:   ${scope} only (.deeppairing/preferences.json). Other projects see it only as an advisory nudge, and only if this project publishes to the cross-project ledger.`,
+      `  Scope:   ${scope} only (.deeppairing/preferences.json). ` +
+        (outcome.publishable
+          ? "Other projects see it only as an advisory nudge, and only if this project publishes to the cross-project ledger."
+          : "It is not published to the cross-project ledger, even if this project publishes, because who asked for it can't be verified."),
       ...describeStanceCoverage(outcome.concept).map((l) => `  ${l}`),
       `To correct or remove it: "Retire this stance" in the companion's gate log when it fires, or delete its row from .deeppairing/preferences.json yourself (an agent edit there always asks).`,
     ].join("\n"),
