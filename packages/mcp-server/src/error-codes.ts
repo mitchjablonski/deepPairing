@@ -87,6 +87,9 @@ export const ERROR_CODES = {
   suggestion_response_required: "suggestion_response_required",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
+  /** #625 — a terminal-stance add was refused: the project already holds the
+   *  most stances that path adds (store/stance-add.ts MAX_PROJECT_STANCES). */
+  stance_cap_reached: "stance_cap_reached",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
    *  (H1-5 write-refusal surfaced as a structured route error). */
   ledger_frozen: "ledger_frozen",

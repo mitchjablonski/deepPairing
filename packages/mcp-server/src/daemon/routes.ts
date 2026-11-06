@@ -54,6 +54,9 @@ const RecordRejectedBody = z.object({
   // #620 — provenance of a terminal-added stance (store/stance-add.ts).
   addedVia: z.enum(["cli", "mcp"]).optional(),
   requestedBy: z.enum(["user", "unknown"]).optional(),
+  // #625 — the terminal-stance doors' in-lock guards (FileStore).
+  fillOnly: z.boolean().optional(),
+  maxRows: z.number().int().positive().optional(),
 });
 const RecordApprovedBody = z.object({
   description: z.string().min(1),
@@ -1269,7 +1272,17 @@ export function createDaemonRoutes(
       const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.recordRejectedApproach(parsed);
+    try {
+      r.store.recordRejectedApproach(parsed);
+    } catch (err) {
+      // #625 — a refused terminal-stance write is a 409 with its code, so
+      // DaemonClient rethrows it with `code` and stance-add.ts can word it.
+      const code = (err as { code?: unknown })?.code;
+      if (code === ERROR_CODES.stance_cap_reached || code === ERROR_CODES.stance_not_found) {
+        return c.json({ error: err instanceof Error ? err.message : String(err), code }, 409);
+      }
+      throw err;
+    }
     // FN3 — record the metric HERE (daemon-side truth point). Decision-resolution
     // ledger writes come through this route via DaemonClient; the MCP wrapper's
     // broadcast is a no-op, so the broadcast-tap never saw them (ledgerWrites

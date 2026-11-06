@@ -215,33 +215,52 @@ export async function recordStance(
   if (existing) {
     if (existing.reason) return { status: "exists", concept: v.concept, existing };
     // #625 review — the store's own dedupe fills a missing reason (never
-    // replaces one). Do the same here: the reason is display-only, so this
-    // can't change what the row matches, and its concept/provenance stay as
-    // they were. Keyed on the row's EXACT description, which is the store's
-    // dedupe key. Provenance is passed so the cross-project mirror applies the
-    // same publish rule as a new add.
+    // replaces one). Do the same: the reason is display-only, so this can't
+    // change what the row matches. `fillOnly` makes the store do it under its
+    // lock against the row's EXACT description and never create a row (a
+    // retire in between wins). The store publishes a fill only under the
+    // row's concept, never its description (an artifact title).
+    try {
+      await store.recordRejectedApproach({
+        description: existing.description,
+        concept: existing.concept,
+        reason: v.reason,
+        addedVia: input.addedVia,
+        requestedBy: input.requestedBy,
+        fillOnly: true,
+      });
+    } catch (err) {
+      if (codeOf(err) === "stance_not_found") {
+        return { status: "invalid", error: `The stance "${existing.concept ?? existing.description}" was retired while this ran, so nothing was recorded. Run the command again to add it fresh.` };
+      }
+      throw err;
+    }
+    return { status: "reason_added", concept: v.concept, reason: v.reason, existing };
+  }
+  try {
     await store.recordRejectedApproach({
-      description: existing.description,
+      description: v.concept,
+      concept: v.concept,
       reason: v.reason,
       addedVia: input.addedVia,
       requestedBy: input.requestedBy,
+      // Checked inside the store's lock, against every row whatever its source.
+      maxRows: MAX_PROJECT_STANCES,
     });
-    return { status: "reason_added", concept: v.concept, reason: v.reason, existing };
+  } catch (err) {
+    if (codeOf(err) === "stance_cap_reached") {
+      return {
+        status: "invalid",
+        error: `This project already has ${MAX_PROJECT_STANCES} stances (from every source), the most this command adds to; more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`,
+      };
+    }
+    throw err;
   }
-  if (memory.rejectedApproaches.length >= MAX_PROJECT_STANCES) {
-    return {
-      status: "invalid",
-      error: `This project already has ${memory.rejectedApproaches.length} stances, the most this command adds (${MAX_PROJECT_STANCES}); more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`,
-    };
-  }
-  await store.recordRejectedApproach({
-    description: v.concept,
-    concept: v.concept,
-    reason: v.reason,
-    addedVia: input.addedVia,
-    requestedBy: input.requestedBy,
-  });
   return { status: "recorded", concept: v.concept, reason: v.reason, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
+}
+
+function codeOf(err: unknown): unknown {
+  return (err as { code?: unknown } | null)?.code;
 }
 
 /** How a project stance came to exist, for listings and readback. */

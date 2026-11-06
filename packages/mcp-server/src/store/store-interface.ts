@@ -559,6 +559,12 @@ export interface IStore {
     /** #620 — provenance for a stance added from the terminal (store/stance-add.ts). */
     addedVia?: StanceAddedVia;
     requestedBy?: StanceRequestedBy;
+    /** #625 — only fill a missing field on an EXISTING row (exact description);
+     *  never create one. Throws code `stance_not_found` when the row is gone. */
+    fillOnly?: boolean;
+    /** #625 — refuse a NEW row once the project holds this many (all sources).
+     *  Throws code `stance_cap_reached`. Checked inside the preferences lock. */
+    maxRows?: number;
   }): MaybePromise<void>;
   recordApprovedPattern(params: {
     description: string;

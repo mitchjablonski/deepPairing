@@ -2054,8 +2054,10 @@ export class FileStore implements IStore {
     concept?: string;
     addedVia?: StanceAddedVia;
     requestedBy?: StanceRequestedBy;
+    fillOnly?: boolean;
+    maxRows?: number;
   }): void {
-    const { description, reason, sourceArtifactId, concept, addedVia, requestedBy } = params;
+    const { description, reason, sourceArtifactId, concept, addedVia, requestedBy, fillOnly, maxRows } = params;
     // #193 E2 — STORE-AUTHORITATIVE ledger guard (mirrors the #187 follow-up
     // stamping: the store owns the invariant so the client can neither forge
     // nor suppress it). The comprehension artifacts are NOT proposed approaches:
@@ -2102,6 +2104,11 @@ export class FileStore implements IStore {
     // lock is busy this throws before anything is written anywhere, so a
     // failed rejection never leaves a cross-project instance behind without
     // the local row the preflight gate actually reads.
+    // #625 review — `fillOnly` / `maxRows` are the terminal-stance doors'
+    // guards (store/stance-add.ts), decided INSIDE the preferences lock so a
+    // concurrent retire or add can't slip between the check and the write.
+    let refused: "stance_not_found" | "stance_cap_reached" | null = null;
+    let filled: { changed: boolean; concept?: string } | null = null;
     this.mutatePreferences((prefs) => {
       const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
       // Dedupe on the EXACT description. P3 note (deliberate, not an oversight):
@@ -2127,8 +2134,14 @@ export class FileStore implements IStore {
           existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
           prefs.rejectedApproaches = rejected;
         }
+        filled = { changed, concept: existing.concept };
         return changed;
       }
+      // A fill never creates a row: if the stance was retired meanwhile, the
+      // human's retire wins and nothing is written.
+      if (fillOnly) { refused = "stance_not_found"; return false; }
+      // Counts every row, whatever its source.
+      if (maxRows !== undefined && rejected.length >= maxRows) { refused = "stance_cap_reached"; return false; }
       rejected.push({
         description,
         reason: reason || undefined,
@@ -2163,7 +2176,29 @@ export class FileStore implements IStore {
     // suspenders, so removing just these gates stays green today. They are
     // deliberate defense-in-depth, not dead code: they keep the invariant
     // even if demo prefs ever get seeded from disk. Don't strip them.
-    const conceptKey = concept?.trim() || description.trim();
+    // (Assigned inside the lock callback; re-read through a cast so control
+    // flow analysis doesn't keep the initial `null` narrowing.)
+    const refusal = refused as "stance_not_found" | "stance_cap_reached" | null;
+    if (refusal) {
+      throw Object.assign(
+        new Error(refusal === "stance_cap_reached"
+          ? `This project already has ${maxRows} or more stances; refusing to add another.`
+          : `No stance "${description}" to add a reason to (it was retired).`),
+        { code: refusal },
+      );
+    }
+    // #625 review (H2) — a fill publishes only under the row's own CONCEPT,
+    // never its description (an artifact title can carry a file path), and
+    // only when it actually changed the row.
+    const fill = filled as { changed: boolean; concept?: string } | null;
+    let conceptKey: string;
+    if (fillOnly) {
+      const key = fill?.changed ? fill.concept?.trim() : undefined;
+      if (!key) return;
+      conceptKey = key;
+    } else {
+      conceptKey = concept?.trim() || description.trim();
+    }
     // #625 review — a terminal-added stance whose requester isn't verified
     // (the MCP door, or a CLI run it couldn't attribute) binds this project
     // only; it never reaches the cross-project ledger (isPublishableStance).

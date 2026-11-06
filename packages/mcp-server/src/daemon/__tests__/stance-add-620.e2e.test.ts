@@ -66,6 +66,22 @@ describe("#620 record_stance through the daemon", () => {
     expect(blocked.text).toContain(`Prior rejection reason: "${REASON}"`);
   });
 
+  it("#625 delta — the in-lock cap and the fill-only guard come back through the daemon as worded refusals", async () => {
+    world = new StanceWorld("dp-620-cap-");
+    const w = await world.wrapper();
+    const prefsPath = path.join(world.dir, ".deeppairing", "preferences.json");
+    fs.writeFileSync(prefsPath, JSON.stringify({ rejectedApproaches: Array.from({ length: 200 }, (_, i) => ({ description: `legacy stance number ${i}` })) }));
+    const capped = await w.call("record_stance", { text: `${CONCEPT} -- ${REASON}`, requestedBy: "user" });
+    expect(capped.isError).toBe(true);
+    expect(capped.text).toContain("already has 200 stances (from every source)");
+    expect(prefsRows(world.dir)).toHaveLength(200);
+    // A fill against a row that isn't there is refused with its code, not created.
+    await expect(
+      w.client.recordRejectedApproach({ description: "not a stance here", reason: REASON, fillOnly: true }),
+    ).rejects.toMatchObject({ code: "stance_not_found" });
+    expect(prefsRows(world.dir)).toHaveLength(200);
+  });
+
   it("the daemon route rejects a forged provenance value instead of storing it", async () => {
     world = new StanceWorld("dp-620-forge-");
     const w = await world.wrapper();

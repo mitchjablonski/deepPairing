@@ -284,6 +284,60 @@ describe("#620 record_stance (the /deeppairing:reject door)", () => {
     if (viaCliUser.status === "recorded") expect(formatRecordStanceOutcome(viaCliUser, "This project").text).toMatch(/only if this project publishes/);
   });
 
+  it("#625 delta — a reason fill publishes under the row's CONCEPT, never the artifact title (H2)", async () => {
+    const { store } = project();
+    const title = "packages/api/src/auth/session-store.ts — swap Redis for a Map";
+    // Rejected in the companion (publishing off), with a named concept, no reason.
+    store.recordRejectedApproach({ description: title, concept: "redis session store", sourceArtifactId: "art_cs1" });
+    // A second row with NO concept: a fill must not publish it at all.
+    const bareTitle = "src/legacy/cache.ts — global cache singleton";
+    store.recordRejectedApproach({ description: bareTitle, sourceArtifactId: "art_cs2" });
+    store.setGlobalLedgerPublish(true);
+    const a = await recordStance(store, { what: "redis session store", why: REASON, addedVia: "cli", requestedBy: "user" });
+    const b = await recordStance(store, { what: bareTitle, why: REASON, addedVia: "cli", requestedBy: "user" });
+    expect([a.status, b.status]).toEqual(["reason_added", "reason_added"]);
+    const ledger = getGlobalStore().query({ limit: 100 });
+    expect(ledger.map((e) => e.concept.toLowerCase())).toEqual(["redis session store"]);
+    const dump = JSON.stringify(ledger);
+    expect(dump).not.toContain("session-store.ts");
+    expect(dump).not.toContain("legacy/cache.ts");
+    expect(dump).toContain(REASON);
+    const rows = store.getSessionMemory().rejectedApproaches;
+    expect(rows.map((r) => r.reason)).toEqual([REASON, REASON]);
+  });
+
+  it("#625 delta — a stance retired between the read and the fill stays retired (the fill never creates a row)", async () => {
+    const { root, store } = project();
+    store.recordRejectedApproach({ description: CONCEPT, concept: CONCEPT, sourceArtifactId: "art_r" });
+    const racing = {
+      getSessionMemory: () => {
+        const m = store.getSessionMemory();
+        store.overrideRejectedApproach({ concept: CONCEPT }); // the human retires it right after the read
+        return m;
+      },
+      recordRejectedApproach: (p: Parameters<FileStore["recordRejectedApproach"]>[0]) => store.recordRejectedApproach(p),
+    };
+    const out = await recordStance(racing, { what: CONCEPT, why: REASON, addedVia: "cli", requestedBy: "user" });
+    expect(out.status).toBe("invalid");
+    if (out.status === "invalid") expect(out.error).toMatch(/was retired while this ran/);
+    expect(prefsOf(root).rejectedApproaches).toEqual([]);
+  });
+
+  it("#625 delta — the cap is decided inside the store's lock, not from the (possibly stale) read", async () => {
+    const { root, store } = project();
+    const prefsPath = path.join(root, ".deeppairing", "preferences.json");
+    fs.writeFileSync(prefsPath, JSON.stringify({ rejectedApproaches: Array.from({ length: MAX_PROJECT_STANCES }, (_, i) => ({ description: `legacy stance number ${i}` })) }));
+    const before = fs.readFileSync(prefsPath, "utf-8");
+    const stale = {
+      getSessionMemory: () => ({ rejectedApproaches: [], approvedPatterns: [] }), // a read from before a concurrent add filled the file
+      recordRejectedApproach: (p: Parameters<FileStore["recordRejectedApproach"]>[0]) => store.recordRejectedApproach(p),
+    };
+    const out = await recordStance(stale, { what: CONCEPT, why: REASON, addedVia: "mcp", requestedBy: "user" });
+    expect(out.status).toBe("invalid");
+    if (out.status === "invalid") expect(out.error).toContain(`already has ${MAX_PROJECT_STANCES} stances (from every source)`);
+    expect(fs.readFileSync(prefsPath, "utf-8")).toBe(before);
+  });
+
   it("provenance survives a later write to the same file (another rejection, a retire of a different row)", async () => {
     const { root, store } = project();
     await recordStance(store, { what: CONCEPT, why: REASON, addedVia: "mcp", requestedBy: "user" });
@@ -436,6 +490,24 @@ describe("#620 `deeppairing stance add` (CLI runner, same code path)", () => {
     expect(run.err.join("")).toContain(`No deepPairing project at or above ${proj}`);
     expect(fs.readFileSync(path.join(home, ".deeppairing", "preferences.json"), "utf-8")).toBe("{}");
     expect(fs.existsSync(path.join(proj, ".deeppairing"))).toBe(false);
+  });
+
+  it("#625 delta — CLAUDE_PROJECT_DIR wins over the walk-up (the hook's root), even with no .deeppairing/ there yet", async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "dp-620-parent-"));
+    plainDirs.push(parent);
+    fs.mkdirSync(path.join(parent, ".deeppairing", "sessions"), { recursive: true });
+    const child = path.join(parent, "child");
+    fs.mkdirSync(child);
+    // Control: without the env, the walk-up lands on the parent's project.
+    const walked = io(child);
+    expect(await runStanceAddCommand([CONCEPT, "--", REASON], walked)).toBe(0);
+    expect(walked.state.roots).toEqual([parent]);
+    // With the hook's env naming the child, the child is the project.
+    const pinned = io(child, { env: { CLAUDE_PROJECT_DIR: child } });
+    expect(await runStanceAddCommand(["redis for caching", "--", REASON], pinned)).toBe(0);
+    expect(pinned.state.roots).toEqual([child]);
+    expect(pinned.out.join("")).toContain(`(${child})`);
+    expect((prefsOf(child).rejectedApproaches ?? []).map((r) => r.concept)).toEqual(["redis for caching"]);
   });
 
   it("a failed write surfaces as a thrown error, not a silent success", async () => {
