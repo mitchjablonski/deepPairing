@@ -19,8 +19,9 @@ import { pushStaleDaemonToast, STALE_DAEMON_TOAST_TITLE } from "../../lib/daemon
  *
  * Setting-gated — ONLY with the Next-up bar ON: the request row collapses to a
  * header "Request" button (pips + resume bridge move into the bar), the demo CTA
- * and wrap card render inside the bar, and the `Agents:` row becomes a filter
- * menu in the sidebar header. OFF: each stays exactly where it is today.
+ * and wrap card render inside the bar. OFF: each stays exactly where it is
+ * today. The `Agents:` row is the sidebar-header filter menu in BOTH modes since
+ * #430 slice 2 (D1, AttentionSlice2.test.tsx has the OFF paths).
  *
  * Unflagged: the ⋯ dot keys on unread blocks + both nag kinds; the session dot
  * pulses only while the agent works; one stale-daemon toast helper. (The shared
@@ -162,16 +163,19 @@ describe("#430 PR 5 — demo CTA and wrap card", () => {
   });
 });
 
-describe("#430 PR 5 — the Agents row becomes a filter menu (ON)", () => {
+describe("#430 PR 5, slice 2 — the Agents row becomes a filter menu", () => {
   const seed = () => useArtifactStore.setState({
     artifacts: [art("a1", "From agent one"), art("a2", "From agent two", { sessionId: "s2" })],
   } as any);
 
-  it("OFF: the Agents: row, unchanged", () => {
+  // Flipped on purpose by #430 slice 2 (D1): OFF used to keep the row.
+  it("OFF: the same menu, no row, while the sidebar is expanded", () => {
     seed();
     render(<ArtifactPanel />);
-    expect(screen.getByText("Agents:")).toBeInTheDocument();
-    expect(screen.queryByTestId("agents-filter-menu")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agents:")).not.toBeInTheDocument();
+    const menu = screen.getByTestId("agents-filter-menu") as HTMLSelectElement;
+    expect(menu.closest("nav[aria-label='Artifacts']")).not.toBeNull();
+    expect(Array.from(menu.options).map((o) => o.textContent)).toEqual(["All (2)", "Agent 1 (1)", "Agent 2 (1)"]);
   });
 
   it("ON: a menu in the sidebar header with the same options, and it filters", () => {

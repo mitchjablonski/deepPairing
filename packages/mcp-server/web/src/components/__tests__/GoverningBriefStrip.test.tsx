@@ -177,9 +177,9 @@ describe("GoverningBriefStrip (#571 slice 2)", () => {
     s.addArtifact(art({ id: "r2", sessionId: "s2", type: "research", title: "S2 research", content: { summary: "s", findings: [] } }));
     render(<ArtifactPanel />);
     expect(strip()).not.toBeInTheDocument(); // "All" agents: no unlabelled pin
-    fireEvent.click(screen.getByRole("button", { name: /^Agent 1 \(/ }));
+    fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "s1" } });
     expect(within(strip()!).getByTestId("governing-brief-title")).toHaveTextContent("S1 brief");
-    fireEvent.click(screen.getByRole("button", { name: /^Agent 2 \(/ }));
+    fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "s2" } });
     expect(strip()).not.toBeInTheDocument(); // s2 has no brief of its own
   });
 
