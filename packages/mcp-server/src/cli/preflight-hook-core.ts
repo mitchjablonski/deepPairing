@@ -976,6 +976,7 @@ export function runPreflightSkippingBadEntries(args: {
       rejectedApproaches: args.entries.map((e) => e.entry),
       teamPreferences: args.teamPreferences,
       rawEditText: true,
+      projectRelativePaths: true,
     },
     (i) => args.entries[i]!.index,
   );

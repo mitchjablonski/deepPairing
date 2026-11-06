@@ -356,7 +356,7 @@ export function isCrossProjectAdvisoryHit(
  * `packages/auth/**`, `src/*.ts`. We avoid adding minimatch as a
  * dependency just for this.
  */
-export function matchesGlob(pathStr: string, glob: string): boolean {
+export function matchesGlob(pathStr: string, glob: string, opts: GlobOptions = {}): boolean {
   const escape = (s: string) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
   let re = "";
   for (let i = 0; i < glob.length; i++) {
@@ -369,7 +369,27 @@ export function matchesGlob(pathStr: string, glob: string): boolean {
       re += escape(glob[i]!); // `!` safe: i < glob.length loop bound
     }
   }
-  return new RegExp(`^${re}$`).test(pathStr);
+  const regex = new RegExp(`^${re}$`);
+  if (regex.test(pathStr)) return true;
+  // #621 — a leading `**/` also matches at the project root, but only for that
+  // glob shape: `**/api/**` takes a top-level `api/x.ts`; `*/x.ts` and `*/**`
+  // still need a directory.
+  return !!opts.projectRelativePaths && glob.startsWith("**/") && !pathStr.startsWith("/") && regex.test(`/${pathStr}`);
+}
+
+export interface GlobOptions {
+  /**
+   * #621 — the paths are project-relative, as the PreToolUse hook now passes
+   * them (teamScopePaths). An absolute path used to give a leading `**` + `/`
+   * glob the separator it needs for a top-level file; this keeps that one case.
+   * present_* calls leave it off, so their matching is unchanged.
+   */
+  projectRelativePaths?: boolean;
+}
+
+/** A scoped team rule applies when some proposal path matches one of its globs. */
+function scopeHit(pref: TeamPreference, proposalPaths: string[], opts: GlobOptions): boolean {
+  return proposalPaths.some((p) => pref.scope!.paths!.some((g) => matchesGlob(p, g, opts)));
 }
 
 /**
@@ -390,6 +410,7 @@ export function findTeamPreferenceViolation(
   proposalStrings: string[],
   prefs: TeamPreference[],
   proposalPaths: string[] = [],
+  globOpts: GlobOptions = {},
 ): { proposal: string; pref: TeamPreference; via: "avoid" | "require" } | null {
   for (const pref of prefs) {
     if (pref.kind === "prefer") continue; // 'prefer' is taste, never blocks
@@ -400,8 +421,7 @@ export function findTeamPreferenceViolation(
     // NOT blocking (avoid false positives on unrelated work).
     if (pref.scope?.paths?.length) {
       if (proposalPaths.length === 0) continue;
-      const hit = proposalPaths.some((p) => pref.scope!.paths!.some((g) => matchesGlob(p, g)));
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
 
     if (pref.kind === "avoid") {
@@ -575,6 +595,8 @@ export interface PreflightInput {
    * see findRejectedApproachMatch. Absent on every present_* call.
    */
   rawEditText?: boolean;
+  /** #621 — `proposalPaths` are project-relative (the hook). See GlobOptions. */
+  projectRelativePaths?: boolean;
 }
 
 export interface PreflightBlock {
@@ -627,7 +649,8 @@ export type PreflightResult =
  * recent stance and is what their brain expects to be enforced.
  */
 export function runPreflight(input: PreflightInput): PreflightResult {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, projectRelativePaths = false } = input;
+  const globOpts: GlobOptions = { projectRelativePaths };
 
   // (A) Near-miss + concept↔concept both benefit from also weighing the
   // agent's NAMED concept(s), not just the prose. The named concept is short
@@ -654,10 +677,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
     if (pref.kind === "prefer") continue; // never blocks; drop from "considered" too
     // Scope filter: skip prefs whose scope doesn't touch any proposal path.
     if (pref.scope?.paths?.length) {
-      const hit = proposalPaths.some((p) =>
-        pref.scope!.paths!.some((g) => matchesGlob(p, g)),
-      );
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
     considered.push({
       source: "team",
@@ -689,10 +709,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   for (const pref of teamPreferences) {
     if (pref.kind === "prefer") continue;
     if (pref.scope?.paths?.length) {
-      const hit = proposalPaths.some((p) =>
-        pref.scope!.paths!.some((g) => matchesGlob(p, g)),
-      );
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
     const cov = Math.max(
       ...coverageTexts.map((p) => tokenCoverage(pref.concept, p)),
@@ -804,7 +821,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   // memory: a team pref is committed to a file in the repo, so the block
   // message attributes to "team policy" not "the user".
   if (teamPreferences.length > 0) {
-    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths, globOpts);
     // (A) concept↔concept fallback for team 'avoid' prefs (require stays
     // domain-gated in findTeamPreferenceViolation). Same scope discipline: a
     // scoped pref only fires when the proposal's paths intersect the scope, and
@@ -814,8 +831,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
         if (pref.kind !== "avoid") continue;
         if (pref.scope?.paths?.length) {
           if (proposalPaths.length === 0) continue;
-          const hit = proposalPaths.some((p) => pref.scope!.paths!.some((g) => matchesGlob(p, g)));
-          if (!hit) continue;
+          if (!scopeHit(pref, proposalPaths, globOpts)) continue;
         }
         const cc = findConceptToConceptMatch(proposalConcepts, [pref.concept]);
         if (cc) {

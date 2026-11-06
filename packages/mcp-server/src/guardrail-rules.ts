@@ -420,32 +420,30 @@ function physicalResolve(base: string, spelling: string): string | null {
  * inside the root, but `packages/api/**` is what it means). Unlike the
  * any-depth guardrail rules, an anchored glob can't absorb that prefix.
  *
- * Symlinks: the path as written and the path the write really lands on both
- * count, against the root as written and its realpath. So a link into the scope
- * fires, a project reached through a link works either way round, and a link
- * leading out of the project adds nothing. The guardrail backstop stays lexical.
+ * Symlinks: the target is resolved the way the filesystem opens it
+ * (physicalResolve, from the raw spelling, so `alias/../x.ts` follows `alias`
+ * before taking its parent), against the root as written and its realpath. A
+ * link into the scope fires, a project reached through a link works either way
+ * round, and a link leading out of the project satisfies no scope. Only if that
+ * resolution fails does the lexical spelling stand in. The guardrail backstop
+ * stays lexical.
  *
- * Each path also comes with a leading `/`. matchesGlob's `**` + `/` needs a
- * separator, so `**` + `/api/**` can't match `api/x.ts` without it, and the
- * absolute path used to satisfy those globs. The cost is that `*` + `/x.ts`
- * also matches a root-level `x.ts`.
+ * The result is project-relative with no leading `/`. A leading `**` + `/`
+ * glob still matches a file at the top of the project through the hook's
+ * `projectRelativePaths` matching (preflight-validator.ts matchesGlob), which
+ * applies to that glob shape only.
  */
 export function teamScopePaths(projectRoot: string, raw: string): string[] {
   try {
-    const abs = path.resolve(projectRoot, raw);
     const roots = new Set([projectRoot]);
     const realRoot = realpathish(path.resolve(projectRoot));
     if (realRoot) roots.add(realRoot);
-    const targets = new Set([abs]);
-    const realTarget = realpathish(abs);
-    if (realTarget) targets.add(realTarget);
+    const target = physicalResolve(projectRoot, raw) ?? path.resolve(projectRoot, raw);
+    const mapped = canonicalizeWorktreePath(target);
     const out = new Set<string>();
-    for (const target of targets) {
-      const mapped = canonicalizeWorktreePath(target);
-      for (const root of roots) {
-        const rel = (mapped.worktree ? relativeInside(root, mapped.path) : null) ?? relativeInside(root, target);
-        if (rel) out.add(rel).add(`/${rel}`);
-      }
+    for (const root of roots) {
+      const rel = (mapped.worktree ? relativeInside(root, mapped.path) : null) ?? relativeInside(root, target);
+      if (rel) out.add(rel);
     }
     return [...out];
   } catch {

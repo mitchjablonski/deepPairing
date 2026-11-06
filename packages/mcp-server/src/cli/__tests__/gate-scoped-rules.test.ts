@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { canonicalProjectDir } from "../../git-worktree.js";
-import { runPreflight } from "../../mcp/preflight-validator.js";
+import { matchesGlob, runPreflight } from "../../mcp/preflight-validator.js";
 import { loadTeamPreferences } from "../../store/project-signals.js";
 import { evaluatePreflightHook, readTeamPreferences, type PreflightFailureSink } from "../preflight-hook-core.js";
 import { ensurePreflightHook } from "../setup-tasks.js";
@@ -109,6 +109,28 @@ describe("#621.1 a path-scoped team rule against the path Claude Code really sen
     expect(editFires(root, path.join(root, "web/x.ts")).fire).toBe(false);
   });
 
+  it("a leading **/ glob reaches the top of the project; a leading */ glob still needs a directory", () => {
+    scopedRule(root, "**/api/**");
+    expect(editFires(root, path.join(root, "api/x.ts")).fire).toBe(true);
+    scopedRule(root, "*/x.ts");
+    expect(editFires(root, path.join(root, "x.ts")).fire).toBe(false);
+    expect(editFires(root, path.join(root, "src/x.ts")).fire).toBe(true);
+    scopedRule(root, "*/**");
+    expect(editFires(root, path.join(root, "README.md")).fire).toBe(false);
+    expect(editFires(root, path.join(root, "src/README.md")).fire).toBe(true);
+    scopedRule(root, "*/api/**");
+    expect(editFires(root, path.join(root, "api/x.ts")).fire).toBe(false);
+    expect(editFires(root, path.join(root, "packages/api/x.ts")).fire).toBe(true);
+  });
+
+  it("the root-level **/ allowance is the hook's alone: present_* matching is unchanged", () => {
+    expect(matchesGlob("api/x.ts", "**/api/**")).toBe(false);
+    expect(matchesGlob("api/x.ts", "**/api/**", { projectRelativePaths: true })).toBe(true);
+    expect(matchesGlob("x.ts", "*/x.ts", { projectRelativePaths: true })).toBe(false);
+    expect(matchesGlob("README.md", "*/**", { projectRelativePaths: true })).toBe(false);
+    expect(matchesGlob("/x.ts", "**/x.ts", { projectRelativePaths: true })).toBe(true);
+  });
+
   it("a directory ABOVE the project is not part of what a scope sees", () => {
     const nested = newProject(path.join(base, "api", "project"));
     scopedRule(nested, "**/api/**");
@@ -154,11 +176,35 @@ describe("#621.1 a path-scoped team rule against the path Claude Code really sen
       expect(editFires(link, path.join(root, "packages/web/x.ts")).fire).toBe(false);
     });
 
-    it("a symlink leading out of the project doesn't bring an outside file into scope", () => {
+    it("a link inside the scope that leads out of the project satisfies no scope", () => {
       fs.mkdirSync(path.join(base, "elsewhere"), { recursive: true });
-      fs.symlinkSync(path.join(base, "elsewhere"), path.join(root, "vendored"));
+      fs.mkdirSync(path.join(root, "packages/api"), { recursive: true });
+      fs.symlinkSync(path.join(base, "elsewhere"), path.join(root, "packages/api/vendored"));
       scopedRule(root, "packages/api/**");
-      expect(editFires(root, path.join(root, "vendored/x.ts")).fire).toBe(false);
+      // As written it's under packages/api; the write lands outside the project.
+      expect(editFires(root, path.join(root, "packages/api/vendored/x.ts")).fire).toBe(false);
+      expect(editFires(root, "packages/api/vendored/x.ts").fire).toBe(false);
+      expect(editFires(root, path.join(root, "packages/api/x.ts")).fire).toBe(true);
+    });
+
+    it("a link followed by .. resolves the way the filesystem opens it, into the scope", () => {
+      fs.mkdirSync(path.join(root, "packages/api/deep"), { recursive: true });
+      fs.symlinkSync(path.join(root, "packages/api/deep"), path.join(root, "alias"));
+      scopedRule(root, "packages/api/**");
+      // path.resolve would collapse alias/.. to the root: project/x.ts.
+      expect(editFires(root, `${root}/alias/../x.ts`).fire).toBe(true);
+      expect(editFires(root, "alias/../x.ts").fire).toBe(true);
+      expect(editFires(root, `${root}/x.ts`).fire).toBe(false);
+    });
+
+    it("a link followed by .. out of the scope doesn't fire, though its spelling looks in scope", () => {
+      fs.mkdirSync(path.join(root, "packages/web/deep"), { recursive: true });
+      fs.mkdirSync(path.join(root, "packages/api"), { recursive: true });
+      fs.symlinkSync(path.join(root, "packages/web/deep"), path.join(root, "packages/api/link"));
+      scopedRule(root, "packages/api/**");
+      // Lexically packages/api/x.ts; the filesystem opens packages/web/x.ts.
+      expect(editFires(root, `${root}/packages/api/link/../x.ts`).fire).toBe(false);
+      expect(editFires(root, "packages/api/link/../x.ts").fire).toBe(false);
     });
   });
 
@@ -376,6 +422,9 @@ describe.each(["init", "plugin"] as const)("#621 through the %s hook as a real p
 
   it("2: a bad addedAt stops the hook enforcing the file", () => {
     const s = script();
+    // Positive control in the same setup: a live hook asks on the good file.
+    writeTeam(root, [{ id: "t1", kind: "avoid", concept: CONCEPT, rationale: "breaks test isolation", addedAt: "2026-01-02T03:04:05Z" }]);
+    expect(hook(s, root, { file_path: path.join(root, "src/x.ts"), new_string: EDIT }).decision).toBe("ask");
     writeTeam(root, [{ id: "t1", kind: "avoid", concept: CONCEPT, rationale: "breaks test isolation", addedAt: "last Tuesday" }]);
     expect(hook(s, root, { file_path: path.join(root, "src/x.ts"), new_string: EDIT }).stdout).toBe("");
   });
