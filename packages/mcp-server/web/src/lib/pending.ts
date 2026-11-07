@@ -132,3 +132,15 @@ export function isSinglePendingInView(
   const { drafts } = computePending(artifacts);
   return drafts.length === 1 && !!selectedArtifactId && drafts[0]!.id === selectedArtifactId;
 }
+
+/** A terminal-held lead has no artifact card, so the artifact-only step-down
+ * never hides it. Shared by the banner and the header's count deduplication. */
+export function isPendingBannerVisible(
+  artifacts: Artifact[],
+  selectedArtifactId: string | null | undefined,
+  terminalHeldLead: boolean,
+): boolean {
+  return terminalHeldLead || (
+    computePending(artifacts).total > 0 && !isSinglePendingInView(artifacts, selectedArtifactId)
+  );
+}

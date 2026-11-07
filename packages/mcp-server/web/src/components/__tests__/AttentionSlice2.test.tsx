@@ -85,6 +85,51 @@ const menu = () => screen.getByTestId("agents-filter-menu") as HTMLSelectElement
 const inSidebar = (id: string) => document.querySelector(`nav[aria-label='Artifacts'] [data-artifact-item="${id}"]`);
 const activeRowButton = () => document.querySelector<HTMLElement>("[data-agents-active]");
 
+describe("#430 ordering follow-up — App banner/header consistency", () => {
+  it.each([
+    { name: "terminal-held lead", type: "research", over: {}, boundary: null, visible: true },
+    { name: "older blocking draft displaces hold", type: "plan", over: {}, boundary: null, visible: false },
+    { name: "daemon-seen hold", type: "research", over: { seenAt: minute(2) }, boundary: null, visible: false },
+    { name: "hold at the unread boundary", type: "research", over: {}, boundary: minute(1), visible: false },
+    { name: "ordinary denial is not a terminal ask", type: "research", over: { decision: "deny" as const }, boundary: null, visible: false },
+  ])("selected sole draft: $name", async ({ type, over, boundary, visible }) => {
+    const hold = ask("held", minute(1), over);
+    fakeDaemon(() => [hold]);
+    usePreflightBlockStore.setState({ blocks: [hold], lastSeenAt: boundary });
+    useArtifactStore.setState({
+      artifacts: [art("only", "Only draft", { type, status: "draft", content: type === "plan" ? { steps: [] } : { summary: "s", findings: [] } })],
+      selectedArtifactId: "only",
+    });
+    render(<App />);
+    await waitFor(() => {
+      const banner = screen.queryByRole("region", { name: "Waiting for you" });
+      const pill = screen.getByRole("button", { name: /Your turn —/ });
+      if (visible) {
+        expect(banner).toBeInTheDocument();
+        expect(within(banner!).getByText("1 item waiting for you")).toBeInTheDocument();
+        expect(screen.getByTestId("pending-next")).toHaveTextContent("HELD IN TERMINAL");
+        expect(pill).toHaveTextContent(/^Your turn$/);
+      } else {
+        expect(banner).not.toBeInTheDocument();
+        expect(pill).toHaveTextContent(/^1 for you$/);
+      }
+    });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("only");
+  });
+
+  it("updates the App's pill when the held lead leaves the unread set", async () => {
+    const hold = ask("held", minute(1));
+    fakeDaemon(() => [hold]);
+    usePreflightBlockStore.setState({ blocks: [hold], lastSeenAt: null });
+    useArtifactStore.setState({ artifacts: [art("only", "Only draft", { status: "draft" })], selectedArtifactId: "only" });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /Your turn —/ })).toHaveTextContent(/^Your turn$/));
+    act(() => { usePreflightBlockStore.setState({ lastSeenAt: minute(1) }); });
+    expect(screen.queryByRole("region", { name: "Waiting for you" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Your turn —/ })).toHaveTextContent(/^1 for you$/);
+  });
+});
+
 describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
   const two = () => [art("a1", "From agent one"), art("a2", "From agent two", { sessionId: "s2" })];
 

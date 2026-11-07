@@ -40,6 +40,26 @@ describe("E3 (L1) — the n shortcut", () => {
     expect(useArtifactStore.getState().selectedArtifactId).toBe("a1");
   });
 
+  it.each([null, "done"])("n/N use consequence/oldest/id order from selection %s", (selectedArtifactId) => {
+    const finding = { ...art("finding"), createdAt: "2026-01-01T00:00:00.000Z" };
+    const plan = { ...art("plan"), type: "plan", content: { steps: [] }, createdAt: "2026-07-01T00:01:00.000Z" };
+    const decision = (id: string) => ({ ...art(id), type: "decision", content: { context: "Choose", options: [] } });
+    useArtifactStore.setState({
+      artifacts: [finding, plan, decision("d_b"), art("done", "approved"), decision("d_a")],
+      selectedArtifactId,
+    });
+    render(<App />);
+    for (const expected of ["d_a", "d_b", "plan", "finding", "d_a"]) {
+      fireEvent.keyDown(document, { key: "n" });
+      expect(useArtifactStore.getState().selectedArtifactId).toBe(expected);
+    }
+    act(() => { useArtifactStore.getState().selectArtifact(selectedArtifactId); });
+    for (const expected of ["finding", "plan", "d_b", "d_a", "finding"]) {
+      fireEvent.keyDown(document, { key: "N" });
+      expect(useArtifactStore.getState().selectedArtifactId).toBe(expected);
+    }
+  });
+
   it("n typed into a textarea does NOT cycle (typing guard)", () => {
     render(<App />);
     const ta = document.createElement("textarea");
