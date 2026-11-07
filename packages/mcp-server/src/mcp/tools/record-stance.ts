@@ -35,7 +35,11 @@ export async function handleRecordStance(ctx: ToolContext, args: any): Promise<T
     };
   }
   const { what, why } = parseStanceArguments(args.text);
-  const outcome = await recordStance(ctx.store, { what, why, addedVia: "mcp", requestedBy: "user" });
+  const addStance = ctx.store.addStance?.bind(ctx.store);
+  if (!addStance) {
+    return { content: [{ type: "text", text: "record_stance: nothing was recorded. This store can't add stances (no project-bound deepPairing store)." }], isError: true };
+  }
+  const outcome = await recordStance({ addStance }, { what, why, addedVia: "mcp", requestedBy: "user" });
   const { ok, text } = formatRecordStanceOutcome(outcome, "This project");
   return ok ? { content: [{ type: "text", text }] } : { content: [{ type: "text", text: `record_stance: ${text}` }], isError: true };
 }

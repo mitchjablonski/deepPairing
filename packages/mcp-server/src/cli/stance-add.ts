@@ -33,7 +33,7 @@ export interface StanceAddIo {
   stdinIsTTY: boolean;
   write: (text: string) => void;
   writeErr: (text: string) => void;
-  openStore: (projectRoot: string) => Promise<Pick<IStore, "recordRejectedApproach" | "getSessionMemory"> & { dispose?: () => void }>;
+  openStore: (projectRoot: string) => Promise<Required<Pick<IStore, "addStance">> & { dispose?: () => void }>;
   /** Defaults to os.homedir(); injectable for tests. */
   homeDir?: string;
 }

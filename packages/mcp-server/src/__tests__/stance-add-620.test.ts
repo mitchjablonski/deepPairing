@@ -306,36 +306,31 @@ describe("#620 record_stance (the /deeppairing:reject door)", () => {
     expect(rows.map((r) => r.reason)).toEqual([REASON, REASON]);
   });
 
-  it("#625 delta — a stance retired between the read and the fill stays retired (the fill never creates a row)", async () => {
+  it("#625 Sol P2 — concurrent same-stance adds: one row, and every response quotes the PERSISTED reason (bounded)", async () => {
     const { root, store } = project();
-    store.recordRejectedApproach({ description: CONCEPT, concept: CONCEPT, sourceArtifactId: "art_r" });
-    const racing = {
-      getSessionMemory: () => {
-        const m = store.getSessionMemory();
-        store.overrideRejectedApproach({ concept: CONCEPT }); // the human retires it right after the read
-        return m;
-      },
-      recordRejectedApproach: (p: Parameters<FileStore["recordRejectedApproach"]>[0]) => store.recordRejectedApproach(p),
-    };
-    const out = await recordStance(racing, { what: CONCEPT, why: REASON, addedVia: "cli", requestedBy: "user" });
-    expect(out.status).toBe("invalid");
-    if (out.status === "invalid") expect(out.error).toMatch(/was retired while this ran/);
-    expect(prefsOf(root).rejectedApproaches).toEqual([]);
-  });
-
-  it("#625 delta — the cap is decided inside the store's lock, not from the (possibly stale) read", async () => {
-    const { root, store } = project();
-    const prefsPath = path.join(root, ".deeppairing", "preferences.json");
-    fs.writeFileSync(prefsPath, JSON.stringify({ rejectedApproaches: Array.from({ length: MAX_PROJECT_STANCES }, (_, i) => ({ description: `legacy stance number ${i}` })) }));
-    const before = fs.readFileSync(prefsPath, "utf-8");
-    const stale = {
-      getSessionMemory: () => ({ rejectedApproaches: [], approvedPatterns: [] }), // a read from before a concurrent add filled the file
-      recordRejectedApproach: (p: Parameters<FileStore["recordRejectedApproach"]>[0]) => store.recordRejectedApproach(p),
-    };
-    const out = await recordStance(stale, { what: CONCEPT, why: REASON, addedVia: "mcp", requestedBy: "user" });
-    expect(out.status).toBe("invalid");
-    if (out.status === "invalid") expect(out.error).toContain(`already has ${MAX_PROJECT_STANCES} stances (from every source)`);
-    expect(fs.readFileSync(prefsPath, "utf-8")).toBe(before);
+    const variants = [
+      `${CONCEPT} -- first reason wins`,
+      `${CONCEPT} -- second reason loses`,
+      `  GLOBAL mutable STATE for config -- a case variant`,
+      `Global Mutable State For Config -- another variant`,
+    ];
+    // Promise.all interleaves the doors' awaits — the old read-then-write path
+    // let every one of these read an empty ledger and claim its own reason.
+    const outs = await Promise.all(variants.map((t) =>
+      recordStance(store, { ...parseStanceArguments(t), addedVia: "mcp", requestedBy: "user" })));
+    const rows = prefsOf(root).rejectedApproaches ?? [];
+    expect(rows).toHaveLength(1);
+    const persisted = rows[0]!.reason as string;
+    expect(outs.filter((o) => o.status === "recorded")).toHaveLength(1);
+    expect(outs.filter((o) => o.status === "exists")).toHaveLength(variants.length - 1);
+    for (const o of outs) {
+      expect(o.status === "recorded" || o.status === "exists").toBe(true);
+      if (o.status === "recorded" || o.status === "exists") {
+        expect(o.row.reason).toBe(persisted);
+        expect(o.row.description).toBe(rows[0]!.description);
+        expect(formatRecordStanceOutcome(o, "This project").text).toContain(`"${persisted}"`);
+      }
+    }
   });
 
   it("provenance survives a later write to the same file (another rejection, a retire of a different row)", async () => {
@@ -514,8 +509,7 @@ describe("#620 `deeppairing stance add` (CLI runner, same code path)", () => {
     const { root } = project();
     const failing = io(root, {
       openStore: async () => ({
-        getSessionMemory: () => ({ rejectedApproaches: [], approvedPatterns: [] }),
-        recordRejectedApproach: () => { throw Object.assign(new Error("Project preferences lock busy"), { code: "ELOCKED" }); },
+        addStance: () => { throw Object.assign(new Error("Project preferences lock busy"), { code: "ELOCKED" }); },
       }),
     });
     await expect(runStanceAddCommand([CONCEPT, "--", REASON], failing)).rejects.toThrow(/lock busy/);

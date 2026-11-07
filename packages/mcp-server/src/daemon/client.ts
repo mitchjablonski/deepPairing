@@ -13,6 +13,8 @@ import type {
   AddCommentParams,
   RecordDecisionParams,
   RejectedApproach,
+  AddStanceParams,
+  AddStanceResult,
   RenderFailureRecord,
 } from "../store/store-interface.js";
 import { projectHashOf, BASE_PORT } from "../project-root.js";
@@ -778,8 +780,18 @@ export class DaemonClient implements IStore {
 
   // AA1 — typed-object signatures matching IStore. Wire shape unchanged
   // (the daemon's /memory/* routes already accepted this object).
-  async recordRejectedApproach(params: Parameters<IStore["recordRejectedApproach"]>[0]): Promise<void> {
+  async recordRejectedApproach(params: {
+    description: string;
+    reason?: string;
+    sourceArtifactId?: string;
+    concept?: string;
+  }): Promise<void> {
     await this.post("/memory/rejected", params);
+  }
+
+  /** #620/#625 — one daemon-side transaction (FileStore.addStance); returns the persisted row. */
+  async addStance(params: AddStanceParams): Promise<AddStanceResult> {
+    return this.post("/memory/stance", params);
   }
 
   async recordApprovedPattern(params: { description: string; concept?: string }): Promise<void> {

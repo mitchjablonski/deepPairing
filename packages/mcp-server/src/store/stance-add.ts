@@ -1,4 +1,4 @@
-import { findRejectedApproachMatch, meaningfulTokens, normalizeConceptKey, containmentBlockAllowed } from "../mcp/preflight-validator.js";
+import { findRejectedApproachMatch, meaningfulTokens, containmentBlockAllowed } from "../mcp/preflight-validator.js";
 import { scanForSecrets } from "../secret-scan.js";
 import type { IStore, RejectedApproach, StanceAddedVia, StanceRequestedBy } from "./store-interface.js";
 
@@ -12,8 +12,9 @@ import type { IStore, RejectedApproach, StanceAddedVia, StanceRequestedBy } from
  *
  * ONE PERSISTENCE PATH, NOTHING NEW MATCHED. A stance added here is an
  * ordinary project-local row in `.deeppairing/preferences.json`
- * `rejectedApproaches`, written by `IStore.recordRejectedApproach` (the same
- * write a rejected artifact or "None of these fit" uses), keyed like
+ * `rejectedApproaches` (the same list a rejected artifact or "None of these
+ * fit" writes, under the same preferences lock), written in one transaction by
+ * `IStore.addStance` (#625: dedupe, fill, cap and insert together), keyed like
  * recordRejectedOptionConcept: `description === concept === <what>`,
  * `reason === <why>`. The present_* gate, the PreToolUse hook, the gate log's
  * Retire, allow-once, the cross-project publish opt-in and a daemon restart
@@ -191,76 +192,41 @@ export function describeStanceCoverage(concept: string): string[] {
 }
 
 export type RecordStanceOutcome =
-  | { status: "recorded"; concept: string; reason: string; publishable: boolean }
-  | { status: "exists"; concept: string; existing: RejectedApproach }
-  | { status: "reason_added"; concept: string; reason: string; existing: RejectedApproach }
+  | { status: "recorded"; row: RejectedApproach; publishable: boolean }
+  | { status: "exists"; row: RejectedApproach }
+  | { status: "reason_added"; row: RejectedApproach }
   | { status: "invalid"; error: string };
 
 /**
- * The one write path both doors share. Validates, refuses a duplicate key
- * (case/whitespace-insensitive) WITHOUT touching the existing row, then records
- * through the store's ordinary rejected-approach write.
+ * The one write path both doors share: validate, then ONE store transaction
+ * (IStore.addStance) that dedupes on the normalized key, fills a missing
+ * reason, applies the ceiling and inserts — all under the preferences lock,
+ * so concurrent adds can't both insert or both claim their reason was saved.
+ * Every outcome carries the row that is actually persisted.
  */
 export async function recordStance(
-  store: Pick<IStore, "recordRejectedApproach" | "getSessionMemory">,
+  store: Required<Pick<IStore, "addStance">>,
   input: { what: unknown; why: unknown; addedVia: StanceAddedVia; requestedBy: StanceRequestedBy },
 ): Promise<RecordStanceOutcome> {
   const v = validateStanceInput(input);
   if (!v.ok) return { status: "invalid", error: v.error };
-  const key = normalizeConceptKey(v.concept);
-  const memory = await store.getSessionMemory();
-  const existing = memory.rejectedApproaches.find(
-    (r) => normalizeConceptKey(r.description) === key || (typeof r.concept === "string" && normalizeConceptKey(r.concept) === key),
-  );
-  if (existing) {
-    if (existing.reason) return { status: "exists", concept: v.concept, existing };
-    // #625 review — the store's own dedupe fills a missing reason (never
-    // replaces one). Do the same: the reason is display-only, so this can't
-    // change what the row matches. `fillOnly` makes the store do it under its
-    // lock against the row's EXACT description and never create a row (a
-    // retire in between wins). The store publishes a fill only under the
-    // row's concept, never its description (an artifact title).
-    try {
-      await store.recordRejectedApproach({
-        description: existing.description,
-        concept: existing.concept,
-        reason: v.reason,
-        addedVia: input.addedVia,
-        requestedBy: input.requestedBy,
-        fillOnly: true,
-      });
-    } catch (err) {
-      if (codeOf(err) === "stance_not_found") {
-        return { status: "invalid", error: `The stance "${existing.concept ?? existing.description}" was retired while this ran, so nothing was recorded. Run the command again to add it fresh.` };
-      }
-      throw err;
-    }
-    return { status: "reason_added", concept: v.concept, reason: v.reason, existing };
+  const result = await store.addStance({
+    concept: v.concept,
+    reason: v.reason,
+    addedVia: input.addedVia,
+    requestedBy: input.requestedBy,
+    maxRows: MAX_PROJECT_STANCES,
+  });
+  if (result.status === "cap_reached") {
+    return {
+      status: "invalid",
+      error: `This project already has ${result.count} stances (from every source); an add is refused once it has ${MAX_PROJECT_STANCES}, because more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`,
+    };
   }
-  try {
-    await store.recordRejectedApproach({
-      description: v.concept,
-      concept: v.concept,
-      reason: v.reason,
-      addedVia: input.addedVia,
-      requestedBy: input.requestedBy,
-      // Checked inside the store's lock, against every row whatever its source.
-      maxRows: MAX_PROJECT_STANCES,
-    });
-  } catch (err) {
-    if (codeOf(err) === "stance_cap_reached") {
-      return {
-        status: "invalid",
-        error: `This project already has ${MAX_PROJECT_STANCES} stances (from every source), the most this command adds to; more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`,
-      };
-    }
-    throw err;
+  if (result.status === "recorded") {
+    return { status: "recorded", row: result.row, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
   }
-  return { status: "recorded", concept: v.concept, reason: v.reason, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
-}
-
-function codeOf(err: unknown): unknown {
-  return (err as { code?: unknown } | null)?.code;
+  return { status: result.status, row: result.row };
 }
 
 /** How a project stance came to exist, for listings and readback. */
@@ -275,33 +241,34 @@ export function stanceProvenance(r: RejectedApproach): string {
 /** The text both doors print after a write. `scope` names the project. */
 export function formatRecordStanceOutcome(outcome: RecordStanceOutcome, scope: string): { ok: boolean; text: string } {
   if (outcome.status === "invalid") return { ok: false, text: `Nothing was recorded. ${outcome.error}` };
+  const row = outcome.row;
+  const name = row.concept ?? row.description;
   if (outcome.status === "reason_added") {
     return {
       ok: true,
-      text: `${scope} already had the stance "${outcome.existing.concept ?? outcome.existing.description}" with no reason recorded. Added yours: "${outcome.reason}". Nothing else about it changed.`,
+      text: `${scope} already had the stance "${name}" with no reason recorded. Added yours: "${row.reason}". Nothing else about it changed.`,
     };
   }
   if (outcome.status === "exists") {
-    const e = outcome.existing;
     return {
       ok: true,
       text:
-        `Nothing changed: ${scope} already has the stance "${e.concept ?? e.description}"` +
-        (e.reason ? ` (reason: "${e.reason}")` : " (no reason recorded)") +
-        `, ${stanceProvenance(e)}. An existing stance is never rewritten here; to change it, retire it ("Retire this stance" in the companion's gate log) and add it again.`,
+        `Nothing changed: ${scope} already has the stance "${name}"` +
+        (row.reason ? ` (reason: "${row.reason}")` : " (no reason recorded)") +
+        `, ${stanceProvenance(row)}. An existing stance is never rewritten here; to change it, retire it ("Retire this stance" in the companion's gate log) and add it again.`,
     };
   }
   return {
     ok: true,
     text: [
       "Stance recorded.",
-      `  Concept: "${outcome.concept}"`,
-      `  Reason:  "${outcome.reason}" (quoted back whenever it fires)`,
+      `  Concept: "${name}"`,
+      `  Reason:  "${row.reason ?? ""}" (quoted back whenever it fires)`,
       `  Scope:   ${scope} only (.deeppairing/preferences.json). ` +
         (outcome.publishable
           ? "Other projects see it only as an advisory nudge, and only if this project publishes to the cross-project ledger."
           : "It is not published to the cross-project ledger, even if this project publishes, because who asked for it can't be verified."),
-      ...describeStanceCoverage(outcome.concept).map((l) => `  ${l}`),
+      ...describeStanceCoverage(name).map((l) => `  ${l}`),
       `To correct or remove it: "Retire this stance" in the companion's gate log when it fires, or delete its row from .deeppairing/preferences.json yourself (an agent edit there always asks).`,
     ].join("\n"),
   };

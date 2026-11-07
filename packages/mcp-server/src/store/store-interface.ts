@@ -258,6 +258,20 @@ export interface RejectedApproach {
 }
 
 export type StanceAddedVia = "cli" | "mcp";
+
+export interface AddStanceParams {
+  concept: string;
+  reason: string;
+  addedVia: StanceAddedVia;
+  requestedBy: StanceRequestedBy;
+  maxRows: number;
+}
+
+/** What FileStore.addStance did, with the PERSISTED row. `cap_reached` wrote
+ *  nothing; `count` is the number of rows the project holds. */
+export type AddStanceResult =
+  | { status: "recorded" | "exists" | "reason_added"; row: RejectedApproach }
+  | { status: "cap_reached"; count: number };
 /** `user` = the door says a human asked (the MCP tool accepts nothing else; the
  *  CLI says so only from a TTY outside Claude Code). `unknown` = the CLI could
  *  not tell. Self-reported either way. */
@@ -556,16 +570,17 @@ export interface IStore {
     reason?: string;
     sourceArtifactId?: string;
     concept?: string;
-    /** #620 — provenance for a stance added from the terminal (store/stance-add.ts). */
-    addedVia?: StanceAddedVia;
-    requestedBy?: StanceRequestedBy;
-    /** #625 — only fill a missing field on an EXISTING row (exact description);
-     *  never create one. Throws code `stance_not_found` when the row is gone. */
-    fillOnly?: boolean;
-    /** #625 — refuse a NEW row once the project holds this many (all sources).
-     *  Throws code `stance_cap_reached`. Checked inside the preferences lock. */
-    maxRows?: number;
   }): MaybePromise<void>;
+  /**
+   * #620/#625 — add a terminal stance (store/stance-add.ts) as ONE preferences
+   * transaction: the normalized-key dedupe (case/whitespace-insensitive, on
+   * description or concept), the missing-reason fill, the `maxRows` ceiling
+   * (every source) and the insert all run under the lock, and the result
+   * describes the row that is actually persisted. Add-only: an existing
+   * reason is never replaced. Optional so other IStore implementations need
+   * not carry it; FileStore and DaemonClient do.
+   */
+  addStance?(params: AddStanceParams): MaybePromise<AddStanceResult>;
   recordApprovedPattern(params: {
     description: string;
     concept?: string;

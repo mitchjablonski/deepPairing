@@ -75,18 +75,32 @@ describe("#620 record_stance through the daemon", () => {
     expect(capped.isError).toBe(true);
     expect(capped.text).toContain("already has 200 stances (from every source)");
     expect(prefsRows(world.dir)).toHaveLength(200);
-    // A fill against a row that isn't there is refused with its code, not created.
-    await expect(
-      w.client.recordRejectedApproach({ description: "not a stance here", reason: REASON, fillOnly: true }),
-    ).rejects.toMatchObject({ code: "stance_not_found" });
-    expect(prefsRows(world.dir)).toHaveLength(200);
   });
 
-  it("the daemon route rejects a forged provenance value instead of storing it", async () => {
+  it("#625 Sol P2 — two sessions adding the same stance at once through the daemon: one row, both replies quote it", async () => {
+    world = new StanceWorld("dp-620-race-");
+    const w1 = await world.wrapper("sx_one");
+    const w2 = await world.wrapper("sx_two");
+    const [a, b] = await Promise.all([
+      w1.call("record_stance", { text: `${CONCEPT} -- ${REASON}`, requestedBy: "user" }),
+      w2.call("record_stance", { text: `GLOBAL Mutable State -- a different reason`, requestedBy: "user" }),
+    ]);
+    const rows = prefsRows(world.dir);
+    expect(rows).toHaveLength(1);
+    const persisted = rows[0]!.reason as string;
+    for (const r of [a, b]) {
+      expect(r.isError).toBeFalsy();
+      expect(r.text).toContain(`"${persisted}"`);
+    }
+    expect([a.text, b.text].filter((t) => t.startsWith("Stance recorded."))).toHaveLength(1);
+    expect([a.text, b.text].filter((t) => t.startsWith("Nothing changed"))).toHaveLength(1);
+  });
+
+  it("the daemon's stance route rejects a forged provenance value instead of storing it", async () => {
     world = new StanceWorld("dp-620-forge-");
     const w = await world.wrapper();
     await expect(
-      w.client.recordRejectedApproach({ description: CONCEPT, concept: CONCEPT, reason: REASON, requestedBy: "agent" as never }),
+      w.client.addStance({ concept: CONCEPT, reason: REASON, addedVia: "mcp", requestedBy: "agent" as never, maxRows: 200 }),
     ).rejects.toThrow();
     expect(fs.existsSync(path.join(world.dir, ".deeppairing", "preferences.json")) ? prefsRows(world.dir) : []).toEqual([]);
   });
