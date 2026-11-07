@@ -16,7 +16,7 @@ packages/
   shared/         # Zod schemas, types, fixtures
   mcp-server/     # Standalone MCP server + HTTP server + companion web UI
     src/
-      mcp/        # MCP server (stdio transport, 18 tools)
+      mcp/        # MCP server (stdio transport, 19 tools)
       http/       # Hono HTTP + WebSocket server
       store/      # File-based persistence (.deeppairing/)
     web/          # Companion React app (Vite build → dist/web/)
