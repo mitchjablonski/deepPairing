@@ -1,11 +1,13 @@
 import { AllowOnceDialogHost } from "./components/AllowOnceDialog";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel, MultiAgentSync } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
 import { SessionWrapCard, wrapCardDismissed } from "./components/SessionWrapCard";
 import { DemoNextStep } from "./components/DemoNextStep";
-import { computePending, isSinglePendingInView } from "./lib/pending";
+import { computePending, isPendingBannerVisible, isSinglePendingInView } from "./lib/pending";
+import { computeAttention, orderedPendingArtifacts } from "./lib/attention";
+import { attentionHolds } from "./lib/attentionCopy";
 import { selectDefaultSession } from "./lib/selectDefaultSession";
 import { enterSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
@@ -134,7 +136,7 @@ function App() {
   const nextUpBar = usePreferencesStore((s) => s.nextUpBar); // #430 PR 2 — default off
   // M4 — whether each below-header banner is visible, so the header pills can
   // suppress the verbatim duplicate (computed with the banners' OWN predicates
-  // so they can't drift). Both banners self-hide when their count is 0.
+  // so they can't drift). A held terminal lead stays even with no drafts.
   const artifactsList = useArtifactStore((s) => s.artifacts);
   // J2b (#212) — lite-frame step-down. When the ONE pending draft is the card
   // in view, the card is the CTA; the PendingBanner suppresses (below) and the
@@ -142,7 +144,14 @@ function App() {
   // the banner-gate here and the banner's own self-suppress can't disagree.
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const singlePendingInView = isSinglePendingInView(artifactsList, selectedArtifactId);
-  const pendingBannerVisible = computePending(artifactsList).total > 0 && !singlePendingInView;
+  const blocks = usePreflightBlockStore((s) => s.blocks);
+  const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
+  const pendingNext = useMemo(() => computeAttention({
+    artifacts: artifactsList, system: { holds: attentionHolds(blocks, lastSeenAt) },
+  }).next, [artifactsList, blocks, lastSeenAt]);
+  const pendingBannerVisible = isPendingBannerVisible(
+    artifactsList, selectedArtifactId, pendingNext?.kind === "held" && pendingNext.terminal === true,
+  );
 
   // U7 — at-rest signal on the Conversation button: how many human questions
   // are still awaiting the agent. Uses the SHARED predicate (lib/unanswered)
@@ -474,7 +483,7 @@ function App() {
       // #457 D7 (design §7) — Shift+`n` (`N`) goes to the PREVIOUS one, same
       // wrap-around; it was unbound.
       if (e.key === "n" || e.key === "N") {
-        const pending = computePending(store.artifacts).drafts;
+        const pending = orderedPendingArtifacts(store.artifacts);
         if (pending.length === 0) return;
         e.preventDefault();
         const idx = pending.findIndex((a) => a.id === store.selectedArtifactId);

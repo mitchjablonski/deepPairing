@@ -1,10 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { computePending, isDraftAwaitingReview, isSinglePendingInView, isUnresolvedQuestion, REVIEWABLE_TYPES, TURN_PART_BUCKETS, summarizeTurnParts } from "../pending";
+import { computePending, isDraftAwaitingReview, isPendingBannerVisible, isSinglePendingInView, isUnresolvedQuestion, REVIEWABLE_TYPES, TURN_PART_BUCKETS, summarizeTurnParts } from "../pending";
 
 const art = (over: any) =>
   ({ id: "a", type: "research", title: "t", status: "draft", version: 1, createdAt: "2026-01-01T00:00:00.000Z", content: {}, ...over }) as any;
 const com = (over: any) =>
   ({ id: "c", sessionId: "s", target: { artifactId: "a" }, parentCommentId: null, author: "human", content: "x", acknowledged: false, createdAt: "2026-01-01T00:00:00.000Z", ...over }) as any;
+
+describe("isPendingBannerVisible — shared held exemption", () => {
+  it.each([
+    ["empty", [], null, false, false],
+    ["held without drafts", [], null, true, true],
+    ["selected sole draft", [art({ id: "only" })], "only", false, false],
+    ["held with selected sole draft", [art({ id: "only" })], "only", true, true],
+    ["offscreen sole draft", [art({ id: "only" })], "other", false, true],
+    ["multiple drafts", [art({ id: "a" }), art({ id: "b" })], "a", false, true],
+    ["informational draft", [art({ type: "debrief" })], null, false, false],
+  ] as const)("%s", (_name, artifacts, selected, held, expected) => {
+    expect(isPendingBannerVisible([...artifacts], selected, held)).toBe(expected);
+  });
+});
 
 describe("computePending — single source of truth for 'waiting on human'", () => {
   it("counts reviewable drafts but not informational debriefs, explainers or reasoning", () => {
