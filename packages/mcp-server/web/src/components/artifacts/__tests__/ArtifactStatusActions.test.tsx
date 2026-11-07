@@ -96,6 +96,9 @@ describe("Approved chip focus recovery stays on the open artifact (#430 keyboard
     useArtifactStore.setState({ selectedArtifactId: "three" });
     // Focus is elsewhere when the earlier pane mounts, as it was when the agent
     // approved it, so its one-shot chip focus is still unspent.
+    // Since #623 the exiting chip never held footer focus, so it can't claim
+    // focus on that ground alone. This stays the end-to-end check that the
+    // open chip wins; the next test isolates the selection check.
     const outside = document.body.appendChild(document.createElement("button"));
     outside.focus();
     const { rerender } = render(panes(artifact({ id: "three", status: "draft" })));
@@ -188,6 +191,30 @@ describe("#623 — the approved chip takes focus only when approving removed it 
     expect(document.activeElement).toBe(document.body);
     rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
     expect(document.activeElement).toBe(chip());
+  });
+
+  it.each(["reviewing", "rejected", "revised"] as const)(
+    "a footer that held focus, then left for %s, doesn't claim focus on a later approve",
+    (between) => {
+      useArtifactStore.setState({ selectedArtifactId: "three" });
+      const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} />);
+      screen.getByRole("button", { name: "Approve" }).focus();
+      rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: between })} />);
+      expect(document.activeElement).toBe(document.body);
+      rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+      expect(document.activeElement).toBe(document.body);
+      expect(focusCalls.calls.filter((c) => c.el === chip())).toEqual([]);
+    },
+  );
+
+  it("an acknowledge footer that held focus, then swapped out, doesn't claim focus when the agent approves", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} acknowledgeMode />);
+    screen.getByRole("button", { name: /Got it/ }).focus();
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} />);
+    expect(document.activeElement).toBe(document.body);
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("control: focus moved away from the footer is not reclaimed", () => {

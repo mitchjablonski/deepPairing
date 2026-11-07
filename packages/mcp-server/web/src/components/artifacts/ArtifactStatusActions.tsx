@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useIsPresent } from "motion/react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
@@ -289,6 +289,16 @@ export function ArtifactStatusActions({
   const noteFooterFocus = (e: { target: EventTarget }) => {
     lastFooterFocusRef.current = e.target as Element;
   };
+  // The footer also detaches when the artifact moves to a status with no chip
+  // (reviewing, rejected, revised, retracted, obsolete, superseded) or a draft
+  // goes read-only in replay. Clear the flag after that commit, so a later move
+  // to approved can't claim focus the footer gave up long before. Layout
+  // effects run after the detach in the same commit. No deps: it must see
+  // every commit, and the check is cheap.
+  const footerRendered = artifact.status === "draft" && !replayActive;
+  useLayoutEffect(() => {
+    if (!footerRendered && artifact.status !== "approved") footerHeldFocusRef.current = false;
+  });
   useEffect(() => {
     if (forceExpanded && wantFocusRef.current) {
       wantFocusRef.current = false;
