@@ -1,8 +1,8 @@
-import { useMemo, useState, useEffect, useRef, lazy, Suspense, type ReactNode } from "react";
+import { useMemo, useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
-import { m, AnimatePresence } from "motion/react";
+import { m, AnimatePresence, useIsPresent } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { isDemoSessionId } from "@deeppairing/shared";
@@ -356,9 +356,34 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       c.target.questionIndex == null,
   );
 
+  // #623 — after you pick another artifact, AnimatePresence keeps this pane
+  // mounted for its exit animation. It goes inert for that window, so Tab
+  // can't land on its Approve and Enter can't act on the artifact you left.
+  // If focus was inside it, hand focus to the entering pane: inert would
+  // otherwise drop it to <body> and a keyboard user restarts from the top.
+  // A layout effect runs before the browser applies inert's focus fixup.
+  const isPresent = useIsPresent();
+  const paneRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (isPresent) return;
+    const pane = paneRef.current;
+    const active = document.activeElement;
+    if (!pane || !active || !pane.contains(active)) return;
+    const selectedId = useArtifactStore.getState().selectedArtifactId;
+    const entering = Array.from(document.querySelectorAll<HTMLElement>("[data-dp-pane]")).find(
+      (p) => p !== pane && p.getAttribute("data-artifact-id") === selectedId,
+    );
+    entering?.focus({ preventScroll: true });
+  }, [isPresent]);
+
   return (
     <m.div
       key={artifact.id}
+      ref={paneRef}
+      inert={!isPresent}
+      // #623 — focusable by script only (never a Tab stop), so the hand-off
+      // above has a target that is the pane itself, not a guessed control.
+      tabIndex={-1}
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -4 }}
@@ -369,7 +394,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       // #403 — the scrolling pane a diagram popover must stay visible inside
       // (with the sticky chrome marked below): DiagramRegionLayer measures it.
       data-dp-pane=""
-      className={`flex-1 overflow-y-auto p-4 space-y-4 scroll-shadow w-full ${
+      className={`flex-1 overflow-y-auto p-4 space-y-4 scroll-shadow w-full focus:outline-none ${
         contentWidth === "constrained" ? "max-w-4xl mx-auto" : ""
       }`}
     >
