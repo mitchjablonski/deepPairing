@@ -64,10 +64,19 @@ export function DiagnosticsMenu({ onOpenLedger }: { onOpenLedger: () => void }) 
       if (triggerRef.current?.contains(target ?? null)) return;
       // #470 — the Allow-once dialog opened from the gate log is not "outside".
       if ((target as Element | null)?.closest?.("[data-allow-once-dialog]")) return;
+      // Focus goes to whatever was clicked, so it isn't moved here.
       setOpen(false);
+      usePreflightBlockStore.getState().clearFocusRequest();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      // #430 slice 2 — Esc closes the whole panel, gate chip included, so ⋯ is
+      // the visible control left to return to. Focus somewhere else stays put.
+      const active = document.activeElement;
+      const focusInside = !active || active === document.body || !!panelRef.current?.contains(active);
+      setOpen(false);
+      usePreflightBlockStore.getState().clearFocusRequest();
+      if (focusInside) triggerRef.current?.focus();
     };
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
@@ -81,7 +90,14 @@ export function DiagnosticsMenu({ onOpenLedger }: { onOpenLedger: () => void }) 
     <div className="relative">
       <button
         ref={triggerRef}
-        onClick={() => setOpen((v) => !v)}
+        data-diagnostics-trigger=""
+        onClick={() => {
+          if (!open) { setOpen(true); return; }
+          setOpen(false);
+          usePreflightBlockStore.getState().clearFocusRequest();
+          // Not every browser focuses a clicked button (Safari doesn't).
+          triggerRef.current?.focus();
+        }}
         className="relative inline-flex items-center justify-center px-1.5 py-0.5 rounded text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
         title={attention
           ? "Diagnostics — attention needed (an unread gate block, or the latest hook fire nagged or asked). Autonomy, gate blocks, hooks, taste stats."

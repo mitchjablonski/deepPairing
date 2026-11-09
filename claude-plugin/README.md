@@ -11,7 +11,7 @@ words and a short synonym list, not meaning: in this project a matching
 `Edit`/`Write` gets a permission prompt (it asks; it doesn't refuse, and it
 fails open). Once you enable cross-project publishing, your other projects get
 an advisory nudge, never a block. Details and limits:
-[the main README](../README.md#your-taste-compounds).
+[Your taste compounds](../docs/features.md#your-taste-compounds).
 
 ## Install
 

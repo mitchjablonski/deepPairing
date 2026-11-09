@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
@@ -11,6 +11,7 @@ import { noAgentLive } from "../lib/liveness";
 import { useTabOffline } from "../lib/connectionGrace";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { openGateLogEntry } from "../lib/stanceException";
 import { DemoTag } from "./ProvenanceMarker";
 
 /**
@@ -52,6 +53,7 @@ export function PendingBanner() {
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const boundSessionId = useConnectionStore((s) => s.sessionId);
   const replayActive = useReplayStore((s) => s.active);
+  const replayExiting = useReplayStore((s) => s.exiting);
   const tabOffline = useTabOffline();
   const blocks = usePreflightBlockStore((s) => s.blocks);
   const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
@@ -102,6 +104,21 @@ export function PendingBanner() {
   // lead arrives while the old lead's chip is focused, expansion is derived
   // against the current lead (false), and the old chip keeps its own blur
   // handler, so ownership clears on Tab away without moving focus.
+  // #430 slice 2 (D2) — the held row's way off the line: the gate log the bar's
+  // `Why` already reaches. Viewed, never answered: nothing here reaches the
+  // terminal or the daemon. Withheld in replay and replay-exit recovery, because
+  // opening the live log advances the read boundary and exposes its live actions
+  // (Sol's condition 3). The row itself stays.
+  const canAskWhy = heldLead && !replayActive && !replayExiting;
+  const askWhy = () => {
+    if (!next) return;
+    const store = usePreflightBlockStore.getState();
+    // The log marks its blocks seen as it OPENS. If it is already open (a hold
+    // arrived after it opened), that moment has passed, so this request is it.
+    if (store.logOpen && store.loaded) store.markSeen();
+    const block = store.blocks.find((b) => b.id === next.id);
+    openGateLogEntry(block?.serverId ?? next.id);
+  };
   const leadLineId = useId();
   const [focusedChipId, setFocusedChipId] = useState<string | null>(null);
   const leadExpanded = !!lead && focusedChipId === lead.id;
@@ -109,6 +126,23 @@ export function PendingBanner() {
   useEffect(() => {
     if (bannerHidden) setConfirmingId(null);
   }, [bannerHidden]);
+
+  // #430 slice 2 review — Why also unmounts without being pressed: an older
+  // draft takes the lead, a grant writes seenAt, or the cap prunes the ask. Read
+  // before this commit removes it; if it held focus and focus falls to <body>,
+  // hand focus to the banner's first stop, or to ⋯ when the banner is gone.
+  // A pending log request means Why was pressed: the log takes focus itself.
+  const bannerRef = useRef<HTMLDivElement>(null);
+  const whyRef = useRef<HTMLButtonElement>(null);
+  const whyHeldFocus = !!whyRef.current && whyRef.current === document.activeElement;
+  useEffect(() => {
+    if (!whyHeldFocus || whyRef.current) return;
+    if (usePreflightBlockStore.getState().focusRequest) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const stop = bannerRef.current?.querySelector<HTMLElement>('[tabindex="0"], button:not([tabindex="-1"])');
+    (stop ?? document.querySelector<HTMLElement>("[data-diagnostics-trigger]"))?.focus();
+  });
 
   if (bannerHidden) return null;
 
@@ -119,6 +153,7 @@ export function PendingBanner() {
     // screen-reader user could not jump to the one surface that says what to
     // do next.
     <div
+      ref={bannerRef}
       role="region"
       aria-label="Waiting for you"
       data-testid="pending-banner"
@@ -185,6 +220,21 @@ export function PendingBanner() {
             <>{" "}<span data-testid="pending-why">· <span className="font-medium">Why </span>{copy.why}</span></>
           )}
         </div>
+      )}
+      {canAskWhy && (
+        // Outside the chip group, on the same row. No border, so it matches the
+        // chips' height. With no drafts there are no chips, so the button sets
+        // the row's height and adds about 4px (evidence run: +3.9 to +4.5px).
+        <button
+          type="button"
+          ref={whyRef}
+          onClick={askWhy}
+          aria-label="Why this is held"
+          title="Open the gate log at this hold. It doesn't answer the terminal."
+          className="px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
+        >
+          Why
+        </button>
       )}
       <div className="flex gap-1 ml-auto items-center min-w-0 max-w-[50%] shrink-0 overflow-x-auto">
         {shown.map((a) => (

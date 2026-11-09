@@ -23,7 +23,7 @@ node packages/mcp-server/dist/cli/init.js doctor --fix
 ```
 
 > Once you've run `pnpm link --global` (or installed the package), this is just
-> `deeppairing doctor --fix` — the same command the README links to.
+> `deeppairing doctor --fix` — the same command [INSTALL.md](../INSTALL.md#cli) lists.
 
 That covers ~80% of first-time install issues. Below are the specific error
 codes the daemon and wrapper return — paste one into your search bar and it

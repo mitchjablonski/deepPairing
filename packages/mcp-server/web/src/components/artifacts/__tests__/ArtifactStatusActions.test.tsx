@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { PresenceContext } from "motion/react";
 import type { Artifact } from "@deeppairing/shared";
 import { ArtifactStatusActions } from "../ArtifactStatusActions";
 import { useArtifactStore } from "../../../stores/artifact";
@@ -74,6 +75,185 @@ describe("ArtifactStatusActions — status branches", () => {
     );
     expect(screen.getByText(/retracted by agent/i)).toBeInTheDocument();
     expect(screen.getByText("wrong file")).toBeInTheDocument();
+  });
+});
+
+describe("Approved chip focus recovery stays on the open artifact (#430 keyboard walkthrough)", () => {
+  // AnimatePresence keeps the previous pane mounted while it exits, and that
+  // pane still re-renders on store changes. Its approved chip must not take the
+  // focus that approving the open artifact just dropped to <body>: the pane
+  // unmounts moments later and a keyboard user is back at the top of the page.
+  function panes(three: Artifact) {
+    return (
+      <>
+        <div data-testid="exiting-pane"><ArtifactStatusActions artifact={artifact({ id: "one", status: "approved" })} /></div>
+        <div data-testid="open-pane"><ArtifactStatusActions artifact={three} /></div>
+      </>
+    );
+  }
+
+  it("focus goes to the open artifact's chip, not an exiting pane's earlier chip", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    // Focus is elsewhere when the earlier pane mounts, as it was when the agent
+    // approved it, so its one-shot chip focus is still unspent.
+    // Since #623 the exiting chip never held footer focus, so it can't claim
+    // focus on that ground alone. This stays the end-to-end check that the
+    // open chip wins; the next test isolates the selection check.
+    const outside = document.body.appendChild(document.createElement("button"));
+    outside.focus();
+    const { rerender } = render(panes(artifact({ id: "three", status: "draft" })));
+    screen.getByRole("button", { name: "Approve" }).focus();
+    outside.remove();
+    rerender(panes(artifact({ id: "three", status: "approved" })));
+    const openChip = within(screen.getByTestId("open-pane")).getByText("Approved").parentElement;
+    expect(document.activeElement).toBe(openChip);
+  });
+
+  it("an exiting pane's chip leaves focus on <body> on its own", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    render(<div data-testid="exiting-pane"><ArtifactStatusActions artifact={artifact({ id: "one", status: "approved" })} /></div>);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("a draft that is not the open artifact keeps its chip unfocused even after its footer held focus", () => {
+    // The selection half of the #619 fix, on its own: the footer DID hold
+    // focus, so only the selection check stops this chip.
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "one", status: "draft" })} />);
+    screen.getByRole("button", { name: "Approve" }).focus();
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "one", status: "approved" })} />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("control: focus held elsewhere is never taken", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    render(<button>Elsewhere</button>);
+    screen.getByRole("button", { name: "Elsewhere" }).focus();
+    render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Elsewhere" }));
+  });
+});
+
+// Records each focus() call's options, then focuses for real. happy-dom does
+// not scroll, so the options are the only observable trace of preventScroll.
+function recordFocusCalls() {
+  const calls: Array<{ el: HTMLElement; options?: FocusOptions }> = [];
+  const real = HTMLElement.prototype.focus;
+  HTMLElement.prototype.focus = function (this: HTMLElement, options?: FocusOptions) {
+    calls.push({ el: this, options });
+    real.call(this, options);
+  };
+  return { calls, restore: () => { HTMLElement.prototype.focus = real; } };
+}
+
+describe("#623 — the approved chip takes focus only when approving removed it from this footer", () => {
+  let focusCalls: ReturnType<typeof recordFocusCalls>;
+  beforeEach(() => { focusCalls = recordFocusCalls(); });
+  afterEach(() => focusCalls.restore());
+  const chip = () => screen.getByText("Approved").parentElement;
+
+  it("page load or j/k onto an already-approved artifact leaves focus on <body>", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(document.body);
+    expect(focusCalls.calls.filter((c) => c.el === chip())).toEqual([]);
+  });
+
+  it("the agent approving while you read (focus on <body>) leaves focus and scroll alone", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} />);
+    expect(document.activeElement).toBe(document.body);
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(document.body);
+    expect(focusCalls.calls.filter((c) => c.el === chip())).toEqual([]);
+  });
+
+  it("control: approving from the footer moves focus to the chip without scrolling", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} />);
+    screen.getByRole("button", { name: "Approve" }).focus();
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(chip());
+    expect(focusCalls.calls.filter((c) => c.el === chip()).map((c) => c.options)).toEqual([{ preventScroll: true }]);
+  });
+
+  it("control: a footer control that was disabled mid-submit still counts as held", () => {
+    // Approving with a note disables the buttons while the comment posts; a
+    // browser may drop that focus to <body> before the status lands.
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} />);
+    const approve = screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement;
+    approve.focus();
+    // The browser's drop to <body>, then the disabled state it left behind
+    // (happy-dom's blur() is a no-op on an already-disabled element).
+    approve.blur();
+    approve.disabled = true;
+    expect(document.activeElement).toBe(document.body);
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(chip());
+  });
+
+  it.each(["reviewing", "rejected", "revised"] as const)(
+    "a footer that held focus, then left for %s, doesn't claim focus on a later approve",
+    (between) => {
+      useArtifactStore.setState({ selectedArtifactId: "three" });
+      const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} />);
+      screen.getByRole("button", { name: "Approve" }).focus();
+      rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: between })} />);
+      expect(document.activeElement).toBe(document.body);
+      rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+      expect(document.activeElement).toBe(document.body);
+      expect(focusCalls.calls.filter((c) => c.el === chip())).toEqual([]);
+    },
+  );
+
+  it("an acknowledge footer that held focus, then swapped out, doesn't claim focus when the agent approves", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} acknowledgeMode />);
+    screen.getByRole("button", { name: /Got it/ }).focus();
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} />);
+    expect(document.activeElement).toBe(document.body);
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("control: focus moved away from the footer is not reclaimed", () => {
+    useArtifactStore.setState({ selectedArtifactId: "three" });
+    const { rerender } = render(<ArtifactStatusActions artifact={artifact({ id: "three", status: "draft" })} />);
+    const approve = screen.getByRole("button", { name: "Approve" });
+    approve.focus();
+    approve.blur();
+    rerender(<ArtifactStatusActions artifact={artifact({ id: "three", status: "approved" })} />);
+    expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("#623 — a pane that is leaving can't change status", () => {
+  // AnimatePresence tells an exiting subtree through PresenceContext; this is
+  // the value it provides while the previous pane animates out.
+  const leaving = { id: "exit", isPresent: false, register: () => () => {}, initial: false as const };
+  const statusCalls = () =>
+    (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).includes("/status"));
+
+  it("Approve in the leaving pane does nothing", async () => {
+    render(<PresenceContext.Provider value={leaving}><ArtifactStatusActions artifact={artifact({ id: "one" })} /></PresenceContext.Provider>);
+    await act(async () => { screen.getByRole("button", { name: "Approve" }).click(); });
+    expect(statusCalls()).toEqual([]);
+    expect(screen.queryByText("Approved")).not.toBeInTheDocument();
+  });
+
+  it("the a shortcut aimed at the leaving pane arms nothing", () => {
+    render(<PresenceContext.Provider value={leaving}><ArtifactStatusActions artifact={artifact({ id: "one" })} /></PresenceContext.Provider>);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "one", action: "approve" } }));
+    });
+    expect(screen.queryByText(/Will auto-approve/)).not.toBeInTheDocument();
+  });
+
+  it("control: the same Approve in a present pane posts the status", async () => {
+    render(<PresenceContext.Provider value={{ ...leaving, isPresent: true }}><ArtifactStatusActions artifact={artifact({ id: "one" })} /></PresenceContext.Provider>);
+    await act(async () => { screen.getByRole("button", { name: "Approve" }).click(); });
+    expect(statusCalls()).toHaveLength(1);
   });
 });
 
