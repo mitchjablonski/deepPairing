@@ -39392,6 +39392,159 @@ async function handlePresentExplainer(ctx, args) {
   };
 }
 
+// src/store/stance-add.ts
+var STANCE_CONCEPT_MIN = 3;
+var STANCE_CONCEPT_MAX = 120;
+var STANCE_REASON_MIN = 3;
+var STANCE_REASON_MAX = 280;
+var STANCE_USAGE = "<what to avoid> -- <why>";
+var MAX_PROJECT_STANCES = 200;
+function isPublishableStance(addedVia, requestedBy) {
+  return addedVia !== "mcp" && requestedBy !== "unknown";
+}
+var RECOVERY_PROBES = [
+  "deeppairing doctor --fix",
+  "/deeppairing:doctor",
+  "/deeppairing:stance",
+  "/deeppairing:reject",
+  "deeppairing stance allow",
+  "deeppairing stance exceptions revoke",
+  "deeppairing stance add",
+  "deeppairing philosophy remove",
+  "deeppairing philosophy publish off",
+  "Allow this proposal once",
+  "Retire this stance",
+  "check_feedback",
+  "record_stance",
+  ".deeppairing/preferences.json",
+  ".deeppairing/team.json"
+];
+var HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
+function tidy(s) {
+  return s.replace(/\s+/g, " ").trim();
+}
+function parseStanceArguments(raw) {
+  if (Array.isArray(raw)) {
+    const at = raw.indexOf("--");
+    if (at >= 0) return { what: raw.slice(0, at).join(" "), why: raw.slice(at + 1).join(" ") };
+    return parseStanceArguments(raw.join(" "));
+  }
+  const m = /^([\s\S]*?)\s--(?:\s+|$)([\s\S]*)$/.exec(` ${raw}`);
+  if (!m) return { what: raw, why: "" };
+  return { what: m[1].slice(1), why: m[2] };
+}
+function validateStanceInput(input) {
+  if (typeof input.what !== "string" || typeof input.why !== "string") {
+    return { ok: false, error: `Both what to avoid and why are required, as text: ${STANCE_USAGE}.` };
+  }
+  const visible = (s) => s.replace(/[\t\n\r]/g, " ");
+  if (HIDDEN_CHARS.test(visible(input.what)) || HIDDEN_CHARS.test(visible(input.why))) {
+    return { ok: false, error: "The stance contains control or invisible characters. Type it again as plain text." };
+  }
+  const concept = tidy(input.what);
+  const reason = tidy(input.why);
+  if (!concept) return { ok: false, error: `Say what to avoid: ${STANCE_USAGE}.` };
+  if (!reason) {
+    return { ok: false, error: `A reason is required after " -- ": ${STANCE_USAGE}. It is quoted back whenever the stance fires.` };
+  }
+  if (concept.length < STANCE_CONCEPT_MIN) return { ok: false, error: `What to avoid is too short (at least ${STANCE_CONCEPT_MIN} characters).` };
+  if (concept.length > STANCE_CONCEPT_MAX) {
+    return { ok: false, error: `What to avoid is ${concept.length} characters; keep it to a short phrase (at most ${STANCE_CONCEPT_MAX}). The gate matches words, so name the approach in the words the agent would use.` };
+  }
+  if (reason.length < STANCE_REASON_MIN) return { ok: false, error: `The reason is too short (at least ${STANCE_REASON_MIN} characters).` };
+  if (reason.length > STANCE_REASON_MAX) return { ok: false, error: `The reason is ${reason.length} characters; keep it to ${STANCE_REASON_MAX} or fewer.` };
+  if (scanForSecrets(concept).length > 0 || scanForSecrets(reason).length > 0) {
+    return { ok: false, error: "The stance looks like it contains a secret (a key or token shape). Describe the approach without it." };
+  }
+  if (meaningfulTokens(concept).length === 0) {
+    return { ok: false, error: `"${concept}" has no word the gate can match on (only short or common words). Name the approach, e.g. "global mutable state for config".` };
+  }
+  if (concept.includes(":")) {
+    const specific = concept.split(":").slice(1).join(":").trim();
+    if (meaningfulTokens(specific).length === 0) {
+      return { ok: false, error: `The part after the colon, "${specific}", has no word the gate can match on (only short or common words). The gate matches that part on its own, so name the approach there, e.g. "Cache backend: Redis".` };
+    }
+  }
+  const recovery = findRejectedApproachMatch([...RECOVERY_PROBES], [{ description: concept, concept }]);
+  if (recovery) {
+    return { ok: false, error: `"${concept}" would also match deepPairing's own recovery path ("${recovery.proposal}"), which a stance must never block. Name the approach more specifically.` };
+  }
+  return { ok: true, concept, reason };
+}
+function describeStanceCoverage(concept) {
+  const lower = concept.toLowerCase();
+  const specific = lower.includes(":") ? lower.split(":").slice(1).join(":").trim() : "";
+  const tokens = [...new Set(meaningfulTokens(concept))];
+  const lines = [
+    `Catches: a present_* proposal, or an Edit/Write/MultiEdit, whose text contains the phrase "${concept}" (whole words, any case). A present_* proposal is refused; a direct edit pauses for your answer.`
+  ];
+  if (specific) lines.push(`Catches: the part after the colon, "${specific}", on its own (the part before it is treated as a category).`);
+  if (containmentBlockAllowed(concept)) {
+    lines.push(`Catches: text containing all of these words in any order, with simple word forms (state/states): ${tokens.join(", ")}.`);
+  } else {
+    lines.push("Single-word stance: only the word itself, or a proposal naming exactly this concept, is caught.");
+  }
+  lines.push("Also caught: a short proposal field (a title or option name) made only of words from this phrase, in order.");
+  lines.push("Won't catch: rewordings that use different words (this is word matching, not meaning), Bash commands, or notebook edits. If the hook errors or can't read the stance file, the edit proceeds (fail-open).");
+  return lines;
+}
+async function recordStance(store, input) {
+  const v2 = validateStanceInput(input);
+  if (!v2.ok) return { status: "invalid", error: v2.error };
+  const result = await store.addStance({
+    concept: v2.concept,
+    reason: v2.reason,
+    addedVia: input.addedVia,
+    requestedBy: input.requestedBy,
+    maxRows: MAX_PROJECT_STANCES
+  });
+  if (result.status === "cap_reached") {
+    return {
+      status: "invalid",
+      error: `This project already has ${result.count} stances (from every source); an add is refused once it has ${MAX_PROJECT_STANCES}, because more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`
+    };
+  }
+  if (result.status === "recorded") {
+    return { status: "recorded", row: result.row, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
+  }
+  return { status: result.status, row: result.row };
+}
+function stanceProvenance(r) {
+  const who = r.requestedBy === "user" ? "user (self-reported)" : "unknown";
+  if (r.addedVia === "cli") return `added with \`deeppairing stance add\`, requested by: ${who}`;
+  if (r.addedVia === "mcp") return `added with /deeppairing:reject (record_stance), requested by: ${who}`;
+  if (r.sourceArtifactId) return `rejected in the companion (${r.sourceArtifactId})`;
+  return "rejected in the companion";
+}
+function formatRecordStanceOutcome(outcome, scope) {
+  if (outcome.status === "invalid") return { ok: false, text: `Nothing was recorded. ${outcome.error}` };
+  const row = outcome.row;
+  const name = row.concept ?? row.description;
+  if (outcome.status === "reason_added") {
+    return {
+      ok: true,
+      text: `${scope} already had the stance "${name}" with no reason recorded. Added yours: "${row.reason}". Nothing else about it changed.`
+    };
+  }
+  if (outcome.status === "exists") {
+    return {
+      ok: true,
+      text: `Nothing changed: ${scope} already has the stance "${name}"` + (row.reason ? ` (reason: "${row.reason}")` : " (no reason recorded)") + `, ${stanceProvenance(row)}. An existing stance is never rewritten here; to change it, retire it ("Retire this stance" in the companion's gate log) and add it again.`
+    };
+  }
+  return {
+    ok: true,
+    text: [
+      "Stance recorded.",
+      `  Concept: "${name}"`,
+      `  Reason:  "${row.reason ?? ""}" (quoted back whenever it fires)`,
+      `  Scope:   ${scope} only (.deeppairing/preferences.json). ` + (outcome.publishable ? "Other projects see it only as an advisory nudge, and only if this project publishes to the cross-project ledger." : "It is not published to the cross-project ledger, even if this project publishes, because who asked for it can't be verified."),
+      ...describeStanceCoverage(name).map((l) => `  ${l}`),
+      `To correct or remove it: "Retire this stance" in the companion's gate log when it fires, or delete its row from .deeppairing/preferences.json yourself (an agent edit there always asks).`
+    ].join("\n")
+  };
+}
+
 // src/mcp/tools/recall.ts
 async function handleRecall(ctx, args) {
   const { store } = ctx;
@@ -39473,6 +39626,36 @@ Top cited stances:
 ${top.join("\n")}` : ""}${seededSection}${suppressionNote}
 
 Respect these stances \u2014 especially TEAM-source, high-citation, and SEED entries \u2014 when shaping new proposals.`
+      }]
+    };
+  }
+  if (mode === "project") {
+    const memory = await store.getSessionMemory();
+    const q = query.toLowerCase();
+    const rows = memory.rejectedApproaches.filter(
+      (r) => !q || [r.concept, r.description, r.reason].some((f) => typeof f === "string" && f.toLowerCase().includes(q))
+    );
+    if (rows.length === 0) {
+      return {
+        content: [{
+          type: "text",
+          text: query ? `No stance in this project matches "${query}".` : "This project has no stances yet. Add one with /deeppairing:reject <what> -- <why>, or reject an approach with a reason in the companion."
+        }]
+      };
+    }
+    const shown = rows.slice(0, limit).map((r) => {
+      const reason = r.reason ? `reason: "${r.reason}"` : "no reason recorded";
+      const when = r.rejectedAt ? ` on ${r.rejectedAt.slice(0, 10)}` : "";
+      return `- "${r.concept ?? r.description}" \u2014 ${reason}
+    ${stanceProvenance(r)}${when}`;
+    });
+    const trailer = rows.length > limit ? `
+\u2026${rows.length - limit} more.` : "";
+    return {
+      content: [{
+        type: "text",
+        text: `This project's stances (${rows.length}${query ? ` matching "${query}"` : ""}; enforced here, matched by words not meaning):
+${shown.join("\n")}${trailer}`
       }]
     };
   }
@@ -39573,6 +39756,31 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
     }
   }
   return { content: [{ type: "text", text: lines.join("\n") }] };
+}
+
+// src/mcp/tools/record-stance.ts
+var RECORD_STANCE_DESCRIPTION = "Record a project stance the HUMAN explicitly asked for, in their own words (normally via /deeppairing:reject). Pass their text VERBATIM as `text`: \"<what to avoid> -- <why>\". Do not paraphrase, shorten or fix it, and do not split it yourself. NEVER call this on your own initiative, and never to turn your own, a reviewer's, or a tool's prose into a stance. Only when the human asked you to record this exact stance. Add-only: it cannot remove, retire, or change an existing stance. The stance is project-local and matched by words, not meaning: a later present_* proposal containing it is refused with the reason quoted, and a matching Edit/Write asks the human. Show the human the reply verbatim (what was saved, its scope, and what it will and won't catch).";
+async function handleRecordStance(ctx, args) {
+  if (args?.requestedBy !== "user") {
+    return {
+      content: [{ type: "text", text: 'record_stance: nothing was recorded. This tool records only a stance the human explicitly asked for (requestedBy: "user"), in their words. Ask them, or tell them about /deeppairing:reject.' }],
+      isError: true
+    };
+  }
+  if (typeof args?.text !== "string") {
+    return {
+      content: [{ type: "text", text: 'record_stance: nothing was recorded. `text` is required: the human\'s words, verbatim, as "<what to avoid> -- <why>".' }],
+      isError: true
+    };
+  }
+  const { what, why } = parseStanceArguments(args.text);
+  const addStance = ctx.store.addStance?.bind(ctx.store);
+  if (!addStance) {
+    return { content: [{ type: "text", text: "record_stance: nothing was recorded. This store can't add stances (no project-bound deepPairing store)." }], isError: true };
+  }
+  const outcome = await recordStance({ addStance }, { what, why, addedVia: "mcp", requestedBy: "user" });
+  const { ok, text } = formatRecordStanceOutcome(outcome, "This project");
+  return ok ? { content: [{ type: "text", text }] } : { content: [{ type: "text", text: `record_stance: ${text}` }], isError: true };
 }
 
 // src/daemon/status.ts
@@ -39927,14 +40135,14 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "recall",
         annotations: { title: "Recall philosophy", readOnlyHint: true, openWorldHint: false },
-        description: "Search deepPairing memory.\n\nModes:\n- `philosophy` \u2014 cross-project stances (avoid/prefer/mixed). Optional `stance` + `source` filters. Empty query lists the whole ledger.\n- `sessions` \u2014 past artifacts in THIS project. Requires a query.\n- `ledger` \u2014 cross-project moat digest (shaped/near-misses/blocked counts + top cited stances + seeded). Query ignored.\n- `any` (default) \u2014 unions philosophy + sessions, philosophy first. Requires a query (a bare `recall(mode='any')` errors \u2014 pass the concept you're about to propose, or use `mode='philosophy'` with an empty query to list the ledger).",
+        description: "Search deepPairing memory.\n\nModes:\n- `philosophy` \u2014 cross-project stances (avoid/prefer/mixed). Optional `stance` + `source` filters. Empty query lists the whole ledger.\n- `sessions` \u2014 past artifacts in THIS project. Requires a query.\n- `ledger` \u2014 cross-project moat digest (shaped/near-misses/blocked counts + top cited stances + seeded). Query ignored.\n- `project` \u2014 THIS project's enforced stances (what the gate checks), with reason and how each was added. Optional query filters.\n- `any` (default) \u2014 unions philosophy + sessions, philosophy first. Requires a query (a bare `recall(mode='any')` errors \u2014 pass the concept you're about to propose, or use `mode='philosophy'` with an empty query to list the ledger).",
         inputSchema: {
           type: "object",
           properties: {
             query: { type: "string", description: "Free-text query (concept, title, or content substring). Empty string with mode='philosophy' lists the whole ledger; ignored for mode='ledger'." },
             mode: {
               type: "string",
-              enum: ["philosophy", "sessions", "ledger", "any"],
+              enum: ["philosophy", "sessions", "ledger", "project", "any"],
               description: "Which layer to search. Default 'any'."
             },
             stance: {
@@ -40153,6 +40361,22 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             reason: { type: "string", description: "One line: why you're taking it back. Shown in the withdrawn state + history." }
           },
           required: ["artifactId", "reason"]
+        }
+      },
+      {
+        // #620 — the MCP door behind /deeppairing:reject. Add-only; human
+        // request only (by contract). Logic shared with `deeppairing stance
+        // add` in store/stance-add.ts.
+        name: "record_stance",
+        annotations: { title: "Record a stance you asked for", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        description: RECORD_STANCE_DESCRIPTION,
+        inputSchema: {
+          type: "object",
+          properties: {
+            text: { type: "string", description: `The human's words, verbatim: "<what to avoid> -- <why>". The reason after " -- " is required.` },
+            requestedBy: { type: "string", enum: ["user"], description: `Who asked. Only "user" is accepted: this tool never records on the agent's own initiative.` }
+          },
+          required: ["text", "requestedBy"]
         }
       }
     ]
@@ -40482,6 +40706,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             return handleReviseArtifact(ctx, args);
           case "withdraw_artifact":
             return handleWithdrawArtifact(ctx, args);
+          case "record_stance":
+            return handleRecordStance(ctx, args);
           case "recall":
             return handleRecall(ctx, args);
           case "post_pr_review":
@@ -41577,6 +41803,10 @@ var DaemonClient = class {
   // (the daemon's /memory/* routes already accepted this object).
   async recordRejectedApproach(params) {
     await this.post("/memory/rejected", params);
+  }
+  /** #620/#625 — one daemon-side transaction (FileStore.addStance); returns the persisted row. */
+  async addStance(params) {
+    return this.post("/memory/stance", params);
   }
   async recordApprovedPattern(params) {
     await this.post("/memory/approved", params);

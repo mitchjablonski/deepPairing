@@ -26999,6 +26999,9 @@ import fs14 from "node:fs";
 import path13 from "node:path";
 
 // src/mcp/preflight-validator.ts
+function normalizeConceptKey2(name) {
+  return String(name).trim().toLowerCase().replace(/\s+/g, " ");
+}
 var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
   "the",
   "and",
@@ -27631,7 +27634,14 @@ var ReviewPostJournal = class {
   }
 };
 
+// src/store/stance-add.ts
+function isPublishableStance(addedVia, requestedBy) {
+  return addedVia !== "mcp" && requestedBy !== "unknown";
+}
+
 // src/store/file-store.ts
+var isStanceAddedVia = (v) => v === "cli" || v === "mcp";
+var isStanceRequestedBy = (v) => v === "user" || v === "unknown";
 var PREFERENCES_LOCK_TIMEOUT_MS = 1e3;
 var RetirementCommentFields = external_exports.object({
   id: external_exports.string().min(1),
@@ -29232,6 +29242,68 @@ var FileStore = class _FileStore {
       }
     }
   }
+  /**
+   * #620/#625 — a terminal stance (`stance add`, `/deeppairing:reject`), as ONE
+   * preferences transaction. The normalized-key dedupe, the missing-reason
+   * fill, the `maxRows` ceiling and the insert all run under the preferences
+   * lock, so two concurrent adds of the same (or a case-variant) stance can't
+   * both insert, and each caller gets back the row that is actually persisted.
+   * Validation is the caller's (store/stance-add.ts validateStanceInput).
+   *
+   * Publishing (when this project publishes): a NEW row only when its
+   * requester is verified (isPublishableStance), keyed on its concept; a
+   * reason fill only under the existing row's CONCEPT, never its description
+   * (an artifact title can carry a file path — Q2 review H2), and only when it
+   * changed the row.
+   */
+  addStance(params) {
+    const { concept, reason, addedVia, requestedBy, maxRows } = params;
+    const key = normalizeConceptKey2(concept);
+    let result = null;
+    this.mutatePreferences((prefs) => {
+      const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+      const existing = rejected.find(
+        (r) => normalizeConceptKey2(r.description) === key || typeof r.concept === "string" && normalizeConceptKey2(r.concept) === key
+      );
+      if (existing) {
+        if (existing.reason) {
+          result = { status: "exists", row: { ...existing } };
+          return false;
+        }
+        existing.reason = reason;
+        existing.rejectedAt = existing.rejectedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+        prefs.rejectedApproaches = rejected;
+        result = { status: "reason_added", row: { ...existing } };
+        return true;
+      }
+      if (rejected.length >= maxRows) {
+        result = { status: "cap_reached", count: rejected.length };
+        return false;
+      }
+      const row = { description: concept, concept, reason, rejectedAt: (/* @__PURE__ */ new Date()).toISOString(), addedVia, requestedBy };
+      rejected.push(row);
+      prefs.rejectedApproaches = rejected;
+      result = { status: "recorded", row: { ...row } };
+      return true;
+    });
+    const out = result;
+    if (!out) throw new Error("addStance: the preferences transaction produced no result");
+    if (this.isDemoSession || !this.globalLedgerPublishEnabled()) return out;
+    let mirror = null;
+    if (out.status === "recorded" && isPublishableStance(addedVia, requestedBy)) {
+      mirror = { key: concept, description: concept };
+    } else if (out.status === "reason_added" && out.row.concept?.trim() && isPublishableStance(addedVia, requestedBy)) {
+      mirror = { key: out.row.concept.trim(), description: out.row.description };
+    }
+    if (mirror) {
+      try {
+        this.mirrorToLedger("rejected", mirror.key, mirror.description, reason);
+      } catch (err) {
+        _FileStore.logLedgerMirrorFailure("rejected", err);
+      }
+    }
+    return out;
+  }
   /** #408 review (M1) — would committing `status` on this artifact conflict
    *  with the persisted record (a concurrent proposal rewrite)? Same rule the
    *  flush applies (mergeArtifactRecords), evaluated read-only BEFORE the
@@ -29277,7 +29349,11 @@ var FileStore = class _FileStore {
         reason: entry?.reason,
         rejectedAt: entry?.rejectedAt,
         sourceArtifactId: entry?.sourceArtifactId,
-        concept: entry?.concept
+        concept: entry?.concept,
+        // #620 — carried through so a later write (another rejection, a
+        // retire of a different row) doesn't strip a stance's provenance.
+        ...isStanceAddedVia(entry?.addedVia) ? { addedVia: entry.addedVia } : {},
+        ...isStanceRequestedBy(entry?.requestedBy) ? { requestedBy: entry.requestedBy } : {}
       }
     ).filter((r) => r.description);
   }
@@ -35406,6 +35482,13 @@ var RecordRejectedBody = external_exports.object({
   sourceArtifactId: external_exports.string().optional(),
   concept: external_exports.string().optional()
 });
+var AddStanceBody = external_exports.object({
+  concept: external_exports.string().min(1),
+  reason: external_exports.string().min(1),
+  addedVia: external_exports.enum(["cli", "mcp"]),
+  requestedBy: external_exports.enum(["user", "unknown"]),
+  maxRows: external_exports.number().int().positive()
+}).strict();
 var RecordApprovedBody = external_exports.object({
   description: external_exports.string().min(1),
   concept: external_exports.string().optional()
@@ -36181,6 +36264,25 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       }
     }
     return c.json({ status: "recorded" });
+  });
+  app.post("/api/internal/sessions/:sessionId/memory/stance", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    let parsed;
+    try {
+      parsed = AddStanceBody.parse(await c.req.json());
+    } catch (err) {
+      const message = err instanceof external_exports.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
+      return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
+    }
+    const result = r.store.addStance(parsed);
+    if ((result.status === "recorded" || result.status === "reason_added") && daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+      try {
+        recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "rejected" });
+      } catch {
+      }
+    }
+    return c.json(result);
   });
   app.post("/api/internal/sessions/:sessionId/memory/approved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
