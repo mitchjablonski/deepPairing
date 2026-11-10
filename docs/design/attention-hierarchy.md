@@ -65,8 +65,9 @@ progressive disclosure or is removed as a duplicate (§5). Nothing pending is
 hidden, nothing is auto-approved, no failure is suppressed.
 
 **Decided (§10):** the lanes, the placement under the session tabs,
-**oldest-first** ordering (with a "+N high decision" indicator so a second high-stakes
-item is never hidden), keeping the stance-hold record in the bar, and starting
+**consequence-first** ordering (blocking tier first, oldest within a tier, ties
+by id; revised from oldest-first by #430 slice 1), with a "+N high decision"
+indicator so a second high-stakes item is never hidden, keeping the stance-hold record in the bar, and starting
 with the split PR 1a (§8). The acute bug — Decide items collapsing behind
 "Show older" — is fixed first and unflagged (§8, PR 0).
 
@@ -228,7 +229,7 @@ A pure selector `lib/attention.ts → computeAttention(state)` (no React) return
 
 ```ts
 interface Attention {
-  next: AttentionItem | null;          // first Decide item: blocking tier first, oldest within a tier (§4.3)
+  next: AttentionItem | null;          // Decide head or a terminal-held ask, by tier, then age, then id (§4.3); held asks never enter Decide
   highDecisionsBeyondNext: number;     // open decisions with stakes === "high", other than `next` ("+N high decision")
   lanes: {
     decide:  AttentionItem[];          // consequence-first, oldest within a tier (§4.3)
@@ -378,7 +379,7 @@ and the `⌄` expansion.
 ```
 │   Why    Needed before Thursday's rollout; hard to reverse once sessions persist.        │
 │   After  Claude continues with the option you pick.     Session: Session cache design   │
-│   Queue  1. Which store…  HIGH   2. Session cache hit rate…   3. Backfill plan…  …        │
+│   Queue  1. Which store…  HIGH   2. Backfill plan…   3. Session cache hit rate…  …        │
 ```
 
 **B. Review queue, nothing blocking pending (oldest review first)**
