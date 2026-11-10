@@ -36,6 +36,7 @@ import { handlePresentChangeset } from "./tools/present-changeset.js";
 import { handlePresentDebrief } from "./tools/present-debrief.js";
 import { handlePresentExplainer } from "./tools/present-explainer.js";
 import { handleRecall } from "./tools/recall.js";
+import { handleRecordStance, RECORD_STANCE_DESCRIPTION } from "./tools/record-stance.js";
 import { handleGetCompanionUrl } from "./tools/get-companion-url.js";
 import type { ToolContext, ToolResult, ToolState } from "./tools/types.js";
 import { feedbackStoreView, liveReservations, parseFeedbackFilter } from "./tools/feedback-ownership.js";
@@ -375,6 +376,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
           "- `philosophy` — cross-project stances (avoid/prefer/mixed). Optional `stance` + `source` filters. Empty query lists the whole ledger.\n" +
           "- `sessions` — past artifacts in THIS project. Requires a query.\n" +
           "- `ledger` — cross-project moat digest (shaped/near-misses/blocked counts + top cited stances + seeded). Query ignored.\n" +
+          "- `project` — THIS project's enforced stances (what the gate checks), with reason and how each was added. Optional query filters.\n" +
           "- `any` (default) — unions philosophy + sessions, philosophy first. Requires a query (a bare `recall(mode='any')` errors — pass the concept you're about to propose, or use `mode='philosophy'` with an empty query to list the ledger).",
         inputSchema: {
           type: "object" as const,
@@ -382,7 +384,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
             query: { type: "string", description: "Free-text query (concept, title, or content substring). Empty string with mode='philosophy' lists the whole ledger; ignored for mode='ledger'." },
             mode: {
               type: "string",
-              enum: ["philosophy", "sessions", "ledger", "any"],
+              enum: ["philosophy", "sessions", "ledger", "project", "any"],
               description: "Which layer to search. Default 'any'.",
             },
             stance: {
@@ -616,6 +618,22 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
             reason: { type: "string", description: "One line: why you're taking it back. Shown in the withdrawn state + history." },
           },
           required: ["artifactId", "reason"],
+        },
+      },
+      {
+        // #620 — the MCP door behind /deeppairing:reject. Add-only; human
+        // request only (by contract). Logic shared with `deeppairing stance
+        // add` in store/stance-add.ts.
+        name: "record_stance",
+        annotations: { title: "Record a stance you asked for", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        description: RECORD_STANCE_DESCRIPTION,
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            text: { type: "string", description: "The human's words, verbatim: \"<what to avoid> -- <why>\". The reason after \" -- \" is required." },
+            requestedBy: { type: "string", enum: ["user"], description: "Who asked. Only \"user\" is accepted: this tool never records on the agent's own initiative." },
+          },
+          required: ["text", "requestedBy"],
         },
       },
     ],
@@ -1190,6 +1208,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         // G1 (#198c) — the agent retracts its own draft; guarded against
         // dodging unanswered feedback. See tools/withdraw-artifact.ts.
         return handleWithdrawArtifact(ctx, args);
+
+      case "record_stance":
+        // #620 — add-only stance from the human's words. See tools/record-stance.ts.
+        return handleRecordStance(ctx, args);
 
       case "recall":
         // CC10 — handler extracted to mcp/tools/recall.ts (~190 LOC out

@@ -14,7 +14,7 @@ import { useChainComments } from "../../hooks/useChainComments";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { ApproveCountdown } from "./ApproveCountdown";
 import { useConfirmCountdown } from "../../hooks/useConfirmCountdown";
-import { computePending } from "../../lib/pending";
+import { orderedPendingArtifacts } from "../../lib/attention";
 import { resolveChangesetKey, type ChangesetIntent } from "../../lib/changesetKeymap";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import {
@@ -52,7 +52,7 @@ import { WalkMeThroughButton, hunkLineRange } from "../WalkMeThrough";
  * changes (focus reason), j/k=next/prev file, ⏎=fire the derived action,
  * ⇧⏎=approve-all. Reaching all-look-right ARMS the same confirm-countdown the
  * single-artifact approve uses (never a silent hard-commit). Terminal actions
- * auto-advance to the next pending artifact (computePending) — send-back
+ * auto-advance in the canonical Decide order — send-back
  * advances AFTER its feedback posts so it never yanks focus out of a textarea.
  */
 
@@ -649,7 +649,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   // --- Auto-advance to the next pending artifact after a terminal action ----
   const advanceToNextPending = useCallback(() => {
     const store = useArtifactStore.getState();
-    const pending = computePending(store.artifacts).drafts.filter((a) => a.id !== artifact.id);
+    const pending = orderedPendingArtifacts(store.artifacts).filter((a) => a.id !== artifact.id);
     const next = pending[0];
     if (next) store.selectArtifact(next.id);
   }, [artifact.id]);

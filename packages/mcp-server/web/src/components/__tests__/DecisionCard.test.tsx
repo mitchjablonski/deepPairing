@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { PresenceContext } from "motion/react";
 import { DecisionCard } from "../DecisionCard";
 import { useArtifactStore } from "../../stores/artifact";
 import { useLedgerStore, resetLedgerStoreForTests } from "../../stores/ledger";
@@ -532,6 +533,33 @@ describe("DecisionCard — keyboard navigation", () => {
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining("/api/decisions/dec_abc"),
         expect.objectContaining({ body: expect.stringContaining('"optionId":"o1"') }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#623 — an armed select cancels when its pane starts leaving, so it can't resolve the decision you left", () => {
+    // AnimatePresence tells an exiting subtree through PresenceContext; inert
+    // stops keys and clicks there, not this timer.
+    const presence = (isPresent: boolean) => ({ id: "pane", isPresent, register: () => () => {}, initial: false as const });
+    const card = (isPresent: boolean) => (
+      <PresenceContext.Provider value={presence(isPresent)}>
+        <DecisionCard event={event} decisionId="dec_abc" artifactId="art_x" />
+      </PresenceContext.Provider>
+    );
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(card(true));
+      fireEvent(window, new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_x", action: "approve" } }));
+      expect(screen.getByText(/will select/i)).toBeInTheDocument();
+      for (let i = 0; i < 2; i++) act(() => { vi.advanceTimersByTime(1100); });
+      rerender(card(false));
+      for (let i = 0; i < 5; i++) act(() => { vi.advanceTimersByTime(1100); });
+      expect(screen.queryByText(/will select/i)).toBeNull();
+      expect(fetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("/api/decisions/dec_abc"),
+        expect.anything(),
       );
     } finally {
       vi.useRealTimers();

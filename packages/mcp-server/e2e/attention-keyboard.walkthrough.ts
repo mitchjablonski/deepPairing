@@ -179,6 +179,55 @@ test("approving just after switching keeps focus on the open artifact", async ({
   }
 });
 
+// #623 — the pane you just left stays mounted for its exit animation. Focus
+// starts on its Approve (scripted, as above, for timing control), then a real
+// `j` switches artifact and a real Enter follows at once. Without the fix that
+// Enter can approve the artifact you left; focus also falls to <body> when the
+// leaving pane unmounts. The focus check holds at any timing; the inert check
+// is recorded only while pane `one` is still mounted, and the walkthrough
+// records whether the Enter landed inside the exit window.
+test("leaving pane is not operable during its exit", async ({ page }, info) => {
+  const e = new AttentionEvidence(page, info, { scenario, mode: "ON", viewport: { width: 1280, height: 800 }, manifest: ["exiting-pane"] });
+  let daemon: AttentionDaemon | undefined;
+  let failure: unknown;
+  let cleanup: "removed" | "retained" = "retained";
+  try {
+    daemon = await AttentionDaemon.create(info);
+    await daemon.seed(scenario.seed);
+    await e.observe();
+    await page.goto(`${daemon.baseURL}/?session=probe`);
+    await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review one");
+    await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
+    await waitForSettledStore(page);
+    await expect(page.locator('[data-artifact-id="one"]')).toBeVisible();
+    await page.locator('[data-artifact-id="one"]').getByRole("button", { name: "Approve", exact: true }).focus();
+    await e.press("j");
+    await e.press("Enter");
+    const during = await page.evaluate(() => {
+      const one = document.querySelector('[data-artifact-id="one"]');
+      return {
+        oneMounted: one !== null,
+        oneInert: one?.hasAttribute("inert") ?? null,
+        focusPane: document.activeElement?.closest("[data-artifact-id]")?.getAttribute("data-artifact-id") ?? null,
+      };
+    });
+    await e.capture(during.oneMounted ? "exiting-pane-inside-exit-window" : "exiting-pane-after-exit-window");
+    await e.check("j selects the next artifact", () => expect(page.locator('[data-artifact-id="two"]')).toBeVisible());
+    await e.check("a still-mounted leaving pane is inert", async () => expect(during.oneMounted ? during.oneInert : true).toBe(true));
+    await e.check("focus moved into the entering pane, not <body>", async () => expect(during.focusPane).toBe("two"));
+    await expect(page.locator('[data-artifact-id="one"]')).toHaveCount(0);
+    await e.check("focus is still in the entering pane after the old pane leaves", async () => expect(await page.evaluate(() => document.activeElement?.closest("[data-artifact-id]")?.getAttribute("data-artifact-id"))).toBe("two"));
+    // Give any stray approval POST time to land before reading the store.
+    await page.waitForTimeout(1_000);
+    await e.check("Enter did not approve the artifact you left", async () => expect((await daemon!.artifacts("probe")).find((artifact) => artifact.id === "one")?.status).toBe("draft"));
+    await e.check("Enter did not approve the entering artifact either", async () => expect((await daemon!.artifacts("probe")).find((artifact) => artifact.id === "two")?.status).toBe("draft"));
+  } catch (error) { failure = error; await e.capture("failure").catch(() => undefined); }
+  finally {
+    if (daemon) { try { await daemon.close(info); cleanup = "removed"; } catch (error) { failure ??= error; } }
+    await finishWalkthrough(failure, () => e.save(failure ? "failed" : "passed", cleanup, failure, daemon?.seedJournal, daemon?.runtimes));
+  }
+});
+
 const op = (route: string, body: unknown) => ({ session: "probe", route, body });
 const finding = (id: string, title: string) => op("artifacts", { id, type: "research", title, content: { summary: "Synthetic gate fixture", findings: [{ category: "Probe", detail: "No production data", significance: "high" }] } });
 const decision = (id: string, title: string) => op("artifacts", { id, type: "decision", title, content: { context: "Synthetic choice context", decisionId: id, stakes: "high", options: [
