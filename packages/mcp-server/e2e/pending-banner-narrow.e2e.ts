@@ -265,8 +265,14 @@ test.describe("#430 slice 2 — a held terminal ask, and a second session", () =
       await expect(filter).toBeVisible({ timeout: 20000 });
       await page.getByTestId("pending-banner").locator("button[title]:not([aria-label])").first().click();
       await expect(page.locator("[data-artifact-id]").first()).toBeVisible({ timeout: 15000 });
+      // The sidebar toggle re-lays out the shell, and a pane can be momentarily
+      // unmeasurable (leaving, so `inert`, or between layouts). Measure the open,
+      // non-leaving pane and wait until it has a box, rather than reading null.
       const tops = async () => {
-        const detail = await page.locator("[data-artifact-id]").first().boundingBox();
+        const pane = page.locator("[data-artifact-id]:not([inert])").first();
+        await expect(pane).toBeVisible({ timeout: 15000 });
+        let detail: { y: number } | null = null;
+        await expect.poll(async () => (detail = await pane.boundingBox()) !== null, { timeout: 5000 }).toBe(true);
         const firstRow = page.locator('nav[aria-label="Artifacts"] [data-artifact-item]').first();
         const sidebar = (await firstRow.count()) ? await firstRow.boundingBox() : null;
         return { detail: detail!.y, sidebar: sidebar ? sidebar.y : null };
