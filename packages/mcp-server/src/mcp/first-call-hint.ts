@@ -293,19 +293,6 @@ export async function buildFirstCallHint(
   // route those into obligations at the bottom of the function. Kept as
   // a const so existing pushes type-check unchanged.
   const blockingParts: string[] = obligationsParts;
-  // #624 item 4 — the wrapper supplies its actual bound project root. Read at
-  // hint-build time, not from FileStore's constructor cache or a hook event.
-  // The server's existing first-success latch delivers automatic guidance once;
-  // an explicit onboarding read is another snapshot, not health monitoring.
-  if (env.projectRoot) {
-    const { status } = readTeamPreferences(path.join(env.projectRoot, ".deeppairing"));
-    if (status === "invalid" || status === "unreadable") {
-      const cause = status === "invalid" ? "invalid JSON or schema" : "file unavailable";
-      obligationsParts.push(
-        `⚠ Team rules could not be loaded and were ignored by this local read (${cause}). Tell the human to check .deeppairing/team.json or run /deeppairing:doctor. After repair, restart the deepPairing daemon to reload cached team rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`,
-      );
-    }
-  }
   // I7 — the LIVE companion UI URL, built from the daemon's real port at
   // hint-build time (standalone.ts threads the daemon's actual bound port
   // through createMcpServer → here). Field report: an agent asked for the UI
@@ -376,6 +363,29 @@ export async function buildFirstCallHint(
   try {
     // AA7b — typed optional method.
     const prefs = await store.getTeamPreferences?.();
+    // #624 — compare the actual session cache used below with a fresh disk
+    // read. A repaired file does not silently reload FileStore. Conversely a
+    // broken/deleted file does not turn its cached rules off. No cwd fallback.
+    if (env.projectRoot && Array.isArray(prefs)) {
+      const disk = readTeamPreferences(path.join(env.projectRoot, ".deeppairing"));
+      let problem: string | undefined;
+      if (disk.status === "invalid" || disk.status === "unreadable") {
+        const cause = disk.status === "invalid" ? "invalid JSON or schema" : "file unavailable";
+        problem = `The current team.json disk file could not be loaded (${cause}).`;
+      } else if (disk.status === "missing" && prefs.length > 0) {
+        problem = "The team.json disk file is missing.";
+      } else if (disk.status === "valid" && JSON.stringify(disk.preferences) !== JSON.stringify(prefs)) {
+        problem = "The team.json disk file differs from this session's cached team rules.";
+      }
+      if (problem) {
+        const cache = prefs.length > 0
+          ? "This session still uses its cached team rules until daemon restart."
+          : "This session currently has no cached team rules; a repaired disk file alone does not load them.";
+        obligationsParts.push(
+          `⚠ Team-rule load warning: ${problem} ${cache} Tell the human to check .deeppairing/team.json or run /deeppairing:doctor, then restart the deepPairing daemon to load the intended rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`,
+        );
+      }
+    }
     if (Array.isArray(prefs) && prefs.length > 0) {
       const render = (p: any) => {
         const scope = p.scope?.paths?.length
