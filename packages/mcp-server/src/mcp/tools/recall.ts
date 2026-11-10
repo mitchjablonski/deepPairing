@@ -1,5 +1,6 @@
 import { getGlobalStore } from "../../store/global-store.js";
 import { formatStanceCitation } from "../../store/philosophy-citation.js";
+import { stanceProvenance } from "../../store/stance-add.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -28,7 +29,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolResult> {
   const { store } = ctx;
   const query = String(args?.query ?? "").trim();
-  const mode = (args?.mode ?? "any") as "philosophy" | "sessions" | "ledger" | "any";
+  const mode = (args?.mode ?? "any") as "philosophy" | "sessions" | "ledger" | "project" | "any";
   const stanceFilter = typeof args?.stance === "string" ? args.stance : undefined;
   // DD5 — `source` filter for mode='philosophy'. Lets the agent ask
   // "show me what the user explicitly seeded" or "show me what came
@@ -168,6 +169,41 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
       content: [{
         type: "text",
         text: `${headline}${headlineQualifier}\n${cross}${top.length ? `\n\nTop cited stances:\n${top.join("\n")}` : ""}${seededSection}${suppressionNote}\n\nRespect these stances — especially TEAM-source, high-citation, and SEED entries — when shaping new proposals.`,
+      }],
+    };
+  }
+
+  // #620 — THIS project's enforced stances (preferences.json rejectedApproaches),
+  // the rows the present_* gate and the PreToolUse hook actually read. The
+  // philosophy mode reads the cross-project ledger, which a project-local
+  // stance reaches only when publishing is on, so a stance added with
+  // /deeppairing:reject or `stance add` needs this to be read back.
+  if (mode === "project") {
+    const memory = await store.getSessionMemory();
+    const q = query.toLowerCase();
+    const rows = memory.rejectedApproaches.filter((r) =>
+      !q || [r.concept, r.description, r.reason].some((f) => typeof f === "string" && f.toLowerCase().includes(q)),
+    );
+    if (rows.length === 0) {
+      return {
+        content: [{
+          type: "text",
+          text: query
+            ? `No stance in this project matches "${query}".`
+            : "This project has no stances yet. Add one with /deeppairing:reject <what> -- <why>, or reject an approach with a reason in the companion.",
+        }],
+      };
+    }
+    const shown = rows.slice(0, limit).map((r) => {
+      const reason = r.reason ? `reason: "${r.reason}"` : "no reason recorded";
+      const when = r.rejectedAt ? ` on ${r.rejectedAt.slice(0, 10)}` : "";
+      return `- "${r.concept ?? r.description}" — ${reason}\n    ${stanceProvenance(r)}${when}`;
+    });
+    const trailer = rows.length > limit ? `\n…${rows.length - limit} more.` : "";
+    return {
+      content: [{
+        type: "text",
+        text: `This project's stances (${rows.length}${query ? ` matching "${query}"` : ""}; enforced here, matched by words not meaning):\n${shown.join("\n")}${trailer}`,
       }],
     };
   }
