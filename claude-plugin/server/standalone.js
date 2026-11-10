@@ -30564,6 +30564,7 @@ function tokenCoverage(concept, proposal) {
   return hits / tokens.length;
 }
 var NEAR_MISS_THRESHOLD = 0.5;
+var REVERSE_EDIT_MIN_COVERAGE = 0.5;
 var CONSIDERED_CAP = 20;
 function conceptMatchesProposal(concept, proposal) {
   const tokens = meaningfulTokens(concept);
@@ -30598,7 +30599,7 @@ function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConce
   }
   return false;
 }
-function matchesGlob(pathStr, glob) {
+function matchesGlob(pathStr, glob, opts = {}) {
   const escape2 = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
   let re = "";
   for (let i = 0; i < glob.length; i++) {
@@ -30611,15 +30612,19 @@ function matchesGlob(pathStr, glob) {
       re += escape2(glob[i]);
     }
   }
-  return new RegExp(`^${re}$`).test(pathStr);
+  const regex = new RegExp(`^${re}$`);
+  if (regex.test(pathStr)) return true;
+  return !!opts.projectRelativePaths && glob.startsWith("**/") && !pathStr.startsWith("/") && regex.test(`/${pathStr}`);
 }
-function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = []) {
+function scopeHit(pref, proposalPaths, opts) {
+  return proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g, opts)));
+}
+function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = [], globOpts = {}) {
   for (const pref of prefs) {
     if (pref.kind === "prefer") continue;
     if (pref.scope?.paths?.length) {
       if (proposalPaths.length === 0) continue;
-      const hit = proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g)));
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
     if (pref.kind === "avoid") {
       if (!containmentBlockAllowed(pref.concept)) continue;
@@ -30655,7 +30660,7 @@ function containsAsPhrase(haystack, needle) {
   const esc3 = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^a-z0-9])${esc3}(?:[^a-z0-9]|$)`).test(haystack);
 }
-function findRejectedApproachMatch(proposalStrings, rejected) {
+function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
   const clean = (s) => s.trim().toLowerCase();
   for (const rej of rejected) {
     const rejNormalized = clean(rej.description);
@@ -30667,7 +30672,7 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
       if (containsAsPhrase(p, rejNormalized)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (containsAsPhrase(specificNoun, p)) {
+      if (containsAsPhrase(specificNoun, p) && (!opts.rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
         return { proposal, rejected: rej, via: "surface" };
       }
       if (containsAsPhrase(p, specificNoun)) {
@@ -30681,7 +30686,8 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
   return null;
 }
 function runPreflight(input) {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [] } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, projectRelativePaths = false } = input;
+  const globOpts = { projectRelativePaths };
   const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
   for (const rej of rejectedApproaches) {
@@ -30696,10 +30702,7 @@ function runPreflight(input) {
     if (considered.length >= CONSIDERED_CAP) break;
     if (pref.kind === "prefer") continue;
     if (pref.scope?.paths?.length) {
-      const hit = proposalPaths.some(
-        (p) => pref.scope.paths.some((g) => matchesGlob(p, g))
-      );
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
     considered.push({
       source: "team",
@@ -30726,10 +30729,7 @@ function runPreflight(input) {
   for (const pref of teamPreferences) {
     if (pref.kind === "prefer") continue;
     if (pref.scope?.paths?.length) {
-      const hit = proposalPaths.some(
-        (p) => pref.scope.paths.some((g) => matchesGlob(p, g))
-      );
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
     const cov = Math.max(
       ...coverageTexts.map((p) => tokenCoverage(pref.concept, p)),
@@ -30757,7 +30757,7 @@ function runPreflight(input) {
     }
   }
   if (rejectedApproaches.length > 0) {
-    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText });
     if (!match && proposalConcepts.length > 0) {
       for (const rej of rejectedApproaches) {
         if (!rej.concept) continue;
@@ -30813,14 +30813,13 @@ Do NOT retry with this approach. Propose an alternative. If this is a false posi
     }
   }
   if (teamPreferences.length > 0) {
-    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths, globOpts);
     if (!teamMatch && proposalConcepts.length > 0) {
       for (const pref of teamPreferences) {
         if (pref.kind !== "avoid") continue;
         if (pref.scope?.paths?.length) {
           if (proposalPaths.length === 0) continue;
-          const hit = proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g)));
-          if (!hit) continue;
+          if (!scopeHit(pref, proposalPaths, globOpts)) continue;
         }
         const cc = findConceptToConceptMatch(proposalConcepts, [pref.concept]);
         if (cc) {
