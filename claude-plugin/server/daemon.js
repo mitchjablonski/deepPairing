@@ -26226,21 +26226,28 @@ function senseProjectGuardrails(projectRoot2) {
 function stripJsoncComments(src) {
   return src.split("\n").map((line) => /^\s*\/\//.test(line) ? "" : line).join("\n");
 }
-function loadTeamPreferences(basePath) {
+function readTeamPreferences(basePath) {
   const filePath = path10.join(basePath, "team.json");
+  let text;
   try {
-    if (!fs11.existsSync(filePath)) return [];
-    const raw2 = JSON.parse(stripJsoncComments(fs11.readFileSync(filePath, "utf-8")));
-    const parsed = parseTeamPreferencesFile(raw2);
-    if (!parsed) {
-      console.warn(`[deepPairing] team.json failed schema validation; ignoring`);
-      return [];
-    }
-    return parsed.preferences;
+    text = fs11.readFileSync(filePath, "utf-8");
   } catch (err) {
-    console.warn(`[deepPairing] Could not load team.json: ${err}`);
-    return [];
+    const missing = typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+    return { status: missing ? "missing" : "unreadable", preferences: [] };
   }
+  try {
+    const parsed = parseTeamPreferencesFile(JSON.parse(stripJsoncComments(text)));
+    return parsed ? { status: "valid", preferences: parsed.preferences } : { status: "invalid", preferences: [] };
+  } catch {
+    return { status: "invalid", preferences: [] };
+  }
+}
+function loadTeamPreferences(basePath) {
+  const result = readTeamPreferences(basePath);
+  if (result.status === "invalid" || result.status === "unreadable") {
+    console.warn(`[deepPairing] team.json ${result.status}; ignoring team rules`);
+  }
+  return result.preferences;
 }
 
 // src/store/engagement-metrics.ts
