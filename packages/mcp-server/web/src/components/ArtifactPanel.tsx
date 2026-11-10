@@ -1,8 +1,8 @@
-import { useMemo, useState, useEffect, useRef, lazy, Suspense, type ReactNode } from "react";
+import { useMemo, useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
-import { m, AnimatePresence } from "motion/react";
+import { m, AnimatePresence, useIsPresent } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { isDemoSessionId } from "@deeppairing/shared";
@@ -356,9 +356,34 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       c.target.questionIndex == null,
   );
 
+  // #623 — after you pick another artifact, AnimatePresence keeps this pane
+  // mounted for its exit animation. It goes inert for that window, so Tab
+  // can't land on its Approve and Enter can't act on the artifact you left.
+  // If focus was inside it, hand focus to the entering pane: inert would
+  // otherwise drop it to <body> and a keyboard user restarts from the top.
+  // A layout effect runs before the browser applies inert's focus fixup.
+  const isPresent = useIsPresent();
+  const paneRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (isPresent) return;
+    const pane = paneRef.current;
+    const active = document.activeElement;
+    if (!pane || !active || !pane.contains(active)) return;
+    const selectedId = useArtifactStore.getState().selectedArtifactId;
+    const entering = Array.from(document.querySelectorAll<HTMLElement>("[data-dp-pane]")).find(
+      (p) => p !== pane && p.getAttribute("data-artifact-id") === selectedId,
+    );
+    entering?.focus({ preventScroll: true });
+  }, [isPresent]);
+
   return (
     <m.div
       key={artifact.id}
+      ref={paneRef}
+      inert={!isPresent}
+      // #623 — focusable by script only (never a Tab stop), so the hand-off
+      // above has a target that is the pane itself, not a guessed control.
+      tabIndex={-1}
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -4 }}
@@ -369,7 +394,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       // #403 — the scrolling pane a diagram popover must stay visible inside
       // (with the sticky chrome marked below): DiagramRegionLayer measures it.
       data-dp-pane=""
-      className={`flex-1 overflow-y-auto p-4 space-y-4 scroll-shadow w-full ${
+      className={`flex-1 overflow-y-auto p-4 space-y-4 scroll-shadow w-full focus:outline-none ${
         contentWidth === "constrained" ? "max-w-4xl mx-auto" : ""
       }`}
     >
@@ -781,7 +806,7 @@ function ArtifactSidebar({
    *  Empty during initial load and replay (see useArrivalHighlights). */
   highlightedIds: string[];
   collapsed: boolean;
-  /** #430 PR 5 — the Agents filter menu (bar ON, expanded sidebar). */
+  /** #430 PR 5, slice 2 — the Agents filter menu (expanded sidebar). */
   headerExtra?: ReactNode;
   width: number;
   onToggle: () => void;
@@ -949,6 +974,7 @@ function ArtifactSidebar({
       {/* Collapse toggle + grouping selector */}
       <div className="flex items-center justify-between">
         <button
+          data-sidebar-toggle=""
           onClick={onToggle}
           className="flex items-center justify-center py-1.5 px-2 text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -1370,7 +1396,7 @@ export function ArtifactPanel() {
   const sidebarWidth = usePreferencesStore((s) => s.sidebarWidth);
   const isNarrow = useIsNarrowViewport();
   const effectiveCollapsed = sidebarCollapsed || isNarrow;
-  const [sessionFilter, setSessionFilter] = useState<string | "all">("all");
+  const [chosenFilter, setSessionFilter] = useState<string | "all">("all");
 
   // Replay mode: hide artifacts created after the cursor. createdAt is ISO
   // so string comparison matches chronological order.
@@ -1390,6 +1416,10 @@ export function ArtifactPanel() {
     () => [...new Set(artifacts.map((a) => a.sessionId))],
     [artifacts],
   );
+  // #430 slice 2 — a filter on a session that has left falls back to All, rather
+  // than emptying the panel and taking the filter control with it. The choice is
+  // kept, so it applies again if that session comes back.
+  const sessionFilter = chosenFilter !== "all" && !sessionIds.includes(chosenFilter) ? "all" : chosenFilter;
 
   const visibleArtifacts = useMemo(
     () => artifacts.filter((a) => {
@@ -1407,13 +1437,16 @@ export function ArtifactPanel() {
 
   const liveCount = (sid: string | "all") =>
     artifacts.filter((a) => a.status !== "superseded" && (sid === "all" || a.sessionId === sid)).length;
-  const agentsMenu = nextUpBar && !effectiveCollapsed && sessionIds.length > 1 ? (
+  // #430 slice 2 (D1) — the menu, not the row, whenever the sidebar is expanded,
+  // bar ON or OFF. It filters; it does not signal.
+  const agentsMenu = !effectiveCollapsed && sessionIds.length > 1 ? (
     <label className="flex items-center gap-1.5 px-2 pb-1.5 text-2xs text-text-muted">
       <span className="shrink-0">Agents</span>
       <select
         value={sessionFilter}
         onChange={(e) => setSessionFilter(e.target.value)}
         data-testid="agents-filter-menu"
+        data-agents-filter=""
         className="flex-1 min-w-0 bg-surface-elevated border border-border-default rounded px-1 py-0.5 text-2xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
       >
         <option value="all">All ({liveCount("all")})</option>
@@ -1423,6 +1456,22 @@ export function ArtifactPanel() {
       </select>
     </label>
   ) : null;
+
+  // #430 slice 2 — the filter control swaps between menu and row on resize and
+  // collapse, and leaves when the last sibling does. Read before this commit
+  // removes it: if it held focus and focus falls to <body>, the effect below
+  // hands focus to whatever now plays that part.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const filterHeldFocus = !!panelRef.current?.querySelector("[data-agents-filter]")?.contains(document.activeElement);
+  useEffect(() => {
+    if (!filterHeldFocus) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const panel = panelRef.current;
+    const control = panel?.querySelector<HTMLElement>("[data-agents-filter]");
+    const target = control?.matches("select") ? control : control?.querySelector<HTMLElement>("[data-agents-active]");
+    (target ?? panel?.querySelector<HTMLElement>("[data-sidebar-toggle]"))?.focus();
+  });
 
   // Group by type
   const typeGroups = useMemo(() => {
@@ -1453,6 +1502,7 @@ export function ArtifactPanel() {
 
   return (
     <div
+      ref={panelRef}
       className={`flex flex-col h-full ${demoView ? "border-l-4 border-dashed border-accent-violet" : ""}`}
       data-provenance={provenance?.kind ?? "none"}
       data-testid="artifact-panel"
@@ -1476,14 +1526,15 @@ export function ArtifactPanel() {
       </div>
 
       {/* Session filter — shown when artifacts from multiple agents exist.
-          #430 PR 5 (design §4.6) — with the Next-up bar ON it becomes a filter
-          menu in the sidebar header (it filters, it does not signal); the row
-          stays whenever the sidebar is collapsed (no header room) and with the
-          bar OFF. */}
+          #430 PR 5 (design §4.6), slice 2 — with the sidebar expanded it is a
+          filter menu in the sidebar header, bar ON or OFF (it filters, it does
+          not signal); the row stays whenever the sidebar is collapsed or the
+          window narrow (no header room). */}
       {sessionIds.length > 1 && !agentsMenu && (
-        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
+        <div data-agents-filter="" className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
           <span className="text-2xs text-text-muted shrink-0">Agents:</span>
           <button
+            data-agents-active={sessionFilter === "all" || undefined}
             onClick={() => setSessionFilter("all")}
             className={`px-2 py-0.5 rounded text-2xs shrink-0 transition-colors ${
               sessionFilter === "all"
@@ -1498,6 +1549,7 @@ export function ArtifactPanel() {
             return (
               <button
                 key={sid}
+                data-agents-active={sessionFilter === sid || undefined}
                 onClick={() => setSessionFilter(sid)}
                 className={`px-2 py-0.5 rounded text-2xs shrink-0 transition-colors ${
                   sessionFilter === sid

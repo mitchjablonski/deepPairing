@@ -3,7 +3,7 @@ import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
-import { AnimatePresence } from "motion/react";
+import { AnimatePresence, useIsPresent } from "motion/react";
 import { type DecisionRequestEvent, type Artifact, type PlanVisual, type DecisionClosedStatus, type DecisionNonAnswerableStatus, coerceDecisionContent, decisionCanAcceptAnswer, nonAnswerableVerb } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
@@ -333,8 +333,17 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // bar at "3s" indefinitely (review-caught).
   const handleSelectRef = useRef<(optionId: string) => void>(() => {});
   handleSelectRef.current = handleSelect;
+  // #623 — false while this card's pane plays its exit animation after you
+  // select another artifact. inert stops clicks and keys there, not timers, so
+  // an armed select would otherwise resolve the decision you just left.
+  // Outside AnimatePresence it is true.
+  const isPresent = useIsPresent();
   useEffect(() => {
     if (!armedSelect) return;
+    if (!isPresent) {
+      setArmedSelect(null);
+      return;
+    }
     if (armedSelect.left <= 0) {
       const { optionId } = armedSelect;
       setArmedSelect(null);
@@ -346,7 +355,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       1000,
     );
     return () => clearTimeout(t);
-  }, [armedSelect]);
+  }, [armedSelect, isPresent]);
   // F8 review — focus-move disarms: expiry committing the option captured at
   // arm time while the ring shows another is the D3/U4 wrong-selection
   // hazard. `a` again re-arms at the new focus.

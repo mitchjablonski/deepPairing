@@ -200,17 +200,21 @@ function ruleForRelPath(rel) {
   }
   return null;
 }
+function relativeInside(root, abs) {
+  const rel = path2.relative(root, abs).replace(/\\/g, "/");
+  return !rel || rel === ".." || rel.startsWith("../") || path2.isAbsolute(rel) ? null : rel;
+}
 function matchGuardrailPath(projectRoot, paths) {
   try {
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
       const abs = path2.resolve(projectRoot, raw);
-      let rel = path2.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../") || path2.isAbsolute(rel)) {
+      let rel = relativeInside(projectRoot, abs);
+      if (!rel) {
         const mapped = canonicalizeWorktreePath(abs);
         if (!mapped.worktree) continue;
-        rel = path2.relative(projectRoot, mapped.path).replace(/\\/g, "/");
-        if (!rel || rel === ".." || rel.startsWith("../") || path2.isAbsolute(rel)) continue;
+        rel = relativeInside(projectRoot, mapped.path);
+        if (!rel) continue;
       }
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
@@ -296,6 +300,23 @@ function physicalResolve(base, spelling) {
     return null;
   }
 }
+function teamScopePaths(projectRoot, raw) {
+  try {
+    const roots = /* @__PURE__ */ new Set([projectRoot]);
+    const realRoot = realpathish(path2.resolve(projectRoot));
+    if (realRoot) roots.add(realRoot);
+    const target = physicalResolve(projectRoot, raw) ?? path2.resolve(projectRoot, raw);
+    const mapped = canonicalizeWorktreePath(target);
+    const out = /* @__PURE__ */ new Set();
+    for (const root of roots) {
+      const rel = (mapped.worktree ? relativeInside(root, mapped.path) : null) ?? relativeInside(root, target);
+      if (rel) out.add(rel);
+    }
+    return [...out];
+  } catch {
+    return [];
+  }
+}
 function matchDeeppairingStatePath(projectRoot, raw) {
   try {
     if (typeof raw !== "string" || !raw) return null;
@@ -368,6 +389,7 @@ export {
   matchesGuardrailFile,
   resolveHookRoots,
   ruleForRelPath,
+  teamScopePaths,
   toolInputTargetPath,
   toolInputTargetsDeeppairingState,
   toolInputTargetsGuardrail

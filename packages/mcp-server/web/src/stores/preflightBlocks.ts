@@ -122,7 +122,7 @@ interface PreflightBlockState {
   clear: () => void;
 }
 
-const MAX_BLOCKS_KEPT = 25;
+export const MAX_BLOCKS_KEPT = 25;
 const LAST_SEEN_KEY = "dp.gateBlocks.lastSeenAt";
 
 /** localStorage is unavailable in private modes / some jsdom configs — never throw. */

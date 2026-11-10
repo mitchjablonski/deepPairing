@@ -14,6 +14,10 @@ import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } 
  * width, its focus expansion is height-bounded, and the composer stays on
  * screen and unoccluded. At the S2 widths (1440 / 900) the same long-copy
  * fixture stays inside the S2 app-shell chrome ceiling (< 15%, unchanged).
+ *
+ * #430 slice 2 (Sol's condition 5) — the same checks with a held terminal ask
+ * leading over the drafts, for the D2 `Why`, plus D1's sidebar and detail tops
+ * recorded separately. `main` top can't see D1: the row sits inside <main>.
  */
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const daemonJs = path.resolve(__dir, "../dist/daemon/index.js");
@@ -22,6 +26,7 @@ let proc: ChildProcess | undefined;
 let projectRoot: string;
 let home: string;
 let baseURL: string;
+let token: string;
 
 const BRIEF_TITLE = "Notify the lead whenever a delegated worker stops, stalls, or exits unexpectedly";
 const LONG_WHY = "Tell the lead the moment a worker stops so a stalled delegated run never sits unnoticed behind a quiet terminal while the rest of the plan waits on it";
@@ -61,6 +66,7 @@ daemonBeforeAll(() => [proc], async (testInfo) => {
   });
   const daemon = await withSetupDiagnostics(proc, testInfo, () => waitForDaemon(projectRoot));
   baseURL = daemon.base;
+  token = daemon.token;
   const h = { "Content-Type": "application/json", Authorization: `Bearer ${daemon.token}` };
   await fetch(`${baseURL}/api/internal/sessions/nb/register`, { method: "POST", headers: h, body: "{}" })
     .then((r) => { if (!r.ok) throw new Error(`register failed: ${r.status}`); });
@@ -164,3 +170,147 @@ for (const width of [1440, 900] as const) {
     await context.close();
   });
 }
+
+const HELD_ASK_ID = "blk_nb_ask";
+
+test.describe("#430 slice 2 — a held terminal ask, and a second session", () => {
+  test.beforeAll(async () => {
+    // Runs after the tests above, so their lead is untouched. The log route reads
+    // this file per request; held asks are local to each browser context.
+    const concept = "Do not rewrite the session-store migration while the delegated cache sweep is still running";
+    const targetPath = "packages/mcp-server/src/store/migrations/2026-session-store-sliding-window-ttl.sql";
+    const hold = (id: string, ageMs: number) => ({
+      id, at: new Date(Date.now() - ageMs).toISOString(), sessionId: "hook", source: "session", via: "concept",
+      lane: "hook", decision: "ask", toolName: "Edit", concept, targetPath, reason: LONG_WHY,
+    });
+    fs.mkdirSync(path.join(projectRoot, ".deeppairing"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, ".deeppairing", "preflight-blocks.json"),
+      // Older than every seeded draft, so the ask leads; two, because Why marks the whole log.
+      JSON.stringify({ version: 1, blocks: [hold("blk_nb_ask_2", 3_600_000), hold(HELD_ASK_ID, 7_200_000)] }),
+    );
+    const h = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+    await fetch(`${baseURL}/api/internal/sessions/nb2/register`, { method: "POST", headers: h, body: "{}" })
+      .then((r) => { if (!r.ok) throw new Error(`register nb2 failed: ${r.status}`); });
+    await fetch(`${baseURL}/api/internal/sessions/nb2/artifacts`, { method: "POST", headers: h, body: JSON.stringify(spec("nb2_sibling", "Sibling session draft", "A second session to filter by")) })
+      .then((r) => { if (!r.ok) throw new Error(`seed nb2 failed: ${r.status}`); });
+  });
+
+  async function openHeld(browser: Browser, width: number, height: number, scale = 1) {
+    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: "light" });
+    const page = await context.newPage();
+    const mutations: string[] = [];
+    page.on("request", (r) => { if (!["GET", "HEAD", "OPTIONS"].includes(r.method())) mutations.push(`${r.method()} ${r.url()}`); });
+    await page.goto(`${baseURL}/?session=nb`);
+    await expect(page.getByTestId("pending-next")).toHaveAttribute("data-next-copy", /^HELD IN TERMINAL/, { timeout: 20000 });
+    return { context, page, mutations, why: page.getByRole("button", { name: "Why this is held" }) };
+  }
+
+  for (const v of NARROW) {
+    test(`Why wraps, stays reachable, and returns focus (${v.name})`, async ({ browser }) => {
+      const { context, page, mutations, why } = await openHeld(browser, v.width, v.height, v.scale);
+      const banner = await box(page, '[data-testid="pending-banner"]');
+      expect(banner.x + banner.width).toBeLessThanOrEqual(v.width + 0.5);
+      const lead = await box(page, '[data-testid="pending-next"]');
+      expect(lead.width).toBeGreaterThanOrEqual(Math.min(240, banner.width * 0.6));
+      await expect(why).toBeVisible();
+      const whyBox = await why.boundingBox();
+      expect(whyBox!.x).toBeGreaterThanOrEqual(0);
+      expect(whyBox!.x + whyBox!.width).toBeLessThanOrEqual(v.width + 0.5);
+      expect(whyBox!.y + whyBox!.height).toBeLessThanOrEqual(v.height + 0.5);
+      await expectComposerClear(page);
+
+      // One Tab past the held row, with the keyboard only.
+      await page.getByTestId("pending-next").focus();
+      await page.keyboard.press("Tab");
+      await expect(why).toBeFocused();
+      await expectComposerClear(page);
+      await page.keyboard.press("Enter");
+
+      const entry = page.locator(`[id="gate-block-${HELD_ASK_ID}"]`);
+      await expect(entry).toBeFocused();
+      await expect(entry).toBeInViewport();
+      await expect(entry.getByTestId("gate-hook-next")).toContainText("Allow it there");
+      const log = await box(page, '[data-testid="gate-block-log"]');
+      expect(log.x).toBeGreaterThanOrEqual(-0.5);
+      expect(log.x + log.width).toBeLessThanOrEqual(v.width + 0.5);
+      await expect(why).toHaveCount(0);
+      await expect(page.getByTestId("pending-next")).toHaveAttribute("data-next-copy", /^(?!HELD IN TERMINAL)/);
+      expect(mutations).toEqual([]);
+
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("gate-block-log")).toHaveCount(0);
+      await expect(page.locator("header").getByRole("button", { name: /diagnostics/i })).toBeFocused();
+      await expectComposerClear(page);
+      expect(mutations).toEqual([]);
+      await context.close();
+    });
+  }
+
+  for (const width of [1440, 900] as const) {
+    test(`held plus drafts stays inside the S2 ceiling; first-content tops recorded (${width})`, async ({ browser }) => {
+      const { context, page, why } = await openHeld(browser, width, 900, 2);
+      await expect(why).toBeVisible();
+      const main = await box(page, "main");
+      const pct = (main.y / 900) * 100;
+      console.log(`[430 D2] app-shell chrome (main top) with held lead and Why (${width}): ${pct.toFixed(1)}%`);
+      expect(pct).toBeLessThan(15.0);
+      // One row: the Why shares the lead's row at the S2 widths.
+      const lead = await box(page, '[data-testid="pending-next"]');
+      const whyBox = await why.boundingBox();
+      expect(Math.abs((whyBox!.y + whyBox!.height / 2) - (lead.y + lead.height / 2))).toBeLessThan(8);
+
+      // The sibling has merged once the filter shows. Then open the first draft chip.
+      const filter = width === 1440 ? page.getByTestId("agents-filter-menu") : page.getByText("Agents:");
+      await expect(filter).toBeVisible({ timeout: 20000 });
+      await page.getByTestId("pending-banner").locator("button[title]:not([aria-label])").first().click();
+      await expect(page.locator("[data-artifact-id]").first()).toBeVisible({ timeout: 15000 });
+      const tops = async () => {
+        const detail = await page.locator("[data-artifact-id]").first().boundingBox();
+        const firstRow = page.locator('nav[aria-label="Artifacts"] [data-artifact-item]').first();
+        const sidebar = (await firstRow.count()) ? await firstRow.boundingBox() : null;
+        return { detail: detail!.y, sidebar: sidebar ? sidebar.y : null };
+      };
+      const report = (label: string, t: { detail: number; sidebar: number | null }) =>
+        console.log(`[430 D1] first-content tops, ${label} (${width}): detail ${(t.detail / 9).toFixed(1)}% | sidebar ${t.sidebar === null ? "n/a" : `${(t.sidebar / 9).toFixed(1)}%`}`);
+
+      if (width === 1440) {
+        await expect(page.getByText("Agents:")).toHaveCount(0);
+        const withMenu = await tops();
+        report("menu", withMenu);
+        // The same screen with the row back: the row costs the detail its height,
+        // and the menu costs the sidebar instead. Both are recorded, not netted.
+        await page.locator("[data-sidebar-toggle]").click();
+        await expect(page.getByText("Agents:")).toBeVisible();
+        const withRow = await tops();
+        report("row, sidebar collapsed", withRow);
+        expect(withRow.detail).toBeGreaterThan(withMenu.detail);
+      } else {
+        // 900px counts as narrow, so the row stays here and D1 saves nothing.
+        report("row, narrow", await tops());
+      }
+      await context.close();
+    });
+  }
+
+  test("the menu works from the keyboard and keeps its choice across a resize (1440)", async ({ browser }) => {
+    const { context, page } = await openHeld(browser, 1440, 900);
+    const menu = page.getByTestId("agents-filter-menu");
+    await expect(menu).toBeVisible({ timeout: 20000 });
+    await menu.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu).not.toHaveValue("all");
+    const chosen = await menu.inputValue();
+    await expect(menu).toBeFocused();
+
+    await page.setViewportSize({ width: 800, height: 900 });
+    const active = page.locator("[data-agents-active]");
+    await expect(active).toBeFocused();
+    await expect(active).toHaveAttribute("title", chosen);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(menu).toHaveValue(chosen);
+    await expect(menu).toBeFocused();
+    await context.close();
+  });
+});
