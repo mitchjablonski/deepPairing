@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "../../App";
-import { ArtifactPanel } from "../ArtifactPanel";
+import { ArtifactPanel, MultiAgentSync } from "../ArtifactPanel";
 import { DiagnosticsMenu } from "../DiagnosticsMenu";
 import { PendingBanner } from "../PendingBanner";
 import { NARROW_VIEWPORT_QUERY } from "../../hooks/useMediaQuery";
@@ -321,6 +321,70 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     expect(inSidebar("a1")).not.toBeNull();
     expect(inSidebar("a2")).not.toBeNull();
   });
+
+  it.each(["403", "500", "network", "missing sessions", "invalid session"])(
+    "preserves the filter through failed backfill and a %s catalog response, then clears a confirmed departure",
+    async (failure) => {
+      const three = [...two(), art("a3", "From agent three", { sessionId: "s3" })];
+      const sessions = ["s1", "s2", "s3"].map((sessionId) => ({ sessionId, title: sessionId, project: "p", artifactCount: 1, revision: 1, live: true }));
+      useConnectionStore.setState({ activeSessions: sessions });
+      let recovering = false;
+      let departed = false;
+      let backfillFailures = 0;
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/active-sessions")) {
+          if (recovering) return json({ sessions: sessions.filter((s) => !departed || s.sessionId !== "s2").map((s) => ({ ...s, revision: departed ? 3 : 2 })) });
+          if (failure === "network") throw new Error("offline");
+          if (failure === "missing sessions") return json({ error: "invalid catalog" });
+          if (failure === "invalid session") return json({ sessions: [{}] });
+          return json({ error: "unavailable" }, Number(failure));
+        }
+        if (url.includes("/api/live-session/")) {
+          if (!recovering) {
+            backfillFailures++;
+            if (failure === "network") throw new Error("offline");
+            return json({ error: "unavailable" }, 500);
+          }
+          const sid = url.split("/api/live-session/")[1];
+          return json({ artifacts: three.filter((a) => a.sessionId === sid), comments: [] });
+        }
+        return json({});
+      });
+      setArtifacts(three);
+      render(<><ArtifactPanel /><MultiAgentSync /></>);
+      fireEvent.change(menu(), { target: { value: "s2" } });
+      await waitFor(() => expect(backfillFailures).toBeGreaterThan(0));
+      act(() => {
+        useArtifactStore.getState().reset();
+        useArtifactStore.setState({ artifacts: [three[0]!, three[2]!] });
+      });
+      await waitFor(() => expect(useSiblingSyncStore.getState().settled).toBe(true));
+      let refreshed = true;
+      await act(async () => { refreshed = await useConnectionStore.getState().refreshSessions(); });
+      expect(refreshed).toBe(false);
+      expect(useConnectionStore.getState().activeSessions).toBe(sessions);
+      // Recover through the real poll/backfill path, not a scripted restoration
+      // of the selected artifact or the filter state.
+      recovering = true;
+      act(() => {
+        useArtifactStore.getState().reset();
+        useArtifactStore.setState({ artifacts: [three[0]!, three[2]!] });
+      });
+      await act(async () => { await useConnectionStore.getState().refreshSessions(); });
+      await waitFor(() => expect(inSidebar("a2")).not.toBeNull());
+      expect(menu().value).toBe("s2");
+      expect(inSidebar("a1")).toBeNull();
+      departed = true;
+      setArtifacts([three[0]!, three[2]!]);
+      await act(async () => { await useConnectionStore.getState().refreshSessions(); });
+      await waitFor(() => expect(menu().value).toBe("all"));
+      setArtifacts(three);
+      expect(menu().value).toBe("all");
+      expect(inSidebar("a1")).not.toBeNull();
+    },
+  );
 
   it("a row button leaving moves focus to the row's active button", () => {
     fakeDaemon();
