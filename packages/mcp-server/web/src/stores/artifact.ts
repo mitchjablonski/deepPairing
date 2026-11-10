@@ -47,6 +47,13 @@ export function markBackfilled(ids: string[]): void {
 export function isBackfilled(id: string): boolean {
   return backfilledIds.has(id);
 }
+// #623 — read-only window view of the backfill set, the same pattern as
+// `__dpConnectionStore`. The e2e walkthroughs wait on it: MultiAgentSync marks
+// a session's first load in its own async poll, after hydration, so a journey
+// that starts before it lands races the #458 "history is not news" gate.
+if (typeof window !== "undefined") {
+  (window as unknown as { __dpBackfill?: { has(id: string): boolean } }).__dpBackfill = { has: isBackfilled };
+}
 /** #407 — the tab's session binding RIGHT NOW. Captured at a call's start so a
  *  request whose routing falls back to the tab (no owner) still goes to the
  *  session it was started in, even if an await inside lets a switch land. */
