@@ -134,6 +134,11 @@ function App() {
     activeSessions.find((s) => s.sessionId === sessionId)?.live === false &&
     sessionDraftsClear && !wrapCardDismissed(sessionId);
   const nextUpBar = usePreferencesStore((s) => s.nextUpBar); // #430 PR 2 — default off
+  // #624 — preserve deliberate filter intent through an empty/re-hydrating
+  // frame. Initial unfiltered loading/empty routes remain unchanged.
+  const [keepAgentFilterPanel, setKeepAgentFilterPanel] = useState(false);
+  const hidePanelForHydration = showHydrationSkeleton && !(hydrationStalled && hasArtifacts);
+  const mountArtifactPanel = keepAgentFilterPanel || (hasArtifacts && !hidePanelForHydration);
   // M4 — whether each below-header banner is visible, so the header pills can
   // suppress the verbatim duplicate (computed with the banners' OWN predicates
   // so they can't drift). A held terminal lead stays even with no drafts.
@@ -986,10 +991,15 @@ function App() {
             Failed to render — try selecting a different artifact
           </div>
         }>
+          {mountArtifactPanel && (
+            <div className={hidePanelForHydration ? "hidden" : "contents"}>
+              <ArtifactPanel onAgentFilterUsed={() => setKeepAgentFilterPanel(true)} />
+            </div>
+          )}
           {/* #487 review (Fable) — stalled but artifacts DID arrive (broadcasts
               after a missed snapshot): show them; the stall stays on the
               bar/banner line only. */}
-          {showHydrationSkeleton && !(hydrationStalled && hasArtifacts)
+          {hidePanelForHydration
             ? (hydrationStalled
               // #487 review (Sol P2) — past the watchdog the main area says
               // the same honest thing as the banner/bar (not live: the banner
@@ -999,8 +1009,7 @@ function App() {
                   <button type="button" onClick={reloadPage} title={RELOAD_TITLE} className="underline text-accent-blue">Reload</button>
                 </div>
               : <HydrationSkeleton />)
-            : hasArtifacts
-            ? <ArtifactPanel />
+            : mountArtifactPanel ? null
             : connected && activeSessions.length > 0 && agentRecentlyActive
               // C2 — a LIVE session with no artifacts yet is the opening beat
               // of every pairing session; pre-C2 it showed IdleHome (a
