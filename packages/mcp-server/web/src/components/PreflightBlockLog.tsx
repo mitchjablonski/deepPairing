@@ -244,7 +244,7 @@ export function PreflightBlockLog() {
              every viewport width — which the alternative (flipping the float to
              the left of the menu) is not, since a narrow window has no room on
              that side either. */
-          className="relative z-[1] mt-1 w-full rounded-md border border-border-default bg-surface-elevated overflow-hidden outline-none"
+          className={`relative z-[1] mt-1 w-full rounded-md border border-border-default bg-surface-elevated overflow-hidden outline-none ${targetMissing ? "ring-2 ring-border-focus" : ""}`}
         >
           <div className="px-3 py-2 border-b border-border-default flex items-center justify-between">
             <span className="text-2xs font-medium text-text-secondary">
