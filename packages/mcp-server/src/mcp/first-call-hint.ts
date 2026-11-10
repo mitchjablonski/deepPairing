@@ -9,6 +9,8 @@ import { cliInvocation } from "../cli-invocation.js";
 import { resolveProjectRoot } from "../project-root.js";
 import { isPluginManaged } from "../cli/setup-tasks.js";
 import { detectWorktreeMissingHooks } from "../worktree-hooks.js";
+import path from "node:path";
+import { readTeamPreferences } from "../store/project-signals.js";
 
 /** N2 (#226 scope 4) — age in ms of the OLDEST pending draft, or null if no
  *  draft carries a parseable createdAt. Used to flag an abandoned-arc backlog. */
@@ -269,8 +271,8 @@ export async function buildFirstCallHint(
    * comment, whichever lane it sat in.
    */
   answeredCommentIds: readonly string[] = [],
-  /** #538 — test seam: the directory the agent works in / plugin-managed flag. */
-  env: { workspaceDir?: string; pluginManaged?: boolean } = {},
+  /** #538 workspace/plugin seam; #624 actual project binding from the wrapper. */
+  env: { workspaceDir?: string; pluginManaged?: boolean; projectRoot?: string } = {},
 ): Promise<string> {
   const answeringCommentIds = new Set(answeredCommentIds.filter((id) => typeof id === "string" && id.length > 0));
   // EE1 — three-tier ordering for assembly:
@@ -291,6 +293,19 @@ export async function buildFirstCallHint(
   // route those into obligations at the bottom of the function. Kept as
   // a const so existing pushes type-check unchanged.
   const blockingParts: string[] = obligationsParts;
+  // #624 item 4 — the wrapper supplies its actual bound project root. Read at
+  // hint-build time, not from FileStore's constructor cache or a hook event.
+  // The server's existing first-success latch delivers automatic guidance once;
+  // an explicit onboarding read is another snapshot, not health monitoring.
+  if (env.projectRoot) {
+    const { status } = readTeamPreferences(path.join(env.projectRoot, ".deeppairing"));
+    if (status === "invalid" || status === "unreadable") {
+      const cause = status === "invalid" ? "invalid JSON or schema" : "file unavailable";
+      obligationsParts.push(
+        `⚠ Team rules could not be loaded and were ignored by this local read (${cause}). Tell the human to check .deeppairing/team.json or run /deeppairing:doctor. After repair, restart the deepPairing daemon to reload cached team rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`,
+      );
+    }
+  }
   // I7 — the LIVE companion UI URL, built from the daemon's real port at
   // hint-build time (standalone.ts threads the daemon's actual bound port
   // through createMcpServer → here). Field report: an agent asked for the UI
