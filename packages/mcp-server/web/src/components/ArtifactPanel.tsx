@@ -13,7 +13,7 @@ import { useSiblingSyncStore } from "../lib/siblingSync";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
-import { useConnectionStore } from "../stores/connection";
+import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
 import { reviewLifecycle } from "../lib/reviewLifecycle";
 import { isDraftAwaitingReview } from "../lib/pending";
 import { useIsNarrowViewport, useMediaQuery } from "../hooks/useMediaQuery";
@@ -1402,6 +1402,10 @@ export function ArtifactPanel() {
   // so string comparison matches chronological order.
   const replayActive = useReplayStore((s) => s.active);
   const replayCursor = useReplayStore((s) => s.cursor);
+  const replayExiting = useReplayStore((s) => s.exiting);
+  const hydratedForBinding = useConnectionStore(selectHydratedForBinding);
+  const siblingsSettled = useSiblingSyncStore((s) => s.settled);
+  const chosenSessionKnown = useConnectionStore((s) => s.activeSessions.some((session) => session.sessionId === chosenFilter));
 
   // New-item locator — which artifacts arrived LIVE (a store delta after the
   // first population). Tracked against the full store set (not the filtered
@@ -1417,9 +1421,17 @@ export function ArtifactPanel() {
     [artifacts],
   );
   // #430 slice 2 — a filter on a session that has left falls back to All, rather
-  // than emptying the panel and taking the filter control with it. The choice is
-  // kept, so it applies again if that session comes back.
+  // than emptying the panel and taking the filter control with it. Commit that
+  // choice only after the live binding/siblings settle and the session is absent
+  // from both artifacts and the session catalog. A failed sibling backfill,
+  // transient reset or replay frame is not evidence that a session departed.
   const sessionFilter = chosenFilter !== "all" && !sessionIds.includes(chosenFilter) ? "all" : chosenFilter;
+  useEffect(() => {
+    if (hydratedForBinding && siblingsSettled && !chosenSessionKnown && !replayActive && !replayExiting &&
+        chosenFilter !== "all" && !sessionIds.includes(chosenFilter)) {
+      setSessionFilter("all");
+    }
+  }, [hydratedForBinding, siblingsSettled, chosenSessionKnown, replayActive, replayExiting, chosenFilter, sessionIds]);
 
   const visibleArtifacts = useMemo(
     () => artifacts.filter((a) => {

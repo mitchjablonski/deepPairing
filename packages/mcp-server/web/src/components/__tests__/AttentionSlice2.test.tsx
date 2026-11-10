@@ -13,6 +13,7 @@ import { useConnectionStore } from "../../stores/connection";
 import { usePreferencesStore } from "../../stores/preferences";
 import { unreadBlockCount, usePreflightBlockStore, type PreflightBlockRecord } from "../../stores/preflightBlocks";
 import { useReplayStore } from "../../stores/replay";
+import { useSiblingSyncStore } from "../../lib/siblingSync";
 
 /**
  * #430 slice 2, Sol's conditions 1-4. D1: the bar-OFF Agents row becomes the
@@ -68,8 +69,9 @@ beforeEach(() => {
   try { localStorage.removeItem("dp.gateBlocks.lastSeenAt"); } catch { /* unavailable */ }
   usePreflightBlockStore.setState({ blocks: [], liveRev: {}, lastSeenAt: null, loaded: true, focusRequest: null, logOpen: false });
   useReplayStore.setState({ active: false, exiting: false, cursor: "" });
+  useSiblingSyncStore.setState({ settled: true });
   useConnectionStore.setState({
-    connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true, artifactCount: 1 }],
+    connected: true, hydrated: true, hydratedBinding: null, projectRoot: null, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true, artifactCount: 1 }],
   } as any);
   usePreferencesStore.setState({ nextUpBar: false, sidebarCollapsed: false } as any);
 });
@@ -247,10 +249,77 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     expect(menu().value).toBe("all");
     expect(inSidebar("a1")).not.toBeNull();
 
+    // A settled departure clears the actual choice, not only its display.
+    setArtifacts(three);
+    expect(menu().value).toBe("all");
+    expect(inSidebar("a1")).not.toBeNull();
+    expect(inSidebar("a3")).not.toBeNull();
+    fireEvent.change(menu(), { target: { value: "s3" } });
+    expect(menu().value).toBe("s3"); // explicit reselection still works
+    expect(inSidebar("a1")).toBeNull();
+    setArtifacts(two());
+
     setArtifacts([art("a1", "From agent one")]);
     expect(screen.queryByTestId("agents-filter-menu")).not.toBeInTheDocument();
     expect(inSidebar("a1")).not.toBeNull();
     expect(document.activeElement).toBe(document.querySelector("[data-sidebar-toggle]"));
+  });
+
+  it.each(["unhydrated", "wrong binding", "siblings loading", "replay", "replay exit"])(
+    "preserves the chosen filter across transient absence during %s",
+    (mode) => {
+      fakeDaemon();
+      const three = [...two(), art("a3", "From agent three", { sessionId: "s3" })];
+      setArtifacts(three);
+      render(<ArtifactPanel />);
+      fireEvent.change(menu(), { target: { value: "s2" } });
+      act(() => {
+        if (mode === "unhydrated") useConnectionStore.setState({ hydrated: false });
+        if (mode === "wrong binding") useConnectionStore.setState({ hydratedBinding: "old@project" });
+        if (mode === "siblings loading") useSiblingSyncStore.setState({ settled: false });
+        if (mode === "replay") useReplayStore.setState({ active: true });
+        if (mode === "replay exit") useReplayStore.setState({ exiting: true });
+      });
+      setArtifacts([three[0]!, three[2]!]);
+      expect(menu().value).toBe("all"); // safe temporary display
+      setArtifacts(three);
+      expect(menu().value).toBe("s2"); // the underlying choice survived
+      expect(inSidebar("a1")).toBeNull();
+      expect(inSidebar("a2")).not.toBeNull();
+    },
+  );
+
+  it("clears an absent choice once hydration settles, without needing another artifact update", () => {
+    fakeDaemon();
+    const three = [...two(), art("a3", "From agent three", { sessionId: "s3" })];
+    setArtifacts(three);
+    render(<ArtifactPanel />);
+    fireEvent.change(menu(), { target: { value: "s2" } });
+    act(() => useConnectionStore.setState({ hydrated: false }));
+    setArtifacts([three[0]!, three[2]!]);
+    act(() => useConnectionStore.setState({ hydrated: true }));
+    setArtifacts(three);
+    expect(menu().value).toBe("all");
+    expect(inSidebar("a1")).not.toBeNull();
+    expect(inSidebar("a2")).not.toBeNull();
+  });
+
+  it("keeps a known sibling's choice through a backfill gap, then clears it when the settled catalog confirms departure", () => {
+    fakeDaemon();
+    const three = [...two(), art("a3", "From agent three", { sessionId: "s3" })];
+    useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: true }, { sessionId: "s2", live: true }] } as any);
+    setArtifacts(three);
+    render(<ArtifactPanel />);
+    fireEvent.change(menu(), { target: { value: "s2" } });
+    setArtifacts([three[0]!, three[2]!]);
+    setArtifacts(three);
+    expect(menu().value).toBe("s2");
+    setArtifacts([three[0]!, three[2]!]);
+    act(() => useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: true }] } as any));
+    setArtifacts(three);
+    expect(menu().value).toBe("all");
+    expect(inSidebar("a1")).not.toBeNull();
+    expect(inSidebar("a2")).not.toBeNull();
   });
 
   it("a row button leaving moves focus to the row's active button", () => {
@@ -357,7 +426,7 @@ describe("#430 slice 2 D2 — Why on a held terminal ask", () => {
     expect(copyOfLine()).toContain("Next draft");
     // Durable history and the terminal instruction are still there.
     expect(entry("newer")).not.toBeNull();
-    expect(within(entry("older")!).getByTestId("gate-hook-next")).toHaveTextContent(/Allow it there/);
+    expect(within(entry("older")!).getByTestId("gate-hook-next")).toHaveTextContent("If Claude Code is still asking, answer in that terminal.");
     expect(daemon.mutations()).toEqual([]);
   });
 
@@ -375,6 +444,8 @@ describe("#430 slice 2 D2 — Why on a held terminal ask", () => {
     expect(usePreflightBlockStore.getState().lastSeenAt).toBe(minute(1));
     expect(unreadBlockCount(usePreflightBlockStore.getState())).toBe(1);
     expect(why()).not.toBeNull();
+    expect(within(entry("second")!).getByTestId("gate-hook-line")).toHaveTextContent("Claude Code asked to edit");
+    expect(within(entry("second")!).getByTestId("gate-hook-next")).toHaveTextContent("If Claude Code is still asking, answer in that terminal.");
 
     // The log is already open, so no opening moment marks it: this request does.
     why()!.focus();
