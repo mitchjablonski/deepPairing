@@ -228,10 +228,10 @@ A pure selector `lib/attention.ts → computeAttention(state)` (no React) return
 
 ```ts
 interface Attention {
-  next: AttentionItem | null;          // oldest Decide item (§4.3)
+  next: AttentionItem | null;          // first Decide item: blocking tier first, oldest within a tier (§4.3)
   highDecisionsBeyondNext: number;     // open decisions with stakes === "high", other than `next` ("+N high decision")
   lanes: {
-    decide:  AttentionItem[];          // oldest-first (§4.3)
+    decide:  AttentionItem[];          // consequence-first, oldest within a tier (§4.3)
     read:    AttentionItem[];          // explainer, reasoning, FYI drafts
     waiting: AttentionItem[];          // unanswered questions, open requests, revised-awaiting-agent
     system:  SystemItem[];             // connection / replay / stale / stance hold / secret flags
@@ -364,7 +364,7 @@ high decision"** indicator, the primary action button and the summary counts
 never "+N high decision". The full text is in the accessible name, a tooltip
 and the `⌄` expansion.
 
-**A. Urgent decision pending, and it is the oldest Decide item (busy multi-session project)**
+**A. Urgent decision pending, so the blocking tier leads (busy multi-session project)**
 
 ```
 ┌ deepPairing  [Threads 1]                                 Decisions  Features  ⌘K  ⚙  ?  ⋯ ┐
@@ -381,11 +381,15 @@ and the `⌄` expansion.
 │   Queue  1. Which store…  HIGH   2. Session cache hit rate…   3. Backfill plan…  …        │
 ```
 
-**B. Review queue, oldest-first, a high-stakes decision later in the queue**
+**B. Review queue, nothing blocking pending (oldest review first)**
 
 ```
-│ ● REVIEW  Session cache hit rate is 12% · verdict reaches Claude on its next check  [Open ⏎]  +1 high decision · 1 of 15 ⌄ │
+│ ● REVIEW  Session cache hit rate is 12% · verdict reaches Claude on its next check  [Open ⏎]  1 of 15 ⌄ │
 ```
+
+Under consequence-first ordering (#430 slice 1) a pending decision always leads
+the reviews, so it shows as state A, where "+N high decision" counts the other
+high-stakes decisions behind it.
 
 **C. Info only / idle**
 
@@ -468,7 +472,7 @@ is the model this bar mirrors in-session.
 
 **One session, one high-stakes decision among findings**
 - *Now:* land on a finding (default selection) → read banner "15 items" → scan chips (decision is chip 2 of 3, truncated) or expand "Show 6 older" → open decision → context → choose. The consequence of choosing is only visible after choosing (receipt).
-- *Proposed (oldest-first, decided):* land → the bar names the oldest item, "● REVIEW Session cache hit rate is 12% … **+1 high decision**" (state B) → click "+1 high decision" (or `⌄`) → the DecisionCard → choose. The high-stakes item is announced on landing and reachable in one step, and the decision's `after` line says what choosing does before you choose. If the decision is the oldest item, state A applies: one read, one keystroke.
+- *Proposed (consequence-first, decided in #430 slice 1):* land → the bar names the decision, whatever its age, because the blocking tier leads (state A) → `⏎` → the DecisionCard → choose. One read, one keystroke; the decision's `after` line says what choosing does before you choose. The findings follow, oldest first. *(Revision 3 had oldest-first here, with the decision reached through "+1 high decision" from state B.)*
 
 **Several sessions / agents**
 - *Now:* per-session tabs with counts + merged sidebar + `Agents:` row + banner total; which session owns the next blocker is inferred.
@@ -476,7 +480,7 @@ is the model this bar mirrors in-session.
 
 **Long review queue (13+)**
 - *Now:* 3 chips + "+12 more", identical dots, `n` in creation order, older items collapse.
-- *Proposed:* `⌄` shows the complete oldest-first queue in place; `n`/Shift+`n` follow the same order; "+N high decision" opens the high-stakes decisions; position "1 of 13" is always visible; nothing collapses out of Decide.
+- *Proposed:* `⌄` shows the complete queue in place in Decide order (blocking tier first, oldest within a tier); `n`/Shift+`n` follow the same order; "+N high decision" opens the high-stakes decisions; position "1 of 13" is always visible; nothing collapses out of Decide.
 
 ---
 
