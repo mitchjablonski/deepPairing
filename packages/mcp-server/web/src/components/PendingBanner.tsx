@@ -1,11 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
-import { computePending, isSinglePendingInView } from "../lib/pending";
-import { computeAttention } from "../lib/attention";
+import { computePending, isPendingBannerVisible } from "../lib/pending";
+import { computeAttention, orderedPendingArtifacts } from "../lib/attention";
 import { attentionHolds, copyFor, copyLineText, reachFrom } from "../lib/attentionCopy";
 import { noAgentLive } from "../lib/liveness";
 import { useTabOffline } from "../lib/connectionGrace";
@@ -58,23 +57,24 @@ export function PendingBanner() {
   const blocks = usePreflightBlockStore((s) => s.blocks);
   const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
 
-  const { drafts, total } = computePending(artifacts);
+  const { total } = computePending(artifacts);
   // The Decide set IS computePending's drafts (parity-tested), so `next` is one
   // of `drafts` (only the order differs) — or a terminal-held hook `ask`, which
   // has no chip: it is answered in the terminal, never dismissed here.
   const sessionLabels = useMemo(() => sessionLabelsFrom(activeSessions), [activeSessions]);
   // Holds are passed so a terminal-held hook `ask` can lead (blocking tier,
   // #430 slice 1) exactly as on the bar; the count below is still drafts only.
-  const next = useMemo(() => computeAttention({
+  const attention = useMemo(() => computeAttention({
     artifacts, sessionLabels, boundSessionId, sample: { content: sampleContent, sessionIds: sampleSessionIds },
     system: { holds: attentionHolds(blocks, lastSeenAt) },
-  }).next, [artifacts, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, blocks, lastSeenAt]);
+  }), [artifacts, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, blocks, lastSeenAt]);
+  const { next } = attention;
+  const drafts = orderedPendingArtifacts(artifacts, attention);
   const reach = reachFrom({ replay: replayActive, tabOffline, agentGone: noAgentLive(activeSessions) });
   const copy = next ? copyFor(next, artifacts, reach, blocks) : null;
   const lead = next ? drafts.find((d) => d.id === next.artifactId) : undefined;
-  const others = lead ? drafts.filter((d) => d !== lead) : drafts;
-  const shown: Artifact[] = lead ? [lead, ...others.slice(0, 2)] : others.slice(0, 3);
-  const hidden = lead ? others.slice(2) : others.slice(3);
+  const shown = drafts.slice(0, 3);
+  const hidden = drafts.slice(3);
   // J2b (#212) — lite-frame step-down: when the ONE pending draft is the card
   // already on screen, it IS the call to action (its own status badge + review
   // actions), so this banner would just restate what the card + the header count
@@ -82,7 +82,6 @@ export function PendingBanner() {
   // with the header-pill collapse in App (they can't disagree). The banner still
   // shows for 2+ pending and when the single pending draft is NOT selected (the
   // scent to reach it) — see isSinglePendingInView.
-  const suppressed = isSinglePendingInView(artifacts, selectedArtifactId);
 
   // Review (LOW) — the suppression is an in-component early return, so this
   // instance never UNMOUNTS: a chip left in the armed "Dismiss?" state would
@@ -122,7 +121,7 @@ export function PendingBanner() {
   const leadLineId = useId();
   const [focusedChipId, setFocusedChipId] = useState<string | null>(null);
   const leadExpanded = !!lead && focusedChipId === lead.id;
-  const bannerHidden = !heldLead && (total === 0 || suppressed);
+  const bannerHidden = !isPendingBannerVisible(artifacts, selectedArtifactId, heldLead);
   useEffect(() => {
     if (bannerHidden) setConfirmingId(null);
   }, [bannerHidden]);

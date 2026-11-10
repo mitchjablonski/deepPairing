@@ -254,6 +254,38 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
   const terminalAsk = { id: "b1", at: "2026-01-05T00:00:00.000Z", source: "session", concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/m.sql" };
   const HELD_LINE = 'HELD IN TERMINAL "migrations": Claude Code asked about db/m.sql · Claude Code asked in the terminal — answer it there; nothing here releases it · Answer in the terminal — approving here does not release it';
 
+  it.each([1, 2, 3, 4, 5].flatMap((count) => [false, true].map((held) => ({ count, held }))))(
+    "canonical chips/tail with $count drafts and held lead=$held",
+    async ({ count, held }) => {
+      const ordered = [
+        art({ id: "d_first", type: "decision", title: "First decision", createdAt: "2026-01-02T00:00:00.000Z" }),
+        art({ id: "plan", type: "plan", title: "Next plan", createdAt: "2026-01-03T00:00:00.000Z" }),
+        art({ id: "d_last", type: "decision", title: "Last decision", createdAt: "2026-01-04T00:00:00.000Z" }),
+        art({ id: "f_first", title: "Older finding", createdAt: "2026-01-01T00:00:00.000Z" }),
+        art({ id: "f_last", title: "Later finding", createdAt: "2026-01-05T00:00:00.000Z" }),
+      ].slice(0, count);
+      // Reverse input to expose drift after the lead, not only lead ranking.
+      seed(...[...ordered].reverse());
+      if (held) usePreflightBlockStore.setState({ blocks: [{ ...terminalAsk, at: "2025-01-01T00:00:00.000Z" }] } as any);
+      render(<PendingBanner />);
+      const banner = screen.getByRole("region", { name: "Waiting for you" });
+      const titles = ordered.map((a) => a.title);
+      const chips = within(banner).getAllByRole("button").filter((b) => titles.includes(b.getAttribute("title") ?? ""));
+      expect(chips.map((b) => b.getAttribute("title"))).toEqual(titles.slice(0, 3));
+      expect(screen.getByText(`${count} item${count > 1 ? "s" : ""} waiting for you`)).toBeInTheDocument();
+      if (held) expect(screen.getByTestId("pending-next")).toHaveTextContent("HELD IN TERMINAL");
+      const hidden = ordered.slice(3);
+      if (hidden.length) {
+        const more = within(banner).getByRole("button", { name: `${hidden.length} more waiting — jump to the next` });
+        expect(more).toHaveAttribute("title", `${hidden.length} more waiting: ${hidden.map((a) => a.title).join(", ")}`);
+        await userEvent.click(more);
+        expect(useArtifactStore.getState().selectedArtifactId).toBe(hidden[0]!.id);
+      } else {
+        expect(within(banner).queryByRole("button", { name: /more waiting/ })).not.toBeInTheDocument();
+      }
+    },
+  );
+
   it("a terminal-held lead shows with ZERO draft cards (no count, no chips)", () => {
     seed(art({ id: "other", status: "approved", title: "Done" }));
     usePreflightBlockStore.setState({ blocks: [terminalAsk], lastSeenAt: null } as any);

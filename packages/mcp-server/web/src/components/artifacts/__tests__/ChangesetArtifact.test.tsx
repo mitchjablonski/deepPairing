@@ -233,6 +233,40 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     expect(selectArtifact).toHaveBeenCalledWith("art_next");
   });
 
+  it("after approval posts, advances to a newer decision before an older finding in a shuffled queue", async () => {
+    vi.useFakeTimers();
+    const art = changeset({ reviewState: { "auth/middleware.ts": "reviewed", "auth/session.ts": "reviewed", "auth/session.test.ts": "reviewed" } }, {
+      createdAt: "2026-04-17T09:00:00.000Z",
+    });
+    const finding = changeset({ summary: "s", findings: [] }, {
+      id: "finding", type: "research", createdAt: "2026-04-17T10:00:00.000Z",
+    });
+    const decision = changeset({ context: "Choose a store", options: [] }, {
+      id: "decision", type: "decision", createdAt: "2026-04-17T11:00:00.000Z",
+    });
+    const done = changeset({}, { id: "done", status: "approved" });
+    seed(art);
+    // Neither arrival order nor a global oldest-first sort should win. The
+    // current changeset is still a draft until the mocked verdict completes.
+    useArtifactStore.setState({ artifacts: [done, finding, art, decision] });
+    const prior = useArtifactStore.getState();
+    let finishVerdict!: () => void;
+    const updateStatus = vi.fn(() => new Promise<void>((resolve) => { finishVerdict = resolve; }));
+    const selectArtifact = vi.fn();
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus, selectArtifact });
+    try {
+      render(<ChangesetArtifact artifact={art} />);
+      act(() => { fireEvent.click(screen.getByTestId("approve-changeset")); });
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      expect(updateStatus).toHaveBeenCalledWith("art_cs", "approved", undefined, undefined);
+      expect(selectArtifact).not.toHaveBeenCalled();
+      await act(async () => { finishVerdict(); });
+      expect(selectArtifact).toHaveBeenCalledExactlyOnceWith("decision");
+    } finally {
+      useArtifactStore.setState({ updateArtifactStatus: prior.updateArtifactStatus, selectArtifact: prior.selectArtifact });
+    }
+  });
+
   it("Hold cancels the armed countdown without committing", () => {
     vi.useFakeTimers();
     const art = changeset({ reviewState: { "auth/middleware.ts": "reviewed", "auth/session.ts": "reviewed", "auth/session.test.ts": "reviewed" } });
