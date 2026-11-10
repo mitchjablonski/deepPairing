@@ -33,12 +33,12 @@ describe("MCP Tool Handlers — protocol contract", () => {
   });
 
   describe("C1 — ToolAnnotations on every tool", () => {
-    it("all 18 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
+    it("all 19 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
       const list = await client.listTools();
       // #163 — get_companion_url added → 13 → 14. #171 — present_changeset → 15.
       // #190 — present_debrief → 16. #190 A2 — present_explainer → 17.
-      // #198 G1 — withdraw_artifact → 18.
-      expect(list.tools).toHaveLength(18);
+      // #198 G1 — withdraw_artifact → 18. #620 — record_stance → 19.
+      expect(list.tools).toHaveLength(19);
       for (const t of list.tools) {
         expect(t.annotations, `${t.name} missing annotations`).toBeDefined();
         expect(typeof (t.annotations as any).openWorldHint).toBe("boolean");
@@ -63,6 +63,9 @@ describe("MCP Tool Handlers — protocol contract", () => {
       // claim read-only, whatever its name suggests.
       expect(byName.check_feedback.readOnlyHint).toBe(false);
       expect(byName.check_feedback.idempotentHint).toBe(false);
+      // #620 — record_stance writes (add-only), so it is not read-only.
+      expect(byName.record_stance.readOnlyHint).toBe(false);
+      expect(byName.record_stance.destructiveHint).toBe(false);
     });
 
     // #171 — the "N tools" prose in user-facing docs drifted TWICE (14 survived

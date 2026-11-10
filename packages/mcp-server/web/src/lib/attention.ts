@@ -302,3 +302,17 @@ export function computeAttention(input: AttentionInput): Attention {
     line: { prefix, primary, summary },
   };
 }
+
+/** The pending draft members in the canonical Decide order. Holds may lead
+ * `next`, but never enter artifact navigation or the draft count. Callers that
+ * already computed attention can reuse it without duplicating its ranking. */
+export function orderedPendingArtifacts(
+  artifacts: Artifact[],
+  attention: Attention = computeAttention({ artifacts }),
+): Artifact[] {
+  const byId = new Map(artifacts.map((a) => [a.id, a]));
+  return attention.lanes.decide.flatMap((item) => {
+    const artifact = byId.get(item.artifactId ?? item.id);
+    return artifact ? [artifact] : [];
+  });
+}

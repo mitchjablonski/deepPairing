@@ -195,6 +195,23 @@ describe("C2 — honest t=0: no signal must not claim 'Agent working'", () => {
 });
 
 describe("B1 — the 'Your turn' pill is a jump button, not a dead label", () => {
+  it("cycles the canonical mixed-tier queue without changing count, nouns or live region", async () => {
+    seedConnected();
+    seedArtifact({ id: "finding", status: "draft", createdAt: "2026-01-01T00:00:00Z" });
+    seedArtifact({ id: "d_b", type: "decision", status: "draft" });
+    seedArtifact({ id: "d_a", type: "decision", status: "draft" });
+    seedArtifact({ id: "done", status: "approved" });
+    useArtifactStore.setState({ selectedArtifactId: "done" });
+    render(<TurnIndicator />);
+    const pill = screen.getByRole("button", { name: /your turn/i });
+    expect(pill).toHaveTextContent("Your turn — 1 finding, 2 decisions");
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+    for (const expected of ["d_a", "d_b", "finding", "d_a"]) {
+      await userEvent.click(pill);
+      expect(useArtifactStore.getState().selectedArtifactId).toBe(expected);
+    }
+  });
+
   it("clicking jumps to the first pending artifact and cycles on repeat clicks", async () => {
     const user = userEvent.setup();
     seedConnected();

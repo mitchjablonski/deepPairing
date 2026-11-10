@@ -30,7 +30,13 @@ import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult } from "./store-interface.js";
+import { normalizeConceptKey } from "../mcp/preflight-validator.js";
+
+import { isPublishableStance } from "./stance-add.js";
+
+const isStanceAddedVia = (v: unknown): v is StanceAddedVia => v === "cli" || v === "mcp";
+const isStanceRequestedBy = (v: unknown): v is StanceRequestedBy => v === "user" || v === "unknown";
 import { canonicalizeWorktreePath } from "../git-worktree.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -2180,6 +2186,68 @@ export class FileStore implements IStore {
     }
   }
 
+  /**
+   * #620/#625 — a terminal stance (`stance add`, `/deeppairing:reject`), as ONE
+   * preferences transaction. The normalized-key dedupe, the missing-reason
+   * fill, the `maxRows` ceiling and the insert all run under the preferences
+   * lock, so two concurrent adds of the same (or a case-variant) stance can't
+   * both insert, and each caller gets back the row that is actually persisted.
+   * Validation is the caller's (store/stance-add.ts validateStanceInput).
+   *
+   * Publishing (when this project publishes): a NEW row only when its
+   * requester is verified (isPublishableStance), keyed on its concept; a
+   * reason fill only under the existing row's CONCEPT, never its description
+   * (an artifact title can carry a file path — Q2 review H2), and only when it
+   * changed the row.
+   */
+  addStance(params: AddStanceParams): AddStanceResult {
+    const { concept, reason, addedVia, requestedBy, maxRows } = params;
+    const key = normalizeConceptKey(concept);
+    let result: AddStanceResult | null = null;
+    this.mutatePreferences((prefs) => {
+      const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+      const existing = rejected.find(
+        (r) => normalizeConceptKey(r.description) === key || (typeof r.concept === "string" && normalizeConceptKey(r.concept) === key),
+      );
+      if (existing) {
+        if (existing.reason) { result = { status: "exists", row: { ...existing } }; return false; }
+        // Same rule as recordRejectedApproach's dedupe: fill a missing reason,
+        // never replace one. The reason is display-only, so what the row
+        // matches doesn't change; its concept and provenance stay as they were.
+        existing.reason = reason;
+        existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
+        prefs.rejectedApproaches = rejected;
+        result = { status: "reason_added", row: { ...existing } };
+        return true;
+      }
+      if (rejected.length >= maxRows) { result = { status: "cap_reached", count: rejected.length }; return false; }
+      const row: RejectedApproach = { description: concept, concept, reason, rejectedAt: new Date().toISOString(), addedVia, requestedBy };
+      rejected.push(row);
+      prefs.rejectedApproaches = rejected;
+      result = { status: "recorded", row: { ...row } };
+      return true;
+    });
+    // Assigned inside the lock callback; re-read through a cast so control flow
+    // analysis doesn't keep the initial `null` narrowing.
+    const out = result as AddStanceResult | null;
+    if (!out) throw new Error("addStance: the preferences transaction produced no result");
+    if (this.isDemoSession || !this.globalLedgerPublishEnabled()) return out;
+    let mirror: { key: string; description: string } | null = null;
+    if (out.status === "recorded" && isPublishableStance(addedVia, requestedBy)) {
+      mirror = { key: concept, description: concept };
+    } else if (out.status === "reason_added" && out.row.concept?.trim() && isPublishableStance(addedVia, requestedBy)) {
+      mirror = { key: out.row.concept.trim(), description: out.row.description };
+    }
+    if (mirror) {
+      try {
+        this.mirrorToLedger("rejected", mirror.key, mirror.description, reason);
+      } catch (err) {
+        FileStore.logLedgerMirrorFailure("rejected", err);
+      }
+    }
+    return out;
+  }
+
   /** #408 review (M1) — would committing `status` on this artifact conflict
    *  with the persisted record (a concurrent proposal rewrite)? Same rule the
    *  flush applies (mergeArtifactRecords), evaluated read-only BEFORE the
@@ -2232,6 +2300,10 @@ export class FileStore implements IStore {
             rejectedAt: (entry as any)?.rejectedAt,
             sourceArtifactId: (entry as any)?.sourceArtifactId,
             concept: (entry as any)?.concept,
+            // #620 — carried through so a later write (another rejection, a
+            // retire of a different row) doesn't strip a stance's provenance.
+            ...(isStanceAddedVia((entry as any)?.addedVia) ? { addedVia: (entry as any).addedVia } : {}),
+            ...(isStanceRequestedBy((entry as any)?.requestedBy) ? { requestedBy: (entry as any).requestedBy } : {}),
           },
     ).filter((r) => r.description);
   }

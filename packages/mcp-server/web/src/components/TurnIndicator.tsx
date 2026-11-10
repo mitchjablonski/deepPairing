@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
-import { computePending, summarizeTurnParts } from "../lib/pending";
+import { summarizeTurnParts } from "../lib/pending";
+import { orderedPendingArtifacts } from "../lib/attention";
 import { AGENT_ACTIVE_WINDOW_MS, lastAgentActivityMs } from "../lib/agentActivity";
 
 /**
@@ -165,7 +166,7 @@ export function TurnIndicator({
   // uses (lib/pending), so the header can't disagree with the banner. Pre-UX1
   // this used an inline filter that omitted code_change, so a draft code change
   // showed "1 waiting" in the banner but "Agent working"/"Up to date" here.
-  const pending = computePending(artifacts).drafts;
+  const pending = orderedPendingArtifacts(artifacts);
   const totalPending = pending.length;
 
   // #430 PR 1c — the ❓ "N questions waiting" badge that lived here is gone:

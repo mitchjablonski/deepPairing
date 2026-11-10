@@ -217,6 +217,7 @@ function tokenCoverage(concept, proposal) {
   return hits / tokens.length;
 }
 var NEAR_MISS_THRESHOLD = 0.5;
+var REVERSE_EDIT_MIN_COVERAGE = 0.5;
 var CONSIDERED_CAP = 20;
 function conceptMatchesProposal(concept, proposal) {
   const tokens = meaningfulTokens(concept);
@@ -251,7 +252,7 @@ function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConce
   }
   return false;
 }
-function matchesGlob(pathStr, glob) {
+function matchesGlob(pathStr, glob, opts = {}) {
   const escape = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
   let re = "";
   for (let i = 0; i < glob.length; i++) {
@@ -264,15 +265,19 @@ function matchesGlob(pathStr, glob) {
       re += escape(glob[i]);
     }
   }
-  return new RegExp(`^${re}$`).test(pathStr);
+  const regex = new RegExp(`^${re}$`);
+  if (regex.test(pathStr)) return true;
+  return !!opts.projectRelativePaths && glob.startsWith("**/") && !pathStr.startsWith("/") && regex.test(`/${pathStr}`);
 }
-function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = []) {
+function scopeHit(pref, proposalPaths, opts) {
+  return proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g, opts)));
+}
+function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = [], globOpts = {}) {
   for (const pref of prefs) {
     if (pref.kind === "prefer") continue;
     if (pref.scope?.paths?.length) {
       if (proposalPaths.length === 0) continue;
-      const hit = proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g)));
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
     if (pref.kind === "avoid") {
       if (!containmentBlockAllowed(pref.concept)) continue;
@@ -308,7 +313,7 @@ function containsAsPhrase(haystack, needle) {
   const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^a-z0-9])${esc}(?:[^a-z0-9]|$)`).test(haystack);
 }
-function findRejectedApproachMatch(proposalStrings, rejected) {
+function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
   const clean = (s) => s.trim().toLowerCase();
   for (const rej of rejected) {
     const rejNormalized = clean(rej.description);
@@ -320,7 +325,7 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
       if (containsAsPhrase(p, rejNormalized)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (containsAsPhrase(specificNoun, p)) {
+      if (containsAsPhrase(specificNoun, p) && (!opts.rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
         return { proposal, rejected: rej, via: "surface" };
       }
       if (containsAsPhrase(p, specificNoun)) {
@@ -334,7 +339,8 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
   return null;
 }
 function runPreflight(input2) {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [] } = input2;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, projectRelativePaths = false } = input2;
+  const globOpts = { projectRelativePaths };
   const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
   for (const rej of rejectedApproaches) {
@@ -349,10 +355,7 @@ function runPreflight(input2) {
     if (considered.length >= CONSIDERED_CAP) break;
     if (pref.kind === "prefer") continue;
     if (pref.scope?.paths?.length) {
-      const hit = proposalPaths.some(
-        (p) => pref.scope.paths.some((g) => matchesGlob(p, g))
-      );
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
     considered.push({
       source: "team",
@@ -379,10 +382,7 @@ function runPreflight(input2) {
   for (const pref of teamPreferences) {
     if (pref.kind === "prefer") continue;
     if (pref.scope?.paths?.length) {
-      const hit = proposalPaths.some(
-        (p) => pref.scope.paths.some((g) => matchesGlob(p, g))
-      );
-      if (!hit) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
     }
     const cov = Math.max(
       ...coverageTexts.map((p) => tokenCoverage(pref.concept, p)),
@@ -410,7 +410,7 @@ function runPreflight(input2) {
     }
   }
   if (rejectedApproaches.length > 0) {
-    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText });
     if (!match && proposalConcepts.length > 0) {
       for (const rej of rejectedApproaches) {
         if (!rej.concept) continue;
@@ -466,14 +466,13 @@ Do NOT retry with this approach. Propose an alternative. If this is a false posi
     }
   }
   if (teamPreferences.length > 0) {
-    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths, globOpts);
     if (!teamMatch && proposalConcepts.length > 0) {
       for (const pref of teamPreferences) {
         if (pref.kind !== "avoid") continue;
         if (pref.scope?.paths?.length) {
           if (proposalPaths.length === 0) continue;
-          const hit = proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g)));
-          if (!hit) continue;
+          if (!scopeHit(pref, proposalPaths, globOpts)) continue;
         }
         const cc = findConceptToConceptMatch(proposalConcepts, [pref.concept]);
         if (cc) {
@@ -899,17 +898,21 @@ function ruleForRelPath(rel) {
   }
   return null;
 }
+function relativeInside(root, abs) {
+  const rel = path4.relative(root, abs).replace(/\\/g, "/");
+  return !rel || rel === ".." || rel.startsWith("../") || path4.isAbsolute(rel) ? null : rel;
+}
 function matchGuardrailPath(projectRoot, paths) {
   try {
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
       const abs = path4.resolve(projectRoot, raw);
-      let rel = path4.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../") || path4.isAbsolute(rel)) {
+      let rel = relativeInside(projectRoot, abs);
+      if (!rel) {
         const mapped = canonicalizeWorktreePath(abs);
         if (!mapped.worktree) continue;
-        rel = path4.relative(projectRoot, mapped.path).replace(/\\/g, "/");
-        if (!rel || rel === ".." || rel.startsWith("../") || path4.isAbsolute(rel)) continue;
+        rel = relativeInside(projectRoot, mapped.path);
+        if (!rel) continue;
       }
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
@@ -993,6 +996,23 @@ function physicalResolve(base, spelling) {
     return cur;
   } catch {
     return null;
+  }
+}
+function teamScopePaths(projectRoot, raw) {
+  try {
+    const roots = /* @__PURE__ */ new Set([projectRoot]);
+    const realRoot = realpathish(path4.resolve(projectRoot));
+    if (realRoot) roots.add(realRoot);
+    const target = physicalResolve(projectRoot, raw) ?? path4.resolve(projectRoot, raw);
+    const mapped = canonicalizeWorktreePath(target);
+    const out = /* @__PURE__ */ new Set();
+    for (const root of roots) {
+      const rel = (mapped.worktree ? relativeInside(root, mapped.path) : null) ?? relativeInside(root, target);
+      if (rel) out.add(rel);
+    }
+    return [...out];
+  } catch {
+    return [];
   }
 }
 function matchDeeppairingStatePath(projectRoot, raw) {
@@ -1428,6 +1448,27 @@ function readRejectedApproachEntries(projectRoot, failures) {
     return [];
   }
 }
+var TEAM_KINDS = /* @__PURE__ */ new Set(["require", "prefer", "avoid"]);
+var TEAM_ADDED_AT = /^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$/;
+function isPlainObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+function isNonEmptyString(x) {
+  return typeof x === "string" && x.length > 0;
+}
+function isValidTeamPreference(x) {
+  if (!isPlainObject(x)) return false;
+  if (!isNonEmptyString(x.id) || !isNonEmptyString(x.concept) || !isNonEmptyString(x.rationale)) return false;
+  if (typeof x.kind !== "string" || !TEAM_KINDS.has(x.kind)) return false;
+  if ("addedBy" in x && typeof x.addedBy !== "string") return false;
+  if ("addedAt" in x && !(typeof x.addedAt === "string" && TEAM_ADDED_AT.test(x.addedAt))) return false;
+  if ("scope" in x) {
+    if (!isPlainObject(x.scope)) return false;
+    const paths = x.scope.paths;
+    if ("paths" in x.scope && !(Array.isArray(paths) && paths.every((g) => typeof g === "string"))) return false;
+  }
+  return true;
+}
 function readTeamPreferences(projectRoot, failures) {
   const p = path6.join(projectRoot, ".deeppairing", "team.json");
   try {
@@ -1438,10 +1479,7 @@ function readTeamPreferences(projectRoot, failures) {
       pushFailure(failures, noteFailure("schema", "team"));
       return [];
     }
-    const KINDS = /* @__PURE__ */ new Set(["require", "prefer", "avoid"]);
-    const valid = raw.preferences.every(
-      (x) => x && typeof x.id === "string" && typeof x.concept === "string" && x.concept.length > 0 && typeof x.rationale === "string" && KINDS.has(x.kind)
-    );
+    const valid = raw.preferences.every(isValidTeamPreference);
     if (!valid) pushFailure(failures, noteFailure("schema", "team"));
     return valid ? raw.preferences : [];
   } catch (err) {
@@ -1761,7 +1799,9 @@ function runPreflightSkippingBadEntries(args) {
       proposalStrings: args.proposalStrings,
       proposalPaths: args.proposalPaths,
       rejectedApproaches: args.entries.map((e) => e.entry),
-      teamPreferences: args.teamPreferences
+      teamPreferences: args.teamPreferences,
+      rawEditText: true,
+      projectRelativePaths: true
     },
     (i) => args.entries[i].index
   );
@@ -1796,7 +1836,7 @@ function evaluateHookGates(args) {
   const result = runPreflightSkippingBadEntries({
     toolName,
     proposalStrings: strings,
-    proposalPaths: paths,
+    proposalPaths: paths.flatMap((p) => teamScopePaths(projectRoot, p)),
     entries: readRejectedApproachEntries(projectRoot, failures),
     teamPreferences: readTeamPreferences(projectRoot, failures),
     failures

@@ -247,7 +247,35 @@ export interface RejectedApproach {
    * gets blocked after "Deploy to Railway" was rejected for the same reason.
    */
   concept?: string;
+  /** #620 — which door recorded a stance added from the terminal (`cli` =
+   *  `deeppairing stance add`, `mcp` = the `record_stance` tool behind
+   *  `/deeppairing:reject`). Absent on stances born from a rejected artifact.
+   *  Provenance only: nothing matches on it. */
+  addedVia?: StanceAddedVia;
+  /** #620 — who asked for it, SELF-REPORTED by that door. Names the door's
+   *  claim, never authenticates anyone. */
+  requestedBy?: StanceRequestedBy;
 }
+
+export type StanceAddedVia = "cli" | "mcp";
+
+export interface AddStanceParams {
+  concept: string;
+  reason: string;
+  addedVia: StanceAddedVia;
+  requestedBy: StanceRequestedBy;
+  maxRows: number;
+}
+
+/** What FileStore.addStance did, with the PERSISTED row. `cap_reached` wrote
+ *  nothing; `count` is the number of rows the project holds. */
+export type AddStanceResult =
+  | { status: "recorded" | "exists" | "reason_added"; row: RejectedApproach }
+  | { status: "cap_reached"; count: number };
+/** `user` = the door says a human asked (the MCP tool accepts nothing else; the
+ *  CLI says so only from a TTY outside Claude Code). `unknown` = the CLI could
+ *  not tell. Self-reported either way. */
+export type StanceRequestedBy = "user" | "unknown";
 
 /**
  * Store interface — implemented by both FileStore (sync) and DaemonClient (async HTTP).
@@ -543,6 +571,16 @@ export interface IStore {
     sourceArtifactId?: string;
     concept?: string;
   }): MaybePromise<void>;
+  /**
+   * #620/#625 — add a terminal stance (store/stance-add.ts) as ONE preferences
+   * transaction: the normalized-key dedupe (case/whitespace-insensitive, on
+   * description or concept), the missing-reason fill, the `maxRows` ceiling
+   * (every source) and the insert all run under the lock, and the result
+   * describes the row that is actually persisted. Add-only: an existing
+   * reason is never replaced. Optional so other IStore implementations need
+   * not carry it; FileStore and DaemonClient do.
+   */
+  addStance?(params: AddStanceParams): MaybePromise<AddStanceResult>;
   recordApprovedPattern(params: {
     description: string;
     concept?: string;

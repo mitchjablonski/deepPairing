@@ -149,6 +149,24 @@ So you never have to make the same call twice:
     gets an advisory note ("you avoided this in `<project>` — still want it
     here?"). Reject it there as well to make it block there. If the
     cross-project ledger can't be read, the note is skipped.
+  - **Record a stance from the terminal.** `/deeppairing:reject global
+    mutable state for config -- keep configuration explicit` (or
+    `deeppairing stance add …` from a source install) records the same kind
+    of project stance a rejected artifact does. The reason after ` -- ` is
+    required. It shows you the concept and reason it saved, its scope (this
+    project only) and what it will and won't catch. It only adds: an
+    existing stance is never rewritten, and you correct or remove one with
+    **Retire this stance** in the gate log or by editing
+    `.deeppairing/preferences.json` yourself. A stance that would match
+    deepPairing's own recovery commands is refused, and an add is refused
+    once the project has 200 stances (counting every source). The agent is told to call it only with your
+    words, when you ask; the server can't verify who typed them, so each
+    stance records how it was added, and `/deeppairing:stance` lists them.
+    For the same reason, a stance added through `/deeppairing:reject` is never
+    published to the cross-project ledger; one added with `deeppairing stance
+    add` in your own terminal publishes like any other when publishing is on
+    (the CLI guesses "your own terminal" from a TTY outside Claude Code, a
+    best-effort heuristic, not proof).
   - **What counts as a match.** Every word of the concept (after light
     stemming, so *state*/*states* match) must appear in the proposal, or the
     rejected phrase itself must. A small, hand-audited **synonym list** widens

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { countUnansweredQuestions } from "@deeppairing/shared";
-import { computeAttention, isDelegateBriefArtifact, type AttentionInput, type SummaryLane } from "../attention";
+import { computeAttention, isDelegateBriefArtifact, orderedPendingArtifacts, type AttentionInput, type SummaryLane } from "../attention";
 import { computePending, REVIEWABLE_TYPES } from "../pending";
 import { parseReviewMode, selectGoverningBrief } from "../governingBrief";
 
@@ -50,6 +50,8 @@ describe("parity with today's counters (no counting rule changes in PR 1a)", () 
     const a = computeAttention({ artifacts });
     expect(a.lanes.decide.length).toBe(pending.total);
     expect(new Set(a.lanes.decide.map((d) => d.id))).toEqual(new Set(pending.drafts.map((d) => d.id)));
+    expect(orderedPendingArtifacts(artifacts, a).map((d) => d.id)).toEqual(a.lanes.decide.map((d) => d.id));
+    expect(new Set(orderedPendingArtifacts(artifacts))).toEqual(new Set(pending.drafts));
   });
 
   it("Read holds exactly the drafts that are not awaiting review (explainer, reasoning) — PR 0's dot rule", () => {
@@ -107,6 +109,27 @@ describe("parity with today's counters (no counting rule changes in PR 1a)", () 
 });
 
 describe("most-consequential-first `next` (#430 slice 1) and the '+N high decision' count", () => {
+  it("projects the same draft order for shuffled input, missing/tied timestamps and a held lead", () => {
+    const artifacts = [
+      art("research", "draft", { id: "finding", createdAt: "2026-01-01T00:00:00.000Z" }),
+      art("decision", "draft", { id: "d_b", createdAt: undefined }),
+      art("plan", "draft", { id: "d_a", createdAt: undefined }),
+      art("decision", "draft", { id: "d_later", createdAt: "2026-06-01T00:00:00.000Z" }),
+      art("debrief", "draft", { id: "read" }),
+      art("decision", "approved", { id: "done" }),
+    ];
+    const expected = ["d_a", "d_b", "d_later", "finding"];
+    for (const input of [artifacts, [...artifacts].reverse()]) {
+      const attention = computeAttention({ artifacts: input, system: {
+        holds: [{ id: "ask", title: "Terminal", at: "", terminal: true }],
+      } });
+      expect(attention.next?.id).toBe("ask");
+      expect(orderedPendingArtifacts(input, attention).map((a) => a.id)).toEqual(expected);
+      expect(orderedPendingArtifacts(input).map((a) => a.id)).toEqual(expected);
+      expect(computePending(input).total).toBe(4);
+    }
+  });
+
   it("next is the OLDEST item of the most consequential tier — a blocking item outranks an older finding", () => {
     const artifacts = [
       art("decision", "draft", { id: "d_new", createdAt: "2026-06-01T03:00:00.000Z", content: { stakes: "high" } }),
