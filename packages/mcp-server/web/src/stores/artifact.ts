@@ -48,7 +48,9 @@ export function isBackfilled(id: string): boolean {
   return backfilledIds.has(id);
 }
 // #623 — read-only window view of the backfill set, the same pattern as
-// `__dpConnectionStore`. The e2e walkthroughs wait on it: MultiAgentSync marks
+// `__dpConnectionStore`. It ships in production builds too (test-consumed, not
+// test-gated): `has` only reads the private Set, so replacing or calling it
+// can't change backfill, matching or status. The e2e walkthroughs wait on it: MultiAgentSync marks
 // a session's first load in its own async poll, after hydration, so a journey
 // that starts before it lands races the #458 "history is not news" gate.
 if (typeof window !== "undefined") {

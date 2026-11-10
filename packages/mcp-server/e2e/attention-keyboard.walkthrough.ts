@@ -180,16 +180,25 @@ test("approving just after switching keeps focus on the open artifact", async ({
     // #623 — this row is only about the exit window if pane `one` is still
     // leaving when Enter lands; otherwise "the old pane leaves" below passes
     // with nothing to leave. The 0.2s exit can't be held open from the test,
-    // so focus and the mounted read happen in ONE evaluate (no round trip
-    // between them), and Enter follows at once. A run that misses the window
-    // fails here instead of passing vacuously.
-    const approve = page.locator('[data-artifact-id="two"]').getByRole("button", { name: "Approve", exact: true });
-    const oneMountedAtEnter = await approve.evaluate((button) => {
-      (button as HTMLElement).focus();
-      return document.querySelector('[data-artifact-id="one"]') !== null;
+    // so a capture-phase listener records pane one's presence and the key's
+    // target synchronously ON the real Enter keydown (not before it). A run
+    // that misses the window fails here instead of passing vacuously.
+    await page.evaluate(() => {
+      const w = window as unknown as { __dp623Enter?: { oneMounted: boolean; target: string | null } };
+      delete w.__dp623Enter;
+      window.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || w.__dp623Enter) return;
+        const target = event.target instanceof Element ? event.target : null;
+        w.__dp623Enter = {
+          oneMounted: document.querySelector('[data-artifact-id="one"]') !== null,
+          target: target?.closest("[data-artifact-id]")?.getAttribute("data-artifact-id") ?? null,
+        };
+      }, { capture: true });
     });
+    await page.locator('[data-artifact-id="two"]').getByRole("button", { name: "Approve", exact: true }).focus();
     await e.press("Enter");
-    await e.check("Enter landed while pane one was still leaving", async () => expect(oneMountedAtEnter).toBe(true));
+    const atEnter = await page.evaluate(() => (window as unknown as { __dp623Enter?: { oneMounted: boolean; target: string | null } }).__dp623Enter ?? null);
+    await e.check("Enter landed on pane two while pane one was still leaving", async () => expect(atEnter).toEqual({ oneMounted: true, target: "two" }));
     await e.check("approval persists", () => expect.poll(async () => (await daemon!.artifacts("probe")).find((artifact) => artifact.id === "two")?.status).toBe("approved"));
     await expect(page.locator('[data-artifact-id="one"]')).toHaveCount(0);
     await e.capture("after-old-pane-left");
