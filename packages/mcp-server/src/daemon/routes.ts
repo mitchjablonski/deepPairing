@@ -52,6 +52,14 @@ const RecordRejectedBody = z.object({
   sourceArtifactId: z.string().optional(),
   concept: z.string().optional(),
 });
+// #620/#625 — a terminal stance (store/stance-add.ts), one transaction in FileStore.addStance.
+const AddStanceBody = z.object({
+  concept: z.string().min(1),
+  reason: z.string().min(1),
+  addedVia: z.enum(["cli", "mcp"]),
+  requestedBy: z.enum(["user", "unknown"]),
+  maxRows: z.number().int().positive(),
+}).strict();
 const RecordApprovedBody = z.object({
   description: z.string().min(1),
   concept: z.string().optional(),
@@ -1276,6 +1284,23 @@ export function createDaemonRoutes(
       try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "rejected" }); } catch {}
     }
     return c.json({ status: "recorded" });
+  });
+
+  app.post("/api/internal/sessions/:sessionId/memory/stance", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    let parsed: z.infer<typeof AddStanceBody>;
+    try {
+      parsed = AddStanceBody.parse(await c.req.json());
+    } catch (err) {
+      const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
+      return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
+    }
+    const result = r.store.addStance(parsed);
+    if ((result.status === "recorded" || result.status === "reason_added") && daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+      try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "rejected" }); } catch {}
+    }
+    return c.json(result);
   });
 
   app.post("/api/internal/sessions/:sessionId/memory/approved", async (c) => {

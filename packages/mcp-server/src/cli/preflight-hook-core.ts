@@ -27,6 +27,7 @@ import {
   GUARDRAIL_RULES,
   matchDeeppairingStatePath,
   matchGuardrailPath,
+  teamScopePaths,
   toolInputTargetPath,
   toolInputTargetsDeeppairingState,
   toolInputTargetsGuardrail,
@@ -118,10 +119,40 @@ export function readRejectedApproachEntries(projectRoot: string, failures?: Pref
   }
 }
 
+const TEAM_KINDS = new Set(["require", "prefer", "avoid"]);
+/** The exact pattern zod 4's `z.string().datetime()` compiles to. A real date
+ *  (leap days included), seconds optional, `Z` only. */
+const TEAM_ADDED_AT = /^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$/;
+
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+function isNonEmptyString(x: unknown): boolean {
+  return typeof x === "string" && x.length > 0;
+}
+
+/** #621 — TeamPreferenceSchema by hand, field for field. A key that's present
+ *  must be valid: JSON has no `undefined`, and `null` fails an optional zod
+ *  field. gate-scoped-rules.test.ts compares this with the real schema and
+ *  loader case by case, so a schema change without one here fails there. */
+function isValidTeamPreference(x: unknown): boolean {
+  if (!isPlainObject(x)) return false;
+  if (!isNonEmptyString(x.id) || !isNonEmptyString(x.concept) || !isNonEmptyString(x.rationale)) return false;
+  if (typeof x.kind !== "string" || !TEAM_KINDS.has(x.kind)) return false;
+  if ("addedBy" in x && typeof x.addedBy !== "string") return false;
+  if ("addedAt" in x && !(typeof x.addedAt === "string" && TEAM_ADDED_AT.test(x.addedAt))) return false;
+  if ("scope" in x) {
+    if (!isPlainObject(x.scope)) return false;
+    const paths = x.scope.paths;
+    if ("paths" in x.scope && !(Array.isArray(paths) && paths.every((g) => typeof g === "string"))) return false;
+  }
+  return true;
+}
+
 /** Read team preferences from .deeppairing/team.json (JSONC — `//` line comments
  *  stripped). Lightweight runtime guard rather than the zod schema so the built
- *  hook stays free of @deeppairing/shared at runtime. runPreflight only reads
- *  kind / concept / rationale / scope. */
+ *  hook stays free of @deeppairing/shared at runtime. */
 export function readTeamPreferences(projectRoot: string, failures?: PreflightFailureSink): TeamPreference[] {
   const p = path.join(projectRoot, ".deeppairing", "team.json");
   try {
@@ -141,16 +172,7 @@ export function readTeamPreferences(projectRoot: string, failures?: PreflightFai
     // returns [] and does NOT enforce, so the hook must do the same — otherwise
     // it would block on a rule the MCP side ignores (an over-block for a gate
     // that's meant to mirror the existing preflight).
-    const KINDS = new Set(["require", "prefer", "avoid"]);
-    const valid = raw.preferences.every(
-      (x: any) =>
-        x &&
-        typeof x.id === "string" &&
-        typeof x.concept === "string" &&
-        x.concept.length > 0 &&
-        typeof x.rationale === "string" &&
-        KINDS.has(x.kind),
-    );
+    const valid = raw.preferences.every(isValidTeamPreference);
     if (!valid) pushFailure(failures, noteFailure("schema", "team"));
     return valid ? (raw.preferences as TeamPreference[]) : [];
   } catch (err) {
@@ -953,6 +975,8 @@ export function runPreflightSkippingBadEntries(args: {
       proposalPaths: args.proposalPaths,
       rejectedApproaches: args.entries.map((e) => e.entry),
       teamPreferences: args.teamPreferences,
+      rawEditText: true,
+      projectRelativePaths: true,
     },
     (i) => args.entries[i]!.index,
   );
@@ -1025,7 +1049,7 @@ function evaluateHookGates(args: {
   const result = runPreflightSkippingBadEntries({
     toolName,
     proposalStrings: strings,
-    proposalPaths: paths,
+    proposalPaths: paths.flatMap((p) => teamScopePaths(projectRoot, p)),
     entries: readRejectedApproachEntries(projectRoot, failures),
     teamPreferences: readTeamPreferences(projectRoot, failures),
     failures,

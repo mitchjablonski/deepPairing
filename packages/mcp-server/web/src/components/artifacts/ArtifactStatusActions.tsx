@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useIsPresent } from "motion/react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { useToastStore } from "../../stores/toast";
@@ -178,6 +179,13 @@ export function ArtifactStatusActions({
   // and F6 owner-routing means a footer click would write a verdict into a
   // long-exited session's store. The whole footer goes read-only.
   const replayActive = useReplayStore((s) => s.active);
+  // #623 — false while this footer's pane plays its exit animation after you
+  // select another artifact. The pane is inert then, and every status write
+  // below also refuses, so a stray Enter or a countdown reaching zero can't
+  // change the artifact you just left. Outside AnimatePresence it is true.
+  const isPresent = useIsPresent();
+  const presentRef = useRef(isPresent);
+  presentRef.current = isPresent;
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const autonomyLevel = useConnectionStore((s) => s.autonomyLevel);
@@ -257,8 +265,40 @@ export function ArtifactStatusActions({
   // F10 (G5) — the shortcut listener's deps deliberately exclude `comment`
   // (re-subscribing per keystroke); a ref keeps the read fresh.
   const hasCommentRef = useRef(false);
-  const approvedChipFocusedRef = useRef(false);
   hasCommentRef.current = comment.trim().length > 0;
+  // #623 — the approved chip takes focus only when approving removed the
+  // focused control from THIS footer. The footer root records that as it
+  // detaches, which React does before removing its DOM, so the focused element
+  // is still in place to check. A disabled control counts too: approving with
+  // a note disables the buttons while the comment posts, and a browser may
+  // already have dropped that focus to <body>. Page load, j/k, or the agent
+  // approving while focus sits elsewhere all leave this false.
+  const footerHeldFocusRef = useRef(false);
+  const lastFooterFocusRef = useRef<Element | null>(null);
+  const trackFooterFocus = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    return () => {
+      const active = document.activeElement;
+      const last = lastFooterFocusRef.current;
+      footerHeldFocusRef.current =
+        (!!active && active !== document.body && el.contains(active)) ||
+        ((active === document.body || active === null) &&
+          !!last && el.contains(last) && (last as HTMLButtonElement).disabled === true);
+    };
+  }, []);
+  const noteFooterFocus = (e: { target: EventTarget }) => {
+    lastFooterFocusRef.current = e.target as Element;
+  };
+  // The footer also detaches when the artifact moves to a status with no chip
+  // (reviewing, rejected, revised, retracted, obsolete, superseded) or a draft
+  // goes read-only in replay. Clear the flag after that commit, so a later move
+  // to approved can't claim focus the footer gave up long before. Layout
+  // effects run after the detach in the same commit. No deps: it must see
+  // every commit, and the check is cheap.
+  const footerRendered = artifact.status === "draft" && !replayActive;
+  useLayoutEffect(() => {
+    if (!footerRendered && artifact.status !== "approved") footerHeldFocusRef.current = false;
+  });
   useEffect(() => {
     if (forceExpanded && wantFocusRef.current) {
       wantFocusRef.current = false;
@@ -363,8 +403,9 @@ export function ArtifactStatusActions({
         // auto-approve commit. Route BOTH through the open-suggestion gate: with
         // an open suggestion the window elapsing surfaces the confirm instead of
         // silently approving.
-        if (countdownAuto && !autoEligibleNow()) {
+        if (!presentRef.current || (countdownAuto && !autoEligibleNow())) {
           // #521 — revoked before commit: abort, no approval.
+          // #623 — the same for a pane that is leaving: you moved on.
           dispatch({ type: "cancelCountdown" });
         } else if (openSugRef.current.total > 0) {
           setApproveConfirm(true);
@@ -400,6 +441,7 @@ export function ArtifactStatusActions({
       const detail = (evt as CustomEvent).detail as { artifactId: string; action: "approve" | "revise" } | undefined;
       if (!detail || detail.artifactId !== artifact.id) return;
       if (artifact.status !== "draft") return;
+      if (!presentRef.current) return; // #623 — a leaving pane takes no shortcuts
 
       // F10 (G5) — a typed note must never be silently dropped: the zero-tick
       // approves via updateArtifactStatus directly (no submitComment), so
@@ -462,20 +504,20 @@ export function ArtifactStatusActions({
         // to <body> and keyboard users re-tabbed from the top. The chip is
         // focusable-by-script and takes focus on mount IF the footer held it.
         ref={(el) => {
+          if (!el || !footerHeldFocusRef.current) return;
           // Review — ONE-SHOT: inline refs re-attach on every render, and
           // re-focusing whenever activeElement is <body> yanked focus (and
           // scroll) back to the chip on any WS-driven re-render.
+          footerHeldFocusRef.current = false;
           // Only the open artifact's chip may claim it: the previous pane stays
           // mounted through its exit animation and re-renders on store changes.
           // Taking focus there loses it to <body> again when that pane unmounts.
           if (
-            el &&
-            !approvedChipFocusedRef.current &&
             useArtifactStore.getState().selectedArtifactId === artifact.id &&
             (document.activeElement === document.body || document.activeElement === null)
           ) {
-            approvedChipFocusedRef.current = true;
-            el.focus();
+            // #623 — the chip is already in view where the button was; never scroll.
+            el.focus({ preventScroll: true });
           }
         }}
         tabIndex={-1}
@@ -561,6 +603,7 @@ export function ArtifactStatusActions({
     opts?: { bypassSuggestionGate?: boolean },
   ) => {
     if (offline) return; // #465 — keyboard/⌘⏎ paths too, not only the buttons
+    if (!presentRef.current) return; // #623 — never act on a pane that is leaving
     // H1 (#202) — gate a FINALIZING approve behind the inline confirm when the
     // human's own suggestions are still open. Reject/Request-changes are never
     // gated (they don't abandon a proposal). "Approve anyway" passes the bypass.
@@ -642,7 +685,7 @@ export function ArtifactStatusActions({
    */
   const handleRespond = async () => {
     const trimmedComment = comment.trim();
-    if (!trimmedComment) return;
+    if (!trimmedComment || !presentRef.current) return;
     dispatch({ type: "submitStart" });
     try {
       await submitComment(artifact.id, trimmedComment);
@@ -661,6 +704,7 @@ export function ArtifactStatusActions({
    * Any typed comment rides along as the reason.
    */
   const handleDismissObsolete = async () => {
+    if (!presentRef.current) return; // #623
     dispatch({ type: "submitStart" });
     try {
       await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
@@ -679,6 +723,7 @@ export function ArtifactStatusActions({
    * it), and clicking Got it hands the turn back. No comment, no verdict semantics.
    */
   const handleAcknowledge = async () => {
+    if (!presentRef.current) return; // #623
     dispatch({ type: "submitStart" });
     try {
       await updateArtifactStatus(artifact.id, "approved");
@@ -701,7 +746,7 @@ export function ArtifactStatusActions({
         <div ref={sentinelRef} aria-hidden className="h-px" />
         {/* #403 — data-dp-sticky-chrome: pinned over the pane, so a diagram
             popover measures it out of its usable bounds (DiagramRegionLayer). */}
-        <div data-dp-sticky-chrome="" className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default">
+        <div ref={trackFooterFocus} onFocus={noteFooterFocus} data-dp-sticky-chrome="" className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default">
           <div className="flex items-center gap-2 pb-1">
             <button
               onClick={handleAcknowledge}
@@ -745,7 +790,7 @@ export function ArtifactStatusActions({
           compact form. */}
       <div ref={sentinelRef} aria-hidden className="h-px" />
       {/* #403 — pinned over the pane: a diagram popover keeps clear of it. */}
-      <div data-dp-sticky-chrome="" className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default space-y-2" /* solid bg: content ghosted readably through the old /95+blur edge */>
+      <div ref={trackFooterFocus} onFocus={noteFooterFocus} data-dp-sticky-chrome="" className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default space-y-2" /* solid bg: content ghosted readably through the old /95+blur edge */>
       {/* H1 (#202) — the open-suggestion approve gate. Shown in place of a silent
           commit; naming the open states so the human knows what approving
           abandons. "Approve anyway" is their explicit call (bypasses the gate);

@@ -138,6 +138,27 @@ describe("installed hook launch contract", () => {
     }));
     expect(ledgerOutput.systemMessage).toBe(ledgerOutput.hookSpecificOutput.permissionDecisionReason);
 
+    // #621 — a path-scoped team rule against the absolute path Claude Code
+    // sends, in each spelling the host OS can produce. This job also runs on
+    // Windows, so it is the real backslash and drive-letter evidence.
+    fs.writeFileSync(path.join(projectRoot, ".deeppairing", "team.json"), JSON.stringify({
+      version: 1,
+      preferences: [{ id: "t1", kind: "avoid", concept: "inline sql builder", rationale: "Use the query layer", scope: { paths: ["packages/api/**"] } }],
+    }));
+    const inScope = path.join(projectRoot, "packages", "api", "x.ts");
+    const spellings = [inScope, inScope.replaceAll("\\", "/"), inScope.replace(/^[A-Z]:/, (drive) => drive.toLowerCase())];
+    for (const file_path of spellings) {
+      const scoped = runInstalledHook(commands[2]!, JSON.stringify({
+        tool_name: "Edit", tool_input: { file_path, new_string: "add an inline sql builder" },
+      }));
+      expect(scoped.stdout, file_path).not.toBe("");
+      expect(JSON.parse(scoped.stdout).hookSpecificOutput.permissionDecision).toBe("ask");
+    }
+    const outOfScope = runInstalledHook(commands[2]!, JSON.stringify({
+      tool_name: "Edit", tool_input: { file_path: path.join(projectRoot, "packages", "web", "x.ts"), new_string: "add an inline sql builder" },
+    }));
+    expect(outOfScope.stdout).toBe("");
+
     const hookState = JSON.parse(
       fs.readFileSync(path.join(projectRoot, ".deeppairing", "hooks-state.json"), "utf8"),
     );
