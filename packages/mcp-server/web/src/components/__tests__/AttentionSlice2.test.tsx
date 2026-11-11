@@ -509,6 +509,9 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
       useArtifactStore.getState().reset();
       useArtifactStore.setState({ artifacts: [two()[0]!] });
     });
+    // Complete this snapshot's pass before the next catalog membership change;
+    // the scenario under test is successful omission, not an aborted backfill.
+    await waitFor(() => expect(useSiblingSyncStore.getState().settled).toBe(true));
     await act(async () => { expect(await useConnectionStore.getState().refreshSessions()).toBe(true); });
     await waitFor(() => expect(useSiblingSyncStore.getState().settled).toBe(true));
     expect(menu().value).toBe("s2");
@@ -520,6 +523,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
       useArtifactStore.getState().reset();
       useArtifactStore.setState({ artifacts: [two()[0]!] });
     });
+    await waitFor(() => expect(useSiblingSyncStore.getState().settled).toBe(true));
     await act(async () => { await useConnectionStore.getState().refreshSessions(); });
     await waitFor(() => expect(inSidebar("a2")).not.toBeNull());
     expect(menu().value).toBe("s2");
