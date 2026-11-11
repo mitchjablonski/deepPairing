@@ -500,7 +500,9 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
       return json({ artifacts: two().filter((a) => a.sessionId === sid && (reregistered || sid === "s1")), comments: [] });
     });
     setArtifacts(two());
+    useSiblingSyncStore.setState({ settled: false });
     render(<><ArtifactPanel /><MultiAgentSync /></>);
+    await waitFor(() => expect(useSiblingSyncStore.getState().settled).toBe(true));
     fireEvent.change(menu(), { target: { value: "s2" } });
     act(() => {
       useConnectionStore.setState({ daemonStartedAt: "daemon-after" });

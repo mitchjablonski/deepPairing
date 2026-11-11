@@ -1489,8 +1489,7 @@ export function ArtifactPanel({ onAgentFilterUsed }: { onAgentFilterUsed?: () =>
     const active = document.activeElement;
     if (active && active !== document.body) return;
     const panel = panelRef.current;
-    const control = panel?.querySelector<HTMLElement>("[data-agents-filter]");
-    const target = control?.matches("select") ? control : control?.querySelector<HTMLElement>("[data-agents-active]");
+    const target = panel?.querySelector<HTMLElement>("select[data-agents-filter], [data-agents-filter] [data-agents-active]");
     (target ?? panel?.querySelector<HTMLElement>("[data-sidebar-toggle]"))?.focus();
   });
 

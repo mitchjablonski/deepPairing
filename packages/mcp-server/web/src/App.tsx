@@ -992,7 +992,7 @@ function App() {
           </div>
         }>
           {mountArtifactPanel && (
-            <div className={hidePanelForHydration ? "hidden" : "contents"}>
+            <div hidden={hidePanelForHydration} className={hidePanelForHydration ? "hidden" : "contents"}>
               <ArtifactPanel onAgentFilterUsed={() => setKeepAgentFilterPanel(true)} />
             </div>
           )}
