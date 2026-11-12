@@ -13,7 +13,7 @@ import { useSiblingSyncStore } from "../lib/siblingSync";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
-import { useConnectionStore } from "../stores/connection";
+import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
 import { reviewLifecycle } from "../lib/reviewLifecycle";
 import { isDraftAwaitingReview } from "../lib/pending";
 import { useIsNarrowViewport, useMediaQuery } from "../hooks/useMediaQuery";
@@ -1387,7 +1387,7 @@ export function MultiAgentSync() {
   return null; // No visual output — just syncs data
 }
 
-export function ArtifactPanel() {
+export function ArtifactPanel({ onAgentFilterUsed }: { onAgentFilterUsed?: () => void } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const unreadIds = useArtifactStore((s) => s.unreadIds);
@@ -1397,11 +1397,20 @@ export function ArtifactPanel() {
   const isNarrow = useIsNarrowViewport();
   const effectiveCollapsed = sidebarCollapsed || isNarrow;
   const [chosenFilter, setSessionFilter] = useState<string | "all">("all");
+  const [hasUsedFilter, setHasUsedFilter] = useState(false);
+  const chooseFilter = (id: string) => {
+    setHasUsedFilter(true);
+    setSessionFilter(id);
+    onAgentFilterUsed?.();
+  };
 
   // Replay mode: hide artifacts created after the cursor. createdAt is ISO
   // so string comparison matches chronological order.
   const replayActive = useReplayStore((s) => s.active);
   const replayCursor = useReplayStore((s) => s.cursor);
+  const replayExiting = useReplayStore((s) => s.exiting);
+  const hydratedForBinding = useConnectionStore(selectHydratedForBinding);
+  const siblingsSettled = useSiblingSyncStore((s) => s.settled);
 
   // New-item locator — which artifacts arrived LIVE (a store delta after the
   // first population). Tracked against the full store set (not the filtered
@@ -1416,10 +1425,15 @@ export function ArtifactPanel() {
     () => [...new Set(artifacts.map((a) => a.sessionId))],
     [artifacts],
   );
-  // #430 slice 2 — a filter on a session that has left falls back to All, rather
-  // than emptying the panel and taking the filter control with it. The choice is
-  // kept, so it applies again if that session comes back.
-  const sessionFilter = chosenFilter !== "all" && !sessionIds.includes(chosenFilter) ? "all" : chosenFilter;
+  // #624 — catalog absence cannot prove departure after lazy re-registration.
+  // Keep the chosen view until a deliberate filter action; never display All
+  // under a retained agent choice. An unavailable choice stays reachable too.
+  const sessionFilter = chosenFilter;
+  const filterSessionIds = chosenFilter !== "all" && !sessionIds.includes(chosenFilter)
+    ? [...sessionIds, chosenFilter] : sessionIds;
+  const showAgentFilter = sessionIds.length > 1 || chosenFilter !== "all";
+  const agentLabel = (sid: string, index: number) => sid === chosenFilter
+    ? `Selected agent — ${sid}` : `Agent ${index + 1}`;
 
   const visibleArtifacts = useMemo(
     () => artifacts.filter((a) => {
@@ -1437,39 +1451,45 @@ export function ArtifactPanel() {
 
   const liveCount = (sid: string | "all") =>
     artifacts.filter((a) => a.status !== "superseded" && (sid === "all" || a.sessionId === sid)).length;
+  const emptyAgentView = chosenFilter !== "all" && visibleArtifacts.length === 0;
+  const emptyAgentCopy = replayActive && !replayExiting
+    ? "No items from the selected agent at this replay point."
+    : !hydratedForBinding || !siblingsSettled || replayExiting
+      ? "Loading the selected agent's view."
+      : "No items from the selected agent are available in this view.";
   // #430 slice 2 (D1) — the menu, not the row, whenever the sidebar is expanded,
   // bar ON or OFF. It filters; it does not signal.
-  const agentsMenu = !effectiveCollapsed && sessionIds.length > 1 ? (
+  const agentsMenu = !effectiveCollapsed && showAgentFilter ? (
     <label className="flex items-center gap-1.5 px-2 pb-1.5 text-2xs text-text-muted">
       <span className="shrink-0">Agents</span>
       <select
         value={sessionFilter}
-        onChange={(e) => setSessionFilter(e.target.value)}
+        onChange={(e) => chooseFilter(e.target.value)}
         data-testid="agents-filter-menu"
         data-agents-filter=""
         className="flex-1 min-w-0 bg-surface-elevated border border-border-default rounded px-1 py-0.5 text-2xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
       >
         <option value="all">All ({liveCount("all")})</option>
-        {sessionIds.map((sid, i) => (
-          <option key={sid} value={sid} title={sid}>Agent {i + 1}{isDemoSessionId(sid) ? " · Demo" : ""} ({liveCount(sid)})</option>
+        {filterSessionIds.map((sid, i) => (
+          <option key={sid} value={sid} title={sid}>{agentLabel(sid, i)}{isDemoSessionId(sid) ? " · Demo" : ""} ({liveCount(sid)})</option>
         ))}
       </select>
     </label>
   ) : null;
 
   // #430 slice 2 — the filter control swaps between menu and row on resize and
-  // collapse, and leaves when the last sibling does. Read before this commit
-  // removes it: if it held focus and focus falls to <body>, the effect below
-  // hands focus to whatever now plays that part.
+  // collapse. Explicit Show all can also remove the unavailable-choice action
+  // or the last filter control. Read before this commit removes it: if it held
+  // focus and focus falls to <body>, hand focus to the surviving filter/toggle.
   const panelRef = useRef<HTMLDivElement>(null);
-  const filterHeldFocus = !!panelRef.current?.querySelector("[data-agents-filter]")?.contains(document.activeElement);
+  const filterHeldFocus = Array.from(panelRef.current?.querySelectorAll("[data-agents-filter]") ?? [])
+    .some((control) => control.contains(document.activeElement));
   useEffect(() => {
     if (!filterHeldFocus) return;
     const active = document.activeElement;
     if (active && active !== document.body) return;
     const panel = panelRef.current;
-    const control = panel?.querySelector<HTMLElement>("[data-agents-filter]");
-    const target = control?.matches("select") ? control : control?.querySelector<HTMLElement>("[data-agents-active]");
+    const target = panel?.querySelector<HTMLElement>("select[data-agents-filter], [data-agents-filter] [data-agents-active]");
     (target ?? panel?.querySelector<HTMLElement>("[data-sidebar-toggle]"))?.focus();
   });
 
@@ -1496,7 +1516,9 @@ export function ArtifactPanel() {
   const provenance = useProvenance(selectedArtifact?.sessionId ?? (sessionIds.length === 1 ? sessionIds[0] : null));
   const demoView = provenance != null && provenance.kind !== "live";
 
-  if (visibleArtifacts.length === 0) {
+  // Initial unfiltered onboarding stays unchanged. Once the user has filtered,
+  // retain the frame/toggle even at zero items so explicit recovery keeps focus.
+  if (visibleArtifacts.length === 0 && chosenFilter === "all" && !hasUsedFilter) {
     return <FirstRunWalkthrough />;
   }
 
@@ -1530,12 +1552,12 @@ export function ArtifactPanel() {
           filter menu in the sidebar header, bar ON or OFF (it filters, it does
           not signal); the row stays whenever the sidebar is collapsed or the
           window narrow (no header room). */}
-      {sessionIds.length > 1 && !agentsMenu && (
+      {showAgentFilter && !agentsMenu && (
         <div data-agents-filter="" className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
           <span className="text-2xs text-text-muted shrink-0">Agents:</span>
           <button
             data-agents-active={sessionFilter === "all" || undefined}
-            onClick={() => setSessionFilter("all")}
+            onClick={() => chooseFilter("all")}
             className={`px-2 py-0.5 rounded text-2xs shrink-0 transition-colors ${
               sessionFilter === "all"
                 ? "bg-accent-blue-dim text-accent-blue font-medium"
@@ -1544,13 +1566,13 @@ export function ArtifactPanel() {
           >
             All ({artifacts.filter((a) => a.status !== "superseded").length})
           </button>
-          {sessionIds.map((sid, i) => {
+          {filterSessionIds.map((sid, i) => {
             const count = artifacts.filter((a) => a.sessionId === sid && a.status !== "superseded").length;
             return (
               <button
                 key={sid}
                 data-agents-active={sessionFilter === sid || undefined}
-                onClick={() => setSessionFilter(sid)}
+                onClick={() => chooseFilter(sid)}
                 className={`px-2 py-0.5 rounded text-2xs shrink-0 transition-colors ${
                   sessionFilter === sid
                     ? "bg-accent-blue-dim text-accent-blue font-medium"
@@ -1559,12 +1581,28 @@ export function ArtifactPanel() {
                 title={sid}
               >
                 <span className="inline-flex items-center gap-1">
-                  Agent {i + 1} ({count})
+                  {agentLabel(sid, i)} ({count})
                   {isDemoSessionId(sid) && <DemoTag />}
                 </span>
               </button>
             );
           })}
+        </div>
+      )}
+
+      {emptyAgentView && (
+        <div data-agents-filter="" data-testid="agent-filter-empty" className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border-default text-2xs text-text-secondary">
+          <div className="min-w-0 break-words">
+            <p className="font-medium text-text-primary">Selected agent — {chosenFilter}</p>
+            <p>{emptyAgentCopy}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => chooseFilter("all")}
+            className="px-2 py-1 rounded bg-surface-elevated text-text-primary shrink-0 focus-visible:ring-1 focus-visible:ring-accent-blue outline-none"
+          >
+            Show all agents
+          </button>
         </div>
       )}
 

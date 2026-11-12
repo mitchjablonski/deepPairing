@@ -46,6 +46,25 @@ function subagentName(f: HookGateFacts): string | undefined {
   return f.agentId ? "a subagent" : undefined;
 }
 
+/** Durable history records a hook event, not a still-live terminal invocation.
+ * Neither unread state nor the event's age can establish that it still waits. */
+export function hookGateHistoryCopy(f: HookGateFacts): Pick<HookGateCopy, "title" | "subagent" | "next"> {
+  const target = f.targetPath ? `\`${f.targetPath}\`` : "a file";
+  const worker = subagentName(f);
+  const title = f.decision === "deny"
+    ? `Claude Code stopped ${f.toolName === "Write" ? "a write" : "an edit"} to ${target}${worker ? ` by ${worker}` : ""}`
+    : f.decision === "ask"
+      ? worker
+        ? `Claude Code asked whether ${worker} could ${verb(f.toolName)} ${target}`
+        : `Claude Code asked to ${verb(f.toolName)} ${target}`
+      : `Claude Code recorded a hook check for ${target}${worker ? ` by ${worker}` : ""}`;
+  return {
+    title,
+    ...(worker ? { subagent: `Subagent: ${f.agentType ?? "unnamed"}` } : {}),
+    next: "If Claude Code is still asking, answer in that terminal. Approving here does not release that prompt.",
+  };
+}
+
 /** Skeleton plans (parity PR 4) — the step ids a `skeleton-scope` firing
  *  names in its concept ("Skeleton fence SKEL[2], SKEL[3]"). */
 function skeletonSteps(concept: string): string[] {

@@ -16,7 +16,7 @@ import {
   postRevoke,
   receiptLabel,
 } from "../lib/stanceException";
-import { hookGateCopy } from "../lib/hookGate";
+import { hookGateHistoryCopy } from "../lib/hookGate";
 
 /**
  * #169 — header chip + popover surfacing recent pre-flight GATE BLOCKS.
@@ -324,13 +324,13 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
         </span>
       </div>
       {block.lane === "hook" && (() => {
-        const copy = hookGateCopy({ ...block, decision: block.decision });
+        const copy = hookGateHistoryCopy(block);
         return (
           <div className="mt-0.5 text-text-secondary break-words" data-testid="gate-hook-line">
             {copy.subagent && <span className="font-semibold text-text-primary" data-testid="gate-hook-subagent">{copy.subagent} · </span>}
             {copy.title}
-            {/* #430 slice 2 — Why takes the terminal instruction off the line,
-                so the entry it opens has to carry it. */}
+            {/* Why reaches a durable event. Keep recovery conditional: the log
+                cannot tell whether that terminal invocation is still waiting. */}
             {block.decision === "ask" && <div className="mt-0.5 text-text-primary" data-testid="gate-hook-next">{copy.next}</div>}
           </div>
         );
