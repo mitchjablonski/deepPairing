@@ -96,19 +96,37 @@ function stripJsoncComments(src: string): string {
     .join("\n");
 }
 
-export function loadTeamPreferences(basePath: string): TeamPreference[] {
+export interface TeamPreferencesLoadResult {
+  /** Diagnostic only: no file text, paths, schema issues or exception messages. */
+  status: "missing" | "valid" | "invalid" | "unreadable";
+  preferences: TeamPreference[];
+}
+
+/** Fresh local snapshot. Validation remains all-or-nothing and fail-open. */
+export function readTeamPreferences(basePath: string): TeamPreferencesLoadResult {
   const filePath = path.join(basePath, "team.json");
+  let text: string;
   try {
-    if (!fs.existsSync(filePath)) return [];
-    const raw = JSON.parse(stripJsoncComments(fs.readFileSync(filePath, "utf-8")));
-    const parsed = parseTeamPreferencesFile(raw);
-    if (!parsed) {
-      console.warn(`[deepPairing] team.json failed schema validation; ignoring`);
-      return [];
-    }
-    return parsed.preferences;
+    text = fs.readFileSync(filePath, "utf-8");
   } catch (err) {
-    console.warn(`[deepPairing] Could not load team.json: ${err}`);
-    return [];
+    const missing = typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+    return { status: missing ? "missing" : "unreadable", preferences: [] };
   }
+  try {
+    const parsed = parseTeamPreferencesFile(JSON.parse(stripJsoncComments(text)));
+    return parsed
+      ? { status: "valid", preferences: parsed.preferences }
+      : { status: "invalid", preferences: [] };
+  } catch {
+    return { status: "invalid", preferences: [] };
+  }
+}
+
+/** Compatibility loader: existing callers still receive [] on any failure. */
+export function loadTeamPreferences(basePath: string): TeamPreference[] {
+  const result = readTeamPreferences(basePath);
+  if (result.status === "invalid" || result.status === "unreadable") {
+    console.warn(`[deepPairing] team.json ${result.status}; ignoring team rules`);
+  }
+  return result.preferences;
 }

@@ -144,7 +144,7 @@ async function main() {
   // Create MCP server with the daemon client as the store
   // broadcast is a no-op — the daemon broadcasts when mutations happen via daemon-routes
   const noop = () => {};
-  const mcp = createMcpServer(client, noop, port);
+  const mcp = createMcpServer(client, noop, port, { projectRoot });
 
   // Graceful shutdown. #470 (§5) — signals AWAIT the unregister (bounded) and
   // stdin closing unregisters, so a session's allowances end with it.
