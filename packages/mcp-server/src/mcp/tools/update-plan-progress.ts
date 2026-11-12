@@ -122,6 +122,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
       .map((u) => ({ index: u.stepIndex, skelId: priorStatuses[u.stepIndex]!.skelId!, status: u.status }));
     if (lifted.length > 0) {
       const what = lifted.map((l) => `SKEL[${l.skelId}] (step ${l.index + 1}, now ${l.status})`).join(", ");
+      let noticeSaved = false;
       try {
         await store.addComment({
           id: `cmt_${nanoid(10)}`,
@@ -129,10 +130,13 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
           author: "agent",
           content: `Fence lifted without completing the step: ${what}. Edits outside the skeleton are no longer gated for ${lifted.length === 1 ? "it" : "them"}. If this is a skeleton change, it should come to you as a revised plan.`,
         });
+        noticeSaved = true;
       } catch {
-        /* the notice is best-effort; the reply below still says it */
+        /* Progress is recorded even when the best-effort notice cannot be saved. */
       }
-      liftedNote = `\n⚠ Fence lifted without done: ${what}. Your pair sees a notice on the plan. If you need a structural change, propose it and revise_artifact the plan (reason "Skeleton change: …") instead.`;
+      liftedNote = noticeSaved
+        ? `\n⚠ Fence lifted without done: ${what}. A notice was saved to the plan's Comments thread. If you need a structural change, propose it and revise_artifact the plan (reason "Skeleton change: …") instead.`
+        : `\n⚠ Fence lifted without done: ${what}. The notice could not be saved to the plan; notify the human directly now. If you need a structural change, propose it and revise_artifact the plan (reason "Skeleton change: …") instead.`;
     }
   }
   // Parity PR 4 — reshape: a skeleton plan's newer version waits for approval

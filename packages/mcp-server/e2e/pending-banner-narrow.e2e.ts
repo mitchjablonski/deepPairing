@@ -260,16 +260,45 @@ test.describe("#430 slice 2 — a held terminal ask, and a second session", () =
       const whyBox = await why.boundingBox();
       expect(Math.abs((whyBox!.y + whyBox!.height / 2) - (lead.y + lead.height / 2))).toBeLessThan(8);
 
-      // The sibling has merged once the filter shows. Then open the first draft chip.
+      // The filter proves sibling hydration. This measures layout, so select the known brief, not chip ordering.
       const filter = width === 1440 ? page.getByTestId("agents-filter-menu") : page.getByText("Agents:");
       await expect(filter).toBeVisible({ timeout: 20000 });
-      await page.getByTestId("pending-banner").locator("button[title]:not([aria-label])").first().click();
-      await expect(page.locator("[data-artifact-id]").first()).toBeVisible({ timeout: 15000 });
+      await page.getByTestId("pending-banner").locator(`button[title="${BRIEF_TITLE}"]`).click();
+      const paneSelector = '[data-dp-pane][data-artifact-id="nb_brief"]';
       const tops = async () => {
-        const detail = await page.locator("[data-artifact-id]").first().boundingBox();
-        const firstRow = page.locator('nav[aria-label="Artifacts"] [data-artifact-item]').first();
-        const sidebar = (await firstRow.count()) ? await firstRow.boundingBox() : null;
-        return { detail: detail!.y, sidebar: sidebar ? sidebar.y : null };
+        const pane = page.locator(paneSelector);
+        await expect(pane).toHaveCount(1);
+        await expect(pane).toBeVisible();
+        await expect(page.locator("[data-dp-pane][inert]")).toHaveCount(0);
+        let measured: { detail: number; sidebar: number | null } | null = null;
+        // Both samples require the same visible fixture pane with no exit and
+        // unchanged geometry across three animation frames. Readiness never
+        // depends on the ceiling or on the row/menu inequality below.
+        await expect.poll(async () => {
+          measured = await page.evaluate(async (selector) => {
+            const target = document.querySelector(selector);
+            const sample = () => {
+              if (!target || !target.isConnected || document.querySelectorAll(selector).length !== 1 ||
+                  document.querySelector(selector) !== target || document.querySelector("[data-dp-pane][inert]")) return null;
+              const rect = target.getBoundingClientRect();
+              if (rect.width <= 0 || rect.height <= 0 || getComputedStyle(target).visibility === "hidden") return null;
+              const row = document.querySelector('nav[aria-label="Artifacts"] [data-artifact-item]');
+              const sidebar = row?.getBoundingClientRect();
+              return { x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                sidebar: sidebar && sidebar.width > 0 && sidebar.height > 0 ? sidebar.y : null };
+            };
+            const first = sample();
+            if (!first) return null;
+            for (let frame = 0; frame < 2; frame++) {
+              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+              if (JSON.stringify(sample()) !== JSON.stringify(first)) return null;
+            }
+            return { detail: first.y, sidebar: first.sidebar };
+          }, paneSelector);
+          return measured !== null;
+        }, { timeout: 15000, message: "selected brief pane must settle without an exiting pane" }).toBe(true);
+        if (!measured) throw new Error("Selected brief pane has no stable geometry");
+        return measured as { detail: number; sidebar: number | null };
       };
       const report = (label: string, t: { detail: number; sidebar: number | null }) =>
         console.log(`[430 D1] first-content tops, ${label} (${width}): detail ${(t.detail / 9).toFixed(1)}% | sidebar ${t.sidebar === null ? "n/a" : `${(t.sidebar / 9).toFixed(1)}%`}`);

@@ -9,11 +9,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { SKELETON_ANCHOR_LIMITS } from "@deeppairing/shared";
-import type { FileStore } from "../../store/file-store.js";
+import { FileStore } from "../../store/file-store.js";
+import { createMcpServer } from "../server.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { skeletonLeftovers } from "../skeleton-finalize.js";
 import { writeReshapeScope } from "../skeleton-reshape.js";
+
+class FailingFenceNoticeStore extends FileStore {
+  override addComment(params: Parameters<FileStore["addComment"]>[0]): ReturnType<FileStore["addComment"]> {
+    if (params.author === "agent" && params.content.startsWith("Fence lifted without completing the step:")) {
+      throw new Error("controlled comment persistence failure");
+    }
+    return super.addComment(params);
+  }
+}
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -223,6 +235,42 @@ describe("reshape and lifted fences", () => {
     await progress(id, 0, "in_progress");
     const ok = await progress(id, 0, "done");
     expect(ok.text).not.toContain("Fence lifted");
+  });
+
+  it("#608: reports a failed notice save and tells the agent to notify the human directly", async () => {
+    const failingStore = ctx.fx.track(new FailingFenceNoticeStore(ctx.tmpDir, "comment_failure_session"));
+    const { server } = createMcpServer(failingStore, () => {}, 4000);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: "comment-failure-test-client", version: "1.0" });
+    await client.connect(clientTransport);
+    const callTool = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name, arguments: args });
+      return ((result.content as Array<{ type?: string; text?: string }>) ?? [])
+        .filter((block) => block.type === "text" && typeof block.text === "string")
+        .map((block) => block.text)
+        .join("");
+    };
+
+    try {
+      await callTool("present_plan", { title: "Smoothing skeleton", steps: STEPS, estimatedChanges: 1 });
+      const plan = failingStore.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+      failingStore.updateArtifactStatus(plan.id, "approved", "ui_approve_button");
+      await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
+      const res = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "pending" }] });
+
+      expect(res).toContain("Fence lifted without done: SKEL[1] (step 1, now pending)");
+      expect(res).toContain("The notice could not be saved to the plan");
+      expect(res).toContain("notify the human directly now");
+      expect(res).not.toContain("notice was saved");
+      expect(failingStore.getArtifacts().find((a) => a.id === plan.id)?.content).toMatchObject({ steps: [{ status: "pending" }] });
+      expect(failingStore.getComments().filter((c) =>
+        c.target.artifactId === plan.id && c.author === "agent" && c.content.includes("Fence lifted"),
+      )).toHaveLength(0);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
 
