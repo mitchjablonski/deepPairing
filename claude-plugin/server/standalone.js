@@ -3227,8 +3227,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path19) {
-      let input = path19;
+    function removeDotSegments(path21) {
+      let input = path21;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3427,8 +3427,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path19, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path19 && path19 !== "/" ? path19 : void 0;
+        const [path21, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path21 && path21 !== "/" ? path21 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6790,12 +6790,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list2, fs18, exportName) {
+    function addFormats(ajv, list2, fs19, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list2)
-        ajv.addFormat(f, fs18[f]);
+        ajv.addFormat(f, fs19[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -7326,10 +7326,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path19) {
-  if (!path19)
+function getElementAtPath(obj2, path21) {
+  if (!path21)
     return obj2;
-  return path19.reduce((acc, key) => acc?.[key], obj2);
+  return path21.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7738,11 +7738,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path19, issues) {
+function prefixIssues(path21, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path19);
+    iss.path.unshift(path21);
     return iss;
   });
 }
@@ -7889,16 +7889,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path19 = []) => {
+  const processError = (error52, path21 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path19, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
       } else {
-        const fullpath = [...path19, ...issue2.path];
+        const fullpath = [...path21, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7925,17 +7925,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path19 = []) => {
+  const processError = (error52, path21 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path19, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
       } else {
-        const fullpath = [...path19, ...issue2.path];
+        const fullpath = [...path21, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -7967,8 +7967,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path19 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path19) {
+  const path21 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path21) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -20966,13 +20966,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path19 = ref.slice(1).split("/").filter(Boolean);
-  if (path19.length === 0) {
+  const path21 = ref.slice(1).split("/").filter(Boolean);
+  if (path21.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path19[0] === defsKey) {
-    const key = path19[1];
+  if (path21[0] === defsKey) {
+    const key = path21[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -27016,6 +27016,10 @@ var TeamPreferencesFileSchema = external_exports.object({
   version: external_exports.literal(1),
   preferences: external_exports.array(TeamPreferenceSchema)
 });
+function parseTeamPreferencesFile(raw) {
+  const result = TeamPreferencesFileSchema.safeParse(raw);
+  return result.success ? result.data : null;
+}
 
 // ../shared/dist/schemas/preflight-trace.js
 var PreflightConsideredConceptSchema = external_exports.object({
@@ -29996,6 +30000,95 @@ function detectWorktreeMissingHooks(workspaceDir) {
 }
 
 // src/mcp/first-call-hint.ts
+import path9 from "node:path";
+
+// src/store/project-signals.ts
+import fs9 from "node:fs";
+import path8 from "node:path";
+
+// src/guardrail-rules.ts
+var GUARDRAIL_RULES = [
+  {
+    category: "migrations",
+    rationale: "Migrations are hard to reverse \u2014 escalate to supervised for changes here.",
+    note: "hard to reverse",
+    dirs: ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations", "alembic/versions"],
+    filePatterns: []
+  },
+  {
+    category: "workflows",
+    rationale: "CI workflows affect every future deploy \u2014 escalate for changes here.",
+    note: "it affects every future deploy",
+    dirs: [".github/workflows", ".circleci"],
+    filePatterns: [/(^|\/)\.gitlab-ci\.ya?ml$/, /(^|\/)Jenkinsfile$/]
+  },
+  {
+    category: "infrastructure",
+    rationale: "Infrastructure changes affect production surfaces \u2014 escalate here.",
+    note: "it affects production surfaces",
+    dirs: ["infrastructure", "terraform", "k8s", "kubernetes", "helm"],
+    filePatterns: [
+      /(^|\/)Dockerfile([.-][^/]*)?$/,
+      /(^|\/)(docker-)?compose[^/]*\.ya?ml$/,
+      /(^|\/)[^/]*\.tfvars(\.json)?$/
+    ]
+  },
+  {
+    category: "secrets",
+    rationale: "Secret files must never leak into the session or a commit \u2014 escalate here.",
+    note: "secrets must never leak into a commit",
+    dirs: [],
+    filePatterns: [
+      /(^|\/)\.env(\.[^/]+)?$/,
+      /(^|\/)config\/secrets[^/]*$/,
+      /(^|\/)config\/credentials[^/]*$/,
+      /(^|\/)config\/master\.key$/
+    ],
+    // Checked-in templates are not secrets. Applies to the whole class (so
+    // `config/secrets.example` is exempt too, not just `.env.example`) — the
+    // pre-Q1 asymmetry, where the carve-out lived inside the dotenv predicate
+    // alone, was an accident of how the predicates were written.
+    fileExclude: /\.(example|sample|template|dist)$/i
+  }
+];
+var GUARDRAIL_EXCLUDED_SEGMENTS = /(^|\/)(node_modules|bower_components|vendor|third_party|\.venv|venv|site-packages|dist|build|out|target|coverage|\.next|\.nuxt|\.output|\.turbo|__pycache__|fixtures|__fixtures__|testdata|test-data|__snapshots__|__mocks__|examples|example)(\/)/;
+function matchesGuardrailDir(rel, d) {
+  return rel === d || rel.startsWith(d + "/") || rel.endsWith("/" + d) || rel.includes("/" + d + "/");
+}
+function matchesGuardrailFile(rule, rel) {
+  if (!rule.filePatterns.some((re) => re.test(rel))) return false;
+  return !(rule.fileExclude && rule.fileExclude.test(rel));
+}
+function ruleForRelPath(rel) {
+  if (GUARDRAIL_EXCLUDED_SEGMENTS.test(rel)) return null;
+  for (const rule of GUARDRAIL_RULES) {
+    if (rule.dirs.some((d) => matchesGuardrailDir(rel, d)) || matchesGuardrailFile(rule, rel)) return rule;
+  }
+  return null;
+}
+
+// src/store/project-signals.ts
+function stripJsoncComments(src) {
+  return src.split("\n").map((line) => /^\s*\/\//.test(line) ? "" : line).join("\n");
+}
+function readTeamPreferences(basePath) {
+  const filePath = path8.join(basePath, "team.json");
+  let text;
+  try {
+    text = fs9.readFileSync(filePath, "utf-8");
+  } catch (err) {
+    const missing = typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+    return { status: missing ? "missing" : "unreadable", preferences: [] };
+  }
+  try {
+    const parsed = parseTeamPreferencesFile(JSON.parse(stripJsoncComments(text)));
+    return parsed ? { status: "valid", preferences: parsed.preferences } : { status: "invalid", preferences: [] };
+  } catch {
+    return { status: "invalid", preferences: [] };
+  }
+}
+
+// src/mcp/first-call-hint.ts
 function staleDraftAgeMs(drafts) {
   const now = Date.now();
   let oldest = null;
@@ -30133,6 +30226,24 @@ ${lines.join("\n")}`
   }
   try {
     const prefs = await store.getTeamPreferences?.();
+    if (env.projectRoot && Array.isArray(prefs)) {
+      const disk = readTeamPreferences(path9.join(env.projectRoot, ".deeppairing"));
+      let problem;
+      if (disk.status === "invalid" || disk.status === "unreadable") {
+        const cause = disk.status === "invalid" ? "invalid JSON or schema" : "file unavailable";
+        problem = `The current team.json disk file could not be loaded (${cause}).`;
+      } else if (disk.status === "missing" && prefs.length > 0) {
+        problem = "The team.json disk file is missing.";
+      } else if (disk.status === "valid" && JSON.stringify(disk.preferences) !== JSON.stringify(prefs)) {
+        problem = "The team.json disk file differs from this session's cached team rules.";
+      }
+      if (problem) {
+        const cache = prefs.length > 0 ? "This session still uses its cached team rules until daemon restart." : "This session currently has no cached team rules; a repaired disk file alone does not load them.";
+        obligationsParts.push(
+          `\u26A0 Team-rule load warning: ${problem} ${cache} Tell the human to check .deeppairing/team.json or run /deeppairing:doctor, then restart the deepPairing daemon to load the intended rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`
+        );
+      }
+    }
     if (Array.isArray(prefs) && prefs.length > 0) {
       const render = (p) => {
         const scope = p.scope?.paths?.length ? ` (scope: ${p.scope.paths.join(", ")})` : "";
@@ -30390,11 +30501,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs18 = await import("node:fs");
-    const path19 = await import("node:path");
-    const claudeMd = path19.join(process.cwd(), "CLAUDE.md");
-    if (fs18.existsSync(claudeMd)) {
-      const content = fs18.readFileSync(claudeMd, "utf-8");
+    const fs19 = await import("node:fs");
+    const path21 = await import("node:path");
+    const claudeMd = path21.join(process.cwd(), "CLAUDE.md");
+    if (fs19.existsSync(claudeMd)) {
+      const content = fs19.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
           "\n\u{1F4A1} Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
@@ -31301,7 +31412,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path19, v: v2 }) => `- ${path19}: ${v2.message}`);
+  const lines = shown.map(({ path: path21, v: v2 }) => `- ${path21}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function formatProseStyleWarnings(label, text, mode = "strict") {
@@ -31315,7 +31426,7 @@ function formatProseStyleWarnings(label, text, mode = "strict") {
   const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  return styleBlock(result.score, shown.map(({ path: path19, v: v2 }) => `- ${path19}: ${v2.message}`), rest);
+  return styleBlock(result.score, shown.map(({ path: path21, v: v2 }) => `- ${path21}: ${v2.message}`), rest);
 }
 function styleBlock(score, lines, rest) {
   const tail = rest > 0 ? ` (+${rest} more)` : "";
@@ -31714,9 +31825,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path19) {
+function receivedSize(input, path21) {
   let cur = input;
-  for (const seg of path19) {
+  for (const seg of path21) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -31739,8 +31850,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path19) {
-  return path19.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path21) {
+  return path21.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -31766,9 +31877,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path19 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path21 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path19}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path21}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -32513,7 +32624,7 @@ async function handleLogReasoning(ctx, args) {
 }
 
 // src/mcp/tools/export-session.ts
-import path9 from "node:path";
+import path11 from "node:path";
 
 // src/replay/timeline.ts
 function buildTimeline(state) {
@@ -32987,7 +33098,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path19 = sanitizePath(file2.path, projectRoot2);
+  const path21 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -33004,7 +33115,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path19)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path21)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -33123,9 +33234,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path19 = sanitizePath(e.filePath, projectRoot2);
+    const path21 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path19 ? `<p class="anchor"><code>${esc2(path19 + range)}</code></p>` : "";
+    let anchor = path21 ? `<p class="anchor"><code>${esc2(path21 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -33282,9 +33393,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path19 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path21 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path19)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path21)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -34833,8 +34944,8 @@ function formatLearnings(state) {
 
 // src/export/html-export.ts
 import crypto3 from "node:crypto";
-import fs9 from "node:fs";
-import path8 from "node:path";
+import fs10 from "node:fs";
+import path10 from "node:path";
 var MAX_TRACE_LOOKUPS = 200;
 async function gatherPreflightTraces(store, artifacts) {
   if (!store?.getPreflightTrace) return [];
@@ -34853,8 +34964,8 @@ async function gatherPreflightTraces(store, artifacts) {
 function readGuardrailFires(projectRoot2) {
   if (!projectRoot2) return [];
   try {
-    const p = path8.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    const parsed = JSON.parse(fs9.readFileSync(p, "utf-8"));
+    const p = path10.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const parsed = JSON.parse(fs10.readFileSync(p, "utf-8"));
     const fires = Array.isArray(parsed?.fires) ? parsed.fires : [];
     const out = [];
     for (const raw of fires) {
@@ -34929,7 +35040,7 @@ async function assembleSessionHtml(state, options = {}) {
     ...renderOptions,
     secretLabels,
     secretCount,
-    projectName: renderOptions.projectName ?? (projectRoot2 ? path8.basename(projectRoot2) : void 0)
+    projectName: renderOptions.projectName ?? (projectRoot2 ? path10.basename(projectRoot2) : void 0)
   });
 }
 function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
@@ -34938,10 +35049,10 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
   return `deeppairing-session-${day}-${token}.html`;
 }
 function writeSessionHtml(projectRoot2, sessionId, html, generatedAt) {
-  const dir = path8.join(projectRoot2, ".deeppairing", "exports");
-  fs9.mkdirSync(dir, { recursive: true });
-  const file2 = path8.join(dir, htmlExportFileName(sessionId, generatedAt));
-  fs9.writeFileSync(file2, html, "utf-8");
+  const dir = path10.join(projectRoot2, ".deeppairing", "exports");
+  fs10.mkdirSync(dir, { recursive: true });
+  const file2 = path10.join(dir, htmlExportFileName(sessionId, generatedAt));
+  fs10.writeFileSync(file2, html, "utf-8");
   return file2;
 }
 
@@ -34998,7 +35109,7 @@ async function handleExportSession(ctx, args) {
       secretCount: secretCountOf(secretMatches)
     });
     const file2 = writeSessionHtml(projectRoot2, state.sessionId, html, generatedAt);
-    const relative = path9.relative(projectRoot2, file2) || path9.basename(file2);
+    const relative = path11.relative(projectRoot2, file2) || path11.basename(file2);
     const kb = Math.max(1, Math.round(Buffer.byteLength(html, "utf-8") / 1024));
     const narrativeNote = narrative ? "Your narrative leads the page." : "No narrative was supplied, so the page opens with an auto-generated summary \u2014 compose one and re-export for a page a stranger can actually follow (see /deeppairing:share).";
     const secretWarning = secretMatches.length ? secretWarningFor(state, { narrative }) : null;
@@ -36917,8 +37028,8 @@ async function handleAnswerQuestion(ctx, args) {
 }
 
 // src/skeleton-scope.ts
-import fs10 from "node:fs";
-import path10 from "node:path";
+import fs11 from "node:fs";
+import path12 from "node:path";
 var SKEL_TODO = "SKEL_TODO";
 var SKELETON_SCOPE_DIR = "skeleton-scopes";
 var SKELETON_SCOPE_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
@@ -36962,13 +37073,13 @@ var PROSE_FILE = /\.(md|mdx|markdown|rst|txt)$/i;
 function scanFile(root, abs, fences, errors) {
   let text;
   try {
-    if (fs10.statSync(abs).size > 1e6) return;
-    text = fs10.readFileSync(abs, "utf-8");
+    if (fs11.statSync(abs).size > 1e6) return;
+    text = fs11.readFileSync(abs, "utf-8");
   } catch {
     return;
   }
   if (!text.includes("SKEL[")) return;
-  const rel = path10.relative(root, abs).split(path10.sep).join("/");
+  const rel = path12.relative(root, abs).split(path12.sep).join("/");
   try {
     fences.push(...scanSkeletonText(text, rel));
   } catch (err) {
@@ -36980,7 +37091,7 @@ function scanSkeletonFences(root, opts = {}) {
   const errors = [];
   if (opts.files && opts.files.length > 0) {
     for (const f of new Set(opts.files)) {
-      const abs = path10.resolve(root, f);
+      const abs = path12.resolve(root, f);
       if (within(root, abs)) scanFile(root, abs, fences, errors);
     }
     return { fences, errors, truncated: false };
@@ -36991,7 +37102,7 @@ function scanSkeletonFences(root, opts = {}) {
   const walk = (dir) => {
     let entries;
     try {
-      entries = fs10.readdirSync(dir, { withFileTypes: true });
+      entries = fs11.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -37000,7 +37111,7 @@ function scanSkeletonFences(root, opts = {}) {
         truncated = true;
         return;
       }
-      const abs = path10.join(dir, e.name);
+      const abs = path12.join(dir, e.name);
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) walk(abs);
         continue;
@@ -37028,7 +37139,7 @@ function planDeclaredFiles(content) {
   return [...new Set(out)];
 }
 function skeletonScopeDir(projectRoot2) {
-  return path10.join(projectRoot2, ".deeppairing", SKELETON_SCOPE_DIR);
+  return path12.join(projectRoot2, ".deeppairing", SKELETON_SCOPE_DIR);
 }
 function scopeFileName(artifactId) {
   return /^[A-Za-z0-9_-]{1,80}$/.test(artifactId) ? `${artifactId}.json` : null;
@@ -37054,14 +37165,14 @@ function parseScope(raw, now) {
 function readSkeletonScopes(projectRoot2, now = Date.now()) {
   let names;
   try {
-    names = fs10.readdirSync(skeletonScopeDir(projectRoot2)).filter((n) => n.endsWith(".json"));
+    names = fs11.readdirSync(skeletonScopeDir(projectRoot2)).filter((n) => n.endsWith(".json"));
   } catch {
     return [];
   }
   const out = [];
   for (const n of names) {
     try {
-      const scope = parseScope(JSON.parse(fs10.readFileSync(path10.join(skeletonScopeDir(projectRoot2), n), "utf-8")), now);
+      const scope = parseScope(JSON.parse(fs11.readFileSync(path12.join(skeletonScopeDir(projectRoot2), n), "utf-8")), now);
       if (scope) out.push(scope);
     } catch {
     }
@@ -37071,16 +37182,16 @@ function readSkeletonScopes(projectRoot2, now = Date.now()) {
 function writeSkeletonScope(projectRoot2, scope) {
   const name = scopeFileName(scope.artifactId);
   if (!name) return;
-  const file2 = path10.join(skeletonScopeDir(projectRoot2), name);
+  const file2 = path12.join(skeletonScopeDir(projectRoot2), name);
   try {
     if (scope.activeSkelIds.length === 0 && !scope.reshape) {
-      fs10.rmSync(file2, { force: true });
+      fs11.rmSync(file2, { force: true });
       return;
     }
-    fs10.mkdirSync(path10.dirname(file2), { recursive: true });
+    fs11.mkdirSync(path12.dirname(file2), { recursive: true });
     const tmp = `${file2}.tmp.${process.pid}.${Date.now()}`;
-    fs10.writeFileSync(tmp, JSON.stringify(scope, null, 2));
-    fs10.renameSync(tmp, file2);
+    fs11.writeFileSync(tmp, JSON.stringify(scope, null, 2));
+    fs11.renameSync(tmp, file2);
   } catch {
   }
 }
@@ -37118,82 +37229,19 @@ function readSkeletonScopeFile(projectRoot2, artifactId, now = Date.now()) {
   const name = scopeFileName(artifactId);
   if (!name) return null;
   try {
-    return parseScope(JSON.parse(fs10.readFileSync(path10.join(skeletonScopeDir(projectRoot2), name), "utf-8")), now);
+    return parseScope(JSON.parse(fs11.readFileSync(path12.join(skeletonScopeDir(projectRoot2), name), "utf-8")), now);
   } catch {
     return null;
   }
 }
 function within(dir, abs) {
-  const rel = path10.relative(dir, abs);
-  return rel === "" || !rel.startsWith("..") && !path10.isAbsolute(rel);
+  const rel = path12.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path12.isAbsolute(rel);
 }
 
 // src/mcp/skeleton-snapshot.ts
-import fs11 from "node:fs";
-import path11 from "node:path";
-
-// src/guardrail-rules.ts
-var GUARDRAIL_RULES = [
-  {
-    category: "migrations",
-    rationale: "Migrations are hard to reverse \u2014 escalate to supervised for changes here.",
-    note: "hard to reverse",
-    dirs: ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations", "alembic/versions"],
-    filePatterns: []
-  },
-  {
-    category: "workflows",
-    rationale: "CI workflows affect every future deploy \u2014 escalate for changes here.",
-    note: "it affects every future deploy",
-    dirs: [".github/workflows", ".circleci"],
-    filePatterns: [/(^|\/)\.gitlab-ci\.ya?ml$/, /(^|\/)Jenkinsfile$/]
-  },
-  {
-    category: "infrastructure",
-    rationale: "Infrastructure changes affect production surfaces \u2014 escalate here.",
-    note: "it affects production surfaces",
-    dirs: ["infrastructure", "terraform", "k8s", "kubernetes", "helm"],
-    filePatterns: [
-      /(^|\/)Dockerfile([.-][^/]*)?$/,
-      /(^|\/)(docker-)?compose[^/]*\.ya?ml$/,
-      /(^|\/)[^/]*\.tfvars(\.json)?$/
-    ]
-  },
-  {
-    category: "secrets",
-    rationale: "Secret files must never leak into the session or a commit \u2014 escalate here.",
-    note: "secrets must never leak into a commit",
-    dirs: [],
-    filePatterns: [
-      /(^|\/)\.env(\.[^/]+)?$/,
-      /(^|\/)config\/secrets[^/]*$/,
-      /(^|\/)config\/credentials[^/]*$/,
-      /(^|\/)config\/master\.key$/
-    ],
-    // Checked-in templates are not secrets. Applies to the whole class (so
-    // `config/secrets.example` is exempt too, not just `.env.example`) — the
-    // pre-Q1 asymmetry, where the carve-out lived inside the dotenv predicate
-    // alone, was an accident of how the predicates were written.
-    fileExclude: /\.(example|sample|template|dist)$/i
-  }
-];
-var GUARDRAIL_EXCLUDED_SEGMENTS = /(^|\/)(node_modules|bower_components|vendor|third_party|\.venv|venv|site-packages|dist|build|out|target|coverage|\.next|\.nuxt|\.output|\.turbo|__pycache__|fixtures|__fixtures__|testdata|test-data|__snapshots__|__mocks__|examples|example)(\/)/;
-function matchesGuardrailDir(rel, d) {
-  return rel === d || rel.startsWith(d + "/") || rel.endsWith("/" + d) || rel.includes("/" + d + "/");
-}
-function matchesGuardrailFile(rule, rel) {
-  if (!rule.filePatterns.some((re) => re.test(rel))) return false;
-  return !(rule.fileExclude && rule.fileExclude.test(rel));
-}
-function ruleForRelPath(rel) {
-  if (GUARDRAIL_EXCLUDED_SEGMENTS.test(rel)) return null;
-  for (const rule of GUARDRAIL_RULES) {
-    if (rule.dirs.some((d) => matchesGuardrailDir(rel, d)) || matchesGuardrailFile(rule, rel)) return rule;
-  }
-  return null;
-}
-
-// src/mcp/skeleton-snapshot.ts
+import fs12 from "node:fs";
+import path13 from "node:path";
 var SKELETON_SNAPSHOT_LIMITS = {
   maxFiles: 12,
   maxFileBytes: 48 * 1024,
@@ -37203,15 +37251,15 @@ var SKELETON_SNAPSHOT_LIMITS = {
 var UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
 var MIN_USEFUL_BYTES = 512;
 function within2(dir, abs) {
-  const rel = path11.relative(dir, abs);
-  return rel === "" || !rel.startsWith("..") && !path11.isAbsolute(rel);
+  const rel = path13.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path13.isAbsolute(rel);
 }
 function normalizeSkeletonPath(root, raw) {
   if (typeof raw !== "string" || !raw.trim() || raw.includes("\0")) return null;
   const spelled = raw.trim().replace(/\\/g, "/");
-  const abs = path11.resolve(root, spelled);
-  if (!within2(root, abs) || abs === path11.resolve(root)) return null;
-  return path11.relative(root, abs).split(path11.sep).join("/");
+  const abs = path13.resolve(root, spelled);
+  if (!within2(root, abs) || abs === path13.resolve(root)) return null;
+  return path13.relative(root, abs).split(path13.sep).join("/");
 }
 function isDeniedSegment(segment) {
   const s = segment.toLowerCase();
@@ -37222,34 +37270,34 @@ function isDeniedPath(rel) {
   if (segs.some(isDeniedSegment)) return true;
   return ruleForRelPath(rel.toLowerCase())?.category === "secrets";
 }
-var O_NOFOLLOW = fs11.constants.O_NOFOLLOW ?? 0;
+var O_NOFOLLOW = fs12.constants.O_NOFOLLOW ?? 0;
 function readConfined(root, rel, limits) {
   if (isDeniedPath(rel)) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let realRoot;
   let realAbs;
   try {
-    realRoot = fs11.realpathSync(root);
+    realRoot = fs12.realpathSync(root);
   } catch {
     return { ok: false, reason: "the project root is unreadable" };
   }
   try {
-    realAbs = fs11.realpathSync(path11.resolve(root, rel));
+    realAbs = fs12.realpathSync(path13.resolve(root, rel));
   } catch {
     return { ok: false, reason: "not on disk" };
   }
   if (!within2(realRoot, realAbs)) return { ok: false, reason: "it resolves outside the project (symlink)" };
-  if (isDeniedPath(path11.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
+  if (isDeniedPath(path13.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let fd;
   try {
-    fd = fs11.openSync(realAbs, fs11.constants.O_RDONLY | O_NOFOLLOW);
+    fd = fs12.openSync(realAbs, fs12.constants.O_RDONLY | O_NOFOLLOW);
   } catch {
     return { ok: false, reason: "unreadable" };
   }
   try {
-    const st = fs11.fstatSync(fd);
+    const st = fs12.fstatSync(fd);
     if (!st.isFile()) return { ok: false, reason: "not a regular file" };
     try {
-      const named = fs11.statSync(realAbs);
+      const named = fs12.statSync(realAbs);
       if (named.dev !== st.dev || named.ino !== st.ino) return { ok: false, reason: "it changed while being read" };
     } catch {
       return { ok: false, reason: "it changed while being read" };
@@ -37258,7 +37306,7 @@ function readConfined(root, rel, limits) {
     const buf = Buffer.alloc(st.size);
     let off = 0;
     while (off < st.size) {
-      const n = fs11.readSync(fd, buf, off, st.size - off, off);
+      const n = fs12.readSync(fd, buf, off, st.size - off, off);
       if (n <= 0) break;
       off += n;
     }
@@ -37269,7 +37317,7 @@ function readConfined(root, rel, limits) {
     return { ok: false, reason: "unreadable" };
   } finally {
     try {
-      fs11.closeSync(fd);
+      fs12.closeSync(fd);
     } catch {
     }
   }
@@ -37302,7 +37350,7 @@ function buildSkeletonSnapshot(args) {
   const steps = Array.isArray(args.steps) ? args.steps : [];
   const skelIds = [...new Set(steps.map((s) => s?.skelId).filter((id) => typeof id === "string" && id.length > 0))];
   if (skelIds.length === 0) return { visuals: [], note: "" };
-  const root = path11.resolve(args.root);
+  const root = path13.resolve(args.root);
   const agentVisuals = Array.isArray(args.visuals) ? args.visuals : [];
   const scan = scanSkeletonFences(root, {
     files: planDeclaredFiles({
@@ -37487,13 +37535,13 @@ function nextReadStamp() {
 }
 
 // src/mcp/skeleton-finalize.ts
-import fs12 from "node:fs";
-import path12 from "node:path";
+import fs13 from "node:fs";
+import path14 from "node:path";
 var MAX_BYTES = 1e6;
 var MAX_LISTED = 20;
 function within3(dir, abs) {
-  const rel = path12.relative(dir, abs);
-  return rel === "" || !rel.startsWith("..") && !path12.isAbsolute(rel);
+  const rel = path14.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path14.isAbsolute(rel);
 }
 var PROSE_FILE2 = /\.(md|mdx|markdown|rst|txt)$/i;
 function skeletonLeftovers(root, content) {
@@ -37510,18 +37558,18 @@ function skeletonLeftovers(root, content) {
   const files = new Set([...declared, ...fences.map((f) => f.file)].filter((f) => !PROSE_FILE2.test(f)));
   let realRoot;
   try {
-    realRoot = fs12.realpathSync(root);
+    realRoot = fs13.realpathSync(root);
   } catch {
     realRoot = root;
   }
   for (const rel of files) {
     try {
-      const abs = fs12.realpathSync(path12.resolve(root, rel));
+      const abs = fs13.realpathSync(path14.resolve(root, rel));
       if (!within3(realRoot, abs)) continue;
-      const st = fs12.statSync(abs);
+      const st = fs13.statSync(abs);
       if (!st.isFile() || st.size > MAX_BYTES) continue;
-      const lines = fs12.readFileSync(abs, "utf-8").split("\n");
-      const shown = path12.relative(realRoot, abs).split(path12.sep).join("/");
+      const lines = fs13.readFileSync(abs, "utf-8").split("\n");
+      const shown = path14.relative(realRoot, abs).split(path14.sep).join("/");
       lines.forEach((l, i) => {
         if (l.includes("SKEL_TODO")) out.push({ file: shown, line: i + 1, what: "SKEL_TODO" });
       });
@@ -39784,22 +39832,22 @@ async function handleRecordStance(ctx, args) {
 }
 
 // src/daemon/status.ts
-import fs13 from "node:fs";
-import path13 from "node:path";
+import fs14 from "node:fs";
+import path15 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path13.resolve(startDir);
+  let dir = path15.resolve(startDir);
   for (; ; ) {
-    const candidate = path13.join(dir, ".deeppairing", "daemon.json");
-    if (fs13.existsSync(candidate)) {
+    const candidate = path15.join(dir, ".deeppairing", "daemon.json");
+    if (fs14.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs13.readFileSync(candidate, "utf-8"));
+        const parsed = JSON.parse(fs14.readFileSync(candidate, "utf-8"));
         const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
         return { dir, info };
       } catch {
         return { dir, info: {} };
       }
     }
-    const parent = path13.dirname(dir);
+    const parent = path15.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -39879,7 +39927,7 @@ Give the human THIS exact URL to open the review surface.`;
 }
 
 // src/mcp/server.ts
-function createMcpServer(store, broadcast, port = BASE_PORT) {
+function createMcpServer(store, broadcast, port = BASE_PORT, hintEnv = {}) {
   const server = new Server(
     { name: "deeppairing", version: SERVER_VERSION },
     {
@@ -40469,7 +40517,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
     if (uri === "deeppairing://onboarding") {
-      const text = await buildFirstCallHint(store, port);
+      const text = await buildFirstCallHint(store, port, [], hintEnv);
       return {
         contents: [{ uri, mimeType: "text/plain", text: text || "(no onboarding context available yet)" }]
       };
@@ -40623,7 +40671,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     let firstCallHint = "";
     if (firstToolCall && carriesFirstCallHint(name)) {
       const answeringCommentIds = name === "answer_question" && typeof args?.commentId === "string" && args.commentId.trim() ? [args.commentId.trim()] : [];
-      firstCallHint = await buildFirstCallHint(store, port, answeringCommentIds);
+      firstCallHint = await buildFirstCallHint(store, port, answeringCommentIds, hintEnv);
     }
     const tryElicit2 = (message) => tryElicit(server, message);
     const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], opts = {}) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts, opts);
@@ -40750,40 +40798,40 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
 
 // src/daemon/lifecycle.ts
 import { spawn as spawn2, execFileSync } from "node:child_process";
-import fs15 from "node:fs";
+import fs16 from "node:fs";
 import net from "node:net";
-import path15 from "node:path";
+import path17 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/daemon/token.ts
-import fs14 from "node:fs";
+import fs15 from "node:fs";
 import os3 from "node:os";
-import path14 from "node:path";
+import path16 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path14.isAbsolute(xdg)) {
+  if (xdg && path16.isAbsolute(xdg)) {
     try {
-      if (fs14.statSync(xdg).isDirectory()) return path14.join(xdg, "deeppairing");
+      if (fs15.statSync(xdg).isDirectory()) return path16.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path14.join(os3.tmpdir(), "deeppairing");
+  return path16.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path14.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path16.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs14.existsSync(file2)) return null;
-    return JSON.parse(fs14.readFileSync(file2, "utf-8"));
+    if (!fs15.existsSync(file2)) return null;
+    return JSON.parse(fs15.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 
 // src/daemon/lifecycle.ts
-var __thisDir2 = path15.dirname(fileURLToPath3(import.meta.url));
+var __thisDir2 = path17.dirname(fileURLToPath3(import.meta.url));
 var DAEMON_FILE = "daemon.json";
 var MAX_PORT_ATTEMPTS = 10;
 function logStale(msg) {
@@ -40794,13 +40842,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path15.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path17.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs15.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs15.readFileSync(infoPath, "utf-8"));
+    if (!fs16.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs16.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -40884,7 +40932,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs15.unlinkSync(daemonInfoPath(projectRoot2));
+      fs16.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -40948,8 +40996,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path15.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs15.existsSync(logPath)) {
+  const logPath = path17.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs16.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -40991,8 +41039,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path15.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs15.existsSync(daemonScript) ? daemonScript : path15.join(__thisDir2, "daemon.js");
+  const daemonScript = path17.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs16.existsSync(daemonScript) ? daemonScript : path17.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -41084,7 +41132,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs15.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs16.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -41367,11 +41415,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs18 = await import("node:fs");
-      const path19 = await import("node:path");
-      const infoPath = path19.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs18.existsSync(infoPath)) return false;
-      const raw = fs18.readFileSync(infoPath, "utf-8");
+      const fs19 = await import("node:fs");
+      const path21 = await import("node:path");
+      const infoPath = path21.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs19.existsSync(infoPath)) return false;
+      const raw = fs19.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -41425,7 +41473,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path19, init, isRetry = false) {
+  async request(path21, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -41436,12 +41484,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path19}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path21}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path19, init, true);
+        if (recovered) return this.request(path21, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -41456,7 +41504,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path19, init, true);
+        return this.request(path21, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -41467,7 +41515,7 @@ var DaemonClient = class {
       }
       await this.register(this.lastRegisterMeta);
       void this.notifyRecovered();
-      return this.request(path19, init, true);
+      return this.request(path21, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -41488,15 +41536,15 @@ var DaemonClient = class {
       );
     }
   }
-  async post(path19, body) {
-    return this.request(path19, {
+  async post(path21, body) {
+    return this.request(path21, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path19) {
-    return this.request(path19, {});
+  async get(path21) {
+    return this.request(path21, {});
   }
   // --- Session lifecycle ---
   /**
@@ -41917,9 +41965,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path19) {
+  async requestPublic(path21) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path19}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path21}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -41964,12 +42012,12 @@ var DaemonClient = class {
 };
 
 // src/store/project-registry.ts
-import fs16 from "node:fs";
+import fs17 from "node:fs";
 import os4 from "node:os";
-import path16 from "node:path";
+import path18 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path16.join(os4.homedir(), ".deeppairing", "projects.json");
+  return path18.join(os4.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {
@@ -41993,8 +42041,8 @@ function readFile() {
   }
   let raw;
   try {
-    if (!fs16.existsSync(filePath)) return emptyFile();
-    raw = JSON.parse(fs16.readFileSync(filePath, "utf-8"));
+    if (!fs17.existsSync(filePath)) return emptyFile();
+    raw = JSON.parse(fs17.readFileSync(filePath, "utf-8"));
   } catch (err) {
     salvageLog("projects.json", `unreadable/unparseable \u2014 starting from empty (${String(err)})`);
     return emptyFile();
@@ -42018,7 +42066,7 @@ function readFile() {
     }
     projects[key] = {
       projectRoot: v2.projectRoot,
-      name: typeof v2.name === "string" && v2.name ? v2.name : path16.basename(v2.projectRoot),
+      name: typeof v2.name === "string" && v2.name ? v2.name : path18.basename(v2.projectRoot),
       lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
@@ -42029,13 +42077,13 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
   try {
     const filePath = projectRegistryPath();
     const file2 = readFile();
-    const key = path16.resolve(projectRoot2);
+    const key = path18.resolve(projectRoot2);
     file2.projects[key] = {
       projectRoot: key,
-      name: path16.basename(key) || key,
+      name: path18.basename(key) || key,
       lastSeen: now.toISOString()
     };
-    fs16.mkdirSync(path16.dirname(filePath), { recursive: true });
+    fs17.mkdirSync(path18.dirname(filePath), { recursive: true });
     writeJsonAtomic(filePath, file2);
     return true;
   } catch (err) {
@@ -42047,9 +42095,9 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
 
 // src/session-id.ts
 import crypto4 from "node:crypto";
-import path17 from "node:path";
+import path19 from "node:path";
 function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
-  const projectName = path17.basename(projectRoot2);
+  const projectName = path19.basename(projectRoot2);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
   const base = `session_${safeProjectName}_${projectHash}`;
@@ -42061,17 +42109,17 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 }
 
 // src/standalone.ts
-import fs17 from "node:fs";
-import path18 from "node:path";
+import fs18 from "node:fs";
+import path20 from "node:path";
 var { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
-var dpDir = path18.join(projectRoot, ".deeppairing");
-var logFile = path18.join(dpDir, "server.log");
+var dpDir = path20.join(projectRoot, ".deeppairing");
+var logFile = path20.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs17.mkdirSync(path18.dirname(logFile), { recursive: true });
-    fs17.appendFileSync(logFile, line);
+    fs18.mkdirSync(path20.dirname(logFile), { recursive: true });
+    fs18.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -42093,7 +42141,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path18.basename(projectRoot);
+  const projectName = path20.basename(projectRoot);
   const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
   const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
   const sessionId = derived.sessionId;
@@ -42125,7 +42173,7 @@ async function main() {
 `);
   const noop = () => {
   };
-  const mcp = createMcpServer(client, noop, port);
+  const mcp = createMcpServer(client, noop, port, { projectRoot });
   installWrapperShutdown({
     proc: process,
     unregister: () => client.unregister(),

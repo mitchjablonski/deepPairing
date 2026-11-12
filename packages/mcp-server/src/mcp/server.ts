@@ -82,7 +82,10 @@ type BroadcastFn = (event: any) => void;
  * .describe() first).
  */
 
-export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BASE_PORT) {
+export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BASE_PORT, hintEnv: { projectRoot?: string } = {}) {
+  // #624 — supplied by standalone from the same root used to bind the daemon.
+  // No cwd fallback: library/test callers without a binding make no diagnostic
+  // claim about a potentially unrelated local project's team file.
   const server = new Server(
     { name: "deeppairing", version: SERVER_VERSION },
     {
@@ -819,7 +822,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     // III2 — top-level URI, not under session/. See ListResources for
     // the collision history.
     if (uri === "deeppairing://onboarding") {
-      const text = await buildFirstCallHint(store, port);
+      const text = await buildFirstCallHint(store, port, [], hintEnv);
       return {
         contents: [{ uri, mimeType: "text/plain", text: text || "(no onboarding context available yet)" }],
       };
@@ -1075,7 +1078,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         name === "answer_question" && typeof args?.commentId === "string" && args.commentId.trim()
           ? [args.commentId.trim()]
           : [];
-      firstCallHint = await buildFirstCallHint(store, port, answeringCommentIds);
+      firstCallHint = await buildFirstCallHint(store, port, answeringCommentIds, hintEnv);
     }
 
     // X4 — per-call helpers extracted to mcp/tool-helpers.ts. These thin
