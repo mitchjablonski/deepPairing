@@ -51,6 +51,36 @@ afterEach(() => {
 });
 
 describe("PreflightBlockLog — durable hydration (Q2)", () => {
+  it.each([
+    { name: "old unread ask", at: "2020-01-01T00:00:00.000Z", over: {}, deny: false },
+    { name: "recent unread ask", at: new Date().toISOString(), over: {}, deny: false },
+    { name: "seen ask", at: "2020-01-01T00:00:00.000Z", over: { seenAt: "2020-01-02T00:00:00.000Z" }, deny: false },
+    { name: "old skeleton ask", at: "2020-01-01T00:00:00.000Z", over: { guardrail: "skeleton-paused", agentType: "worker" }, deny: false },
+    { name: "deny", at: "2020-01-01T00:00:00.000Z", over: { decision: "deny" }, deny: true },
+    { name: "legacy record without a decision", at: "2020-01-01T00:00:00.000Z", over: { decision: undefined }, deny: false },
+  ])("describes $name as an event without claiming a live terminal invocation", async ({ at, over, deny }) => {
+    const block = { ...SERVER_BLOCK, at, lane: "hook", decision: "ask", toolName: "Edit", targetPath: "db/m.sql", ...over };
+    mockBlocks([block]);
+    render(<PreflightBlockLog />);
+    await waitFor(() => expect(usePreflightBlockStore.getState().blocks).toHaveLength(1));
+    await userEvent.click(screen.getByRole("button", { name: /show recent gate blocks/i }));
+    const line = screen.getByTestId("gate-hook-line");
+    if (deny) {
+      expect(line).toHaveTextContent("Claude Code stopped an edit to `db/m.sql`");
+      expect(screen.queryByTestId("gate-hook-next")).not.toBeInTheDocument();
+    } else if (block.decision === "ask") {
+      expect(line).toHaveTextContent(/Claude Code asked (to edit|whether the worker subagent could edit)/);
+      expect(screen.getByTestId("gate-hook-next")).toHaveTextContent("If Claude Code is still asking, answer in that terminal. Approving here does not release that prompt.");
+    } else {
+      expect(line).toHaveTextContent("Claude Code recorded a hook check for `db/m.sql`");
+      expect(screen.queryByTestId("gate-hook-next")).not.toBeInTheDocument();
+    }
+    expect(line).not.toHaveTextContent(/is asking to|fills are paused|awaiting your approval/);
+    // Reading history is neither a verdict nor evidence that the ask ended.
+    expect(usePreflightBlockStore.getState().blocks[0]?.decision).toBe(block.decision);
+    expect(usePreflightBlockStore.getState().blocks[0]?.allowance).toBeUndefined();
+  });
+
   it("THE POINT: a block that fired with no client attached shows up after a later page load", async () => {
     const user = userEvent.setup();
     mockBlocks([SERVER_BLOCK]);

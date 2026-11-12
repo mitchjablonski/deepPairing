@@ -1312,9 +1312,16 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       // guard can AWAIT a fresh fetch before blocking. The internal catch keeps
       // fire-and-forget callers (the 10s poll) free of unhandled rejections.
       return apiGet(`${apiBase()}/api/active-sessions`)
-        .then((r) => r.json())
-        .then((data) => {
-          const next: ActiveSession[] = data.sessions ?? [];
+        .then(async (r) => {
+          // #624 — retain the last validated catalog on transport/payload
+          // failure. An error body is not evidence that a session departed.
+          if (!r.ok) return false;
+          const data = await r.json();
+          if (!Array.isArray(data?.sessions) || !data.sessions.every((session: unknown) =>
+            session !== null && typeof session === "object" && "sessionId" in session &&
+            typeof session.sessionId === "string" && session.sessionId.length > 0,
+          )) return false;
+          const next: ActiveSession[] = data.sessions;
           // D6 (P1) — equality bail. An unconditional set minted a new array
           // identity every 10s poll, re-rendering the ENTIRE App subtree at
           // idle. Compare ALL FOUR rendered fields (id alone would freeze the

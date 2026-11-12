@@ -9,6 +9,8 @@ import { cliInvocation } from "../cli-invocation.js";
 import { resolveProjectRoot } from "../project-root.js";
 import { isPluginManaged } from "../cli/setup-tasks.js";
 import { detectWorktreeMissingHooks } from "../worktree-hooks.js";
+import path from "node:path";
+import { readTeamPreferences } from "../store/project-signals.js";
 
 /** N2 (#226 scope 4) — age in ms of the OLDEST pending draft, or null if no
  *  draft carries a parseable createdAt. Used to flag an abandoned-arc backlog. */
@@ -269,8 +271,8 @@ export async function buildFirstCallHint(
    * comment, whichever lane it sat in.
    */
   answeredCommentIds: readonly string[] = [],
-  /** #538 — test seam: the directory the agent works in / plugin-managed flag. */
-  env: { workspaceDir?: string; pluginManaged?: boolean } = {},
+  /** #538 workspace/plugin seam; #624 actual project binding from the wrapper. */
+  env: { workspaceDir?: string; pluginManaged?: boolean; projectRoot?: string } = {},
 ): Promise<string> {
   const answeringCommentIds = new Set(answeredCommentIds.filter((id) => typeof id === "string" && id.length > 0));
   // EE1 — three-tier ordering for assembly:
@@ -361,6 +363,29 @@ export async function buildFirstCallHint(
   try {
     // AA7b — typed optional method.
     const prefs = await store.getTeamPreferences?.();
+    // #624 — compare the actual session cache used below with a fresh disk
+    // read. A repaired file does not silently reload FileStore. Conversely a
+    // broken/deleted file does not turn its cached rules off. No cwd fallback.
+    if (env.projectRoot && Array.isArray(prefs)) {
+      const disk = readTeamPreferences(path.join(env.projectRoot, ".deeppairing"));
+      let problem: string | undefined;
+      if (disk.status === "invalid" || disk.status === "unreadable") {
+        const cause = disk.status === "invalid" ? "invalid JSON or schema" : "file unavailable";
+        problem = `The current team.json disk file could not be loaded (${cause}).`;
+      } else if (disk.status === "missing" && prefs.length > 0) {
+        problem = "The team.json disk file is missing.";
+      } else if (disk.status === "valid" && JSON.stringify(disk.preferences) !== JSON.stringify(prefs)) {
+        problem = "The team.json disk file differs from this session's cached team rules.";
+      }
+      if (problem) {
+        const cache = prefs.length > 0
+          ? "This session still uses its cached team rules until daemon restart."
+          : "This session currently has no cached team rules; a repaired disk file alone does not load them.";
+        obligationsParts.push(
+          `⚠ Team-rule load warning: ${problem} ${cache} Tell the human to check .deeppairing/team.json or run /deeppairing:doctor, then restart the deepPairing daemon to load the intended rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`,
+        );
+      }
+    }
     if (Array.isArray(prefs) && prefs.length > 0) {
       const render = (p: any) => {
         const scope = p.scope?.paths?.length

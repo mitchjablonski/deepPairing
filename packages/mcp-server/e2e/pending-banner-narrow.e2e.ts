@@ -230,7 +230,7 @@ test.describe("#430 slice 2 — a held terminal ask, and a second session", () =
       const entry = page.locator(`[id="gate-block-${HELD_ASK_ID}"]`);
       await expect(entry).toBeFocused();
       await expect(entry).toBeInViewport();
-      await expect(entry.getByTestId("gate-hook-next")).toContainText("Allow it there");
+      await expect(entry.getByTestId("gate-hook-next")).toContainText("If Claude Code is still asking, answer in that terminal.");
       const log = await box(page, '[data-testid="gate-block-log"]');
       expect(log.x).toBeGreaterThanOrEqual(-0.5);
       expect(log.x + log.width).toBeLessThanOrEqual(v.width + 0.5);
