@@ -1,3 +1,4 @@
+import { sessionVisits } from "../../lib/session-visits";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Artifact } from "@deeppairing/shared";
@@ -26,6 +27,10 @@ beforeEach(() => {
   useConnectionStore.getState().disconnect();
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ sessions: [], blocks: [] }),
     { status: 200, headers: { "Content-Type": "application/json" } })));
+  sessionVisits.resetRuntime();
+  sessionVisits.beginBinding();
+  const visit = sessionVisits.plan({ projectRoot: "/project", sessionId: "bound", currentSelection: null });
+  sessionVisits.commit(visit, [], null);
   useArtifactStore.getState().reset();
   useArtifactStore.setState({ agentFilter: "all", filterBinding: null, navigationEpoch: 0, exactNavigationId: null });
   useReplayStore.setState({ active: false, exiting: false, cursor: "" });
@@ -110,13 +115,15 @@ describe("#642 mounted App filter-following navigation", () => {
     expect(pane("b1")).toBeNull();
     const recover = screen.getByRole("button", { name: "Show all agents" }); recover.focus();
     fireEvent.click(recover);
-    expect(menu().value).toBe("all"); expect(selected()).toBe("b1");
+    expect(screen.queryByTestId("agents-filter-menu")).toBeNull();
+    expect(useArtifactStore.getState().agentFilter).toBe("all"); expect(selected()).toBe("b1");
     await waitFor(() => expect(pane("b1")).not.toBeNull());
     expect(document.activeElement).not.toBe(document.body);
   });
 
   it("resets only for an actual bound-session/project switch and retains root enrichment/catalog loss", () => {
-    useConnectionStore.setState({ projectRoot: null }); seed(); render(<App />); choose("A");
+    seed(); render(<App />); choose("A");
+    act(() => useConnectionStore.setState({ projectRoot: null }));
     act(() => useConnectionStore.setState({ projectRoot: "/project", activeSessions: [] }));
     expect(menu().value).toBe("A");
     act(() => useConnectionStore.setState({ connected: false, hydrated: false }));
@@ -128,7 +135,7 @@ describe("#642 mounted App filter-following navigation", () => {
   });
 
   it("explicit global high token opens follow owner atomically, same-agent stays scoped, All stays All", () => {
-    const extra = Array.from({ length: 5 }, (_, i) => art("p" + i, "A", { type: "spec", content: { objective: "Review", requirements: [], context: "Review: packet" } as any }));
+    const extra = Array.from({ length: 5 }, (_, i) => art("p" + i, "A", { createdAt: "2026-05-01T00:00:00.000Z", type: "spec", content: { objective: "Review", requirements: [], context: "Review: packet" } as any }));
     seed([...extra, art("b-high", "B", { type: "decision", content: { context: "choose", stakes: "high", options: [] } as any })]);
     render(<App />); choose("A");
     const publications: { owner: string; id: string | null }[] = [];
