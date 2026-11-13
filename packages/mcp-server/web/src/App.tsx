@@ -118,6 +118,15 @@ function App() {
     }
   }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+  // #642 item 8 (Sol P2 x2) — does the queue have a row to skip to? Mirrors
+  // ArtifactPanel's own visibility rule: superseded rows never show, and
+  // replay hides rows created after the cursor (an all-future replay renders
+  // the walkthrough, which has no Artifacts nav).
+  const allArtifacts = useArtifactStore((s) => s.artifacts);
+  const replayOn = useReplayStore((s) => s.active);
+  const replayAt = useReplayStore((s) => s.cursor);
+  const queueHasRows = useMemo(() => allArtifacts.some((a) => a.status !== "superseded" &&
+    !(replayOn && replayAt && a.createdAt > replayAt)), [allArtifacts, replayOn, replayAt]);
   // IV9 — the demo "next step" CTA: a scripted demo session (sessionId
   // `demo_…`, daemon.ts) that has actually fired. D9 (H3) — the wrap card: the
   // bound session's wrapper exited (M8 live flag), the agent is quiet, and there
@@ -631,7 +640,7 @@ function App() {
           to dismiss. Rendered only while its target (the Artifacts nav inside
           ArtifactPanel) is mounted and shown — the empty / still-hydrating
           routes have no queue to skip to (Sol P2). */}
-      {mountArtifactPanel && !hidePanelForHydration && <a
+      {mountArtifactPanel && !hidePanelForHydration && queueHasRows && <a
         href="#review-queue"
         onClick={(e) => {
           e.preventDefault();

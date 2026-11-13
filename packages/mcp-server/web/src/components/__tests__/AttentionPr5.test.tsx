@@ -264,6 +264,20 @@ describe("#430 PR 5 — PR 4 review nits", () => {
     expect(document.activeElement).toBe(r2);
   });
 
+  it("#642 item 8 (Sol P2) — no skip link while replay hides every row (the panel shows the walkthrough, no nav)", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+    useArtifactStore.setState({ artifacts: [art("r1", "Future review")], selectedArtifactId: null } as any);
+    useReplayStore.setState({ active: true, cursor: "2000-01-01T00:00:00.000Z" } as any);
+    try {
+      render(<App />);
+      expect(document.querySelector('nav[aria-label="Artifacts"]')).toBeNull();
+      expect(screen.queryByRole("link", { name: "Skip to review queue" })).toBeNull();
+    } finally {
+      useReplayStore.setState({ active: false, cursor: "" } as any);
+    }
+  });
+
   it("#642 item 8 (Sol P2) — no skip link on the empty route, where its target isn't mounted", () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
       Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
