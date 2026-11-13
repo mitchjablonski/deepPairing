@@ -435,6 +435,8 @@ export interface ArtifactState {
   selectedArtifactId: string | null;
   /** Transient view keyed by actual project/bound session, never agent labels. */
   agentFilter: string;
+  pendingOpen: { id: string; epoch: number; binding: string; replay: boolean; cursor: string } | null;
+  fulfillPendingOpen: () => void;
   exactNavigationId: string | null;
   navigationEpoch: number;
   filterBinding: { sessionId: string | null; projectRoot: string | null } | null;
@@ -741,6 +743,17 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   comments: {},
   selectedArtifactId: null,
   agentFilter: "all",
+  pendingOpen: null,
+  fulfillPendingOpen: () => {
+    const state = get();
+    const pending = state.pendingOpen;
+    if (!pending || !state.artifacts.some((a) => a.id === pending.id)) return;
+    const replay = useReplayStore.getState();
+    if (state.navigationEpoch !== pending.epoch || JSON.stringify(state.filterBinding) !== pending.binding ||
+        replay.active !== pending.replay || replay.cursor !== pending.cursor) { set({ pendingOpen: null }); return; }
+    set({ pendingOpen: null });
+    get().openArtifact(pending.id);
+  },
   exactNavigationId: null,
   navigationEpoch: 0,
   filterBinding: null,
@@ -767,7 +780,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const replay = useReplayStore.getState();
     const resolved = id && !replay.active ? resolveToLiveId(state.artifacts, id) : id;
     const target = state.artifacts.find((a) => a.id === resolved);
-    if (id && !target) return { selectedArtifactId: id, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1 };
+    if (id && !target) return { selectedArtifactId: id, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1,
+      pendingOpen: { id, epoch: state.navigationEpoch + 1, binding: JSON.stringify(state.filterBinding), replay: replay.active, cursor: replay.cursor } };
     if (target && replay.active && replay.cursor && target.createdAt > replay.cursor) return {};
     persistLiveSelection(state, resolved);
     return { agentFilter: state.agentFilter === "all" ? "all" : target?.sessionId ?? state.agentFilter,

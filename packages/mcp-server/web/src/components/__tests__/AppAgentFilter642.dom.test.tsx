@@ -156,18 +156,38 @@ describe("#642 mounted App filter-following navigation", () => {
     fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a-future");
   });
 
-  it("keeps unloaded Open intent without guessing owner or writing receipt when another owner's target arrives", () => {
+  it("fulfills the same unloaded Open intent using its real owner without receipt leakage", () => {
     seed(); render(<App />); choose("A");
     localStorage.setItem("dp-selected-artifact", "saved-bound-intent");
     const visits = localStorage.getItem("dp-session-visits-v1");
     act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "missing" } })));
     expect(selected()).toBe("missing"); expect(menu().value).toBe("A");
-    expect(screen.getByText(/This artifact is unavailable in the selected view/)).toBeInTheDocument();
+    expect(screen.getByText(/This artifact is unavailable/)).toBeInTheDocument();
     expect(localStorage.getItem("dp-selected-artifact")).toBe("saved-bound-intent");
     act(() => useArtifactStore.getState().addArtifact(art("missing", "B")));
-    expect(selected()).toBe("missing"); expect(menu().value).toBe("A"); expect(pane("missing")).toBeNull();
+    expect(selected()).toBe("missing"); expect(menu().value).toBe("B");
     expect(localStorage.getItem("dp-selected-artifact")).toBe("saved-bound-intent");
     expect(localStorage.getItem("dp-session-visits-v1")).toBe(visits);
+  });
+
+  it.each(["selection", "filter", "session", "replay"])("late unknown target does not supersede newer %s intent", (intent) => {
+    seed(); render(<App />); choose("A");
+    act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "late" } })));
+    if (intent === "selection") act(() => useArtifactStore.getState().openArtifact("a2"));
+    if (intent === "filter") choose("B");
+    if (intent === "session") act(() => useConnectionStore.setState({ sessionId: "other" }));
+    if (intent === "replay") act(() => useReplayStore.setState({ active: true, cursor: "2026-06-02T00:00:00.000Z" }));
+    const id = selected(); const filter = useArtifactStore.getState().agentFilter;
+    act(() => useArtifactStore.getState().addArtifact(art("late", "B")));
+    expect(selected()).toBe(id); expect(useArtifactStore.getState().agentFilter).toBe(filter);
+  });
+
+  it("does not fulfill an unknown replay target created after the cursor", () => {
+    seed(); useReplayStore.setState({ active: true, cursor: "2026-06-02T00:00:00.000Z" });
+    render(<App />); choose("A");
+    act(() => useArtifactStore.getState().openArtifact("future"));
+    act(() => useArtifactStore.getState().addArtifact(art("future", "B", { createdAt: "2026-07-01T00:00:00.000Z" })));
+    expect(menu().value).toBe("A"); expect(pane("future")).toBeNull();
   });
 
   it("preserves scoped explicit superseded-version detail and clears exact intent on filter navigation", async () => {

@@ -148,12 +148,15 @@ function App() {
     };
     bind();
     const stopBinding = useConnectionStore.subscribe(bind);
+    const stopPendingOpen = useArtifactStore.subscribe((next, previous) => {
+      if (next.artifacts !== previous.artifacts && next.pendingOpen) next.fulfillPendingOpen();
+    });
     const stopReplay = useReplayStore.subscribe((next, previous) => {
       if (next.active !== previous.active || next.exiting !== previous.exiting || next.cursor !== previous.cursor) {
         useArtifactStore.setState((state) => ({ navigationEpoch: state.navigationEpoch + 1 }));
       }
     });
-    return () => { stopBinding(); stopReplay(); };
+    return () => { stopBinding(); stopReplay(); stopPendingOpen(); };
   }, []);
   const recoverEmptyFilterFocus = useRef(false);
   useEffect(() => {
