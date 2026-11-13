@@ -58,6 +58,7 @@ const browserVisible = () => typeof document === "undefined" || !document.hidden
 
 export class SessionVisits {
   private active: Visit | null = null;
+  private lifecycleStarted = false;
   private memory = new Map<string, Receipt>();
   private token = 0;
   private lifetime = 0;
@@ -74,11 +75,16 @@ export class SessionVisits {
       ? navigator.locks.request(SESSION_VISITS_KEY, work) : Promise.resolve());
   }
   /** End an actual bound-session visit; network recovery must not call this. */
-  leave(): void { this.active = null; this.token++; }
+  leave(): void { this.active = null; this.lifecycleStarted = true; this.token++; }
+  beginBinding(): void { this.lifecycleStarted = true; }
+  /** undefined is isolated legacy use; null is a scoped but unaccepted/left binding. */
+  selectionBinding(): string | null | undefined {
+    return this.active?.sessionId ?? (this.lifecycleStarted ? null : undefined);
+  }
   /** Suspend live observation before installing history; exit needs a new live snapshot. */
   suspend(): void { this.leave(); }
   /** Discard one UI lifetime's memory; never delete another binding's durable receipt. */
-  resetRuntime(): void { this.leave(); this.lifetime++; this.memory.clear(); this.revisions.clear(); this.dirty.clear(); }
+  resetRuntime(): void { this.leave(); this.lifetime++; this.memory.clear(); this.revisions.clear(); this.dirty.clear(); this.lifecycleStarted = false; }
   async settled(): Promise<void> { await Promise.all(this.writes); }
   matches(sessionId: string | null, projectRoot: string | null): boolean {
     return !!this.active && this.active.sessionId === sessionId &&
@@ -158,6 +164,7 @@ export class SessionVisits {
   }
   commit(plan: VisitPlan, artifacts: VisitArtifact[], selected: string | null): string[] | null {
     if (plan.token !== this.token) return null;
+    this.lifecycleStarted = true;
     this.active = plan.visit;
     return this.observe(artifacts, selected);
   }

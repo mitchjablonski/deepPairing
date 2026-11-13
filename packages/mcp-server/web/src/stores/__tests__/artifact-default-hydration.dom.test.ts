@@ -289,12 +289,18 @@ describe("#430 — canonical selection through real connected hydration", () => 
     expect(useArtifactStore.getState().unreadIds).toEqual([]);
   });
 
-  it("foreground sibling Open clears its badge but creates no visit until actual connection switch", async () => {
+  it.each(["missing", "stale"] as const)("foreground sibling Open creates no visit with a %s bridge", async (bridgeMode) => {
     await hydrate([mk("a")]);
     useArtifactStore.getState().selectArtifact("a");
     useArtifactStore.getState().addArtifact(mk("b", { sessionId: "B" }));
     expect(useArtifactStore.getState().unreadIds).toContain("b");
-    useArtifactStore.getState().selectArtifact("b");
+    // The accepted visit, not the best-effort window bridge, owns persistence.
+    const bridge = window as unknown as { __dpConnectionStore?: unknown };
+    const original = bridge.__dpConnectionStore;
+    try {
+      bridge.__dpConnectionStore = bridgeMode === "missing" ? undefined : { getState: () => ({ sessionId: "B" }) };
+      useArtifactStore.getState().selectArtifact("b");
+    } finally { bridge.__dpConnectionStore = original; }
     expect(useArtifactStore.getState().selectedArtifactId).toBe("b");
     expect(useConnectionStore.getState().sessionId).toBe("A");
     expect(useArtifactStore.getState().unreadIds).not.toContain("b");
@@ -307,6 +313,27 @@ describe("#430 — canonical selection through real connected hydration", () => 
     expect(receipts.entries[JSON.stringify(["/p", "B"])].observed).toEqual(["b", "b2"]);
     expect(useArtifactStore.getState().unreadIds).toEqual([]);
     expect(receipts.entries[JSON.stringify(["/p", "A"])].selected).toBe("a");
+  });
+
+  it("does not persist outgoing or unaccepted target selection during a real session switch", async () => {
+    await hydrate([mk("a"), mk("a-other")]);
+    useArtifactStore.getState().selectArtifact("a");
+    useConnectionStore.getState().switchSession("B");
+    const bridge = window as unknown as { __dpConnectionStore?: unknown };
+    const original = bridge.__dpConnectionStore;
+    try {
+      bridge.__dpConnectionStore = undefined;
+      useArtifactStore.getState().selectArtifact("a-other");
+    } finally { bridge.__dpConnectionStore = original; }
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("a");
+    await vi.waitFor(() => expect(adapter.switched.at(-1)).toBe("B"));
+    useArtifactStore.getState().addArtifact(mk("unaccepted-b", { sessionId: "B" }));
+    useArtifactStore.getState().selectArtifact("unaccepted-b");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("a");
+    expect(JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[JSON.stringify(["/p", "B"])]).toBeUndefined();
+    await hydrate([mk("accepted-b", { sessionId: "B" })], "B");
+    useArtifactStore.getState().selectArtifact("accepted-b");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("accepted-b");
   });
 
   it("keeps demo and sample selection out of real legacy and visit state", async () => {
