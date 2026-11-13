@@ -313,6 +313,33 @@ describe("#430 — canonical selection through real connected hydration", () => 
     expect(receipts.entries[JSON.stringify(["/p", "A"])].selected).toBe("a");
   });
 
+  it("mounted empty sibling filter and empty Show all clear only the pane, preserving bound A intent", async () => {
+    await hydrate([mk("a")]);
+    useArtifactStore.getState().selectArtifact("a");
+    await sessionVisits.settled();
+    const legacy = localStorage.getItem("dp-selected-artifact");
+    const receipt = localStorage.getItem(SESSION_VISITS_KEY);
+    useArtifactStore.getState().addArtifact(mk("b", { sessionId: "B" }));
+    usePreferencesStore.setState({ sidebarCollapsed: true });
+    useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
+    render(createElement(App));
+    fireEvent.click(screen.getByRole("button", { name: /^Agent 2 \(/ }));
+    act(() => useArtifactStore.setState({ artifacts: [mk("a")] }));
+    fireEvent.click(screen.getByRole("button", { name: /^Selected agent — B \(/ }));
+    expect(useArtifactStore.getState().selectedArtifactId).toBeNull();
+    expect(useArtifactStore.getState().agentFilter).toBe("B");
+    await sessionVisits.settled();
+    expect(localStorage.getItem("dp-selected-artifact")).toBe(legacy);
+    expect(localStorage.getItem(SESSION_VISITS_KEY)).toBe(receipt);
+    act(() => useArtifactStore.setState({ artifacts: [] }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all agents" }));
+    expect(useArtifactStore.getState().agentFilter).toBe("all");
+    expect(useArtifactStore.getState().selectedArtifactId).toBeNull();
+    await sessionVisits.settled();
+    expect(localStorage.getItem("dp-selected-artifact")).toBe(legacy);
+    expect(localStorage.getItem(SESSION_VISITS_KEY)).toBe(receipt);
+  });
+
   it("mounted explicit replay filter and exact opens never write the accepted live visit or legacy intent", async () => {
     await hydrate([mk("live")]);
     useArtifactStore.getState().selectArtifact("live");
