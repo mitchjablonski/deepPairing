@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { isDemoSessionId } from "@deeppairing/shared";
 import type { Artifact, Comment, ArtifactStatus, CommentSuggestion, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
@@ -598,6 +599,17 @@ function lsSetSelection(id: string | null): void {
   } catch { /* private mode / quota — selection persistence is best-effort */ }
 }
 
+/** Explicit live selection only; history/demo/sample never overwrite real intent. */
+function persistLiveSelection(state: Pick<ArtifactState, "artifacts" | "sampleContent">, id: string | null): void {
+  const owner = state.artifacts.find((a) => a.id === id)?.sessionId;
+  const bound = tabSessionAtCall();
+  if (owner && bound && owner !== bound) return; // foreground sibling Open is not a bound-session visit
+  if (useReplayStore.getState().active || state.sampleContent || isDemoSessionId(owner ?? "") ||
+      isDemoSessionId(bound ?? "")) return;
+  lsSetSelection(id);
+  sessionVisits.select(id, owner);
+}
+
 /**
  * Follow the supersede chain from `id` to the live (non-superseded) version.
  * Many callers select an artifact by a possibly-stale id — CausalChain rows,
@@ -833,11 +845,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // Resolve a stale/dead id to its live successor so no caller lands on a
     // superseded artifact whose actions are all disabled (U8).
     const resolved = id ? resolveToLiveId(state.artifacts, id) : id;
-    // Historical navigation must not overwrite live legacy/per-binding intent.
-    if (!useReplayStore.getState().active && !state.sampleContent) {
-      lsSetSelection(resolved);
-      sessionVisits.select(resolved, state.artifacts.find((a) => a.id === resolved)?.sessionId);
-    }
+    persistLiveSelection(state, resolved);
     return {
       selectedArtifactId: resolved,
       unreadIds: state.unreadIds.filter((uid) => uid !== resolved),
@@ -846,10 +854,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   selectArtifactExact: (id) => set((state) => {
     if (!state.artifacts.some((a) => a.id === id)) return {};
-    if (!useReplayStore.getState().active && !state.sampleContent) {
-      lsSetSelection(id);
-      sessionVisits.select(id, state.artifacts.find((a) => a.id === id)?.sessionId);
-    }
+    persistLiveSelection(state, id);
     return {
       selectedArtifactId: id,
       unreadIds: state.unreadIds.filter((uid) => uid !== id),

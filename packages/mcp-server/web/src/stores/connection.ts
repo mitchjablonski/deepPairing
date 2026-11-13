@@ -232,7 +232,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       if (restored && visit.selection === undefined) {
         sessionVisits.select(current.selectedArtifactId, current.artifacts.find((a) => a.id === current.selectedArtifactId)?.sessionId);
       }
-    }
+    } else sessionVisits.suspend(); // successfully installed demo snapshot only
   };
 
   // #339 — the transport snapshot contract. Every door that REPLACES the
@@ -550,7 +550,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           store.addArtifact(data.artifact);
           if (!isDemoSessionId(get().sessionId ?? "") && data.artifact?.sessionId === get().sessionId) {
             const current = useArtifactStore.getState();
-            if (!current.sampleContent) {
+            if (!current.sampleContent && sessionVisits.matches(get().sessionId, get().projectRoot)) {
               const unread = sessionVisits.observe(current.artifacts, current.selectedArtifactId);
               if (unread) useArtifactStore.setState({ unreadIds: sessionVisits.mergeUnread(current.unreadIds, current.artifacts, unread) });
             }

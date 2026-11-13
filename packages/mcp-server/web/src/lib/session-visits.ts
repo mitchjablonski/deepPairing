@@ -10,6 +10,7 @@ interface Visit {
   sessionId: string;
   observed: Set<string>;
   unread: Set<string>;
+  read: Set<string>;
   selected: string | null;
   firstVisit: boolean;
   visibleCommitted: boolean;
@@ -73,12 +74,16 @@ export class SessionVisits {
       ? navigator.locks.request(SESSION_VISITS_KEY, work) : Promise.resolve());
   }
   /** End an actual bound-session visit; network recovery must not call this. */
-  leave(): void { this.active = null; this.token++; this.lifetime++; }
+  leave(): void { this.active = null; this.token++; }
   /** Suspend live observation before installing history; exit needs a new live snapshot. */
   suspend(): void { this.leave(); }
   /** Discard one UI lifetime's memory; never delete another binding's durable receipt. */
-  resetRuntime(): void { this.leave(); this.memory.clear(); this.revisions.clear(); this.dirty.clear(); }
+  resetRuntime(): void { this.leave(); this.lifetime++; this.memory.clear(); this.revisions.clear(); this.dirty.clear(); }
   async settled(): Promise<void> { await Promise.all(this.writes); }
+  matches(sessionId: string | null, projectRoot: string | null): boolean {
+    return !!this.active && this.active.sessionId === sessionId &&
+      (!projectRoot || !this.active.projectRoot || projectRoot === this.active.projectRoot);
+  }
 
   private read(): DocumentV1 | null {
     try { return parseDocument(this.storage()?.getItem(SESSION_VISITS_KEY) ?? null); } catch { return null; }
@@ -138,9 +143,16 @@ export class SessionVisits {
     const receipt = this.receipt(key);
     const visit: Visit = reentry ? {
       key, projectRoot, sessionId: input.sessionId,
-      observed: new Set(receipt?.observed ?? []), unread: new Set(),
+      observed: new Set(receipt?.observed ?? []), unread: new Set(), read: new Set(),
       selected: receipt?.selected ?? null, firstVisit: !receipt, visibleCommitted: false,
-    } : { ...old!, key, projectRoot, observed: new Set(old!.observed), unread: new Set(old!.unread) };
+    } : { ...old!, key, projectRoot, observed: new Set(old!.observed), unread: new Set(old!.unread), read: new Set(old!.read) };
+    if (enriched && receipt && !reentry) {
+      // Identity discovery is recovery, not pane navigation. Reconcile against
+      // the real prior receipt while retaining actual reads in this UI visit.
+      visit.observed = new Set(receipt.observed);
+      visit.firstVisit = false;
+      visit.selected = old!.selected ?? receipt.selected;
+    }
     return { token: ++this.token, visit, reentry,
       selection: reentry ? receipt?.selected : input.currentSelection };
   }
@@ -155,12 +167,12 @@ export class SessionVisits {
     if (!visit) return null;
     const ids = artifacts.filter((a) => a.sessionId === visit.sessionId).map((a) => a.id).filter(validId);
     if (!(visit.firstVisit && !visit.visibleCommitted)) {
-      for (const id of ids) if (!visit.observed.has(id)) visit.unread.add(id);
+      for (const id of ids) if (!visit.observed.has(id) && !visit.read.has(id)) visit.unread.add(id);
     }
     if (this.visible()) {
       // The first eligible visible commit seeds history; hidden loads never do.
       for (const id of ids) visit.observed.add(id);
-      if (selected && ids.includes(selected)) visit.unread.delete(selected);
+      if (selected && ids.includes(selected)) { visit.unread.delete(selected); visit.read.add(selected); }
       visit.visibleCommitted = true;
       this.remember(visit);
     }
@@ -170,7 +182,7 @@ export class SessionVisits {
     const visit = this.active;
     if (!visit || (id !== null && owner !== visit.sessionId) || !this.visible()) return;
     visit.selected = id;
-    if (id) visit.unread.delete(id);
+    if (id) { visit.unread.delete(id); visit.read.add(id); }
     this.remember(visit);
   }
   /** Replace only the active binding's badge set, preserving unrelated sibling state. */

@@ -90,7 +90,7 @@ describe("#642 origin-local session visit receipts", () => {
     expect(visits.observe([art("old"), art("while-hidden")], "old")).toEqual([]);
   });
 
-  it("rejects stale plans and suspended/replay writes without consuming a new visit", async () => {
+  it("rejects stale plans and persists only accepted pre-replay observations", async () => {
     const storage = new MemoryStorage();
     const queued: Array<() => void> = [];
     const visits = new SessionVisits({ storage: () => storage, lock: (work) => new Promise<void>((resolve) => queued.push(() => { work(); resolve(); })) });
@@ -103,8 +103,24 @@ describe("#642 origin-local session visit receipts", () => {
     expect(visits.observe([art("historical")], "historical")).toBeNull();
     queued.splice(0).forEach((work) => work());
     await visits.settled();
-    expect(storage.getItem(SESSION_VISITS_KEY)).toBeNull();
+    expect(documentOf(storage).entries[JSON.stringify(["/p", "A"])].observed).toEqual(["accepted"]);
     expect(visits.plan({ projectRoot: "/p", sessionId: "A", currentSelection: null }).reentry).toBe(true);
+  });
+
+  it("retains an accepted delayed A receipt after A → B then reload", async () => {
+    const storage = new MemoryStorage();
+    const queued: Array<() => void> = [];
+    const visits = new SessionVisits({ storage: () => storage, lock: (work) => new Promise<void>((resolve) => queued.push(() => { work(); resolve(); })) });
+    enter(visits, ["seen-a"]);
+    visits.select("seen-a", "A");
+    visits.leave();
+    enter(visits, ["seen-b"], "B");
+    queued.splice(0).forEach((work) => work());
+    await visits.settled();
+    const reloaded = new SessionVisits(options(storage));
+    const result = enter(reloaded, ["seen-a", "new-a"]);
+    expect(result.plan.selection).toBe("seen-a");
+    expect(result.unread).toEqual(["new-a"]);
   });
 
   it("serializes multi-tab union while preserving each active tab's unread", async () => {
@@ -144,6 +160,21 @@ describe("#642 origin-local session visit receipts", () => {
     expect(doc.recent).toHaveLength(SESSION_VISITS_LIMIT);
     expect(doc.entries[JSON.stringify(["/p", "session-0"])]).toBeUndefined();
     expect(doc.entries[JSON.stringify(["/p", `session-${SESSION_VISITS_LIMIT}`])].observed).toEqual(["old", "all-ids-retained"]);
+  });
+
+  it.each([false, true])("root enrichment uses known history without preemption (read new=%s)", async (readNew) => {
+    const storage = new MemoryStorage();
+    const prior = new SessionVisits(options(storage));
+    enter(prior, ["old"]);
+    prior.select("old", "A");
+    await prior.settled();
+    const current = new SessionVisits(options(storage));
+    enter(current, ["old", "new"], "A", null);
+    if (readNew) current.select("new", "A");
+    const plan = current.plan({ projectRoot: "/p", sessionId: "A", currentSelection: "old" });
+    expect(plan.reentry).toBe(false);
+    expect(plan.selection).toBe("old");
+    expect(current.commit(plan, [art("old"), art("new")], "old")).toEqual(readNew ? [] : ["new"]);
   });
 
   it("keeps missing project identity memory-only and root enrichment is recovery", () => {

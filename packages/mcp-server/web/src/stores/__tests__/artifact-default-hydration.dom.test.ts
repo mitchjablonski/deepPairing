@@ -3,7 +3,7 @@ import { useArtifactStore } from "../artifact";
 import { useConnectionStore } from "../connection";
 import { useReplayStore, replayRehydrateSettled } from "../replay";
 import { computePending } from "../../lib/pending";
-import { sessionVisits } from "../../lib/session-visits";
+import { sessionVisits, SESSION_VISITS_KEY } from "../../lib/session-visits";
 import type { ConnectionAdapter } from "../../lib/connection-adapter";
 
 // Exercise the actual connected snapshot pipeline, with real DOM localStorage.
@@ -137,6 +137,7 @@ describe("#430 — canonical selection through real connected hydration", () => 
     useReplayStore.setState({ active: false, exiting: false, cursor: "" });
     localStorage.clear();
     vi.stubGlobal("Notification", undefined);
+    vi.stubGlobal("navigator", { locks: { request: (_name: string, work: () => void) => Promise.resolve(work()) } });
     vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ blocks: [], sessions: [] }), {
       status: 200, headers: { "Content-Type": "application/json" },
     }));
@@ -286,6 +287,39 @@ describe("#430 — canonical selection through real connected hydration", () => 
     // An actual different project with identical artifact/session IDs has no history.
     await hydrate([mk("a"), mk("different-project")], "A", "/another");
     expect(useArtifactStore.getState().unreadIds).toEqual([]);
+  });
+
+  it("foreground sibling Open clears its badge but creates no visit until actual connection switch", async () => {
+    await hydrate([mk("a")]);
+    useArtifactStore.getState().selectArtifact("a");
+    useArtifactStore.getState().addArtifact(mk("b", { sessionId: "B" }));
+    expect(useArtifactStore.getState().unreadIds).toContain("b");
+    useArtifactStore.getState().selectArtifact("b");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("b");
+    expect(useConnectionStore.getState().sessionId).toBe("A");
+    expect(useArtifactStore.getState().unreadIds).not.toContain("b");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("a");
+    let receipts = JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!);
+    expect(receipts.entries[JSON.stringify(["/p", "A"])]).toEqual({ observed: ["a"], selected: "a" });
+    expect(receipts.entries[JSON.stringify(["/p", "B"])]).toBeUndefined();
+    await hydrate([mk("b", { sessionId: "B" }), mk("b2", { sessionId: "B" })], "B");
+    receipts = JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!);
+    expect(receipts.entries[JSON.stringify(["/p", "B"])].observed).toEqual(["b", "b2"]);
+    expect(useArtifactStore.getState().unreadIds).toEqual([]);
+    expect(receipts.entries[JSON.stringify(["/p", "A"])].selected).toBe("a");
+  });
+
+  it("keeps demo and sample selection out of real legacy and visit state", async () => {
+    await hydrate([mk("real")]);
+    useArtifactStore.getState().selectArtifact("real");
+    useArtifactStore.getState().setSampleContent(true, ["A"]);
+    useArtifactStore.getState().addArtifact(mk("sample"));
+    useArtifactStore.getState().selectArtifact("sample");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("real");
+    await hydrate([mk("demo", { sessionId: "demo_test" })], "demo_test");
+    useArtifactStore.getState().selectArtifact("demo");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("real");
+    expect(sessionVisits.observe([mk("not-a-live-observation")], null)).toBeNull();
   });
 
   it("does not acknowledge a rejected incomplete snapshot", async () => {
