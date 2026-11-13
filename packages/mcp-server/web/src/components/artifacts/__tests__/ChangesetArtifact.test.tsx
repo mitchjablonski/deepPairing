@@ -345,9 +345,32 @@ describe("ChangesetArtifact — keyboard, scoped to focus (#175 / #187 hazard)",
     // Pre-fix: the derived action ran approveAll, marking every file reviewed.
     expect(setReview).not.toHaveBeenCalled();
     expect(updateStatus).not.toHaveBeenCalled();
-    // From a non-control target the keymap still acts (behavior otherwise unchanged).
-    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    // From a non-control target ⇧⏎ (the explicit approve-all) still acts.
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter", shiftKey: true }); });
     expect(setReview).toHaveBeenCalled();
+  });
+
+  it("#642 item 1 (Mitch) — a bare ⏎ on an UNTOUCHED changeset does nothing; the hint offers ⇧⏎ approve all", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview, updateArtifactStatus: updateStatus });
+    render(<ChangesetArtifact artifact={art} />);
+    expect(screen.getByText("approve all")).toBeInTheDocument();
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    expect(setReview).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it("#642 item 1 — once a file is marked, ⏎ runs the derived action again (approve-all of the remainder)", () => {
+    const art = changeset({ reviewState: { "auth/middleware.ts": "reviewed" } });
+    seed(art);
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview });
+    render(<ChangesetArtifact artifact={art} />);
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    expect(setReview).toHaveBeenCalledWith("art_cs", "auth/session.ts", "reviewed");
   });
 
   it("the keys are DEAD when the changeset is not the focused artifact", () => {
