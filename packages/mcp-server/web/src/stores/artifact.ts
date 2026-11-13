@@ -753,7 +753,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const current = visible.find((a) => a.id === state.selectedArtifactId);
     const target = (owner === "all" ? current : undefined) ?? orderedPendingArtifacts(visible)[0] ?? current ?? visible[0];
     const id = target?.id ?? null;
-    persistLiveSelection(state, id);
+    // Empty transient scopes clear the pane without erasing bound visit intent.
+    if (id !== null) persistLiveSelection(state, id);
     return { agentFilter: owner, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1,
       selectedArtifactId: id, unreadIds: state.unreadIds.filter((uid) => uid !== id) };
   }),
