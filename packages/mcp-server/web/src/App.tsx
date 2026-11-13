@@ -11,6 +11,7 @@ import { attentionHolds } from "./lib/attentionCopy";
 import { selectDefaultSession } from "./lib/selectDefaultSession";
 import { enterSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
+import { useSessionVisits } from "./hooks/useSessionVisits";
 import { useAgentWorking } from "./hooks/useAgentWorking";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
@@ -60,6 +61,7 @@ import { useProvenance } from "./lib/provenance";
 import { ProvenanceChip, DemoTag } from "./components/ProvenanceMarker";
 
 function App() {
+  useSessionVisits();
   const connected = useConnectionStore((s) => s.connected);
   const connect = useConnectionStore((s) => s.connect);
   const sessionId = useConnectionStore((s) => s.sessionId);

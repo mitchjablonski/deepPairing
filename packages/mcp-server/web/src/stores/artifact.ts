@@ -1,8 +1,11 @@
 import { create } from "zustand";
+import { isDemoSessionId } from "@deeppairing/shared";
 import type { Artifact, Comment, ArtifactStatus, CommentSuggestion, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
 import { orderedPendingArtifacts } from "../lib/attention";
+import { isDraftAwaitingReview } from "../lib/pending";
+import { sessionVisits } from "../lib/session-visits";
 
 // Monotonic counter for provisional (optimistic) comment ids until the server
 // assigns a real one. Module-scoped so ids stay unique across submits.
@@ -475,7 +478,7 @@ export interface ArtifactState {
   selectArtifactExact: (id: string) => void;
   /** Restore a valid persisted choice, including a nonpending artifact. Return
    *  whether restoration succeeded so hydration never replaces that intent. */
-  restoreSelection: () => boolean;
+  restoreSelection: (options?: { savedId?: string | null; pendingOnly?: boolean }) => boolean;
   /** One-shot hydration fallback: canonical Decide head, else earliest visible
    *  artifact (including the demo's rejected hero). Ordinary calls fill only a
    *  blank pane. The live snapshot installer may supply its known provisional
@@ -603,6 +606,17 @@ function lsSetSelection(id: string | null): void {
     if (id) localStorage.setItem(SELECTION_KEY, id);
     else localStorage.removeItem(SELECTION_KEY);
   } catch { /* private mode / quota — selection persistence is best-effort */ }
+}
+
+/** Explicit live selection only; history/demo/sample never overwrite real intent. */
+function persistLiveSelection(state: Pick<ArtifactState, "artifacts" | "sampleContent">, id: string | null): void {
+  const owner = state.artifacts.find((a) => a.id === id)?.sessionId;
+  const bound = tabSessionAtCall();
+  if (owner && bound && owner !== bound) return; // foreground sibling Open is not a bound-session visit
+  if (useReplayStore.getState().active || state.sampleContent || isDemoSessionId(owner ?? "") ||
+      isDemoSessionId(bound ?? "")) return;
+  lsSetSelection(id);
+  sessionVisits.select(id, owner);
 }
 
 /**
@@ -739,7 +753,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const current = visible.find((a) => a.id === state.selectedArtifactId);
     const target = (owner === "all" ? current : undefined) ?? orderedPendingArtifacts(visible)[0] ?? current ?? visible[0];
     const id = target?.id ?? null;
-    persistExplicitSelection(state, id);
+    persistLiveSelection(state, id);
     return { agentFilter: owner, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1,
       selectedArtifactId: id, unreadIds: state.unreadIds.filter((uid) => uid !== id) };
   }),
@@ -748,7 +762,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const resolved = id && !replay.active ? resolveToLiveId(state.artifacts, id) : id;
     const target = state.artifacts.find((a) => a.id === resolved);
     if (id && (!target || (replay.active && replay.cursor && target.createdAt > replay.cursor))) return {};
-    persistExplicitSelection(state, resolved);
+    persistLiveSelection(state, resolved);
     return { agentFilter: state.agentFilter === "all" ? "all" : target?.sessionId ?? state.agentFilter,
       navigationEpoch: state.navigationEpoch + 1, exactNavigationId: replay.active ? resolved : null, selectedArtifactId: resolved,
       unreadIds: state.unreadIds.filter((uid) => uid !== resolved) };
@@ -757,7 +771,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const target = state.artifacts.find((a) => a.id === id);
     const replay = useReplayStore.getState();
     if (!target || (replay.active && replay.cursor && target.createdAt > replay.cursor)) return {};
-    persistExplicitSelection(state, id);
+    persistLiveSelection(state, id);
     return { agentFilter: state.agentFilter === "all" ? "all" : target.sessionId,
       navigationEpoch: state.navigationEpoch + 1, exactNavigationId: id, selectedArtifactId: id,
       unreadIds: state.unreadIds.filter((uid) => uid !== id) };
@@ -881,7 +895,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // Resolve a stale/dead id to its live successor so no caller lands on a
     // superseded artifact whose actions are all disabled (U8).
     const resolved = id ? resolveToLiveId(state.artifacts, id) : id;
-    lsSetSelection(resolved);
+    persistLiveSelection(state, resolved);
     return {
       selectedArtifactId: resolved,
       exactNavigationId: null,
@@ -892,7 +906,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   selectArtifactExact: (id) => set((state) => {
     if (!state.artifacts.some((a) => a.id === id)) return {};
-    lsSetSelection(id);
+    persistLiveSelection(state, id);
     return {
       selectedArtifactId: id,
       exactNavigationId: id,
@@ -901,13 +915,14 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     };
   }),
 
-  restoreSelection: () => {
+  restoreSelection: (options = {}) => {
     const state = get();
-    const saved = lsGetSelection();
+    const saved = options.savedId === undefined ? lsGetSelection() : options.savedId;
     // Preserve any valid saved choice; only stale superseded ids follow their
     // existing live-successor resolution. A missing id permits hydration fallback.
     if (saved && state.artifacts.some((a) => a.id === saved)) {
       const resolved = resolveToLiveId(state.artifacts, saved);
+      if (options.pendingOnly && !state.artifacts.some((a) => a.id === resolved && isDraftAwaitingReview(a))) return false;
       set({
         selectedArtifactId: resolved,
         unreadIds: state.unreadIds.filter((uid) => uid !== resolved),
@@ -1527,18 +1542,10 @@ export function captureNavigationOwnership() {
 export function advanceOwnedNavigation(owner: ReturnType<typeof captureNavigationOwnership>, artifactId: string) {
   const s = useArtifactStore.getState();
   const r = useReplayStore.getState();
-  if (s.navigationEpoch !== owner.epoch || s.filterBinding?.sessionId !== owner.binding?.sessionId ||
+  if (owner.selected !== artifactId || s.navigationEpoch !== owner.epoch || s.filterBinding?.sessionId !== owner.binding?.sessionId ||
       s.filterBinding?.projectRoot !== owner.binding?.projectRoot || s.selectedArtifactId !== owner.selected ||
       r.active !== owner.replay || r.cursor !== owner.cursor || r.active) return;
   const next = orderedPendingArtifacts(scopedVisibleArtifacts(s.artifacts)).find((a) => a.id !== artifactId);
   if (next) s.openArtifact(next.id);
 }
 
-/** Explicit sibling navigation remains foreground-only until that owner is bound. */
-function persistExplicitSelection(state: ArtifactState, id: string | null): void {
-  const bound = tabSessionAtCall();
-  const owner = state.artifacts.find((a) => a.id === id)?.sessionId;
-  if (useReplayStore.getState().active || state.sampleContent || bound?.startsWith("demo_") ||
-      owner?.startsWith("demo_") || (bound && owner && bound !== owner)) return;
-  lsSetSelection(id);
-}
