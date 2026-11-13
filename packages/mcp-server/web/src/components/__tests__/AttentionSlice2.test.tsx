@@ -493,7 +493,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     expect(screen.queryByTestId("artifact-panel")).not.toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Waiting for Claude" })).toBeInTheDocument();
     expect(screen.getByRole("main")).toHaveFocus();
-    expect(useArtifactStore.getState().selectedArtifactId).toBe("a2");
+    expect(useArtifactStore.getState().selectedArtifactId).toBeNull();
     setArtifacts(two());
     expect(menu().value).toBe("all");
     expect(inSidebar("a1")).not.toBeNull();

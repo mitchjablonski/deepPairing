@@ -1661,7 +1661,7 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
             </ErrorBoundary>
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-text-muted">
-              Select an artifact to view details
+              {selectedArtifactId ? "This artifact is unavailable in the selected view. Choose an item or show all agents to recover." : "Select an artifact to view details"}
             </div>
           )}
         </AnimatePresence>

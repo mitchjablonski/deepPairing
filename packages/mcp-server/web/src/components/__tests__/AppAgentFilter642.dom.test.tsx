@@ -23,6 +23,7 @@ const seed = (artifacts = [art("a1"), art("a2"), art("b1", "B")]) => {
 };
 
 beforeEach(() => {
+  useConnectionStore.getState().disconnect();
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ sessions: [], blocks: [] }),
     { status: 200, headers: { "Content-Type": "application/json" } })));
   useArtifactStore.getState().reset();
@@ -31,7 +32,7 @@ beforeEach(() => {
   usePreferencesStore.setState({ sidebarCollapsed: false, nextUpBar: false });
   useSiblingSyncStore.setState({ settled: true });
   usePreflightBlockStore.setState({ blocks: [], lastSeenAt: null, loaded: true });
-  useConnectionStore.setState({ connected: true, hydrated: true, hydratedBinding: "bound@/project", sessionId: "bound",
+  useConnectionStore.setState({ adapter: { connect() {}, disconnect() {}, onMessage() {}, onConnect() {}, onDisconnect() {}, switchSession() {} }, connected: true, hydrated: true, hydratedBinding: "bound@/project", sessionId: "bound",
     projectRoot: "/project", activeSessions: [{ sessionId: "bound", live: true, artifactCount: 3 }] } as any);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -127,7 +128,7 @@ describe("#642 mounted App filter-following navigation", () => {
   });
 
   it("explicit global high token opens follow owner atomically, same-agent stays scoped, All stays All", () => {
-    const extra = Array.from({ length: 5 }, (_, i) => art("p" + i, "A", { type: "plan", content: { steps: [] } as any }));
+    const extra = Array.from({ length: 5 }, (_, i) => art("p" + i, "A", { type: "spec", content: { objective: "Review", requirements: [], context: "Review: packet" } as any }));
     seed([...extra, art("b-high", "B", { type: "decision", content: { context: "choose", stakes: "high", options: [] } as any })]);
     render(<App />); choose("A");
     const publications: { owner: string; id: string | null }[] = [];

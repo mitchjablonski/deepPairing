@@ -767,7 +767,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const replay = useReplayStore.getState();
     const resolved = id && !replay.active ? resolveToLiveId(state.artifacts, id) : id;
     const target = state.artifacts.find((a) => a.id === resolved);
-    if (id && (!target || (replay.active && replay.cursor && target.createdAt > replay.cursor))) return {};
+    if (id && !target) return { selectedArtifactId: id, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1 };
+    if (target && replay.active && replay.cursor && target.createdAt > replay.cursor) return {};
     persistLiveSelection(state, resolved);
     return { agentFilter: state.agentFilter === "all" ? "all" : target?.sessionId ?? state.agentFilter,
       navigationEpoch: state.navigationEpoch + 1, exactNavigationId: replay.active ? resolved : null, selectedArtifactId: resolved,
