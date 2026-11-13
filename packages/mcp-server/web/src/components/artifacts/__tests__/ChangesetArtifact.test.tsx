@@ -321,6 +321,35 @@ describe("ChangesetArtifact — keyboard, scoped to focus (#175 / #187 hazard)",
     await waitFor(() => expect(updateStatus).toHaveBeenCalledWith("art_cs", "revised", expect.stringContaining("auth/middleware.ts"), undefined));
   });
 
+  it("#642 item 1 — Enter / Shift+Enter on a focused BUTTON or link is that control's activation, never a changeset approve", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art); // selected changeset, nothing marked yet
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview, updateArtifactStatus: updateStatus });
+    render(
+      <>
+        {/* e.g. the banner chip / Next-up "Open" that just opened this changeset */}
+        <button type="button">Open</button>
+        <a href="#elsewhere">Sidebar row</a>
+        <ChangesetArtifact artifact={art} />
+      </>,
+    );
+    const open = screen.getByRole("button", { name: "Open" });
+    open.focus();
+    act(() => { fireEvent.keyDown(open, { key: "Enter" }); });
+    act(() => { fireEvent.keyDown(open, { key: "Enter", shiftKey: true }); });
+    const link = screen.getByRole("link", { name: "Sidebar row" });
+    link.focus();
+    act(() => { fireEvent.keyDown(link, { key: "Enter" }); });
+    // Pre-fix: the derived action ran approveAll, marking every file reviewed.
+    expect(setReview).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+    // From a non-control target the keymap still acts (behavior otherwise unchanged).
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    expect(setReview).toHaveBeenCalled();
+  });
+
   it("the keys are DEAD when the changeset is not the focused artifact", () => {
     const art = changeset({ reviewState: {} });
     seed(art);

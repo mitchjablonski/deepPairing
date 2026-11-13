@@ -819,6 +819,15 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable === true) return;
     const intent = resolveChangesetKey(e);
     if (!intent) return;
+    // #642 item 1 — this capture-phase listener runs while the changeset is
+    // SELECTED, whatever holds DOM focus. Enter on a focused button or link
+    // (the banner chip or Next-up "Open" you just pressed, a sidebar row, a
+    // button inside this card) is that control's own activation; taking it
+    // here ran the derived action, which with nothing flagged marks EVERY
+    // file reviewed server-side. Let the native activation through. a/r/j/k
+    // are unchanged.
+    if ((intent === "fireDerivedAction" || intent === "approveAll") &&
+      t?.closest?.("button, a[href], [role='button'], summary")) return;
     // Handle it here AND stop the global App handler (a/r/j/k) from also firing.
     e.preventDefault();
     e.stopPropagation();
