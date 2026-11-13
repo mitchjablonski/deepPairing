@@ -11,6 +11,7 @@ import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { isDemoSessionId } from "@deeppairing/shared";
 import { useReplayStore } from "./replay";
 import { useArtifactStore } from "./artifact";
+import { sessionVisits } from "../lib/session-visits";
 import {
   beginSessionTransition,
   captureSessionTransition,
@@ -192,6 +193,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     connection === connectionGeneration && session === sessionGeneration;
 
   const hydrateArtifactState = (store: ArtifactStoreState, state: RecoverySnapshot) => {
+    const visit = isDemoSessionId(state.sessionId) ? null : sessionVisits.plan({
+      projectRoot: get().projectRoot, sessionId: state.sessionId,
+      currentSelection: useArtifactStore.getState().selectedArtifactId,
+      reentry: useReplayStore.getState().exiting,
+    });
     store.reset();
     for (const artifact of state.artifacts ?? []) store.addArtifact(artifact);
     const provisionalSelectionId = useArtifactStore.getState().selectedArtifactId;
@@ -214,7 +220,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     // This entire batch is synchronous: no human event can interleave. Keep
     // addArtifact's existing insertion/unread behavior, but replace its implicit
     // first-arrival selection only when no valid persisted intent was restored.
-    if (!store.restoreSelection()) store.selectDefaultOnHydration(provisionalSelectionId);
+    const restored = visit
+      ? store.restoreSelection({ savedId: visit.selection, pendingOnly: visit.reentry })
+      : store.restoreSelection();
+    if (!restored) store.selectDefaultOnHydration(provisionalSelectionId);
+    if (visit) {
+      const current = useArtifactStore.getState();
+      const unread = sessionVisits.commit(visit, current.artifacts, current.selectedArtifactId);
+      if (unread) useArtifactStore.setState({ unreadIds: sessionVisits.mergeUnread(current.unreadIds, current.artifacts, unread) });
+      // A valid legacy choice seeds selection, never an observation boundary.
+      if (restored && visit.selection === undefined) {
+        sessionVisits.select(current.selectedArtifactId, current.artifacts.find((a) => a.id === current.selectedArtifactId)?.sessionId);
+      }
+    } else sessionVisits.suspend(); // successfully installed demo snapshot only
   };
 
   // #339 — the transport snapshot contract. Every door that REPLACES the
@@ -530,6 +548,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
         case "artifact_created":
           store.addArtifact(data.artifact);
+          if (!isDemoSessionId(get().sessionId ?? "") && data.artifact?.sessionId === get().sessionId) {
+            const current = useArtifactStore.getState();
+            if (!current.sampleContent && sessionVisits.matches(get().sessionId, get().projectRoot)) {
+              const unread = sessionVisits.observe(current.artifacts, current.selectedArtifactId);
+              if (unread) useArtifactStore.setState({ unreadIds: sessionVisits.mergeUnread(current.unreadIds, current.artifacts, unread) });
+            }
+          }
           // B2 — the turn-handoff has to reach a BACKGROUNDED tab for EVERY
           // reviewable draft. Pre-B2 only decision_request/plan_review_request
           // notified — and in daemon mode (the only production wiring) the
@@ -1132,10 +1157,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
     connect: (sessionId?: string) => {
       if (get().adapter) return;
+      sessionVisits.beginBinding();
 
       let thisConnection = connectionGeneration;
       const adapter = createAdapter(undefined, sessionId);
       if (sessionId !== undefined && sessionId !== get().sessionId) {
+        sessionVisits.leave();
         beginSessionTransition(sessionId);
         // A fresh binding may follow explicit teardown, which retains the old
         // same-session last-known frame. Retire that frame synchronously BEFORE
@@ -1280,6 +1307,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     switchSession: (sessionId: string, options?: SwitchSessionOptions) => {
       const { adapter } = get();
       if (adapter && "switchSession" in adapter) {
+        if (sessionId !== get().sessionId) sessionVisits.leave();
         const transition = beginSessionTransition(sessionId);
         sessionGeneration++;
         snapshotGeneration++;
