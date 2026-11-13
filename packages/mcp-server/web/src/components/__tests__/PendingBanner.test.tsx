@@ -55,6 +55,34 @@ describe("PendingBanner", () => {
     expect(useArtifactStore.getState().selectedArtifactId).toBe("d3");
   });
 
+  it("#642 item 6 — a high-stakes decision hidden past the 3-chip cap gets a pinned token that opens it", async () => {
+    for (let i = 0; i < 5; i++) {
+      useArtifactStore.getState().addArtifact(
+        art({ id: `d${i}`, type: "decision", title: `draft ${i}`, status: "draft",
+          content: { context: "x", options: [], decisionId: `dec${i}`, ...(i === 4 ? { stakes: "high" } : {}) } }),
+      );
+    }
+    render(<PendingBanner />);
+    // Order is unchanged: d0-d2 are the chips, d4 (high) sits in "+2 more".
+    expect(screen.getByRole("button", { name: /2 more waiting/i })).toHaveTextContent("+2 more");
+    const token = screen.getByRole("button", { name: /1 high-stakes decision waiting — open draft 4/i });
+    expect(token).toHaveTextContent("+1 high decision");
+    await userEvent.click(token);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("d4");
+  });
+
+  it("#642 item 6 — no high-decision token when the high-stakes decision already shows as a chip, or is next", () => {
+    for (let i = 0; i < 5; i++) {
+      useArtifactStore.getState().addArtifact(
+        art({ id: `d${i}`, type: "decision", title: `draft ${i}`, status: "draft",
+          content: { context: "x", options: [], decisionId: `dec${i}`, ...(i <= 1 ? { stakes: "high" } : {}) } }),
+      );
+    }
+    render(<PendingBanner />);
+    // d0 is next and d1 is a visible chip — nothing hidden to point at.
+    expect(screen.queryByText(/high decision/i)).not.toBeInTheDocument();
+  });
+
   it("#192 — no '+N more' affordance when 3 or fewer are pending", () => {
     for (let i = 0; i < 3; i++) {
       useArtifactStore.getState().addArtifact(

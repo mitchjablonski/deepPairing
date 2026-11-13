@@ -194,6 +194,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   const hydrateArtifactState = (store: ArtifactStoreState, state: RecoverySnapshot) => {
     store.reset();
     for (const artifact of state.artifacts ?? []) store.addArtifact(artifact);
+    const provisionalSelectionId = useArtifactStore.getState().selectedArtifactId;
     for (const comment of state.comments ?? []) store.addComment(comment);
     store.setRequests?.(state.requests ?? []);
     const decisions = state.decisions ?? [];
@@ -210,8 +211,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         });
       }
     }
-    store.restoreSelection();
-    store.selectDefaultOnHydration();
+    // This entire batch is synchronous: no human event can interleave. Keep
+    // addArtifact's existing insertion/unread behavior, but replace its implicit
+    // first-arrival selection only when no valid persisted intent was restored.
+    if (!store.restoreSelection()) store.selectDefaultOnHydration(provisionalSelectionId);
   };
 
   // #339 — the transport snapshot contract. Every door that REPLACES the
