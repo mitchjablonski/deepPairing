@@ -1387,7 +1387,7 @@ export function MultiAgentSync() {
   return null; // No visual output — just syncs data
 }
 
-export function ArtifactPanel({ onAgentFilterUsed }: { onAgentFilterUsed?: () => void } = {}) {
+export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (active: boolean) => void } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const unreadIds = useArtifactStore((s) => s.unreadIds);
@@ -1397,11 +1397,9 @@ export function ArtifactPanel({ onAgentFilterUsed }: { onAgentFilterUsed?: () =>
   const isNarrow = useIsNarrowViewport();
   const effectiveCollapsed = sidebarCollapsed || isNarrow;
   const [chosenFilter, setSessionFilter] = useState<string | "all">("all");
-  const [hasUsedFilter, setHasUsedFilter] = useState(false);
   const chooseFilter = (id: string) => {
-    setHasUsedFilter(true);
     setSessionFilter(id);
-    onAgentFilterUsed?.();
+    onAgentFilterChange?.(id !== "all");
   };
 
   // Replay mode: hide artifacts created after the cursor. createdAt is ISO
@@ -1516,9 +1514,9 @@ export function ArtifactPanel({ onAgentFilterUsed }: { onAgentFilterUsed?: () =>
   const provenance = useProvenance(selectedArtifact?.sessionId ?? (sessionIds.length === 1 ? sessionIds[0] : null));
   const demoView = provenance != null && provenance.kind !== "live";
 
-  // Initial unfiltered onboarding stays unchanged. Once the user has filtered,
-  // retain the frame/toggle even at zero items so explicit recovery keeps focus.
-  if (visibleArtifacts.length === 0 && chosenFilter === "all" && !hasUsedFilter) {
+  // Initial unfiltered onboarding stays unchanged. A selected agent retains
+  // its recovery frame; explicitly returning to All restores normal routing.
+  if (visibleArtifacts.length === 0 && chosenFilter === "all") {
     return <FirstRunWalkthrough />;
   }
 
