@@ -298,7 +298,12 @@ describe("#430 — canonical selection through real connected hydration", () => 
     useArtifactStore.getState().selectArtifact("a");
     useArtifactStore.getState().addArtifact(mk("b", { sessionId: "B" }));
     expect(useArtifactStore.getState().unreadIds).toContain("b");
-    useArtifactStore.getState().selectArtifact("b");
+    usePreferencesStore.setState({ sidebarCollapsed: false });
+    useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
+    render(createElement(App));
+    fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "A" } });
+    act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "b" } })));
+    expect(useArtifactStore.getState().agentFilter).toBe("B");
     expect(useArtifactStore.getState().selectedArtifactId).toBe("b");
     expect(useConnectionStore.getState().sessionId).toBe("A");
     expect(useArtifactStore.getState().unreadIds).not.toContain("b");
