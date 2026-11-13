@@ -156,6 +156,20 @@ describe("#642 mounted App filter-following navigation", () => {
     fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a-future");
   });
 
+  it("keeps unloaded Open intent without guessing owner or writing receipt when another owner's target arrives", () => {
+    seed(); render(<App />); choose("A");
+    localStorage.setItem("dp-selected-artifact", "saved-bound-intent");
+    const visits = localStorage.getItem("dp-session-visits-v1");
+    act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "missing" } })));
+    expect(selected()).toBe("missing"); expect(menu().value).toBe("A");
+    expect(screen.getByText(/This artifact is unavailable in the selected view/)).toBeInTheDocument();
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("saved-bound-intent");
+    act(() => useArtifactStore.getState().addArtifact(art("missing", "B")));
+    expect(selected()).toBe("missing"); expect(menu().value).toBe("A"); expect(pane("missing")).toBeNull();
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("saved-bound-intent");
+    expect(localStorage.getItem("dp-session-visits-v1")).toBe(visits);
+  });
+
   it("preserves scoped explicit superseded-version detail and clears exact intent on filter navigation", async () => {
     seed([art("a-old", "A", { status: "superseded" }), art("a-current", "A", { parentId: "a-old" }), art("b1", "B")]);
     render(<App />); choose("B");
