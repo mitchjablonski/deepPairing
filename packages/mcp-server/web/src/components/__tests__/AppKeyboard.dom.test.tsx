@@ -60,6 +60,61 @@ describe("E3 (L1) — the n shortcut", () => {
     }
   });
 
+  it("n/N re-read canonical order when a higher-tier artifact arrives mid-cycle", () => {
+    const findingA = { ...art("finding-a"), createdAt: "2026-01-01T00:00:00.000Z" };
+    const findingB = { ...art("finding-b"), createdAt: "2026-03-01T00:00:00.000Z" };
+    const plan = { ...art("plan"), type: "plan", content: { steps: [] }, createdAt: "2026-02-01T00:00:00.000Z" };
+    const decision = (id: string) => ({ ...art(id), type: "decision", content: { context: "Choose", options: [] } });
+    useArtifactStore.setState({
+      // Shuffled insertion order; initial canonical order is plan, finding-a, finding-b.
+      artifacts: [findingB, plan, findingA],
+      selectedArtifactId: "finding-a",
+    });
+    render(<App />);
+
+    fireEvent.keyDown(document, { key: "n" });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("finding-b");
+    act(() => { useArtifactStore.getState().addArtifact(decision("decision-d")); });
+    // The higher-tier arrival does not steal focus. Current canonical order is
+    // plan, decision-d, finding-a, finding-b; timestamp order differs.
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("finding-b");
+    fireEvent.keyDown(document, { key: "n" });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("plan");
+    fireEvent.keyDown(document, { key: "n" });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("decision-d");
+    fireEvent.keyDown(document, { key: "N" });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("plan");
+    fireEvent.keyDown(document, { key: "N" });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("finding-b");
+  });
+
+  it.each([
+    ["n", "decision-a"],
+    ["N", "finding-old"],
+  ] as const)("%s starts at the fresh queue edge when selection becomes nonpending", (key, expected) => {
+    const finding = { ...art("finding-old"), createdAt: "2026-01-01T00:00:00.000Z" };
+    const plan = { ...art("plan"), type: "plan", content: { steps: [] } };
+    const decision = (id: string) => ({ ...art(id), type: "decision", content: { context: "Choose", options: [] } });
+    useArtifactStore.setState({
+      artifacts: [finding, plan, decision("decision-b"), decision("decision-a")],
+      selectedArtifactId: "plan",
+    });
+    render(<App />);
+
+    act(() => { useArtifactStore.getState().updateArtifact("plan", "approved"); });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("plan");
+    fireEvent.keyDown(document, { key });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe(expected);
+  });
+
+  it.each(["n", "N"] as const)("%s leaves selection unchanged when the pending queue empties", (key) => {
+    useArtifactStore.setState({ artifacts: [art("only")], selectedArtifactId: "only" });
+    render(<App />);
+
+    act(() => { useArtifactStore.getState().updateArtifact("only", "approved"); });
+    fireEvent.keyDown(document, { key });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("only");
+  });
   it("n typed into a textarea does NOT cycle (typing guard)", () => {
     render(<App />);
     const ta = document.createElement("textarea");
