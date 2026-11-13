@@ -132,9 +132,17 @@ describe("#642 mounted App filter-following navigation", () => {
     act(() => useConnectionStore.setState({ connected: false, hydrated: false }));
     act(() => useConnectionStore.setState({ connected: true, hydrated: true }));
     expect(menu().value).toBe("A");
-    act(() => useConnectionStore.setState({ projectRoot: "/another" })); expect(menu().value).toBe("all");
+    act(() => useConnectionStore.setState({ projectRoot: "/another" }));
+    expect(useArtifactStore.getState().agentFilter).toBe("all");
+    expect(screen.queryByRole("combobox", { name: /^Agents/ })).toBeNull();
+    act(() => useConnectionStore.setState({ hydratedBinding: "bound@/another" }));
+    expect(menu().value).toBe("all");
     choose("A");
-    act(() => useConnectionStore.setState({ sessionId: "different" })); expect(menu().value).toBe("all");
+    act(() => useConnectionStore.setState({ sessionId: "different" }));
+    expect(useArtifactStore.getState().agentFilter).toBe("all");
+    expect(screen.queryByRole("combobox", { name: /^Agents/ })).toBeNull();
+    act(() => useConnectionStore.setState({ hydratedBinding: "different@/another" }));
+    expect(menu().value).toBe("all");
   });
 
   it("explicit global high token opens follow owner atomically, same-agent stays scoped, All stays All", () => {
