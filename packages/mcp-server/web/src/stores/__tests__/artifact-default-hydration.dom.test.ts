@@ -3,6 +3,7 @@ import { useArtifactStore } from "../artifact";
 import { useConnectionStore } from "../connection";
 import { useReplayStore, replayRehydrateSettled } from "../replay";
 import { computePending } from "../../lib/pending";
+import { sessionVisits } from "../../lib/session-visits";
 import type { ConnectionAdapter } from "../../lib/connection-adapter";
 
 // Exercise the actual connected snapshot pipeline, with real DOM localStorage.
@@ -131,6 +132,7 @@ describe("#430 — canonical selection through real connected hydration", () => 
     useConnectionStore.getState().disconnect();
     useConnectionStore.setState({ sessionId: null, projectRoot: null, activeSessions: [] });
     adapter.switched = [];
+    sessionVisits.resetRuntime();
     useArtifactStore.getState().reset();
     useReplayStore.setState({ active: false, exiting: false, cursor: "" });
     localStorage.clear();
@@ -149,9 +151,13 @@ describe("#430 — canonical selection through real connected hydration", () => 
     type: "decision", content: { context: "Choose", options: [] },
     createdAt: "2026-01-01T00:00:02.000Z", ...over,
   });
-  async function hydrate(artifacts: any[]) {
-    useConnectionStore.getState().connect("A");
-    adapter.emit({ type: "connected", state: { sessionId: "A", artifacts, comments: [], requests: [], decisions: [] } });
+  async function hydrate(artifacts: any[], sessionId = "A", projectRoot = "/p") {
+    if (useConnectionStore.getState().adapter && useConnectionStore.getState().sessionId !== sessionId) {
+      useConnectionStore.getState().switchSession(sessionId);
+      await vi.waitFor(() => expect(adapter.switched.at(-1)).toBe(sessionId));
+    } else useConnectionStore.getState().connect(sessionId);
+    useConnectionStore.setState({ hydrated: false });
+    adapter.emit({ type: "connected", projectRoot, state: { sessionId, artifacts, comments: [], requests: [], decisions: [] } });
     await vi.waitFor(() => expect(useConnectionStore.getState().hydrated).toBe(true));
   }
 
@@ -167,31 +173,30 @@ describe("#430 — canonical selection through real connected hydration", () => 
     expect(state.selectedArtifactId).toBe("decision-a");
     expect(state.artifacts.map((a) => a.id)).toEqual(snapshot.map((a) => a.id));
     expect(computePending(state.artifacts).drafts).toHaveLength(4);
-    // Preserve addArtifact's first-arrival bookkeeping, then mark the pane's
-    // canonical target read, just as any selection does. No new unread policy.
-    expect(state.unreadIds).toEqual(snapshot.slice(1).map((a) => a.id).filter((id) => id !== "decision-a"));
+    // #642: first visit establishes a baseline, rather than marking history new.
+    expect(state.unreadIds).toEqual([]);
     expect(localStorage.getItem("dp-selected-artifact")).toBeNull();
   });
 
-  it.each(["saved nonpending", "explicit nonpending"])("preserves a valid %s choice over the canonical head", async (kind) => {
+  it.each(["saved nonpending", "explicit nonpending"])("re-entry sends a %s choice to the canonical pending head", async (kind) => {
     const selected = mk("resolved", { status: "approved" });
     if (kind === "explicit nonpending") {
       useArtifactStore.getState().addArtifact(selected);
       useArtifactStore.getState().selectArtifact("resolved");
     } else localStorage.setItem("dp-selected-artifact", "resolved");
     await hydrate([selected, decision("decision-a")]);
-    expect(useArtifactStore.getState().selectedArtifactId).toBe("resolved");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("decision-a");
     expect(localStorage.getItem("dp-selected-artifact")).toBe("resolved");
     expect(computePending(useArtifactStore.getState().artifacts).drafts).toHaveLength(1);
   });
 
-  it("resolves a saved superseded id to its live successor without replacing that choice", async () => {
+  it("resolves a saved superseded id before applying the pending re-entry rule", async () => {
     localStorage.setItem("dp-selected-artifact", "old");
     await hydrate([
       mk("old", { status: "superseded" }), decision("decision-a"),
       mk("successor", { parentId: "old", status: "approved", version: 2 }),
     ]);
-    expect(useArtifactStore.getState().selectedArtifactId).toBe("successor");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("decision-a");
     expect(localStorage.getItem("dp-selected-artifact")).toBe("old");
   });
 
@@ -221,8 +226,10 @@ describe("#430 — canonical selection through real connected hydration", () => 
     useArtifactStore.getState().reset();
     useArtifactStore.getState().addArtifact(mk("historic-old", { sessionId: "history", status: "superseded" }));
     useArtifactStore.getState().addArtifact(mk("historic-next", { sessionId: "history", parentId: "historic-old", status: "approved", version: 2 }));
-    useArtifactStore.getState().selectArtifactExact("historic-old");
     useReplayStore.setState({ active: true, exiting: false, sessionId: "history", cursor: "2026-02-01T00:00:00.000Z" });
+    sessionVisits.suspend();
+    const liveSaved = localStorage.getItem("dp-selected-artifact");
+    useArtifactStore.getState().selectArtifactExact("historic-old");
     useConnectionStore.setState({ hydrated: false });
     // Wait for the actual connected handler to report hydration; the active
     // replay branch must leave the historical frame/exact selection untouched.
@@ -238,7 +245,56 @@ describe("#430 — canonical selection through real connected hydration", () => 
     await hydrate([mk("live-finding"), decision("live-decision")]);
     expect(useReplayStore.getState()).toMatchObject({ active: false, exiting: false });
     expect(useArtifactStore.getState().selectedArtifactId).toBe("live-decision");
-    expect(localStorage.getItem("dp-selected-artifact")).toBe("historic-old");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe(liveSaved);
+  });
+
+  it("keeps a saved pending item below the canonical head, including a pending successor", async () => {
+    localStorage.setItem("dp-selected-artifact", "old");
+    await hydrate([
+      mk("old", { status: "superseded" }), decision("decision-a"),
+      mk("pending-successor", { parentId: "old", version: 2 }),
+    ]);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("pending-successor");
+    expect(useArtifactStore.getState().unreadIds).toEqual([]);
+  });
+
+  it("same-session recovery preserves a resolved pane and unread despite omitted/redelivered IDs", async () => {
+    const resolved = mk("resolved", { status: "approved" });
+    await hydrate([resolved, mk("finding")]);
+    useArtifactStore.getState().selectArtifact("resolved");
+    adapter.emit({ type: "artifact_created", artifact: decision("new") });
+    await vi.waitFor(() => expect(useArtifactStore.getState().unreadIds).toEqual(["new"]));
+    await hydrate([resolved]);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("resolved");
+    expect(useArtifactStore.getState().unreadIds).toContain("new");
+    await hydrate([decision("new"), resolved, mk("finding")]);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("resolved");
+    expect(useArtifactStore.getState().unreadIds).toEqual(["new"]);
+    useArtifactStore.getState().selectArtifact("new");
+    adapter.emit({ type: "artifact_created", artifact: decision("new") });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(useArtifactStore.getState().unreadIds).toEqual([]);
+  });
+
+  it("actual A → B → A re-entry marks only newly observed A IDs and preserves pending saved choice", async () => {
+    await hydrate([mk("a"), decision("head")]);
+    useArtifactStore.getState().selectArtifact("a");
+    await hydrate([mk("b", { sessionId: "B" })], "B");
+    await hydrate([decision("head"), mk("new-a"), mk("a")]);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("a");
+    expect(useArtifactStore.getState().unreadIds).toEqual(["new-a"]);
+    // An actual different project with identical artifact/session IDs has no history.
+    await hydrate([mk("a"), mk("different-project")], "A", "/another");
+    expect(useArtifactStore.getState().unreadIds).toEqual([]);
+  });
+
+  it("does not acknowledge a rejected incomplete snapshot", async () => {
+    await hydrate([mk("old")]);
+    adapter.emit({ type: "connected", projectRoot: "/p", state: { sessionId: "A", artifacts: [mk("not-committed")] } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["old"]);
+    adapter.emit({ type: "artifact_created", artifact: mk("not-committed") });
+    await vi.waitFor(() => expect(useArtifactStore.getState().unreadIds).toEqual(["not-committed"]));
   });
 
   it("does not let a later higher-tier live/sibling arrival preempt an established pane", async () => {
