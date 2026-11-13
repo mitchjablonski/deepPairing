@@ -30238,9 +30238,9 @@ ${lines.join("\n")}`
         problem = "The team.json disk file differs from this session's cached team rules.";
       }
       if (problem) {
-        const cache = prefs.length > 0 ? "This session still uses its cached team rules until daemon restart." : "This session currently has no cached team rules; a repaired disk file alone does not load them.";
+        const cache = prefs.length > 0 ? "MCP plan/review tools still use this session's cached team rules until daemon restart." : "MCP plan/review tools currently have no cached team rules; a repaired disk file alone does not load their cache.";
         obligationsParts.push(
-          `\u26A0 Team-rule load warning: ${problem} ${cache} Tell the human to check .deeppairing/team.json or run /deeppairing:doctor, then restart the deepPairing daemon to load the intended rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`
+          `\u26A0 Team-rule load warning: ${problem} ${cache} The Edit/Write hook reads team.json from disk on each call instead of using this MCP cache; broken or repaired disk files affect that gate without a daemon restart. Tell the human to check .deeppairing/team.json or run /deeppairing:doctor, then restart the deepPairing daemon to load the intended MCP rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`
         );
       }
     }
