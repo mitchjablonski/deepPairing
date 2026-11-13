@@ -264,6 +264,15 @@ describe("#430 PR 5 — PR 4 review nits", () => {
     expect(document.activeElement).toBe(r2);
   });
 
+  it("#642 item 8 (Sol P2) — no skip link on the empty route, where its target isn't mounted", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+    useArtifactStore.setState({ artifacts: [], selectedArtifactId: null } as any);
+    render(<App />);
+    expect(document.querySelector('nav[aria-label="Artifacts"]')).toBeNull();
+    expect(screen.queryByRole("link", { name: "Skip to review queue" })).toBeNull();
+  });
+
   it("keyboard focus on a sidebar row shows its lane label as a visible tooltip; a click does not; no extra tab stop", () => {
     useArtifactStore.setState({ artifacts: [art("d1", "Pick a store", { type: "decision", status: "draft", content: { context: "c", decisionId: "d", options: [] } })] } as any);
     render(<ArtifactPanel />);
