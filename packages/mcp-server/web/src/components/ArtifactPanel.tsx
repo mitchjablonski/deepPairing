@@ -964,6 +964,9 @@ function ArtifactSidebar({
       // #642 item 8 — the "Skip to review queue" link's target. axe's region
       // rule exempts an in-page skip link only when its fragment target exists.
       id="review-queue"
+      // Focusable by script only (never a Tab stop): the skip link's fallback
+      // target when the queue has no row to land on.
+      tabIndex={-1}
       aria-label="Artifacts"
       className={`relative shrink-0 border-r border-border-default bg-surface-secondary transition-all duration-[180ms] ease-out ${
         collapsed ? "w-12" : ""

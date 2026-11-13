@@ -264,6 +264,19 @@ describe("#430 PR 5 — PR 4 review nits", () => {
     expect(document.activeElement).toBe(r2);
   });
 
+  it("#642 item 8 (Sol P2) — with no row to land on, the skip link focuses the Artifacts nav itself (never stays on the link)", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+    useArtifactStore.setState({ artifacts: [art("r1", "Only review")], selectedArtifactId: null } as any);
+    render(<App />);
+    const nav = document.querySelector('nav[aria-label="Artifacts"]') as HTMLElement;
+    expect(nav).toHaveAttribute("tabindex", "-1"); // script-focusable, never a Tab stop
+    // Stand-in for an empty recovery frame (a selected agent with no rows).
+    nav.querySelectorAll("[data-artifact-item]").forEach((el) => el.remove());
+    fireEvent.click(screen.getByRole("link", { name: "Skip to review queue" }));
+    expect(document.activeElement).toBe(nav);
+  });
+
   it("#642 item 8 (Sol P2) — no skip link while replay hides every row (the panel shows the walkthrough, no nav)", () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
       Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));

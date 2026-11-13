@@ -644,10 +644,12 @@ function App() {
         href="#review-queue"
         onClick={(e) => {
           e.preventDefault();
-          const nav = document.querySelector('nav[aria-label="Artifacts"]');
+          const nav = document.querySelector<HTMLElement>('nav[aria-label="Artifacts"]');
           const row = nav?.querySelector<HTMLElement>('[data-artifact-item][aria-current="true"]') ??
             nav?.querySelector<HTMLElement>("[data-artifact-item]");
-          row?.focus();
+          // No row (e.g. a selected agent with nothing in it keeps its empty
+          // recovery frame): land on the nav landmark itself (Sol P2 x3).
+          (row ?? nav)?.focus();
         }}
         className="sr-only focus:not-sr-only focus:absolute focus:top-1 focus:left-1 focus:z-50 focus:px-2 focus:py-1 focus:rounded focus:bg-surface-elevated focus:text-text-primary focus:text-xs"
       >
