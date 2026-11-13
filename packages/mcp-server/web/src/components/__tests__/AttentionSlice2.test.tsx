@@ -438,7 +438,8 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     screen.getByRole("button", { name: "Show all agents" }).focus();
     await userEvent.keyboard("{Enter}");
     expect(screen.queryByTestId("agent-filter-empty")).not.toBeInTheDocument();
-    expect(document.querySelector("[data-sidebar-toggle]")).toHaveFocus();
+    if (count > 0) expect(document.querySelector("[data-sidebar-toggle]")).toHaveFocus();
+    else expect(screen.getByText("Waiting for your agent's first move")).toBeInTheDocument();
     expect(useArtifactStore.getState().artifacts).toBe(before);
     expect(useArtifactStore.getState().selectedArtifactId).toBe("a2");
     setArtifacts(two());
@@ -461,7 +462,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     expect(inSidebar("a1")).not.toBeNull();
   });
 
-  it("App preserves its actual panel through zero items and hydration, then keyboard Show all keeps focus", async () => {
+  it("App preserves the chosen agent through zero items and hydration, then keyboard Show all restores the empty route and focus", async () => {
     fakeDaemon();
     setArtifacts(two());
     useArtifactStore.setState({ selectedArtifactId: "a2" });
@@ -480,12 +481,85 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     expect(menu().selectedOptions[0]).toHaveTextContent("Selected agent — s2 (0)");
     screen.getByRole("button", { name: "Show all agents" }).focus();
     await userEvent.keyboard("{Enter}");
-    expect(document.querySelector("[data-sidebar-toggle]")).toHaveFocus();
+    expect(screen.queryByTestId("artifact-panel")).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Waiting for Claude" })).toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveFocus();
     expect(useArtifactStore.getState().selectedArtifactId).toBe("a2");
     setArtifacts(two());
     expect(menu().value).toBe("all");
     expect(inSidebar("a1")).not.toBeNull();
     expect(inSidebar("a2")).not.toBeNull();
+  });
+
+  it.each(["waiting", "drafting", "disconnected"])("App restores the normal %s empty route after filter → All → empty", async (route) => {
+    fakeDaemon();
+    setArtifacts(two());
+    render(<App />);
+    fireEvent.change(menu(), { target: { value: "s2" } });
+    setArtifacts([two()[0]!]);
+    fireEvent.click(screen.getByRole("button", { name: "Show all agents" }));
+    act(() => {
+      useConnectionStore.setState({
+        connected: route !== "disconnected", hydrated: true,
+        activeSessions: [{ sessionId: "s1", live: true, artifactCount: 0 }],
+        agentActivityAt: route === "drafting" ? Date.now() : null,
+      } as any);
+      useArtifactStore.getState().reset();
+    });
+    expect(screen.queryByTestId("artifact-panel")).not.toBeInTheDocument();
+    if (route === "disconnected") {
+      expect(screen.getByRole("button", { name: "Past sessions" })).toBeInTheDocument();
+    } else {
+      expect(screen.getByRole("status", { name: route === "drafting" ? "Claude is connected" : "Waiting for Claude" })).toBeInTheDocument();
+    }
+  });
+
+  it("App clears the chosen agent on a real session-tab switch, but not same-session catalog loss", async () => {
+    const sessions = ["s1", "s2"].map((sessionId) => ({ sessionId, title: `Session ${sessionId}`, project: "p", live: true, artifactCount: 1 }));
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/active-sessions")) return json({ sessions });
+      if (url.includes("/api/live-session/")) return json({ artifacts: [], comments: [] });
+      if (url.includes("/api/preflight-blocks")) return json({ blocks: [] });
+      return json({});
+    });
+    const previousAdapter = useConnectionStore.getState().adapter;
+    const switched: string[] = [];
+    // The actual store switchSession publishes the identity and resets the
+    // frame before this adapter receives the switch, as with a real socket.
+    const adapter = { switchSession: (sid: string) => {
+      switched.push(sid);
+      useConnectionStore.setState({ hydrated: true, hydratedBinding: null });
+    } };
+    useConnectionStore.setState({ adapter: adapter as any, activeSessions: sessions });
+    try {
+      setArtifacts(two());
+      render(<App />);
+      fireEvent.change(menu(), { target: { value: "s2" } });
+      act(() => {
+        useArtifactStore.getState().reset();
+        useConnectionStore.setState({ activeSessions: sessions.slice(0, 1), projectRoot: "p", daemonStartedAt: "new-daemon" });
+      });
+      expect(menu().value).toBe("s2");
+      expect(screen.getByRole("button", { name: "Show all agents" })).toBeInTheDocument();
+      setArtifacts(two());
+      expect(menu().value).toBe("s2");
+      expect(inSidebar("a1")).toBeNull();
+      act(() => useConnectionStore.setState({ activeSessions: sessions }));
+      fireEvent.click(within(screen.getByRole("navigation", { name: "Sessions" })).getByRole("button", { name: /^Session s2\b/ }));
+      expect(useConnectionStore.getState().sessionId).toBe("s2");
+      expect(screen.queryByTestId("agent-filter-empty")).not.toBeInTheDocument();
+      await waitFor(() => expect(switched).toEqual(["s2"]));
+      expect(screen.queryByTestId("artifact-panel")).not.toBeInTheDocument();
+      expect(screen.getByRole("status", { name: "Waiting for Claude" })).toBeInTheDocument();
+      setArtifacts(two());
+      expect(menu().value).toBe("all");
+      expect(inSidebar("a1")).not.toBeNull();
+      expect(inSidebar("a2")).not.toBeNull();
+    } finally {
+      useConnectionStore.setState({ adapter: previousAdapter });
+    }
   });
 
   it("retains the visible choice through a daemon restart's successful partial catalog and lazy re-registration", async () => {
