@@ -435,6 +435,7 @@ export interface ArtifactState {
   selectedArtifactId: string | null;
   /** Transient view keyed by actual project/bound session, never agent labels. */
   agentFilter: string;
+  installingSnapshot: boolean;
   pendingOpen: { id: string; epoch: number; binding: string; replay: boolean; cursor: string } | null;
   fulfillPendingOpen: () => void;
   exactNavigationId: string | null;
@@ -743,11 +744,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   comments: {},
   selectedArtifactId: null,
   agentFilter: "all",
+  installingSnapshot: false,
   pendingOpen: null,
   fulfillPendingOpen: () => {
     const state = get();
     const pending = state.pendingOpen;
-    if (!pending || !state.artifacts.some((a) => a.id === pending.id)) return;
+    if (state.installingSnapshot || !pending || !state.artifacts.some((a) => a.id === pending.id)) return;
     const replay = useReplayStore.getState();
     if (state.selectedArtifactId !== pending.id || state.navigationEpoch !== pending.epoch || JSON.stringify(state.filterBinding) !== pending.binding ||
         replay.active !== pending.replay || replay.cursor !== pending.cursor) { set({ pendingOpen: null }); return; }

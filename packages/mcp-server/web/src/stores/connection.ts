@@ -198,6 +198,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       currentSelection: useArtifactStore.getState().selectedArtifactId,
       reentry: useReplayStore.getState().exiting,
     });
+    const beforeInstall = useArtifactStore.getState();
+    const pendingOpen = beforeInstall.pendingOpen;
+    const retainOpen = pendingOpen && !useReplayStore.getState().active && !pendingOpen.replay &&
+      useReplayStore.getState().cursor === pendingOpen.cursor && beforeInstall.selectedArtifactId === pendingOpen.id &&
+      beforeInstall.navigationEpoch === pendingOpen.epoch && JSON.stringify(beforeInstall.filterBinding) === pendingOpen.binding;
+    useArtifactStore.setState({ installingSnapshot: true });
     store.reset();
     for (const artifact of state.artifacts ?? []) store.addArtifact(artifact);
     const provisionalSelectionId = useArtifactStore.getState().selectedArtifactId;
@@ -224,6 +230,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       ? store.restoreSelection({ savedId: visit.selection, pendingOnly: visit.reentry })
       : store.restoreSelection();
     if (!restored) store.selectDefaultOnHydration(provisionalSelectionId);
+    // Preserve only an actual explicit current Open, never a provisional pane.
+    if (retainOpen) useArtifactStore.setState({ selectedArtifactId: pendingOpen.id });
     if (visit) {
       const current = useArtifactStore.getState();
       const unread = sessionVisits.commit(visit, current.artifacts, current.selectedArtifactId);
@@ -233,6 +241,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         sessionVisits.select(current.selectedArtifactId, current.artifacts.find((a) => a.id === current.selectedArtifactId)?.sessionId);
       }
     } else sessionVisits.suspend(); // successfully installed demo snapshot only
+    useArtifactStore.setState({ installingSnapshot: false });
+    useArtifactStore.getState().fulfillPendingOpen();
   };
 
   // #339 — the transport snapshot contract. Every door that REPLACES the

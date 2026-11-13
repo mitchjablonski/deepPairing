@@ -326,6 +326,24 @@ describe("#430 — canonical selection through real connected hydration", () => 
     expect(receipts.entries[JSON.stringify(["/p", "A"])].selected).toBe("a");
   });
 
+  it.each([false, true])("complete same-binding snapshot fulfills requested sibling after installation (targetFirst=%s)", async (targetFirst) => {
+    await hydrate([mk("a")]);
+    useArtifactStore.getState().selectArtifact("a");
+    useArtifactStore.getState().addArtifact(mk("b-marker", { sessionId: "B" }));
+    usePreferencesStore.setState({ sidebarCollapsed: false });
+    useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
+    render(createElement(App));
+    fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "A" } });
+    act(() => useArtifactStore.getState().openArtifact("requested-b"));
+    const saved = localStorage.getItem("dp-selected-artifact");
+    const rows = [mk("other-a"), mk("requested-b", { sessionId: "B" })];
+    await act(async () => { await hydrate(targetFirst ? rows.reverse() : rows); });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("requested-b");
+    expect(useArtifactStore.getState().agentFilter).toBe("B");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe(saved);
+    expect(JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[JSON.stringify(["/p", "A"])].selected).toBe("a");
+  });
+
   it("mounted empty sibling filter and empty Show all clear only the pane, preserving bound A intent", async () => {
     await hydrate([mk("a")]);
     useArtifactStore.getState().selectArtifact("a");
