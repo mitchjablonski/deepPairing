@@ -250,6 +250,57 @@ describe("#430 PR 5 — unflagged fixes", () => {
 });
 
 describe("#430 PR 5 — PR 4 review nits", () => {
+  it("#642 item 8 — 'Skip to review queue' lands on the selected sidebar row, which carries aria-current", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+    useArtifactStore.setState({
+      artifacts: [art("r1", "First review"), art("r2", "Second review")],
+      selectedArtifactId: "r2",
+    } as any);
+    render(<App />);
+    const r2 = document.querySelector("[data-artifact-item='r2']") as HTMLElement;
+    expect(r2).toHaveAttribute("aria-current", "true");
+    expect(document.querySelector("[data-artifact-item='r1']")).not.toHaveAttribute("aria-current");
+    fireEvent.click(screen.getByRole("link", { name: "Skip to review queue" }));
+    expect(document.activeElement).toBe(r2);
+  });
+
+  it("#642 item 8 (Sol P2) — with no row to land on, the skip link focuses the Artifacts nav itself (never stays on the link)", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+    useArtifactStore.setState({ artifacts: [art("r1", "Only review")], selectedArtifactId: null } as any);
+    render(<App />);
+    const nav = document.querySelector('nav[aria-label="Artifacts"]') as HTMLElement;
+    expect(nav).toHaveAttribute("tabindex", "-1"); // script-focusable, never a Tab stop
+    // Stand-in for an empty recovery frame (a selected agent with no rows).
+    nav.querySelectorAll("[data-artifact-item]").forEach((el) => el.remove());
+    fireEvent.click(screen.getByRole("link", { name: "Skip to review queue" }));
+    expect(document.activeElement).toBe(nav);
+  });
+
+  it("#642 item 8 (Sol P2) — no skip link while replay hides every row (the panel shows the walkthrough, no nav)", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+    useArtifactStore.setState({ artifacts: [art("r1", "Future review")], selectedArtifactId: null } as any);
+    useReplayStore.setState({ active: true, cursor: "2000-01-01T00:00:00.000Z" } as any);
+    try {
+      render(<App />);
+      expect(document.querySelector('nav[aria-label="Artifacts"]')).toBeNull();
+      expect(screen.queryByRole("link", { name: "Skip to review queue" })).toBeNull();
+    } finally {
+      useReplayStore.setState({ active: false, cursor: "" } as any);
+    }
+  });
+
+  it("#642 item 8 (Sol P2) — no skip link on the empty route, where its target isn't mounted", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+    useArtifactStore.setState({ artifacts: [], selectedArtifactId: null } as any);
+    render(<App />);
+    expect(document.querySelector('nav[aria-label="Artifacts"]')).toBeNull();
+    expect(screen.queryByRole("link", { name: "Skip to review queue" })).toBeNull();
+  });
+
   it("keyboard focus on a sidebar row shows its lane label as a visible tooltip; a click does not; no extra tab stop", () => {
     useArtifactStore.setState({ artifacts: [art("d1", "Pick a store", { type: "decision", status: "draft", content: { context: "c", decisionId: "d", options: [] } })] } as any);
     render(<ArtifactPanel />);
