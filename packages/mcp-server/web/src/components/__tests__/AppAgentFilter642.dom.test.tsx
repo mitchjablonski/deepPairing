@@ -73,6 +73,26 @@ describe("#642 mounted App filter-following navigation", () => {
     fireEvent.keyDown(document, { key: "k" }); expect(selected()).toBe("a1");
   });
 
+  it.each(["collapsed", "narrow"])("scoped navigation remains live in the %s App layout", (layout) => {
+    if (layout === "collapsed") usePreferencesStore.setState({ sidebarCollapsed: true });
+    if (layout === "narrow") vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+      matches: query === "(max-width: 900px)", media: query, onchange: null,
+      addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false,
+    }));
+    seed(); render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /^Agent 1 \(/ }));
+    expect(selected()).toBe("a1");
+    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a2");
+    fireEvent.keyDown(document, { key: "j" }); expect(selected()).toBe("a2");
+    fireEvent.keyDown(document, { key: "N" }); expect(selected()).toBe("a1");
+  });
+
+  it("Show all keeps a valid receipt rather than jumping to another agent's pending head", () => {
+    seed([art("receipt", "A", { status: "approved" }), art("b1", "B")]);
+    render(<App />); choose("A"); choose("all");
+    expect(selected()).toBe("receipt");
+  });
+
   it("keeps a valid scoped receipt when no pending remains, otherwise chooses the first visible fallback", () => {
     seed([art("receipt", "A", { status: "approved" }), art("b1", "B")]);
     render(<App />); choose("A"); expect(selected()).toBe("receipt");

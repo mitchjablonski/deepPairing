@@ -736,10 +736,10 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   }),
   chooseAgentFilter: (owner) => set((state) => {
     const visible = scopedVisibleArtifacts(state.artifacts, owner);
-    const target = orderedPendingArtifacts(visible)[0] ??
-      visible.find((a) => a.id === state.selectedArtifactId) ?? visible[0];
+    const current = visible.find((a) => a.id === state.selectedArtifactId);
+    const target = (owner === "all" ? current : undefined) ?? orderedPendingArtifacts(visible)[0] ?? current ?? visible[0];
     const id = target?.id ?? null;
-    lsSetSelection(id);
+    persistExplicitSelection(state, id);
     return { agentFilter: owner, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1,
       selectedArtifactId: id, unreadIds: state.unreadIds.filter((uid) => uid !== id) };
   }),
@@ -748,16 +748,16 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const resolved = id && !replay.active ? resolveToLiveId(state.artifacts, id) : id;
     const target = state.artifacts.find((a) => a.id === resolved);
     if (id && (!target || (replay.active && replay.cursor && target.createdAt > replay.cursor))) return {};
-    lsSetSelection(resolved);
+    persistExplicitSelection(state, resolved);
     return { agentFilter: state.agentFilter === "all" ? "all" : target?.sessionId ?? state.agentFilter,
-      navigationEpoch: state.navigationEpoch + 1, exactNavigationId: null, selectedArtifactId: resolved,
+      navigationEpoch: state.navigationEpoch + 1, exactNavigationId: replay.active ? resolved : null, selectedArtifactId: resolved,
       unreadIds: state.unreadIds.filter((uid) => uid !== resolved) };
   }),
   openArtifactExact: (id) => set((state) => {
     const target = state.artifacts.find((a) => a.id === id);
     const replay = useReplayStore.getState();
     if (!target || (replay.active && replay.cursor && target.createdAt > replay.cursor)) return {};
-    lsSetSelection(id);
+    persistExplicitSelection(state, id);
     return { agentFilter: state.agentFilter === "all" ? "all" : target.sessionId,
       navigationEpoch: state.navigationEpoch + 1, exactNavigationId: id, selectedArtifactId: id,
       unreadIds: state.unreadIds.filter((uid) => uid !== id) };
@@ -1532,4 +1532,13 @@ export function advanceOwnedNavigation(owner: ReturnType<typeof captureNavigatio
       r.active !== owner.replay || r.cursor !== owner.cursor || r.active) return;
   const next = orderedPendingArtifacts(scopedVisibleArtifacts(s.artifacts)).find((a) => a.id !== artifactId);
   if (next) s.openArtifact(next.id);
+}
+
+/** Explicit sibling navigation remains foreground-only until that owner is bound. */
+function persistExplicitSelection(state: ArtifactState, id: string | null): void {
+  const bound = tabSessionAtCall();
+  const owner = state.artifacts.find((a) => a.id === id)?.sessionId;
+  if (useReplayStore.getState().active || state.sampleContent || bound?.startsWith("demo_") ||
+      owner?.startsWith("demo_") || (bound && owner && bound !== owner)) return;
+  lsSetSelection(id);
 }
