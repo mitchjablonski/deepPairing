@@ -1,9 +1,8 @@
 import { createElement } from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import App from "../../App";
 import { usePreferencesStore } from "../preferences";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { fireEvent, renderHook } from "@testing-library/react";
 import { useSessionVisits } from "../../hooks/useSessionVisits";
 import { useArtifactStore } from "../artifact";
 import { useConnectionStore } from "../connection";
