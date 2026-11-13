@@ -1,3 +1,4 @@
+import { orderedPendingArtifacts } from "../lib/attention";
 import { useMemo, useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
@@ -8,7 +9,7 @@ import type { Artifact, Comment } from "@deeppairing/shared";
 import { isDemoSessionId } from "@deeppairing/shared";
 import { useProvenance } from "../lib/provenance";
 import { DemoContentBanner, DemoTag, ProvenanceChip } from "./ProvenanceMarker";
-import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
+import { useArtifactStore, scopedVisibleArtifacts, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
 import { useSiblingSyncStore } from "../lib/siblingSync";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
@@ -163,7 +164,7 @@ const typeLabels: Record<string, string> = {
 
 function RelatedArtifacts({ ids }: { ids: string[] }) {
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const related = ids.map((id) => artifacts.find((a) => a.id === id)).filter(Boolean) as Artifact[];
 
   if (related.length === 0) return null;
@@ -811,7 +812,7 @@ function ArtifactSidebar({
   width: number;
   onToggle: () => void;
 }) {
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   // #430 PR 4 — each row's lane glyph comes from the bar's own selector.
   const laneMarks = useMemo(() => laneMarksFrom(computeAttention({ artifacts })), [artifacts]);
   // New-item locator plumbing. The scroll container + per-item nodes let the
@@ -1390,13 +1391,15 @@ export function MultiAgentSync() {
 export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (active: boolean) => void } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  const exactNavigationId = useArtifactStore((s) => s.exactNavigationId);
   const unreadIds = useArtifactStore((s) => s.unreadIds);
   const sidebarCollapsed = usePreferencesStore((s) => s.sidebarCollapsed);
   const toggleSidebar = usePreferencesStore((s) => s.toggleSidebar);
   const sidebarWidth = usePreferencesStore((s) => s.sidebarWidth);
   const isNarrow = useIsNarrowViewport();
   const effectiveCollapsed = sidebarCollapsed || isNarrow;
-  const [chosenFilter, setSessionFilter] = useState<string | "all">("all");
+  const chosenFilter = useArtifactStore((s) => s.agentFilter);
+  const setSessionFilter = useArtifactStore((s) => s.chooseAgentFilter);
   const chooseFilter = (id: string) => {
     setSessionFilter(id);
     onAgentFilterChange?.(id !== "all");
@@ -1507,7 +1510,10 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
     return groups;
   }, [visibleArtifacts]);
 
-  const selectedArtifact = artifacts.find((a) => a.id === selectedArtifactId);
+  const selectedArtifact = artifacts.find((a) => a.id === selectedArtifactId &&
+    (a.status !== "superseded" || a.id === exactNavigationId) &&
+    (chosenFilter === "all" || a.sessionId === chosenFilter) &&
+    (!replayActive || !replayCursor || a.createdAt <= replayCursor));
   // #569 proposal 1 — label demo/sample content where the cards are. Keyed on
   // the SELECTED artifact's own session (MultiAgentSync can merge a demo beside
   // real work); falls back to the bound/replayed session. Labelling only.
@@ -1528,6 +1534,9 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
       data-testid="artifact-panel"
     >
       <DemoContentBanner provenance={provenance} />
+      {chosenFilter !== "all" && <div role="status" data-testid="agent-filter-scope" className="px-3 py-1 text-xs text-text-muted">
+        {orderedPendingArtifacts(visibleArtifacts).length} pending here · {orderedPendingArtifacts(scopedVisibleArtifacts(artifacts, "all")).filter((a) => a.sessionId !== chosenFilter).length} in other agents · Selected agent — {chosenFilter}
+      </div>}
 
       {/* #457 D6 — MultiAgentSync (other sessions' artifacts) is mounted by
           App now, so it runs even while the bound session is empty. */}

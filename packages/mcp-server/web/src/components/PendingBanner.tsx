@@ -41,7 +41,7 @@ const EXPANDED_LEAD = "whitespace-normal break-words max-h-16 overflow-y-auto";
 export function PendingBanner() {
   const offline = useOfflineReason(); // #467 review — the dismiss chip is an act
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   // UX5 — dismissing marks a draft obsolete, which the API can't undo back to

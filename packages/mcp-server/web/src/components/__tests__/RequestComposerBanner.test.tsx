@@ -122,8 +122,8 @@ describe("RequestComposerBanner (#198b / #204)", () => {
   });
 
   it("shows a served vs unserved pip, and a served pip is clickable to jump to the artifact", async () => {
-    const selectArtifact = vi.fn();
-    useArtifactStore.setState({ selectArtifact } as any);
+    const openArtifact = vi.fn();
+    useArtifactStore.setState({ openArtifact } as any);
     seedRequests([
       { id: "req_1", text: "explain auth", intent: "explain", createdAt: "2026-08-01T00:00:00.000Z" },
       { id: "req_2", text: "plan cache", intent: "plan", createdAt: "2026-08-01T00:01:00.000Z", servedByArtifactId: "art_x" },
@@ -135,7 +135,7 @@ describe("RequestComposerBanner (#198b / #204)", () => {
     expect(unserved).toHaveAttribute("data-served", "false");
     expect(served).toHaveAttribute("data-served", "true");
     await userEvent.click(served);
-    expect(selectArtifact).toHaveBeenCalledWith("art_x");
+    expect(openArtifact).toHaveBeenCalledWith("art_x");
   });
 
   it("when NO agent is live and a request is pending, offers a resume prompt", () => {

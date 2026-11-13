@@ -67,7 +67,7 @@ export function IdleHome() {
               data={ledger}
               error={error}
               onJumpToArtifact={(artifactId) => {
-                useArtifactStore.getState().selectArtifact(artifactId);
+                useArtifactStore.getState().openArtifact(artifactId);
               }}
             />
             {/* DD10 — gate the cold-start seed affordance on a fresh

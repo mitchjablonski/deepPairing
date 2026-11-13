@@ -66,6 +66,7 @@ const realMatchMedia = window.matchMedia;
 
 beforeEach(() => {
   useArtifactStore.getState().reset();
+  useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
   try { localStorage.removeItem("dp.gateBlocks.lastSeenAt"); } catch { /* unavailable */ }
   usePreflightBlockStore.setState({ blocks: [], liveRev: {}, lastSeenAt: null, loaded: true, focusRequest: null, logOpen: false });
   useReplayStore.setState({ active: false, exiting: false, cursor: "" });

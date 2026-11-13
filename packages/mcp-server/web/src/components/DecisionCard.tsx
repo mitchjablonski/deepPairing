@@ -715,7 +715,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               {closed.supersededBy && (
                 <button
                   type="button"
-                  onClick={() => useArtifactStore.getState().selectArtifact(closed.supersededBy!.artifactId)}
+                  onClick={() => useArtifactStore.getState().openArtifact(closed.supersededBy!.artifactId)}
                   className="text-accent-blue underline font-medium"
                 >
                   Open the new version →

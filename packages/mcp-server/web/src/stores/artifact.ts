@@ -430,6 +430,15 @@ export interface ArtifactState {
   artifacts: Artifact[];
   comments: Record<string, Comment[]>;
   selectedArtifactId: string | null;
+  /** Transient view keyed by actual project/bound session, never agent labels. */
+  agentFilter: string;
+  exactNavigationId: string | null;
+  navigationEpoch: number;
+  filterBinding: { sessionId: string | null; projectRoot: string | null } | null;
+  bindAgentFilter: (sessionId: string | null, projectRoot: string | null) => void;
+  chooseAgentFilter: (owner: string) => void;
+  openArtifact: (id: string | null) => void;
+  openArtifactExact: (id: string) => void;
   unreadIds: string[];
   /** C2 — decision ids the AGENT has consumed (check_feedback ack). Drives the
    *  "✓ Claude picked this up" receipt on resolved DecisionCards. Record, not
@@ -712,6 +721,47 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   artifacts: [],
   comments: {},
   selectedArtifactId: null,
+  agentFilter: "all",
+  exactNavigationId: null,
+  navigationEpoch: 0,
+  filterBinding: null,
+  bindAgentFilter: (sessionId, projectRoot) => set((state) => {
+    const previous = state.filterBinding;
+    const switched = previous && (previous.sessionId !== sessionId ||
+      (!!previous.projectRoot && !!projectRoot && previous.projectRoot !== projectRoot));
+    return {
+      filterBinding: { sessionId, projectRoot: projectRoot ?? (previous?.sessionId === sessionId ? previous.projectRoot : null) },
+      ...(switched ? { agentFilter: "all", exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1 } : {}),
+    };
+  }),
+  chooseAgentFilter: (owner) => set((state) => {
+    const visible = scopedVisibleArtifacts(state.artifacts, owner);
+    const target = orderedPendingArtifacts(visible)[0] ??
+      visible.find((a) => a.id === state.selectedArtifactId) ?? visible[0];
+    const id = target?.id ?? null;
+    lsSetSelection(id);
+    return { agentFilter: owner, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1,
+      selectedArtifactId: id, unreadIds: state.unreadIds.filter((uid) => uid !== id) };
+  }),
+  openArtifact: (id) => set((state) => {
+    const replay = useReplayStore.getState();
+    const resolved = id && !replay.active ? resolveToLiveId(state.artifacts, id) : id;
+    const target = state.artifacts.find((a) => a.id === resolved);
+    if (id && (!target || (replay.active && replay.cursor && target.createdAt > replay.cursor))) return {};
+    lsSetSelection(resolved);
+    return { agentFilter: state.agentFilter === "all" ? "all" : target?.sessionId ?? state.agentFilter,
+      navigationEpoch: state.navigationEpoch + 1, exactNavigationId: null, selectedArtifactId: resolved,
+      unreadIds: state.unreadIds.filter((uid) => uid !== resolved) };
+  }),
+  openArtifactExact: (id) => set((state) => {
+    const target = state.artifacts.find((a) => a.id === id);
+    const replay = useReplayStore.getState();
+    if (!target || (replay.active && replay.cursor && target.createdAt > replay.cursor)) return {};
+    lsSetSelection(id);
+    return { agentFilter: state.agentFilter === "all" ? "all" : target.sessionId,
+      navigationEpoch: state.navigationEpoch + 1, exactNavigationId: id, selectedArtifactId: id,
+      unreadIds: state.unreadIds.filter((uid) => uid !== id) };
+  }),
   unreadIds: [],
   acknowledgedDecisions: {},
   resolvedDecisions: {},
@@ -834,6 +884,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     lsSetSelection(resolved);
     return {
       selectedArtifactId: resolved,
+      exactNavigationId: null,
+      navigationEpoch: state.navigationEpoch + 1,
       unreadIds: state.unreadIds.filter((uid) => uid !== resolved),
     };
   }),
@@ -843,6 +895,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     lsSetSelection(id);
     return {
       selectedArtifactId: id,
+      exactNavigationId: id,
+      navigationEpoch: state.navigationEpoch + 1,
       unreadIds: state.unreadIds.filter((uid) => uid !== id),
     };
   }),
@@ -1439,7 +1493,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     storeGeneration++;
     backfilledIds.clear(); // #458 review — the merged history went with the store
     rollbackChains = {}; // #422 — nothing from before the boundary may roll back into it
-    set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [], sampleContent: false, sampleSessionIds: [] });
+    set({ artifacts: [], comments: {}, selectedArtifactId: null, exactNavigationId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [], sampleContent: false, sampleSessionIds: [] });
   },
 
   markDecisionsAcknowledged: (decisionIds) =>
@@ -1455,3 +1509,27 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       return { resolvedDecisions: { ...s.resolvedDecisions, [decisionId]: info } };
     }),
 }));
+
+/** Same membership for sidebar, keyboard and verdict advance; order stays caller-owned. */
+export function scopedVisibleArtifacts(artifacts: Artifact[], owner = useArtifactStore.getState().agentFilter): Artifact[] {
+  const replay = useReplayStore.getState();
+  return artifacts.filter((a) => a.status !== "superseded" &&
+    (owner === "all" || a.sessionId === owner) &&
+    (!replay.active || !replay.cursor || a.createdAt <= replay.cursor));
+}
+
+export function captureNavigationOwnership() {
+  const s = useArtifactStore.getState();
+  const r = useReplayStore.getState();
+  return { epoch: s.navigationEpoch, binding: s.filterBinding, selected: s.selectedArtifactId,
+    replay: r.active, cursor: r.cursor };
+}
+export function advanceOwnedNavigation(owner: ReturnType<typeof captureNavigationOwnership>, artifactId: string) {
+  const s = useArtifactStore.getState();
+  const r = useReplayStore.getState();
+  if (s.navigationEpoch !== owner.epoch || s.filterBinding?.sessionId !== owner.binding?.sessionId ||
+      s.filterBinding?.projectRoot !== owner.binding?.projectRoot || s.selectedArtifactId !== owner.selected ||
+      r.active !== owner.replay || r.cursor !== owner.cursor || r.active) return;
+  const next = orderedPendingArtifacts(scopedVisibleArtifacts(s.artifacts)).find((a) => a.id !== artifactId);
+  if (next) s.openArtifact(next.id);
+}

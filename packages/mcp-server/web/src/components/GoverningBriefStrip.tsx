@@ -20,7 +20,7 @@ import { useBriefExceptions, briefExceptionStripText } from "./BriefExceptions";
  */
 export function GoverningBriefStrip({ artifacts }: { artifacts: Artifact[] }) {
   const all = useArtifactStore((s) => s.artifacts);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const brief = useMemo(() => selectGoverningBrief(artifacts, all), [artifacts, all]);
   // #572 slice A2 — attached AFTER selection (never inside its predicates): the
   // same exception index the brief's own lists use, read in the brief's session.

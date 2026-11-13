@@ -46,7 +46,7 @@ export function TurnIndicator({
 } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const connected = useConnectionStore((s) => s.connected);
   // B2 — heartbeat liveness. The daemon broadcasts a throttled agent_activity
