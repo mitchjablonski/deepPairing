@@ -45,7 +45,7 @@ export const CHANGESET_KEYMAP: ChangesetBinding[] = [
   { intent: "nextFile", key: "j", glyph: "j", description: "Next file" },
   { intent: "prevFile", key: "k", glyph: "k", description: "Previous file" },
   { intent: "approveAll", key: "enter", shift: true, glyph: "⇧⏎", description: "Approve all files (fast path)" },
-  { intent: "fireDerivedAction", key: "enter", glyph: "⏎", description: "Approve / send back (the derived action)" },
+  { intent: "fireDerivedAction", key: "enter", glyph: "⏎", description: "Approve / send back, once any file is marked (the derived action)" },
 ];
 
 /**
