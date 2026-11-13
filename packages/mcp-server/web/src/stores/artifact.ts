@@ -1548,4 +1548,3 @@ export function advanceOwnedNavigation(owner: ReturnType<typeof captureNavigatio
   const next = orderedPendingArtifacts(scopedVisibleArtifacts(s.artifacts)).find((a) => a.id !== artifactId);
   if (next) s.openArtifact(next.id);
 }
-

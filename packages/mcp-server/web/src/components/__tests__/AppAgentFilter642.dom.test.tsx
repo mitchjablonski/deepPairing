@@ -164,6 +164,28 @@ describe("#642 mounted App filter-following navigation", () => {
     choose("A"); expect(selected()).toBe("a-current"); expect(useArtifactStore.getState().exactNavigationId).toBeNull();
   });
 
+  it.each([false, true])("successful real changeset POST advances only within the latest scoped queue (arrival=%s)", async (arrival) => {
+    let finish!: () => void;
+    const response = () => new Response(JSON.stringify({ blocks: [], sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST" && String(input).includes("/a-cs/status")) {
+        return new Promise<Response>((resolve) => { finish = () => resolve(response()); });
+      }
+      return response();
+    }));
+    useConnectionStore.setState({ sessionId: "A", hydratedBinding: "A@/project" });
+    const cs = art("a-cs", "A", { type: "changeset", content: { summary: "change", files: [{ path: "a.ts", changeType: "modified", hunks: [] }], reviewState: { "a.ts": "needs_changes" }, reviewReasons: { "a.ts": "fix" } } as any });
+    seed([cs, art("b-high", "B", { type: "decision", content: { context: "choose", stakes: "high", options: [] } as any })]);
+    render(<App />); choose("A");
+    fireEvent.click(await screen.findByTestId("send-back"));
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    if (arrival) act(() => useArtifactStore.getState().addArtifact(art("a-arrival")));
+    await act(async () => { finish(); });
+    expect(selected()).toBe(arrival ? "a-arrival" : "a-cs");
+    expect(menu().value).toBe("A");
+    expect(useArtifactStore.getState().artifacts.find((a) => a.id === "a-cs")?.status).toBe("revised");
+  });
+
   it.each(["filter", "selection", "binding", "replay"])("a delayed changeset verdict cannot hijack newer %s intent", async (intent) => {
     let finish!: () => void;
     const update = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
