@@ -515,7 +515,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
   });
 
   it("App clears the chosen agent on a real session-tab switch, but not same-session catalog loss", async () => {
-    const sessions = ["s1", "s2"].map((sessionId) => ({ sessionId, title: sessionId, project: "p", live: true, artifactCount: 1 }));
+    const sessions = ["s1", "s2"].map((sessionId) => ({ sessionId, title: `Session ${sessionId}`, project: "p", live: true, artifactCount: 1 }));
     const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -547,7 +547,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
       expect(menu().value).toBe("s2");
       expect(inSidebar("a1")).toBeNull();
       act(() => useConnectionStore.setState({ activeSessions: sessions }));
-      fireEvent.click(within(screen.getByRole("navigation", { name: "Sessions" })).getByRole("button", { name: /^s2\b/ }));
+      fireEvent.click(within(screen.getByRole("navigation", { name: "Sessions" })).getByRole("button", { name: /^Session s2\b/ }));
       expect(useConnectionStore.getState().sessionId).toBe("s2");
       expect(screen.queryByTestId("agent-filter-empty")).not.toBeInTheDocument();
       await waitFor(() => expect(switched).toEqual(["s2"]));
