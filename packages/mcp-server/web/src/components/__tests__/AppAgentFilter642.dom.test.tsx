@@ -27,6 +27,9 @@ beforeEach(() => {
   useConnectionStore.getState().disconnect();
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ sessions: [], blocks: [] }),
     { status: 200, headers: { "Content-Type": "application/json" } })));
+  const browserNavigator = Object.create(navigator);
+  Object.defineProperty(browserNavigator, "locks", { value: { request: (_name: string, work: () => void) => Promise.resolve(work()) } });
+  vi.stubGlobal("navigator", browserNavigator);
   sessionVisits.resetRuntime();
   sessionVisits.beginBinding();
   const visit = sessionVisits.plan({ projectRoot: "/project", sessionId: "bound", currentSelection: null });
@@ -164,16 +167,23 @@ describe("#642 mounted App filter-following navigation", () => {
   });
 
   it("fulfills the same unloaded Open intent using its real owner without receipt leakage", () => {
-    seed(); render(<App />); choose("A");
-    localStorage.setItem("dp-selected-artifact", "saved-bound-intent");
+    seed();
+    useConnectionStore.setState({ sessionId: "A", hydratedBinding: "A@/project" });
+    const accepted = sessionVisits.plan({ projectRoot: "/project", sessionId: "A", currentSelection: "a1" });
+    sessionVisits.commit(accepted, useArtifactStore.getState().artifacts, "a1");
+    sessionVisits.select("a1", "A");
+    render(<App />); choose("A");
+    localStorage.setItem("dp-selected-artifact", "a1");
     const visits = localStorage.getItem("dp-session-visits-v1");
+    expect(JSON.parse(visits!).entries[JSON.stringify(["/project", "A"])].selected).toBe("a1");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("a1");
     act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "missing" } })));
     expect(selected()).toBe("missing"); expect(menu().value).toBe("A");
     expect(screen.getByText(/This artifact is unavailable/)).toBeInTheDocument();
-    expect(localStorage.getItem("dp-selected-artifact")).toBe("saved-bound-intent");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("a1");
     act(() => useArtifactStore.getState().addArtifact(art("missing", "B")));
     expect(selected()).toBe("missing"); expect(menu().value).toBe("B");
-    expect(localStorage.getItem("dp-selected-artifact")).toBe("saved-bound-intent");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe("a1");
     expect(localStorage.getItem("dp-session-visits-v1")).toBe(visits);
   });
 
