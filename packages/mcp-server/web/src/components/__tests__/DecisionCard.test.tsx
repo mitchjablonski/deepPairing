@@ -447,24 +447,62 @@ describe("DecisionCard — horizon check trigger (Q3)", () => {
 });
 
 describe("DecisionCard — keyboard navigation", () => {
-  it("j advances focusedIndex, k retreats, Enter selects", async () => {
-    render(<DecisionCard event={event} decisionId="dec_abc" />);
+  it("j advances focusedIndex, k retreats, Enter arms then selects", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<DecisionCard event={event} decisionId="dec_abc" />);
+      const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
+      // The container is the outer div with tabIndex={0}; focus it
+      (container as HTMLElement).focus();
+
+      // Recommended option (Redis, index 0) starts focused. Pressing j should
+      // advance to the second option; Enter arms the 3s confirm (#642 item 2)
+      // and the countdown resolves with o2.
+      fireEvent.keyDown(container, { key: "j" });
+      fireEvent.keyDown(container, { key: "Enter" });
+      expect(screen.getByText(/will select/i)).toBeInTheDocument();
+      for (let i = 0; i < 4; i++) act(() => { vi.advanceTimersByTime(1100); });
+
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/decisions/dec_abc"),
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"optionId":"o2"'),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#642 item 2 — a bare Enter right after the card opens ARMS a cancellable confirm; it never resolves on the keystroke", () => {
+    vi.useFakeTimers();
+    try {
+      render(<DecisionCard event={event} decisionId="dec_abc" />);
+      const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
+      // UX2 auto-focus puts DOM focus inside the card with Recommended highlighted.
+      expect(container.contains(document.activeElement)).toBe(true);
+      fireEvent.keyDown(container, { key: "Enter" });
+      expect(screen.getByText(/will select “Redis”/i)).toBeInTheDocument();
+      expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/decisions/dec_abc"), expect.anything());
+      // A second Enter keeps the same countdown (doesn't commit early or restart).
+      act(() => { vi.advanceTimersByTime(1100); });
+      fireEvent.keyDown(container, { key: "Enter" });
+      expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/decisions/dec_abc"), expect.anything());
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByText(/will select/i)).toBeNull();
+      for (let i = 0; i < 5; i++) act(() => { vi.advanceTimersByTime(1100); });
+      expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/decisions/dec_abc"), expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#642 item 2 — Enter does not arm on a write-locked card", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" writeLocked />);
     const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
-    // The container is the outer div with tabIndex={0}; focus it
-    (container as HTMLElement).focus();
-
-    // Recommended option (Redis, index 0) starts focused. Pressing j should
-    // advance to the second option, then Enter should resolve with o2.
-    fireEvent.keyDown(container, { key: "j" });
     fireEvent.keyDown(container, { key: "Enter" });
-
-    expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/decisions/dec_abc"),
-      expect.objectContaining({
-        method: "POST",
-        body: expect.stringContaining('"optionId":"o2"'),
-      }),
-    );
+    expect(screen.queryByText(/will select/i)).toBeNull();
   });
 
   it("ArrowDown/ArrowUp mirror j/k", () => {
@@ -485,10 +523,8 @@ describe("DecisionCard — keyboard navigation", () => {
     fireEvent.focus(opt2);
     const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
     fireEvent.keyDown(container, { key: "Enter" });
-    expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/decisions/dec_abc"),
-      expect.objectContaining({ body: expect.stringContaining('"optionId":"o2"') }),
-    );
+    // #642 item 2 — Enter arms the confirm for THAT option.
+    expect(screen.getByText(/will select “CDN edge cache”/i)).toBeInTheDocument();
   });
 
   it("D3 (was U5e) — each option exposes a distinctly-named real Select button; the roving highlight styles the focused one", () => {
