@@ -79,6 +79,23 @@ describe("#642 origin-local session visit receipts", () => {
     expect(visits.observe([art("hidden"), art("old"), art("unread-before-hide")], "old")).toEqual(["unread-before-hide", "hidden"]);
   });
 
+  it("hides the selected pane badge without acknowledging hidden history", async () => {
+    const storage = new MemoryStorage();
+    let visible = true;
+    const visits = new SessionVisits({ ...options(storage), visible: () => visible });
+    enter(visits, ["old"]);
+    await visits.settled();
+    const frozen = storage.getItem(SESSION_VISITS_KEY);
+    visits.leave();
+    visible = false;
+    expect(enter(visits, ["old", "hidden"], "A", "/p", "hidden").unread).toEqual([]);
+    expect(storage.getItem(SESSION_VISITS_KEY)).toBe(frozen);
+    // Moving the still-hidden pane does not pretend the previous pane was read.
+    expect(visits.observe([art("old"), art("hidden")], "old")).toEqual(["hidden"]);
+    visible = true;
+    expect(visits.observe([art("old"), art("hidden")], "old")).toEqual(["hidden"]);
+  });
+
   it("does not establish first-visit history during hidden loading", () => {
     const storage = new MemoryStorage();
     let visible = false;

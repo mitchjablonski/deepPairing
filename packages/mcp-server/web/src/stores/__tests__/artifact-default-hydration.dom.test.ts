@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { fireEvent, renderHook } from "@testing-library/react";
+import { useSessionVisits } from "../../hooks/useSessionVisits";
 import { useArtifactStore } from "../artifact";
 import { useConnectionStore } from "../connection";
 import { useReplayStore, replayRehydrateSettled } from "../replay";
@@ -347,6 +349,67 @@ describe("#430 — canonical selection through real connected hydration", () => 
     useArtifactStore.getState().selectArtifact("demo");
     expect(localStorage.getItem("dp-selected-artifact")).toBe("real");
     expect(sessionVisits.observe([mk("not-a-live-observation")], null)).toBeNull();
+  });
+
+  it("supersede-follow clears visit unread so later observation cannot resurrect the successor badge", async () => {
+    await hydrate([mk("old")]);
+    useArtifactStore.getState().selectArtifact("old");
+    const successor = mk("successor", { parentId: "old", version: 2 });
+    adapter.emit({ type: "artifact_created", artifact: successor });
+    await vi.waitFor(() => expect(useArtifactStore.getState().unreadIds).toEqual(["successor"]));
+    adapter.emit({ type: "artifact_updated", artifactId: "old", status: "superseded" });
+    await vi.waitFor(() => expect(useArtifactStore.getState().selectedArtifactId).toBe("successor"));
+    expect(useArtifactStore.getState().unreadIds).toEqual([]);
+    adapter.emit({ type: "artifact_created", artifact: mk("later") });
+    await vi.waitFor(() => expect(useArtifactStore.getState().artifacts).toHaveLength(3));
+    expect(useArtifactStore.getState().unreadIds).toEqual(["later"]);
+    await hydrate([mk("old", { status: "superseded" }), successor, mk("later")]);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("successor");
+    expect(useArtifactStore.getState().unreadIds).toEqual(["later"]);
+  });
+
+  it("hidden re-entry reconciles the selected badge but defers its durable acknowledgement until visible", async () => {
+    await hydrate([mk("old")]);
+    useArtifactStore.getState().selectArtifact("old");
+    await hydrate([mk("b", { sessionId: "B" })], "B");
+    const key = JSON.stringify(["/p", "A"]);
+    const frozen = JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[key];
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const hook = renderHook(() => useSessionVisits());
+    try {
+      await hydrate([mk("old", { status: "approved" }), decision("new")]);
+      expect(useArtifactStore.getState().selectedArtifactId).toBe("new");
+      expect(useArtifactStore.getState().unreadIds).not.toContain("new");
+      await sessionVisits.settled();
+      expect(JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[key]).toEqual(frozen);
+      hidden.mockReturnValue(false);
+      fireEvent(document, new Event("visibilitychange"));
+      await sessionVisits.settled();
+      expect(JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[key].observed).toEqual(["old", "new"]);
+      expect(useArtifactStore.getState().selectedArtifactId).toBe("new");
+      expect(useArtifactStore.getState().unreadIds).not.toContain("new");
+    } finally { hook.unmount(); hidden.mockRestore(); }
+  });
+
+  it("real connected hydration persists through delayed browser locks and reloads its durable receipt", async () => {
+    const queued: Array<() => void> = [];
+    vi.stubGlobal("navigator", { locks: { request: (_name: string, work: () => void) =>
+      new Promise<void>((resolve) => queued.push(() => { work(); resolve(); })) } });
+    const flushLocks = async () => { queued.splice(0).forEach((work) => work()); await sessionVisits.settled(); };
+    await hydrate([mk("old")]);
+    useArtifactStore.getState().selectArtifact("old");
+    expect(localStorage.getItem(SESSION_VISITS_KEY)).toBeNull();
+    await hydrate([mk("b", { sessionId: "B" })], "B");
+    await flushLocks();
+    expect(JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[JSON.stringify(["/p", "A"])]).toEqual({ observed: ["old"], selected: "old" });
+    useConnectionStore.getState().disconnect();
+    sessionVisits.resetRuntime(); // new UI lifetime; keep actual browser storage
+    localStorage.removeItem("dp-selected-artifact"); // prove restoration reads the per-binding durable receipt
+    await hydrate([decision("new-head"), mk("old")]);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("old");
+    expect(useArtifactStore.getState().unreadIds).toEqual(["new-head"]);
+    await flushLocks();
+    expect(JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[JSON.stringify(["/p", "A"])].observed).toEqual(["old", "new-head"]);
   });
 
   it("does not acknowledge a rejected incomplete snapshot", async () => {
