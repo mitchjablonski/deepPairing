@@ -305,8 +305,17 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         e.preventDefault();
         e.stopPropagation();
         if (showReasoning) return; // Let the reasoning input handle Enter
+        // #642 item 2 — the card auto-focuses on mount with the Recommended
+        // option highlighted, so a bare Enter here used to resolve the decision
+        // irreversibly (and feed the ledger) on the most common keystroke
+        // after opening it. Enter now ARMS the same 3s confirm the `a`
+        // shortcut uses (F8); Esc or a focus move cancels. Deliberate
+        // activations stay immediate: clicking (or Enter on) an option's
+        // Select button bails above (DV1) and fires its own click, and Enter
+        // in the typed "Why" input commits from DecisionFooter.
+        if (offline || writeLocked || useReplayStore.getState().active) return;
         const focusedOption = event.options[focusedIndex];
-        if (focusedOption) handleSelect(focusedOption.id);
+        if (focusedOption) setArmedSelect((a) => (a?.optionId === focusedOption.id ? a : { optionId: focusedOption.id, left: 3 }));
       }
     };
 
@@ -315,7 +324,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     // handleSelect closes over phase/reasoning — it MUST be in the deps or the
     // Enter branch runs a stale closure (the sibling shortcut effect below
     // already lists handleSelect for the same reason).
-  }, [focusedIndex, resolved, showReasoning, event.options, handleSelect]);
+  }, [focusedIndex, resolved, showReasoning, event.options, handleSelect, offline, writeLocked]);
 
   // UX2 — auto-focus the card when a draft decision is shown, so its keyboard
   // nav (↑↓/Enter, advertised in the footer) is live without a Tab/click first.
@@ -656,7 +665,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             Read-only
           </span>
         ) : (
-          <span className={`text-2xs text-text-muted ${artifactId ? "" : "ml-auto"}`}>↑↓ navigate · Enter selects highlighted</span>
+          <span className={`text-2xs text-text-muted ${artifactId ? "" : "ml-auto"}`}>↑↓ navigate · Enter selects highlighted (3s, Esc cancels)</span>
         )}
       </div>
       {/* M1.1 — when the agent named the fork with a short `title`, lead with it
