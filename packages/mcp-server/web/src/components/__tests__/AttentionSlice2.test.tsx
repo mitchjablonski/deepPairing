@@ -465,9 +465,17 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
 
   it("App preserves the chosen agent through zero items and hydration, then keyboard Show all restores the empty route and focus", async () => {
     fakeDaemon();
+    // This is a filter/empty-route test, not a socket test. Retire any earlier
+    // owned adapter and prevent App init from opening a real WebSocket while
+    // userEvent yields; disconnects have their own explicit route case below.
+    useConnectionStore.getState().disconnect();
+    useConnectionStore.setState({ connected: true, hydrated: true, hydratedBinding: null, adapter: {
+      connect() {}, disconnect() {}, onMessage() {}, onConnect() {}, onDisconnect() {},
+    } });
     setArtifacts(two());
     useArtifactStore.setState({ selectedArtifactId: "a2" });
-    render(<App />);
+    const view = render(<App />);
+    try {
     fireEvent.change(menu(), { target: { value: "s2" } });
     const panel = screen.getByTestId("artifact-panel");
     setArtifacts([]);
@@ -490,6 +498,10 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     expect(menu().value).toBe("all");
     expect(inSidebar("a1")).not.toBeNull();
     expect(inSidebar("a2")).not.toBeNull();
+    } finally {
+      view.unmount();
+      useConnectionStore.getState().disconnect();
+    }
   });
 
   it.each(["waiting", "drafting", "disconnected"])("App restores the normal %s empty route after filter → All → empty", async (route) => {

@@ -611,7 +611,12 @@ function lsSetSelection(id: string | null): void {
 /** Explicit live selection only; history/demo/sample never overwrite real intent. */
 function persistLiveSelection(state: Pick<ArtifactState, "artifacts" | "sampleContent">, id: string | null): void {
   const owner = state.artifacts.find((a) => a.id === id)?.sessionId;
-  const bound = tabSessionAtCall();
+  const accepted = sessionVisits.selectionBinding();
+  const proxy = tabSessionAtCall();
+  // A scoped but not-yet-accepted generation cannot authorize persistence.
+  // Legacy isolated store callers remain compatible when no live binding exists.
+  if (accepted === null || (accepted === undefined && proxy)) return;
+  const bound = accepted ?? proxy;
   if (owner && bound && owner !== bound) return; // foreground sibling Open is not a bound-session visit
   if (useReplayStore.getState().active || state.sampleContent || isDemoSessionId(owner ?? "") ||
       isDemoSessionId(bound ?? "")) return;

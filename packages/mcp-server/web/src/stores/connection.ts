@@ -1157,6 +1157,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
     connect: (sessionId?: string) => {
       if (get().adapter) return;
+      sessionVisits.beginBinding();
 
       let thisConnection = connectionGeneration;
       const adapter = createAdapter(undefined, sessionId);
