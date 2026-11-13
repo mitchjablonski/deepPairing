@@ -2,7 +2,6 @@ import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus, CommentSuggestion, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
-import { isDraftAwaitingReview } from "../lib/pending";
 import { orderedPendingArtifacts } from "../lib/attention";
 
 // Monotonic counter for provisional (optimistic) comment ids until the server
