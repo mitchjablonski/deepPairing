@@ -749,7 +749,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const pending = state.pendingOpen;
     if (!pending || !state.artifacts.some((a) => a.id === pending.id)) return;
     const replay = useReplayStore.getState();
-    if (state.navigationEpoch !== pending.epoch || JSON.stringify(state.filterBinding) !== pending.binding ||
+    if (state.selectedArtifactId !== pending.id || state.navigationEpoch !== pending.epoch || JSON.stringify(state.filterBinding) !== pending.binding ||
         replay.active !== pending.replay || replay.cursor !== pending.cursor) { set({ pendingOpen: null }); return; }
     set({ pendingOpen: null });
     get().openArtifact(pending.id);
