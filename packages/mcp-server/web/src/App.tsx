@@ -134,9 +134,18 @@ function App() {
     activeSessions.find((s) => s.sessionId === sessionId)?.live === false &&
     sessionDraftsClear && !wrapCardDismissed(sessionId);
   const nextUpBar = usePreferencesStore((s) => s.nextUpBar); // #430 PR 2 — default off
-  // #624 — preserve deliberate filter intent through an empty/re-hydrating
-  // frame. Initial unfiltered loading/empty routes remain unchanged.
-  const [keepAgentFilterPanel, setKeepAgentFilterPanel] = useState(false);
+  // #624/#637 — retain a chosen agent through same-session catalog/hydration
+  // changes, but release the panel on All or an actual bound-session switch.
+  const filterBinding = JSON.stringify(sessionId);
+  const [agentFilterBinding, setAgentFilterBinding] = useState<string | null>(null);
+  const keepAgentFilterPanel = agentFilterBinding === filterBinding;
+  useEffect(() => setAgentFilterBinding(null), [sessionId]);
+  const recoverEmptyFilterFocus = useRef(false);
+  useEffect(() => {
+    if (!recoverEmptyFilterFocus.current) return;
+    recoverEmptyFilterFocus.current = false;
+    if (document.activeElement === document.body) document.querySelector<HTMLElement>("main")?.focus();
+  });
   const hidePanelForHydration = showHydrationSkeleton && !(hydrationStalled && hasArtifacts);
   const mountArtifactPanel = keepAgentFilterPanel || (hasArtifacts && !hidePanelForHydration);
   // M4 — whether each below-header banner is visible, so the header pills can
@@ -1011,7 +1020,13 @@ function App() {
         }>
           {mountArtifactPanel && (
             <div hidden={hidePanelForHydration} className={hidePanelForHydration ? "hidden" : "contents"}>
-              <ArtifactPanel onAgentFilterUsed={() => setKeepAgentFilterPanel(true)} />
+              <ArtifactPanel key={filterBinding} onAgentFilterChange={(active) => {
+                // If Show all unmounts its empty panel, preserve keyboard focus
+                // on the stable main landmark, without stealing unrelated focus.
+                recoverEmptyFilterFocus.current = !active && !hasArtifacts &&
+                  !!document.activeElement?.closest("[data-agents-filter]");
+                setAgentFilterBinding(active ? filterBinding : null);
+              }} />
             </div>
           )}
           {/* #487 review (Fable) — stalled but artifacts DID arrive (broadcasts
