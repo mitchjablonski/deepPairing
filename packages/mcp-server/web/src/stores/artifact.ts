@@ -857,6 +857,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         if (successor) {
           selectedArtifactId = successor.id;
           unreadIds = unreadIds.filter((u) => u !== successor.id);
+          if (!useReplayStore.getState().active && !state.sampleContent && !isDemoSessionId(successor.sessionId)) {
+            sessionVisits.select(successor.id, successor.sessionId);
+          }
         }
       }
       return { artifacts, selectedArtifactId, unreadIds };

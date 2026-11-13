@@ -67,7 +67,7 @@ export class SessionVisits {
   private writes: Promise<unknown>[] = [];
   private readonly storage: () => Storage | null;
   private readonly visible: () => boolean;
-  private readonly lock: ((work: () => void) => Promise<unknown>) | undefined;
+  private readonly lock: (work: () => void) => Promise<unknown>;
   constructor(options: Options = {}) {
     this.storage = options.storage ?? browserStorage;
     this.visible = options.visible ?? browserVisible;
@@ -111,7 +111,7 @@ export class SessionVisits {
       const oldest = this.memory.keys().next().value!;
       this.memory.delete(oldest); this.dirty.delete(oldest); this.revisions.delete(oldest);
     }
-    if (!visit.projectRoot || !this.lock) return; // no unsafe cross-tab durable overwrite
+    if (!visit.projectRoot) return; // default lock adapter does no work when locking is unavailable
     const lifetime = this.lifetime;
     const revision = (this.revisions.get(visit.key) ?? 0) + 1;
     this.revisions.set(visit.key, revision);
@@ -176,6 +176,9 @@ export class SessionVisits {
     if (!(visit.firstVisit && !visit.visibleCommitted)) {
       for (const id of ids) if (!visit.observed.has(id) && !visit.read.has(id)) visit.unread.add(id);
     }
+    // The pane itself never carries an unread badge. Hidden reconciliation is
+    // transient only: it does not add a read ID or advance durable observations.
+    if (selected && ids.includes(selected)) visit.unread.delete(selected);
     if (this.visible()) {
       // The first eligible visible commit seeds history; hidden loads never do.
       for (const id of ids) visit.observed.add(id);
@@ -187,9 +190,11 @@ export class SessionVisits {
   }
   select(id: string | null, owner: string | undefined): void {
     const visit = this.active;
-    if (!visit || (id !== null && owner !== visit.sessionId) || !this.visible()) return;
+    if (!visit || (id !== null && owner !== visit.sessionId)) return;
+    if (id) visit.unread.delete(id);
+    if (!this.visible()) return;
     visit.selected = id;
-    if (id) { visit.unread.delete(id); visit.read.add(id); }
+    if (id) visit.read.add(id);
     this.remember(visit);
   }
   /** Replace only the active binding's badge set, preserving unrelated sibling state. */
