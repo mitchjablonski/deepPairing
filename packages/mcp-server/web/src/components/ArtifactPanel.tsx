@@ -1077,6 +1077,9 @@ function ArtifactSidebar({
                 key={a.id}
                 ref={(el) => { itemRefs.current[a.id] = el; }}
                 data-artifact-item={a.id}
+                // #642 item 8 — the selected row is named for assistive tech
+                // (it was colour-only) and is the skip link's landing target.
+                aria-current={isSelected ? "true" : undefined}
                 onClick={() => selectArtifact(a.id)}
                 className={`w-full flex items-center gap-2 transition-all duration-[180ms] ease-out ${
                   collapsed ? "justify-center px-1 py-1.5" : "px-3 py-1.5 text-left"

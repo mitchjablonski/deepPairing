@@ -249,6 +249,21 @@ describe("#430 PR 5 — unflagged fixes", () => {
 });
 
 describe("#430 PR 5 — PR 4 review nits", () => {
+  it("#642 item 8 — 'Skip to review queue' lands on the selected sidebar row, which carries aria-current", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+    useArtifactStore.setState({
+      artifacts: [art("r1", "First review"), art("r2", "Second review")],
+      selectedArtifactId: "r2",
+    } as any);
+    render(<App />);
+    const r2 = document.querySelector("[data-artifact-item='r2']") as HTMLElement;
+    expect(r2).toHaveAttribute("aria-current", "true");
+    expect(document.querySelector("[data-artifact-item='r1']")).not.toHaveAttribute("aria-current");
+    fireEvent.click(screen.getByRole("link", { name: "Skip to review queue" }));
+    expect(document.activeElement).toBe(r2);
+  });
+
   it("keyboard focus on a sidebar row shows its lane label as a visible tooltip; a click does not; no extra tab stop", () => {
     useArtifactStore.setState({ artifacts: [art("d1", "Pick a store", { type: "decision", status: "draft", content: { context: "c", decisionId: "d", options: [] } })] } as any);
     render(<ArtifactPanel />);

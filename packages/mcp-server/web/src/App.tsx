@@ -615,6 +615,24 @@ function App() {
           Jump to next up
         </a>
       )}
+      {/* #642 item 8 — with the bar off, the review queue sat ~23 Tab stops
+          deep (header, every banner chip and its ✕, Ask). A skip link, visible
+          only while focused, lands on the selected row (else the first). The
+          chip ✕ buttons stay in the tab order: they are the only keyboard path
+          to dismiss. */}
+      <a
+        href="#review-queue"
+        onClick={(e) => {
+          e.preventDefault();
+          const nav = document.querySelector('nav[aria-label="Artifacts"]');
+          const row = nav?.querySelector<HTMLElement>('[data-artifact-item][aria-current="true"]') ??
+            nav?.querySelector<HTMLElement>("[data-artifact-item]");
+          row?.focus();
+        }}
+        className="sr-only focus:not-sr-only focus:absolute focus:top-1 focus:left-1 focus:z-50 focus:px-2 focus:py-1 focus:rounded focus:bg-surface-elevated focus:text-text-primary focus:text-xs"
+      >
+        Skip to review queue
+      </a>
       {/* O6: surfaces when the pairing-protocol skill isn't active so the
           plugin-install path doesn't fail silently. Dismissible; auto-hides
           once any artifact arrives. */}
