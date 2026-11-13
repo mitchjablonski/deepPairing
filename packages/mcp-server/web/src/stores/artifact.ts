@@ -3,6 +3,7 @@ import type { Artifact, Comment, ArtifactStatus, CommentSuggestion, Request, Req
 import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
 import { isDraftAwaitingReview } from "../lib/pending";
+import { orderedPendingArtifacts } from "../lib/attention";
 
 // Monotonic counter for provisional (optimistic) comment ids until the server
 // assigns a real one. Module-scoped so ids stay unique across submits.
@@ -464,19 +465,15 @@ export interface ArtifactState {
    *  walk selectArtifact applies: a brief pin opens the version it pins, even
    *  when that version was superseded. No-op for an id not in the store. */
   selectArtifactExact: (id: string) => void;
-  /** Re-select the artifact you were last on (persisted across reloads), if
-   *  it's present in the freshly-hydrated session. Called after hydration. */
-  restoreSelection: () => void;
-  /** L1 (#218) — one-shot hydration fallback. If NOTHING is selected after
-   *  hydration + restoreSelection but reviewable artifacts exist, land the
-   *  human on the first draft awaiting review (else the first non-superseded
-   *  artifact, by creation order) instead of a blank center pane — e.g. the
-   *  served demo's hero rejected-research, which makes the pre-flight toast's
-   *  context visible. Guarded to `selectedArtifactId === null` so it NEVER
-   *  overrides addArtifact's / restoreSelection's pick and never steals focus
-   *  mid-review (it runs once, at hydration). Does not persist the pick, so a
-   *  saved cross-session selection is left intact for its own session. */
-  selectDefaultOnHydration: () => void;
+  /** Restore a valid persisted choice, including a nonpending artifact. Return
+   *  whether restoration succeeded so hydration never replaces that intent. */
+  restoreSelection: () => boolean;
+  /** One-shot hydration fallback: canonical Decide head, else earliest visible
+   *  artifact (including the demo's rejected hero). Ordinary calls fill only a
+   *  blank pane. The live snapshot installer may supply its known provisional
+   *  addArtifact pick, only after restoreSelection reports no valid saved choice.
+   *  No persistence: a saved cross-session choice stays intact. */
+  selectDefaultOnHydration: (provisionalSelectionId?: string | null) => void;
 
   submitComment: (
     artifactId: string,
@@ -851,33 +848,33 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     };
   }),
 
-  restoreSelection: () => set((state) => {
+  restoreSelection: () => {
+    const state = get();
     const saved = lsGetSelection();
-    // Only restore if it's still in the session; otherwise leave the default
-    // (first artifact) that addArtifact picked during hydration. Resolve to the
-    // live version in case the saved artifact was superseded since.
+    // Preserve any valid saved choice; only stale superseded ids follow their
+    // existing live-successor resolution. A missing id permits hydration fallback.
     if (saved && state.artifacts.some((a) => a.id === saved)) {
       const resolved = resolveToLiveId(state.artifacts, saved);
-      return {
+      set({
         selectedArtifactId: resolved,
         unreadIds: state.unreadIds.filter((uid) => uid !== resolved),
-      };
+      });
+      return true;
     }
-    return {};
-  }),
+    return false;
+  },
 
-  selectDefaultOnHydration: () => set((state) => {
-    // Guard: never override an existing selection (addArtifact's first-artifact
-    // pick or restoreSelection's saved pick). Only fill a genuinely blank pane.
-    if (state.selectedArtifactId !== null) return {};
+  selectDefaultOnHydration: (provisionalSelectionId) => set((state) => {
+    // Only the synchronous live snapshot installer may replace its known
+    // implicit pick. Ordinary callers never preempt an established selection.
+    if (state.selectedArtifactId !== null && state.selectedArtifactId !== provisionalSelectionId) return {};
     const candidates = state.artifacts
       .filter((a) => a.status !== "superseded")
       .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
     if (candidates.length === 0) return {};
-    // Prefer the first thing awaiting review; otherwise the earliest visible
-    // artifact (the demo's rejected-research hero, whose toast context we want
-    // on screen). Not persisted — see the interface doc.
-    const target = candidates.find(isDraftAwaitingReview) ?? candidates[0];
+    // Reuse the same consequence/tier/age/id projection as keyboard and banners.
+    // The visible fallback and insertion/unread bookkeeping stay unchanged.
+    const target = orderedPendingArtifacts(state.artifacts)[0] ?? candidates[0];
     if (!target) return {};
     return {
       selectedArtifactId: target.id,
