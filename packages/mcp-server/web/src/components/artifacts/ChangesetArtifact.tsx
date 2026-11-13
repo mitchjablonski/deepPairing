@@ -1605,10 +1605,11 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   title={offline ?? undefined}
                   type="button"
                   onClick={() => {
+                    const navigationOwner = captureNavigationOwnership();
                     setConfirmDismiss(false);
                     setSubmitting(true);
                     void updateArtifactStatus(artifact.id, "obsolete", feedback.trim() || undefined)
-                      .then(() => advanceToNextPending())
+                      .then(() => advanceOwnedNavigation(navigationOwner, artifact.id))
                       .catch(() => {})
                       .finally(() => setSubmitting(false));
                   }}

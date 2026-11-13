@@ -115,6 +115,7 @@ describe("#642 mounted App filter-following navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: /1 high-stakes decision waiting/ })); stop();
     expect(publications).toEqual([{ owner: "B", id: "b-high" }]);
     expect(menu().value).toBe("B"); expect(selected()).toBe("b-high");
+    expect(useConnectionStore.getState().sessionId).toBe("bound");
     act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "b-high" } })));
     expect(menu().value).toBe("B");
     choose("all");

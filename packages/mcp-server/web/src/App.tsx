@@ -145,7 +145,13 @@ function App() {
       useArtifactStore.getState().bindAgentFilter(connection.sessionId, connection.projectRoot);
     };
     bind();
-    return useConnectionStore.subscribe(bind);
+    const stopBinding = useConnectionStore.subscribe(bind);
+    const stopReplay = useReplayStore.subscribe((next, previous) => {
+      if (next.active !== previous.active || next.exiting !== previous.exiting || next.cursor !== previous.cursor) {
+        useArtifactStore.setState((state) => ({ navigationEpoch: state.navigationEpoch + 1 }));
+      }
+    });
+    return () => { stopBinding(); stopReplay(); };
   }, []);
   const recoverEmptyFilterFocus = useRef(false);
   useEffect(() => {

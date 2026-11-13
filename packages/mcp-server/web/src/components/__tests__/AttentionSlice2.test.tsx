@@ -442,7 +442,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     if (count > 0) expect(document.querySelector("[data-sidebar-toggle]")).toHaveFocus();
     else expect(screen.getByText("Waiting for your agent's first move")).toBeInTheDocument();
     expect(useArtifactStore.getState().artifacts).toBe(before);
-    expect(useArtifactStore.getState().selectedArtifactId).toBe("a2");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe(count ? "a1" : null);
     setArtifacts(two());
     expect(menu().value).toBe("all");
     expect(inSidebar("a1")).not.toBeNull();
@@ -628,8 +628,8 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     await userEvent.click(within(screen.getByRole("region", { name: "Waiting for you" })).getByTitle("Lead from agent one"));
     expect(useArtifactStore.getState().selectedArtifactId).toBe("a1");
     await waitFor(() => expect(document.querySelector('[data-artifact-id="a1"]')).not.toBeNull());
-    expect(menu().value).toBe("s2");
-    expect(inSidebar("a1")).toBeNull();
+    expect(menu().value).toBe("s1");
+    expect(inSidebar("a1")).not.toBeNull();
   });
 
   it("replay still hides later artifacts while the menu keeps its totals", () => {
