@@ -51,6 +51,7 @@ import { FirstRunWalkthrough } from "./WalkthroughCards";
 import { CausalChain } from "./CausalChain";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
+import { NextPendingLink } from "./NextPendingLink";
 import { SecretWarningBanner } from "./SecretWarningBanner";
 import { AllowedOnceBadge } from "./AllowedOnce";
 import { WAITING_TONE } from "../lib/waitingTone";
@@ -420,6 +421,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <Suspense fallback={null}>
             <ClarityChip artifact={artifact} />
           </Suspense>
+          <NextPendingLink artifact={artifact} />
         </div>
         {artifact.agentReasoning && (
           <p className="text-xs text-text-muted italic">{artifact.agentReasoning}</p>
