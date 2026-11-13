@@ -365,7 +365,8 @@ export async function buildFirstCallHint(
     const prefs = await store.getTeamPreferences?.();
     // #624 — compare the actual session cache used below with a fresh disk
     // read. A repaired file does not silently reload FileStore. Conversely a
-    // broken/deleted file does not turn its cached rules off. No cwd fallback.
+    // broken/deleted file does not turn its MCP cached rules off. The Edit/Write
+    // hook reads disk separately on each call; this is not its cache. No cwd fallback.
     if (env.projectRoot && Array.isArray(prefs)) {
       const disk = readTeamPreferences(path.join(env.projectRoot, ".deeppairing"));
       let problem: string | undefined;
@@ -379,10 +380,10 @@ export async function buildFirstCallHint(
       }
       if (problem) {
         const cache = prefs.length > 0
-          ? "This session still uses its cached team rules until daemon restart."
-          : "This session currently has no cached team rules; a repaired disk file alone does not load them.";
+          ? "MCP plan/review tools still use this session's cached team rules until daemon restart."
+          : "MCP plan/review tools currently have no cached team rules; a repaired disk file alone does not load their cache.";
         obligationsParts.push(
-          `⚠ Team-rule load warning: ${problem} ${cache} Tell the human to check .deeppairing/team.json or run /deeppairing:doctor, then restart the deepPairing daemon to load the intended rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`,
+          `⚠ Team-rule load warning: ${problem} ${cache} The Edit/Write hook reads team.json from disk on each call instead of using this MCP cache; broken or repaired disk files affect that gate without a daemon restart. Tell the human to check .deeppairing/team.json or run /deeppairing:doctor, then restart the deepPairing daemon to load the intended MCP rules. This is a guidance snapshot, not continuous health monitoring; other guardrails are unchanged.`,
         );
       }
     }
