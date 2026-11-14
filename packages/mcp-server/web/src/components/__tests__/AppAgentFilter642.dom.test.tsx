@@ -88,12 +88,12 @@ describe("#642 mounted App filter-following navigation", () => {
     seed([art("a1", ownerA), art("b1", ownerB)]);
     useConnectionStore.setState({ activeSessions: [{ sessionId: ownerA, title: "Pair", live: true }, { sessionId: ownerB, title: "Pair", live: true }] as any });
     render(<App />);
-    expect(menu().options[1].textContent).toContain("Pair (00000001)");
-    expect(menu().options[2].textContent).toContain("Pair (00000002)");
+    expect(menu().options.item(1)?.textContent).toContain("Pair (00000001)");
+    expect(menu().options.item(2)?.textContent).toContain("Pair (00000002)");
     choose(ownerA);
     expect(screen.getByTestId("agent-filter-scope")).toHaveTextContent("Selected agent — Pair (00000001)");
     act(() => { useConnectionStore.setState({ activeSessions: [] }); useArtifactStore.setState({ artifacts: [art("b1", ownerB)] }); });
-    expect(menu().selectedOptions[0].textContent).toContain("Pair (00000001)");
+    expect(menu().selectedOptions.item(0)?.textContent).toContain("Pair (00000001)");
     expect(screen.getByTestId("agent-filter-empty")).toHaveTextContent("Selected agent — Pair (00000001)");
     expect(screen.getByTestId("agent-filter-scope")).not.toHaveTextContent(ownerA);
   });

@@ -1448,7 +1448,7 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
   const sharedLabels = sessionLabelsFrom(labelCatalog);
   const agentLabel = (sid: string, index: number) => {
     const entry = labelCatalog.find((session) => session.sessionId === sid);
-    const base = entry ? sharedLabels[sid] : rememberedLabels.current[sid] ?? "Session " + (index + 1);
+    const base = (entry ? sharedLabels[sid] : rememberedLabels.current[sid]) ?? "Session " + (index + 1);
     const collision = entry && labelCatalog.filter((session) => sharedLabels[session.sessionId] === base).length > 1;
     const label = collision ? base + " (" + sid.slice(-8) + ")" : base;
     rememberedLabels.current[sid] = label;
