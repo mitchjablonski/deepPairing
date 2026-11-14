@@ -12,28 +12,36 @@ for (const width of [1280, 1920]) for (const reduced of [false, true]) {
           id, type: "research", title: "Pane " + id, content: { summary: "Long pane", findings: Array.from({ length: 40 }, (_, n) => ({ category: "Evidence", title: "Finding " + n, detail: "Long synthetic content ".repeat(15), significance: "high" })) },
         } })),
       ]);
+      await daemon.post("panes", "artifacts", { id: "broken", type: "debrief", title: "Broken renderer", content: { summary: "Synthetic renderer fault" } });
+      await page.route("**/DebriefArtifact-*.js", (route) => route.fulfill({ status: 200, contentType: "application/javascript", body: 'throw new Error("Synthetic malformed renderer");' }));
       await page.setViewportSize({ width, height: width === 1280 ? 800 : 1080 });
       await page.emulateMedia({ reducedMotion: reduced ? "reduce" : "no-preference" });
       await page.goto(daemon.baseURL + "/?session=panes");
       const pane = (id: string) => page.locator('[data-dp-pane][data-artifact-id="' + id + '"]:not([inert])');
       await expect(pane("a")).toBeVisible();
       await pane("a").evaluate((el) => { el.scrollTop = 200; });
-      await pane("a").getByRole("button", { name: "Pane a", exact: true }).focus();
-      await page.keyboard.press("n");
-      await expect(pane("b")).toBeFocused();
-      const samples = await page.evaluate(async () => {
+      await pane("a").evaluate((el) => { (el as HTMLElement).focus({ preventScroll: true }); });
+      expect(await pane("a").evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+      // Start recording before the action, rather than after a retry could hide the exit.
+      const recording = page.evaluate(async () => {
         const rows = [];
-        for (let frame = 0; frame < 20; frame++) {
+        for (let frame = 0; frame < 35; frame++) {
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
           const selected = document.querySelector<HTMLElement>('[data-dp-pane][data-artifact-id="b"]:not([inert])');
-          if (!selected) throw new Error("Selected pane missing");
+          if (!selected) continue;
           const parent = selected.parentElement!;
           const box = selected.getBoundingClientRect(), region = parent.getBoundingClientRect();
           rows.push({ top: box.top, left: box.left, width: box.width, height: box.height, regionHeight: region.height, offset: box.top - region.top,
+            exitingCount: document.querySelectorAll('[data-dp-pane]:not([data-artifact-id="b"])').length,
             exitsInert: [...document.querySelectorAll('[data-dp-pane]:not([data-artifact-id="b"])')].every((node) => node.hasAttribute("inert")) });
         }
         return rows;
       });
+      await page.keyboard.press("n");
+      await expect(pane("b")).toBeFocused();
+      const samples = await recording;
+      expect(samples.length).toBeGreaterThan(0);
+      if (!reduced) expect(samples.some((row) => row.exitingCount > 0)).toBe(true);
       const final = samples[samples.length - 1]!;
       for (const row of samples) {
         expect(row.exitsInert).toBe(true);
@@ -53,6 +61,18 @@ for (const width of [1280, 1920]) for (const reduced of [false, true]) {
       await expect(pane("b")).toHaveCount(1);
       await expect(pane("b")).toBeVisible();
       await expect(pane("b").getByRole("button", { name: "Approve", exact: true })).toHaveCount(1);
+      // Explicit chip opens keep the external control focused, without a pane focus steal.
+      const chip = page.getByTestId("pending-banner").getByTitle("Pane a", { exact: true });
+      await chip.click();
+      await expect(pane("a")).toBeVisible();
+      await expect(chip).toBeFocused();
+      await page.locator('[data-artifact-item="broken"]').click();
+      await expect(pane("broken")).toContainText("This artifact failed to render");
+      await expect(pane("broken")).toHaveCount(1);
+      await pane("broken").focus();
+      await page.keyboard.press("n");
+      await expect(pane("a")).toBeFocused();
+      await expect(pane("a")).not.toContainText("This artifact failed to render");
     } finally { await daemon.close(info); }
   });
 }
