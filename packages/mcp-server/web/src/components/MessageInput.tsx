@@ -9,6 +9,7 @@ import { useDraft, clearDraftIfUnchanged, isDraftSending, markDraftSending, useD
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { useSentFlash } from "../hooks/useSentFlash";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { sessionLabelsFrom } from "../lib/sessionLabel";
 
 // Stable empty-array reference so Zustand's store selector doesn't produce
 // a fresh `[]` on every render (which would trigger an infinite loop via
@@ -51,6 +52,33 @@ export function MessageInput() {
   // D9 (H5) — survives reloads; keyed per session so a draft can never
   // follow you across a session switch (M5).
   const sessionId = useConnectionStore((st) => st.sessionId);
+  // #656 item 1 (Mitch, 11-14) — the box sends to the tab's BOUND session, but
+  // the agent filter (#650) can show another agent's work above it. Name the
+  // recipient whenever more than one agent is around, and when the filter is
+  // on a different agent say so and offer an explicit Switch. Nothing changes
+  // silently.
+  const activeSessions = useConnectionStore((st) => st.activeSessions);
+  const switchSession = useConnectionStore((st) => st.switchSession);
+  const agentFilter = useArtifactStore((st) => st.agentFilter);
+  // Sol P2 — disclosure keys on the KNOWN bound/filter identities, not on
+  // catalog membership: lazy re-registration and catalog loss (#632/#641/#650)
+  // can leave either id out of activeSessions while the pane still shows the
+  // filtered agent. Shared human label when known, else a stable short id.
+  const labelOf = useMemo(() => {
+    const base = sessionLabelsFrom(activeSessions);
+    return (sid: string) => {
+      const label = base[sid];
+      if (!label) return `session …${sid.slice(-8)}`;
+      const clash = activeSessions.filter((x) => base[x.sessionId] === label).length > 1;
+      return clash ? `${label} (${sid.slice(-8)})` : label;
+    };
+  }, [activeSessions]);
+  const viewingOther = agentFilter !== "all" && !!sessionId && agentFilter !== sessionId;
+  const multiAgent = activeSessions.length > 1 || viewingOther;
+  const recipient = multiAgent && sessionId ? labelOf(sessionId) : null;
+  const viewingLabel = viewingOther ? labelOf(agentFilter) : null;
+  // Switch only to a target the catalog actually knows; never invent one.
+  const switchable = viewingOther && activeSessions.some((x) => x.sessionId === agentFilter);
   const draftKey = `msg:${sessionId ?? "unbound"}`;
   const [message, setMessage] = useDraft(draftKey);
   // #417 review — keyed per draft and held outside this instance (see
@@ -255,11 +283,28 @@ export function MessageInput() {
         </div>
       )}
 
+      {viewingOther && (
+        <div data-testid="message-recipient-mismatch" className="flex items-center gap-2 mb-1.5 text-2xs text-accent-amber">
+          <span className="min-w-0 truncate">
+            Viewing {viewingLabel} · messages go to {recipient}
+          </span>
+          <button
+            type="button"
+            disabled={!switchable}
+            title={switchable ? undefined : "That agent isn't available to switch to yet"}
+            onClick={() => { if (switchable) switchSession(agentFilter); }}
+            className="shrink-0 px-1.5 py-0.5 rounded border border-accent-amber/40 hover:bg-accent-amber-dim disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Switch to {viewingLabel}
+          </button>
+        </div>
+      )}
       <div className="relative">
         <textarea
           ref={textareaRef}
           rows={2}
-          placeholder="Message the agent... (Cmd+Enter to send, @ to reference artifacts)"
+          aria-label={recipient ? `Message the agent in ${recipient}` : "Message the agent"}
+          placeholder={`Message the agent${recipient ? ` in ${recipient}` : ""}... (Cmd+Enter to send, @ to reference artifacts)`}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => {

@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { createRef } from "react";
+import { ErrorBoundary } from "../ErrorBoundary";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { PresenceContext } from "motion/react";
 import type { Artifact } from "@deeppairing/shared";
-import { ArtifactDetail } from "../ArtifactPanel";
+import { ArtifactDetail, ArtifactPane } from "../ArtifactPanel";
 import { useArtifactStore } from "../../stores/artifact";
 
 /**
@@ -36,9 +38,9 @@ function panes(onePresent: boolean) {
   return (
     <>
       <PresenceContext.Provider value={presence(onePresent)}>
-        <ArtifactDetail artifact={pane("one")} />
+        <ArtifactPane artifact={pane("one")}><ArtifactDetail artifact={pane("one")} /></ArtifactPane>
       </PresenceContext.Provider>
-      <ArtifactDetail artifact={pane("two")} />
+      <ArtifactPane artifact={pane("two")}><ArtifactDetail artifact={pane("two")} /></ArtifactPane>
     </>
   );
 }
@@ -57,6 +59,7 @@ describe("#623 — an exiting artifact pane is not operable", () => {
     rerender(panes(false));
     expect(paneEl("one")).toHaveAttribute("inert");
     expect(paneEl("two")).not.toHaveAttribute("inert");
+    expect(document.querySelectorAll("[data-dp-pane]")).toHaveLength(2);
   });
 
   it("focus inside the leaving pane moves to the entering pane, not <body>", () => {
@@ -81,7 +84,22 @@ describe("#623 — an exiting artifact pane is not operable", () => {
   });
 
   it("control: a pane outside AnimatePresence is never inert", () => {
-    render(<ArtifactDetail artifact={pane("solo")} />);
+    render(<ArtifactPane artifact={pane("solo")}><ArtifactDetail artifact={pane("solo")} /></ArtifactPane>);
     expect(paneEl("solo")).not.toHaveAttribute("inert");
   });
+  it("forwards the popLayout DOM ref and keeps error fallback inside the same pane identity", () => {
+    const ref = createRef<HTMLDivElement>();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    function Broken(): never { throw new Error("Synthetic malformed renderer"); }
+    try {
+      const { rerender } = render(<ArtifactPane key="broken" ref={ref} artifact={pane("broken")}><ErrorBoundary fallback={<button>Recover</button>}><Broken /></ErrorBoundary></ArtifactPane>);
+      expect(ref.current).toBe(paneEl("broken"));
+      expect(paneEl("broken").querySelector("button")).toHaveTextContent("Recover");
+      expect(document.querySelectorAll("[data-dp-pane]")).toHaveLength(1);
+      rerender(<ArtifactPane key="healthy" artifact={pane("healthy")}><ErrorBoundary><ArtifactDetail artifact={pane("healthy")} /></ErrorBoundary></ArtifactPane>);
+      expect(paneEl("healthy")).not.toHaveTextContent("Recover");
+      expect(document.querySelector('[data-artifact-id="broken"]')).toBeNull();
+    } finally { log.mockRestore(); }
+  });
+
 });

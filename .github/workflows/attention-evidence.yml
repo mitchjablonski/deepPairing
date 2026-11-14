@@ -8,6 +8,12 @@ name: Attention evidence
 # whose gitSha differs from it is refused at staging.
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Evidence selection (full matrix or the four existing S3 cases)
+        type: choice
+        options: [all, s3]
+        default: all
 
 permissions:
   contents: read
@@ -50,8 +56,23 @@ jobs:
         run: pnpm --filter @deeppairing/mcp-server exec playwright install --with-deps chromium
 
       - name: Attention walkthroughs
+        if: inputs.scope != 's3'
         timeout-minutes: 75
         run: pnpm --filter @deeppairing/mcp-server exec playwright test --config playwright.attention.config.ts
+
+      # Fixed selection only: no user-provided shell arguments or permission changes.
+      - name: Verify the four S3 cases before execution
+        if: inputs.scope == 's3'
+        timeout-minutes: 3
+        working-directory: packages/mcp-server
+        run: |
+          pnpm exec playwright test --config playwright.attention.config.ts --grep 'S3 (OFF|ON) (1280x800|1920x1080)' --list --reporter=json > "$RUNNER_TEMP/s3-selection.json"
+          node scripts/check-s3-evidence-selection.mjs "$RUNNER_TEMP/s3-selection.json"
+
+      - name: S3 persisted verdict walkthroughs
+        if: inputs.scope == 's3'
+        timeout-minutes: 12
+        run: pnpm --filter @deeppairing/mcp-server exec playwright test --config playwright.attention.config.ts --grep 'S3 (OFF|ON) (1280x800|1920x1080)'
 
       # Copies only validated evidence to a fresh directory. Absolute paths are
       # replaced, and an invalid file is dropped and turns this step red.
