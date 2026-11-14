@@ -297,8 +297,8 @@ export function MessageInput() {
         <textarea
           ref={textareaRef}
           rows={2}
-          aria-label={recipient ? `Message ${recipient}'s agent` : "Message the agent"}
-          placeholder={`${recipient ? `Message ${recipient}'s agent` : "Message the agent"}... (Cmd+Enter to send, @ to reference artifacts)`}
+          aria-label={recipient ? `Message the agent in ${recipient}` : "Message the agent"}
+          placeholder={`Message the agent${recipient ? ` in ${recipient}` : ""}... (Cmd+Enter to send, @ to reference artifacts)`}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => {

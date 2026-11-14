@@ -20,7 +20,7 @@ beforeEach(() => {
 describe("#656 item 1 — the message box names its recipient", () => {
   it("names the tab's agent when more than one agent is around", () => {
     render(<MessageInput />);
-    expect(screen.getByRole("textbox", { name: "Message Auth refactor's agent" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message the agent in Auth refactor" })).toBeInTheDocument();
     expect(screen.queryByTestId("message-recipient-mismatch")).toBeNull();
   });
 
