@@ -30,6 +30,9 @@ export interface Provenance {
   projectName: string | null;
   /** Viewing a past session's history (replay) rather than the live run. */
   history: boolean;
+  /** #656 item 7a — real work whose agent has exited (not replay). Optional
+   *  for backward compatibility with callers that build a Provenance. */
+  ended?: boolean;
 }
 
 /** Last path segment of a project root, POSIX or Windows. */
@@ -46,6 +49,7 @@ export function classifyProvenance(input: {
   sampleSessionIds?: readonly string[];
   projectName?: string | null;
   history?: boolean;
+  ended?: boolean;
 }): Provenance | null {
   // The session id wins: the sample flag labels only the fixture's own
   // sessions (or the session-less offline preview), never a real session.
@@ -54,7 +58,8 @@ export function classifyProvenance(input: {
   }
   if (!input.sessionId) return null;
   if (isDemoSessionId(input.sessionId)) return { kind: "demo", projectName: null, history: !!input.history };
-  return { kind: "live", projectName: input.projectName ?? null, history: !!input.history };
+  return { kind: "live", projectName: input.projectName ?? null, history: !!input.history,
+    ...(input.ended && !input.history ? { ended: true } : {}) };
 }
 
 /**
@@ -72,12 +77,14 @@ export function useProvenance(sessionIdOverride?: string | null): Provenance | n
   const replayActive = useReplayStore((s) => s.active);
   const replaySessionId = useReplayStore((s) => s.sessionId);
   const sessionId = sessionIdOverride ?? (replayActive && replaySessionId ? replaySessionId : boundSessionId);
-  const fromSession = activeSessions.find((s) => s.sessionId === sessionId)?.project;
+  const session = activeSessions.find((s) => s.sessionId === sessionId);
+  const fromSession = session?.project;
   return classifyProvenance({
     sessionId,
     sampleContent,
     sampleSessionIds,
     projectName: fromSession || projectNameFromRoot(projectRoot),
     history: replayActive,
+    ended: session?.live === false,
   });
 }
