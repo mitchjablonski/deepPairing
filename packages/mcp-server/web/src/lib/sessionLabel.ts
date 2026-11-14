@@ -19,3 +19,13 @@ export function sessionLabelsFrom(sessions: SessionLike[]): Record<string, strin
   sessions.forEach((s, i) => { out[s.sessionId] = sessionLabelOf(s, i); });
   return out;
 }
+
+/** #656 — one agent's display name: its shared session label, with a short-id
+ *  suffix when two sessions would otherwise read the same (as #650's filter). */
+export function agentLabelOf(sessions: SessionLike[], sid: string | null | undefined): string | null {
+  if (!sid) return null;
+  const labels = sessionLabelsFrom(sessions);
+  const label = labels[sid];
+  if (!label) return null;
+  return sessions.filter((s) => labels[s.sessionId] === label).length > 1 ? `${label} (${sid.slice(-8)})` : label;
+}

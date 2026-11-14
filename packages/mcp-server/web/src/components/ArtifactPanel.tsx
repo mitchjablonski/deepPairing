@@ -1,6 +1,6 @@
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { orderedPendingArtifacts } from "../lib/attention";
-import { useMemo, useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
+import { forwardRef, useMemo, useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
@@ -331,13 +331,65 @@ function ArtifactSkeleton() {
 }
 
 // Exported for tests (#158 — the secret-warning banner renders here).
+export const ArtifactPane = forwardRef<HTMLDivElement, { artifact: Artifact; children: ReactNode }>(function ArtifactPane({ artifact, children }, forwardedRef) {
+  const contentWidth = usePreferencesStore((s) => s.contentWidth);
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  // #623 — after you pick another artifact, AnimatePresence keeps this pane
+  // mounted for its exit animation. It goes inert for that window, so Tab
+  // can't land on its Approve and Enter can't act on the artifact you left.
+  // If focus was inside it, hand focus to the entering pane: inert would
+  // otherwise drop it to <body> and a keyboard user restarts from the top.
+  // A layout effect runs before the browser applies inert's focus fixup.
+  const isPresent = useIsPresent();
+  const paneRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (isPresent) return;
+    const pane = paneRef.current;
+    const active = document.activeElement;
+    if (!pane || !active || !pane.contains(active)) return;
+    const selectedId = useArtifactStore.getState().selectedArtifactId;
+    const entering = Array.from(document.querySelectorAll<HTMLElement>("[data-dp-pane]")).find(
+      (p) => p !== pane && p.getAttribute("data-artifact-id") === selectedId,
+    );
+    entering?.focus({ preventScroll: true });
+  }, [isPresent]);
+
+  return (
+    <m.div
+      ref={(node) => {
+        paneRef.current = node;
+        if (typeof forwardedRef === "function") forwardedRef(node);
+        else if (forwardedRef) forwardedRef.current = node;
+      }}
+      inert={!isPresent}
+      // #623 — focusable by script only (never a Tab stop), so the hand-off
+      // above has a target that is the pane itself, not a guessed control.
+      tabIndex={-1}
+      initial={reducedMotion ? false : { opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={reducedMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: -4 }}
+      transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.32, 0.72, 0, 1] }}
+      // X10 — scoping attribute used by scrollToAnchor() to disambiguate
+      // anchors when two artifacts are on the page during transitions.
+      data-artifact-id={artifact.id}
+      // #403 — the scrolling pane a diagram popover must stay visible inside
+      // (with the sticky chrome marked below): DiagramRegionLayer measures it.
+      data-dp-pane=""
+      className={`flex-1 h-full min-h-0 min-w-0 overflow-y-auto p-4 space-y-4 scroll-shadow w-full focus:outline-none ${
+        contentWidth === "constrained" ? "max-w-4xl mx-auto" : ""
+      }`}
+    >
+      {children}
+    </m.div>
+  );
+});
+
 export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const headerGlyph = laneMarkFor(artifact)?.glyph ?? statusGlyph[artifact.status];
   // #569 review — every card names its own provenance in its header, keyed on
   // the artifact's OWN session: "● Live · <project>" on real work, "Demo" on
   // demo/sample content. Labelling only.
   const provenance = useProvenance(artifact.sessionId);
-  const contentWidth = usePreferencesStore((s) => s.contentWidth);
   // #204 (UX L2) — the artifact-level comment thread's WRITE AXIS, derived through
   // the shared reviewLifecycle helper. A retracted/terminal ("closed") or replayed
   // ("frozen") artifact is read-only: posted comments stay readable, the composer
@@ -363,48 +415,8 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       c.target.questionIndex == null,
   );
 
-  // #623 — after you pick another artifact, AnimatePresence keeps this pane
-  // mounted for its exit animation. It goes inert for that window, so Tab
-  // can't land on its Approve and Enter can't act on the artifact you left.
-  // If focus was inside it, hand focus to the entering pane: inert would
-  // otherwise drop it to <body> and a keyboard user restarts from the top.
-  // A layout effect runs before the browser applies inert's focus fixup.
-  const isPresent = useIsPresent();
-  const paneRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    if (isPresent) return;
-    const pane = paneRef.current;
-    const active = document.activeElement;
-    if (!pane || !active || !pane.contains(active)) return;
-    const selectedId = useArtifactStore.getState().selectedArtifactId;
-    const entering = Array.from(document.querySelectorAll<HTMLElement>("[data-dp-pane]")).find(
-      (p) => p !== pane && p.getAttribute("data-artifact-id") === selectedId,
-    );
-    entering?.focus({ preventScroll: true });
-  }, [isPresent]);
-
   return (
-    <m.div
-      key={artifact.id}
-      ref={paneRef}
-      inert={!isPresent}
-      // #623 — focusable by script only (never a Tab stop), so the hand-off
-      // above has a target that is the pane itself, not a guessed control.
-      tabIndex={-1}
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
-      transition={{ duration: 0.2, ease: [0.32, 0.72, 0, 1] }}
-      // X10 — scoping attribute used by scrollToAnchor() to disambiguate
-      // anchors when two artifacts are on the page during transitions.
-      data-artifact-id={artifact.id}
-      // #403 — the scrolling pane a diagram popover must stay visible inside
-      // (with the sticky chrome marked below): DiagramRegionLayer measures it.
-      data-dp-pane=""
-      className={`flex-1 overflow-y-auto p-4 space-y-4 scroll-shadow w-full focus:outline-none ${
-        contentWidth === "constrained" ? "max-w-4xl mx-auto" : ""
-      }`}
-    >
+    <>
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 mb-1">
@@ -528,7 +540,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         )}
       </div>
       )}
-    </m.div>
+    </>
   );
 }
 
@@ -1559,9 +1571,25 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
       data-testid="artifact-panel"
     >
       <DemoContentBanner provenance={provenance} />
-      {chosenFilter !== "all" && <div role="status" data-testid="agent-filter-scope" className="px-3 py-1 text-xs text-text-muted">
-        {orderedPendingArtifacts(visibleArtifacts).length} pending here · {orderedPendingArtifacts(scopedVisibleArtifacts(artifacts, "all")).filter((a) => a.sessionId !== chosenFilter).length} in other agents · {agentLabel(chosenFilter, filterSessionIds.indexOf(chosenFilter))}
-      </div>}
+      {chosenFilter !== "all" && (() => {
+        const otherPending = orderedPendingArtifacts(scopedVisibleArtifacts(artifacts, "all")).filter((a) => a.sessionId !== chosenFilter).length;
+        return (
+          // data-agents-filter: Show all removes this line, so the existing
+          // filter focus recovery hands focus to the surviving menu (Sol P2).
+          <div data-agents-filter="" className="flex items-center gap-2 px-3 py-1 text-xs text-text-muted">
+            <span role="status" data-testid="agent-filter-scope" className="min-w-0">
+              {orderedPendingArtifacts(visibleArtifacts).length} pending here · {otherPending} in other agents · {agentLabel(chosenFilter, filterSessionIds.indexOf(chosenFilter))}
+            </span>
+            {/* #656 item 5 — "M in other agents" was text with no action. */}
+            {otherPending > 0 && (
+              <button type="button" onClick={() => chooseFilter("all")}
+                className="shrink-0 px-1.5 py-0.5 rounded text-accent-blue hover:bg-surface-hover transition-colors">
+                Show all
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* #457 D6 — MultiAgentSync (other sessions' artifacts) is mounted by
           App now, so it runs even while the bound session is empty. */}
@@ -1662,7 +1690,7 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
       />
 
       {/* Detail pane */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="relative flex-1 flex flex-col min-h-0 min-w-0">
         <AnimatePresence mode="popLayout">
           {selectedArtifact ? (
             // Per-artifact boundary: a renderer crash on malformed content is
@@ -1671,8 +1699,8 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
             // a fresh boundary on selection change, so switching away from a
             // broken artifact auto-recovers (no manual "Try again" loop on the
             // same crashing content).
+            <ArtifactPane key={selectedArtifact.id} artifact={selectedArtifact}>
             <ErrorBoundary
-              key={selectedArtifact.id}
               fallback={
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 p-6 text-center">
                   <p className="text-sm text-accent-red font-medium">This artifact failed to render</p>
@@ -1684,6 +1712,7 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
             >
               <ArtifactDetail artifact={selectedArtifact} />
             </ErrorBoundary>
+            </ArtifactPane>
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-text-muted">
               {selectedArtifactId ? (artifacts.some((a) => a.id === selectedArtifactId) ? "This artifact is outside the selected view. Choose an item or show all agents to recover." : "This artifact is unavailable. Choose an item or show all agents to recover.") : "Select an artifact to view details"}
