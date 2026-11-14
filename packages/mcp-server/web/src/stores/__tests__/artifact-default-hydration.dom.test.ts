@@ -585,4 +585,39 @@ describe("#430 — canonical selection through real connected hydration", () => 
     expect(receipts.entries[JSON.stringify(["/p", "A"])]).toEqual(aReceipt);
   });
 
+
+  it("#656 accepted sibling batch repairs a retained B scope after A-only recovery without acknowledging B", async () => {
+    await hydrate([mk("a")]);
+    useArtifactStore.getState().bindAgentFilter("A", "/p");
+    useArtifactStore.getState().addArtifact(mk("b-before", { sessionId: "B" }));
+    useArtifactStore.getState().chooseAgentFilter("B");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("b-before");
+    await hydrate([mk("a")]); // Same binding recovery discards sibling data, retains B filter.
+    expect(useArtifactStore.getState().agentFilter).toBe("B");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("a");
+    await sessionVisits.settled();
+    const receiptBefore = localStorage.getItem(SESSION_VISITS_KEY);
+    let deliver: ((response: Response) => void) | undefined;
+    vi.stubGlobal("fetch", (url: string) => {
+      if (String(url).includes("/api/live-session/B")) return new Promise<Response>((resolve) => { deliver = resolve; });
+      return Promise.resolve(new Response(JSON.stringify({ blocks: [], sessions: [] }), { status: 200 }));
+    });
+    useConnectionStore.setState({ activeSessions: [{ sessionId: "B", title: "B", project: "p", artifactCount: 1, live: true }] });
+    const mounted = render(createElement(MultiAgentSync));
+    try {
+      await vi.waitFor(() => expect(deliver).toBeDefined());
+      await act(async () => {
+        if (!deliver) throw new Error("Expected the deferred sibling snapshot");
+        deliver(new Response(JSON.stringify({ artifacts: [mk("b-after", { sessionId: "B" })], comments: [], decisions: [] }), { status: 200 }));
+      });
+      // No subsequent array update is needed to repair the ineligible A pane.
+      expect(useArtifactStore.getState().agentFilter).toBe("B");
+      expect(useArtifactStore.getState().selectedArtifactId).toBe("b-after");
+      expect(useArtifactStore.getState().unreadIds).toEqual([]);
+      expect(useConnectionStore.getState().sessionId).toBe("A");
+      await sessionVisits.settled();
+      expect(localStorage.getItem(SESSION_VISITS_KEY)).toBe(receiptBefore);
+    } finally { mounted.unmount(); }
+  });
+
 });

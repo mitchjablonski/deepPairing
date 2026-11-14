@@ -1321,7 +1321,10 @@ export function MultiAgentSync() {
         } finally {
           useArtifactStore.setState({ installingSnapshot: installing });
         }
-        if (!installing) useArtifactStore.getState().fulfillPendingOpen();
+        if (!installing) {
+          useArtifactStore.getState().fulfillPendingOpen();
+          useArtifactStore.getState().reconcileAgentScope();
+        }
       } catch {
         /* network/abort: existing cadence retries without acknowledging history */
       } finally {
