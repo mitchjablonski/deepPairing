@@ -1134,3 +1134,18 @@ describe("#407 review — resolveSuggestion + markQuestionResolved are fenced at
     expect(toasts()).toHaveLength(0);
   });
 });
+
+describe("#656 historical insertion", () => {
+  it("suppresses only new historical badges, preserving live unread, selected pane and all artifacts", () => {
+    const store = useArtifactStore.getState();
+    store.addArtifact(artifact("selected"));
+    store.addArtifact(artifact("live"));
+    store.addArtifact(artifact("history"), { historical: true });
+    store.addArtifact(artifact("live", { title: "updated live" }), { historical: true });
+    expect(useArtifactStore.getState().unreadIds).toEqual(["live"]);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("selected");
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["selected", "live", "history"]);
+    store.addArtifact(artifact("later"));
+    expect(useArtifactStore.getState().unreadIds).toEqual(["live", "later"]);
+  });
+});

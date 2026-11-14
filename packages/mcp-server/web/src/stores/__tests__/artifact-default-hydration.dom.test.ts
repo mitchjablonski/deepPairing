@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import App from "../../App";
+import { MultiAgentSync } from "../../components/ArtifactPanel";
 import { usePreferencesStore } from "../preferences";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useSessionVisits } from "../../hooks/useSessionVisits";
@@ -544,4 +545,44 @@ describe("#430 — canonical selection through real connected hydration", () => 
     useArtifactStore.getState().addArtifact(decision("sibling", { sessionId: "B" }));
     expect(useArtifactStore.getState().selectedArtifactId).toBe("finding");
   });
+
+  it("#656 mounted sibling history/live/unknown Open never acknowledges another visit", async () => {
+    await hydrate([mk("a")]);
+    useArtifactStore.getState().openArtifact("a");
+    await sessionVisits.settled();
+    const aReceipt = JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[JSON.stringify(["/p", "A"])];
+    const legacy = localStorage.getItem("dp-selected-artifact");
+    let sibling = [mk("b-history", { sessionId: "B" }), mk("b-target", { sessionId: "B" })];
+    vi.stubGlobal("fetch", async (url: string) => new Response(JSON.stringify(
+      String(url).includes("/api/live-session/B") ? { artifacts: sibling, comments: [], decisions: [] } : { blocks: [], sessions: [] }
+    ), { status: 200, headers: { "Content-Type": "application/json" } }));
+    useConnectionStore.setState({ activeSessions: [{ sessionId: "B", title: "B", project: "p", artifactCount: 2, live: true }] });
+    useArtifactStore.getState().bindAgentFilter("A", "/p");
+    useArtifactStore.getState().chooseAgentFilter("A");
+    useArtifactStore.getState().openArtifact("b-target");
+    const mounted = render(createElement(MultiAgentSync));
+    try {
+      await vi.waitFor(() => expect(useArtifactStore.getState().pendingOpen).toBeNull());
+      expect(useArtifactStore.getState().selectedArtifactId).toBe("b-target");
+      expect(useArtifactStore.getState().agentFilter).toBe("B");
+      expect(useArtifactStore.getState().unreadIds).toEqual([]);
+      expect(computePending(useArtifactStore.getState().artifacts).drafts).toHaveLength(3);
+      sibling = [...sibling, mk("b-live", { sessionId: "B" })];
+      act(() => useConnectionStore.setState({ activeSessions: [{ sessionId: "B", title: "B", project: "p", artifactCount: 3, live: true }] }));
+      await vi.waitFor(() => expect(useArtifactStore.getState().unreadIds).toEqual(["b-live"]));
+      await sessionVisits.settled();
+      const receipts = JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!);
+      expect(receipts.entries[JSON.stringify(["/p", "A"])]).toEqual(aReceipt);
+      expect(receipts.entries[JSON.stringify(["/p", "B"])]).toBeUndefined();
+      expect(localStorage.getItem("dp-selected-artifact")).toBe(legacy);
+      expect(useConnectionStore.getState().sessionId).toBe("A");
+    } finally { mounted.unmount(); }
+    await hydrate(sibling, "B");
+    await sessionVisits.settled();
+    expect(useArtifactStore.getState().unreadIds).toEqual([]);
+    const receipts = JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!);
+    expect(receipts.entries[JSON.stringify(["/p", "B"])].observed).toEqual(sibling.map((a) => a.id));
+    expect(receipts.entries[JSON.stringify(["/p", "A"])]).toEqual(aReceipt);
+  });
+
 });

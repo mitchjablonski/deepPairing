@@ -1,6 +1,6 @@
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { orderedPendingArtifacts } from "../lib/attention";
-import { forwardRef, useMemo, useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
+import { forwardRef, useMemo, useState, useEffect, useCallback, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
@@ -11,7 +11,8 @@ import { isDemoSessionId } from "@deeppairing/shared";
 import { useProvenance } from "../lib/provenance";
 import { DemoContentBanner, DemoTag, ProvenanceChip } from "./ProvenanceMarker";
 import { useArtifactStore, scopedVisibleArtifacts, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
-import { useSiblingSyncStore } from "../lib/siblingSync";
+import { useSiblingSyncStore, siblingFrame, cancelSiblingFlights } from "../lib/siblingSync";
+import { captureSessionTransition, isCurrentSessionTransition } from "../lib/session-transition";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
@@ -1236,181 +1237,151 @@ function changeSignal(s: { artifactCount: number; revision?: number; revisionEpo
 }
 
 export function MultiAgentSync() {
-  const addArtifact = useArtifactStore((s) => s.addArtifact);
-  const addComment = useArtifactStore((s) => s.addComment);
-  const updateComment = useArtifactStore((s) => s.updateComment);
-  const recordResolvedDecision = useArtifactStore((s) => s.recordResolvedDecision);
-  // C1 — reuse the session list App already polls into the connection store
-  // (every 10s) instead of running a SECOND 5s /api/active-sessions poll here.
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const boundSessionId = useConnectionStore((s) => s.sessionId);
-  // C1 review — refreshSessions sets a NEW array identity every 10s poll even
-  // when unchanged; depending on the array tore down + recreated the 5s
-  // interval each time. Key the effect on the id list's VALUE instead.
   const sessionKey = activeSessions.map((s) => s.sessionId).join(",");
-  // #458 review (D6b) — the per-session CHANGE signal: the artifact count the
-  // same 10s poll already carries (refreshSessions publishes a new list only
-  // when a rendered field — incl. artifactCount — changed).
   const countKey = activeSessions.map((s) => `${s.sessionId}:${changeSignal(s)}`).join(",");
-  const sessionsRef = useRef(activeSessions);
-  sessionsRef.current = activeSessions;
-  const boundRef = useRef(boundSessionId);
-  boundRef.current = boundSessionId;
-  // Bug B — track which sessions we've actually BACKFILLED (a successful
-  // /api/live-session/:id that returned artifacts), NOT "which sessions do we
-  // hold ≥1 artifact from". A stray WS-delivered artifact for session B no
-  // longer marks B "known" and skips its full fetch. A ref (not state) so
-  // adding an id doesn't re-render / churn the interval.
-  const fullyLoadedSessions = useRef<Set<string>>(new Set());
-  // #458 review (D6b) — the artifactCount each loaded session had when we last
-  // fetched it. Broadcasts are session-scoped, so a sibling's NEW draft never
-  // reaches this tab over the WS; before, a loaded session was never fetched
-  // again and its new decision stayed invisible ("Nothing needs you"). A loaded
-  // session is re-fetched when — and only when — its count moves, so the cost
-  // follows activity: a quiet sibling costs nothing, a busy one one GET per
-  // change, bounded by the existing 10s session poll.
-  const fetchedCount = useRef<Map<string, string>>(new Map());
-  // #460 — sessions a stale-card refusal asked to re-fetch right now.
-  const forceRefresh = useRef<Set<string>>(new Set());
-  // C1 — a session with ZERO artifacts is never fully-loaded (the fetch
-  // returned nothing to mark), so the 30s backoff keeps polling it: that's how
-  // another session's FIRST artifact gets discovered.
-  const lastAttemptRef = useRef<Map<string, number>>(new Map());
-  const inFlight = useRef<Set<string>>(new Set());
-  const EMPTY_SESSION_RETRY_MS = 30_000;
-  // #457 D6 — this component lives at App level (it was inside ArtifactPanel,
-  // which only mounts once the BOUND session has artifacts). A store reset
-  // (session switch, hydration snapshot) discards everything merged; it is
-  // detected by the store generation, and (#458 review) re-merged IMMEDIATELY —
-  // waiting for the next 5s tick landed the history after the arrival region's
-  // settle window, so old sibling artifacts were announced as new.
-  const generationRef = useRef(artifactStoreGeneration());
   const syncRef = useRef<() => Promise<void>>(async () => {});
-  const acRef = useRef<AbortController | null>(null);
-
+  const ownerRef = useRef<symbol | null>(null);
+  const generationRef = useRef(artifactStoreGeneration());
+  const currentFrame = useCallback(() => {
+    const connection = useConnectionStore.getState();
+    generationRef.current = artifactStoreGeneration();
+    return siblingFrame(generationRef.current, connection.sessionId, connection.projectRoot);
+  }, []);
   syncRef.current = async () => {
-    // PP3 — skip the fetch + parse + cross-session merge when the tab is
-    // hidden (the timer keeps ticking but does no work / triggers no renders).
-    if (typeof document !== "undefined" && document.hidden) return;
-    const ac = acRef.current;
-    if (!ac) return;
-    const generation = artifactStoreGeneration();
-    if (generation !== generationRef.current) {
-      generationRef.current = generation;
-      fullyLoadedSessions.current.clear();
-      fetchedCount.current.clear();
-      lastAttemptRef.current.clear();
-      useSiblingSyncStore.setState({ settled: false }); // #467 review — re-merging
-    }
-    for (const session of sessionsRef.current) {
-      // E7 review — bail BEFORE stamping the backoff on an abort.
-      if (ac.signal.aborted) return;
+    const replay = useReplayStore.getState();
+    if (document.hidden || replay.active || replay.exiting || !ownerRef.current) return;
+    const owner = ownerRef.current;
+    const frame = currentFrame();
+    const transition = captureSessionTransition(frame.sessionId);
+    for (const session of useConnectionStore.getState().activeSessions) {
+      if (ownerRef.current !== owner || !isCurrentSessionTransition(transition)) return;
       const id = session.sessionId;
-      // Keyed by generation: a fetch from before a reset must not block the
-      // reset's own immediate re-merge.
-      const flightKey = `${generation}:${id}`;
-      if (inFlight.current.has(flightKey)) continue;
-      const loaded = fullyLoadedSessions.current.has(id);
+      if (frame.flights.has(id)) continue;
+      const loaded = frame.loaded.has(id);
       if (loaded) {
-        // The bound session's own changes arrive over its WS.
-        if (id === boundRef.current) continue;
-        if (fetchedCount.current.get(id) === changeSignal(session) && !forceRefresh.current.has(id)) continue; // nothing new
+        if (id === frame.sessionId) continue;
+        if (frame.fetched.get(id) === changeSignal(session) && !frame.forced.has(id)) continue;
       } else {
-        const last = lastAttemptRef.current.get(id) ?? 0;
-        if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
-        lastAttemptRef.current.set(id, Date.now());
+        if (Date.now() - (frame.attempted.get(id) ?? 0) < 30_000) continue;
+        frame.attempted.set(id, Date.now());
       }
-      inFlight.current.add(flightKey);
+      const token = Symbol();
+      const controller = new AbortController();
+      frame.flights.set(id, { token, owner, controller });
+      const eligible = () => {
+        const connection = useConnectionStore.getState();
+        const replayNow = useReplayStore.getState();
+        return siblingFrame(artifactStoreGeneration(), connection.sessionId, connection.projectRoot) === frame &&
+          !controller.signal.aborted && frame.flights.get(id)?.token === token &&
+          ownerRef.current === owner && artifactStoreGeneration() === frame.generation &&
+          connection.sessionId === frame.sessionId &&
+          (!connection.projectRoot || !frame.projectRoot || connection.projectRoot === frame.projectRoot) &&
+          isCurrentSessionTransition(transition) && !document.hidden && !replayNow.active && !replayNow.exiting;
+      };
       try {
-        const sRes = await apiGet(`${apiBase()}/api/live-session/${id}`, { signal: ac.signal });
-        if (!sRes.ok) continue;
-        const state = await sRes.json();
-        if (ac.signal.aborted) return;
-        // #457 D6 — a reset landed mid-fetch: this payload belongs to the
-        // discarded store. The reset's own immediate re-sync fetches again.
-        if (artifactStoreGeneration() !== generation) return;
-        const artifacts: Artifact[] = state.artifacts ?? [];
-        // #458 review — a session's FIRST load (or its re-merge after a reset)
-        // is history: mark it before adding so nothing reads it as an arrival.
-        // A re-poll of a loaded session brings genuinely new work: unmarked.
-        if (!loaded) markBackfilled(artifacts.map((a) => a.id));
-        for (const artifact of artifacts) addArtifact(artifact);
-        // #460 — upsert: a re-poll must carry an answered/resolved question's
-        // UPDATE too (addComment skips an id it already holds).
-        const held = useArtifactStore.getState().comments;
-        for (const comment of (state.comments ?? []) as Comment[]) {
-          const bucket = held[comment.target?.artifactId ?? ""] ?? [];
-          if (bucket.some((c) => c.id === comment.id)) updateComment(comment);
-          else addComment(comment);
-        }
-        // #464 review — the sibling's recorded decision answers too, so a card
-        // resolved elsewhere renders resolved (winning pick, no Select) instead
-        // of a stale, actionable option grid.
-        for (const d of (state.decisions ?? []) as Array<{ decisionId?: string; resolvedAt?: string; response?: { optionId?: string; reasoning?: string } }>) {
-          if (d?.decisionId && d.response?.optionId) {
-            recordResolvedDecision(d.decisionId, { optionId: d.response.optionId, reasoning: d.response.reasoning, resolvedAt: d.resolvedAt });
+        const response = await apiGet(`${apiBase()}/api/live-session/${id}`, { signal: controller.signal });
+        if (!response.ok) continue;
+        const state = await response.json();
+        if (!eligible()) return;
+        // Validate the whole artifact batch before publishing any item or consuming
+        // even an empty baseline. Optional collections retain endpoint compatibility.
+        if (!state || !Array.isArray(state.artifacts) ||
+            !state.artifacts.every((a: Artifact | null) => a && typeof a.id === "string" && a.id.length > 0 &&
+              a.sessionId === id) ||
+            (state.comments !== undefined && (!Array.isArray(state.comments) ||
+              !state.comments.every((c: Comment | null) => c && c.target && typeof c.id === "string"))) ||
+            (state.decisions !== undefined && (!Array.isArray(state.decisions) ||
+              !state.decisions.every((d: unknown) => d && typeof d === "object")))) continue;
+        const artifacts: Artifact[] = state.artifacts;
+        const historical = id !== frame.sessionId && !frame.baseline.has(id);
+        const store = useArtifactStore.getState();
+        const installing = store.installingSnapshot;
+        useArtifactStore.setState({ installingSnapshot: true });
+        try {
+          if (!frame.baseline.has(id)) markBackfilled(artifacts.map((a) => a.id));
+          for (const artifact of artifacts) store.addArtifact(artifact, historical ? { historical: true } : undefined);
+          const held = useArtifactStore.getState().comments;
+          for (const comment of (state.comments ?? []) as Comment[]) {
+            const bucket = held[comment.target?.artifactId ?? ""] ?? [];
+            if (bucket.some((c) => c.id === comment.id)) store.updateComment(comment);
+            else store.addComment(comment);
           }
+          for (const d of (state.decisions ?? []) as Array<{ decisionId?: string; resolvedAt?: string; response?: { optionId?: string; reasoning?: string } }>) {
+            if (d.decisionId && d.response?.optionId) store.recordResolvedDecision(d.decisionId,
+              { optionId: d.response.optionId, reasoning: d.response.reasoning, resolvedAt: d.resolvedAt });
+          }
+          frame.baseline.add(id); // Includes accepted empty history, independently of polling.
+          frame.forced.delete(id);
+          if (artifacts.length > 0) {
+            frame.loaded.add(id);
+            frame.fetched.set(id, changeSignal(session));
+          }
+        } finally {
+          useArtifactStore.setState({ installingSnapshot: installing });
         }
-        forceRefresh.current.delete(id);
-        // Bug B — mark fully-loaded ONLY once we've actually pulled artifacts;
-        // empty sessions stay unmarked so the 30s backoff keeps polling them.
-        if (artifacts.length > 0) {
-          fullyLoadedSessions.current.add(id);
-          fetchedCount.current.set(id, changeSignal(session));
-        }
+        if (!installing) useArtifactStore.getState().fulfillPendingOpen();
       } catch {
-        /* network / abort — the next tick retries */
+        /* network/abort: existing cadence retries without acknowledging history */
       } finally {
-        inFlight.current.delete(flightKey);
+        if (frame.flights.get(id)?.token === token) frame.flights.delete(id);
       }
     }
-    // #467 review — a full pass over a KNOWN session list (the 10s poll has
-    // published at least one session) means the siblings are merged.
-    const stillFetching = [...inFlight.current].some((k) => k.startsWith(`${generation}:`));
-    if (sessionsRef.current.length > 0 && !stillFetching && artifactStoreGeneration() === generation && !useSiblingSyncStore.getState().settled) {
-      useSiblingSyncStore.setState({ settled: true });
-    }
+    if (useConnectionStore.getState().activeSessions.length > 0 && frame.flights.size === 0 &&
+        artifactStoreGeneration() === frame.generation) useSiblingSyncStore.setState({ settled: true });
   };
 
   useEffect(() => {
-    // E7 — one controller per effect generation; cleanup aborts mid-flight.
-    const ac = new AbortController();
-    acRef.current = ac;
+    const owner = Symbol();
+    ownerRef.current = owner;
+    const invalidate = () => cancelSiblingFlights(currentFrame(), owner);
+    const onVisibility = () => {
+      invalidate(); // A hide→show roundtrip cannot revive a captured response.
+      if (!document.hidden) void syncRef.current();
+    };
+    const offReplay = useReplayStore.subscribe((next, prev) => {
+      if (next.active !== prev.active || next.exiting !== prev.exiting || next.cursor !== prev.cursor) {
+        invalidate();
+        if (!next.active && !next.exiting) void syncRef.current();
+      }
+    });
+    const offConnection = useConnectionStore.subscribe((next, prev) => {
+      if (next.sessionId !== prev.sessionId ||
+          (!!next.projectRoot && !!prev.projectRoot && next.projectRoot !== prev.projectRoot)) {
+        invalidate();
+        void syncRef.current();
+      }
+    });
+    document.addEventListener("visibilitychange", onVisibility);
     void syncRef.current();
-    // 5s cadence stays for reacting to NEWLY appearing sessions quickly; it is
-    // fetch-free unless a session is new, past its empty backoff, or changed.
     const timer = setInterval(() => void syncRef.current(), 5000);
-    return () => { ac.abort(); clearInterval(timer); };
-  }, [sessionKey]); // Re-run when the session MEMBERSHIP changes
+    return () => {
+      invalidate();
+      if (ownerRef.current === owner) ownerRef.current = null;
+      offReplay(); offConnection();
+      document.removeEventListener("visibilitychange", onVisibility);
+      clearInterval(timer);
+    };
+  }, [sessionKey, boundSessionId, currentFrame]);
 
-  // #458 review (D6b) — a sibling's count moved (the 10s poll saw it): fetch now.
+  useEffect(() => { void syncRef.current(); }, [countKey]);
   useEffect(() => {
-    void syncRef.current();
-  }, [countKey]);
-
-  // #460 — a stale-card refusal (verdict_already_final) on a sibling's
-  // artifact: re-fetch that session now, whatever its signal says.
-  useEffect(() => {
-    const onRefresh = (e: Event) => {
-      const sid = (e as CustomEvent<{ sessionId?: string }>).detail?.sessionId;
-      if (!sid) return;
-      forceRefresh.current.add(sid);
+    const onRefresh = (event: Event) => {
+      const id = (event as CustomEvent<{ sessionId?: string }>).detail?.sessionId;
+      if (!id) return;
+      currentFrame().forced.add(id);
       void syncRef.current();
     };
     window.addEventListener(REFRESH_SESSION_EVENT, onRefresh);
     return () => window.removeEventListener(REFRESH_SESSION_EVENT, onRefresh);
-  }, []);
-
-  // #458 review — re-merge immediately after a store reset (generation bump).
-  useEffect(
-    () => useArtifactStore.subscribe(() => {
-      if (artifactStoreGeneration() !== generationRef.current) void syncRef.current();
-    }),
-    [],
-  );
-
-  return null; // No visual output — just syncs data
+  }, [currentFrame]);
+  useEffect(() => useArtifactStore.subscribe(() => {
+    if (artifactStoreGeneration() !== generationRef.current) void syncRef.current();
+  }), []);
+  return null;
 }
+
 
 export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (active: boolean) => void } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
