@@ -363,14 +363,38 @@ describe("ChangesetArtifact — keyboard, scoped to focus (#175 / #187 hazard)",
     expect(updateStatus).not.toHaveBeenCalled();
   });
 
-  it("#642 item 1 — once a file is marked, ⏎ runs the derived action again (approve-all of the remainder)", () => {
+  it("#656 item 3 (Mitch) — with some files marked, ⏎ jumps to the next UNREVIEWED file and marks nothing", () => {
     const art = changeset({ reviewState: { "auth/middleware.ts": "reviewed" } });
     seed(art);
     const setReview = vi.fn().mockResolvedValue(undefined);
-    useArtifactStore.setState({ setChangesetFileReview: setReview });
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview, updateArtifactStatus: updateStatus });
     render(<ChangesetArtifact artifact={art} />);
+    expect(screen.getByText(/next unreviewed/)).toBeInTheDocument();
     act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    // Moved to file 1 (session.ts) — its diff is shown — and nothing was written.
+    expect(screen.getByText(/expiresAt: number;/)).toBeInTheDocument();
+    expect(setReview).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+    // ⇧⏎ is still the explicit approve-all.
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter", shiftKey: true }); });
     expect(setReview).toHaveBeenCalledWith("art_cs", "auth/session.ts", "reviewed");
+  });
+
+  it("#656 item 3 — ⏎ wraps to an earlier unreviewed file, and skips flagged ones", () => {
+    const art = changeset({ reviewState: { "auth/session.ts": "needs_changes", "auth/session.test.ts": "reviewed" }, reviewReasons: { "auth/session.ts": "fix" } });
+    seed(art);
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview, updateArtifactStatus: updateStatus });
+    render(<ChangesetArtifact artifact={art} />);
+    act(() => { fireEvent.keyDown(document.body, { key: "j" }); });
+    act(() => { fireEvent.keyDown(document.body, { key: "j" }); }); // now on file 2 (session.test.ts)
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    // The only unreviewed file is 0 (middleware.ts): wrapped back to it; no send-back fired.
+    expect(screen.getByText(/getAndTouch/)).toBeInTheDocument();
+    expect(updateStatus).not.toHaveBeenCalled();
+    expect(setReview).not.toHaveBeenCalled();
   });
 
   it("the keys are DEAD when the changeset is not the focused artifact", () => {
