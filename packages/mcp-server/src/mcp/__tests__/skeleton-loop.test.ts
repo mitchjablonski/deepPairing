@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { SKELETON_ANCHOR_LIMITS } from "@deeppairing/shared";
@@ -16,11 +16,12 @@ import { FileStore } from "../../store/file-store.js";
 import { createMcpServer } from "../server.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { skeletonLeftovers } from "../skeleton-finalize.js";
+import { readSkeletonScopes, resolveSkeletonScopes } from "../../skeleton-scope.js";
 import { writeReshapeScope } from "../skeleton-reshape.js";
 
 class FailingFenceNoticeStore extends FileStore {
   override addComment(params: Parameters<FileStore["addComment"]>[0]): ReturnType<FileStore["addComment"]> {
-    if (params.author === "agent" && params.content.startsWith("Fence lifted without completing the step:")) {
+    if (params.author === "agent" && (params.content.startsWith("Fence lifted without completing the step:") || params.content.startsWith("Completion/TODO mismatch:"))) {
       throw new Error("controlled comment persistence failure");
     }
     return super.addComment(params);
@@ -305,4 +306,147 @@ describe("comment skeleton anchor (server-side cap)", () => {
     const plain = store.addComment({ id: "cmt_plain", artifactId: id, content: "plain", author: "human", target: { lineStart: 1, filePath: "a.ts" } });
     expect(plain.target).toEqual({ artifactId: id, lineStart: 1, filePath: "a.ts" });
   });
+});
+
+describe("#640 accepted completion/TODO notice", () => {
+  beforeEach(() => {
+    // Unlike the older scan-only fixtures, hook authority and code share a root.
+    fs.rmSync(root, { recursive: true, force: true });
+    root = fs.realpathSync(ctx.tmpDir);
+    process.env.CLAUDE_PROJECT_DIR = root;
+    fs.writeFileSync(path.join(root, "a.ts"), SRC);
+  });
+  afterEach(() => {
+    store.dispose();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const notices = () => store.getComments().filter((c) => c.content.startsWith("Completion/TODO mismatch:"));
+  async function activePlan() {
+    const id = await presentApproved();
+    await progress(id, 0, "in_progress");
+    store.forceFlush(); // Establish actual pre-call authority, never called by the new path.
+    return id;
+  }
+  function failScopeSync() {
+    const rename = fs.renameSync;
+    const remove = fs.rmSync;
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to).includes(path.sep + "skeleton-scopes" + path.sep)) throw new Error("controlled scope sync failure");
+      return rename(from, to);
+    });
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (String(target).includes(path.sep + "skeleton-scopes" + path.sep)) throw new Error("controlled scope sync failure");
+      return remove(target, options);
+    });
+  }
+  it.each([
+    { restored: false, failSync: false },
+    { restored: false, failSync: true },
+    { restored: true, failSync: true },
+  ])("notifies accepted TODO completion while disk is stale (restored=$restored syncFailure=$failSync)", async ({ restored, failSync }) => {
+    const id = await activePlan();
+    if (restored) {
+      await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "Skeleton change: x", content: { steps: STEPS, estimatedChanges: 1 } });
+      const v2 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+      store.updateArtifactStatus(v2.id, "rejected", "ui_reject_button");
+      store.forceFlush();
+    }
+    const before = resolveSkeletonScopes(root, readSkeletonScopes(root)).fenced;
+    expect(before.some((scope) => scope.activeSkelIds.includes("1"))).toBe(true);
+    const disk = fs.readFileSync(path.join(root, ".deeppairing", "sessions", store.getSessionId(), "artifacts.json"), "utf8");
+    if (failSync) failScopeSync();
+    vi.useFakeTimers(); // Deliberately retain PF1's debounced pre-completion disk view.
+    const flush = vi.spyOn(store, "forceFlush");
+    const result = await progress(id, 0, "done");
+    expect(flush).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(root, ".deeppairing", "sessions", store.getSessionId(), "artifacts.json"), "utf8")).toBe(disk);
+    expect(store.getArtifacts().find((a) => a.id === id)?.content).toMatchObject({ steps: [{ status: "done" }] });
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]?.target.artifactId).toBe(id);
+    expect(notices()[0]?.content).toContain("SKEL_TODO remains at a.ts:2");
+    expect(result.text).toContain("A completion/TODO notice was saved");
+    expect(result.text).toContain("once the hook reads that state");
+    expect(result.text).toContain("Other active scopes may still gate edits");
+    expect(notices()[0]?.content).not.toContain("the fence was released");
+    expect(notices()[0]?.content).not.toContain("saved to disk");
+    await progress(id, 0, "done");
+    expect(notices()).toHaveLength(1); // Repeated done is not a new completion.
+  });
+  it.each(["clean", "skipped", "pending", "unapproved", "no-scope", "wrong-session", "wrong-worktree", "expired", "missing-file", "unreadable-scope"])("keeps %s completion notice-free", async (mode) => {
+    const id = await activePlan();
+    const scopePath = path.join(root, ".deeppairing", "skeleton-scopes", id + ".json");
+    if (mode === "clean") fs.writeFileSync(path.join(root, "a.ts"), FILLED);
+    if (mode === "missing-file") fs.rmSync(path.join(root, "a.ts"));
+    if (mode === "unreadable-scope") fs.writeFileSync(scopePath, "{");
+    if (mode === "pending") { await progress(id, 0, "pending"); store.forceFlush(); }
+    if (mode === "unapproved") store.updateArtifactStatus(id, "rejected", "ui_reject_button");
+    if (mode === "no-scope") fs.rmSync(scopePath);
+    if (["wrong-session", "wrong-worktree", "expired"].includes(mode)) {
+      const scope = JSON.parse(fs.readFileSync(scopePath, "utf8"));
+      if (mode === "wrong-session") scope.sessionId = "another";
+      if (mode === "wrong-worktree") scope.workspaceRoot = path.join(root, "different-worktree");
+      if (mode === "expired") scope.updatedAt = "2000-01-01T00:00:00.000Z";
+      fs.writeFileSync(scopePath, JSON.stringify(scope));
+    }
+    const result = await progress(id, 0, mode === "skipped" ? "skipped" : "done");
+    expect(notices()).toEqual([]);
+    expect(result.text).not.toContain("completion/TODO notice was saved");
+  });
+  it("uses final batch state and deduplicates a newly completed ID", async () => {
+    const id = await activePlan();
+    await callTool("update_plan_progress", { artifactId: id, updates: [
+      { stepIndex: 0, status: "done" }, { stepIndex: 0, status: "in_progress" },
+    ] });
+    expect(notices()).toEqual([]);
+    store.forceFlush();
+    await callTool("update_plan_progress", { artifactId: id, updates: [
+      { stepIndex: 0, status: "done" }, { stepIndex: 0, status: "done" },
+    ] });
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]?.content.match(/Step 1/g)).toHaveLength(1);
+  });
+  it("omits release wording when another final step still carries the same ID", async () => {
+    await callTool("present_plan", { title: "Duplicate ID", steps: [...STEPS, { ...STEPS[0], description: "same fence" }], estimatedChanges: 1 });
+    const id = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!.id;
+    store.updateArtifactStatus(id, "approved", "ui_approve_button");
+    await callTool("update_plan_progress", { artifactId: id, updates: [{ stepIndex: 0, status: "in_progress" }, { stepIndex: 1, status: "in_progress" }] });
+    store.forceFlush();
+    await progress(id, 0, "done");
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]?.content).toContain("Another accepted step still marks the same fence ID");
+    expect(notices()[0]?.content).not.toContain("no longer marks");
+  });
+  it("does not treat a generic superseded plan or a paused reshape as restored approval", async () => {
+    const id = await activePlan();
+    await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "Skeleton change: x", content: { steps: STEPS, estimatedChanges: 1 } });
+    await progress(id, 0, "done"); // v2 is still draft: paused, not a restoring fence.
+    expect(notices()).toEqual([]);
+  });
+
+  it("reports a failed completion notice without rolling back accepted progress", async () => {
+    const id = await activePlan();
+    const addComment = store.addComment.bind(store);
+    vi.spyOn(store, "addComment").mockImplementation((params) => {
+      if (params.content.startsWith("Completion/TODO mismatch:")) throw new Error("controlled completion notice failure");
+      return addComment(params);
+    });
+    const result = await progress(id, 0, "done");
+    expect(result.text).toContain("The notice could not be saved to the plan; notify the human directly now");
+    expect(result.text).not.toContain("completion/TODO notice was saved");
+    expect(notices()).toHaveLength(0);
+    expect(store.getArtifacts().find((a) => a.id === id)?.content).toMatchObject({ steps: [{ status: "done" }] });
+  });
+  it("does not claim all scopes are gone when another plan remains active", async () => {
+    const id = await activePlan();
+    const other = await presentApproved();
+    await progress(other, 0, "in_progress");
+    store.forceFlush();
+    await progress(id, 0, "done");
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]?.content).toContain("for this plan");
+    expect(notices()[0]?.content).toContain("Other active scopes may still gate edits");
+    expect(readSkeletonScopes(root).some((scope) => scope.artifactId === other && scope.activeSkelIds.includes("1"))).toBe(true);
+  });
+
 });
