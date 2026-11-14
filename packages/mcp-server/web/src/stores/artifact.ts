@@ -441,6 +441,7 @@ export interface ArtifactState {
   reconcileAgentScope: () => void;
   exactNavigationId: string | null;
   navigationEpoch: number;
+  bindingUnknown: boolean;
   filterBinding: { sessionId: string | null; projectRoot: string | null } | null;
   bindAgentFilter: (sessionId: string | null, projectRoot: string | null) => void;
   chooseAgentFilter: (owner: string) => void;
@@ -767,14 +768,16 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   },
   exactNavigationId: null,
   navigationEpoch: 0,
+  bindingUnknown: false,
   filterBinding: null,
   bindAgentFilter: (sessionId, projectRoot) => set((state) => {
     const previous = state.filterBinding;
-    if (sessionId === null && previous?.sessionId && (!projectRoot || !previous.projectRoot || previous.projectRoot === projectRoot)) return state;
-    if (previous?.sessionId === sessionId && (projectRoot === previous.projectRoot || !projectRoot)) return state;
+    if (sessionId === null && previous?.sessionId && (!projectRoot || !previous.projectRoot || previous.projectRoot === projectRoot)) return state.bindingUnknown ? state : { bindingUnknown: true, navigationEpoch: state.navigationEpoch + 1 };
+    if (!state.bindingUnknown && previous?.sessionId === sessionId && (projectRoot === previous.projectRoot || !projectRoot)) return state;
     const switched = previous && (previous.sessionId !== sessionId ||
       (!!previous.projectRoot && !!projectRoot && previous.projectRoot !== projectRoot));
     return {
+      bindingUnknown: false,
       filterBinding: { sessionId, projectRoot: projectRoot ?? (previous?.sessionId === sessionId ? previous.projectRoot : null) },
       ...(switched ? { agentFilter: "all", exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1 } : {}),
     };
