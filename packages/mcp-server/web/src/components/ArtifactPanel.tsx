@@ -1291,7 +1291,7 @@ export function MultiAgentSync() {
             (Object.hasOwn(state, "sessionId") && state.sessionId !== id)) continue;
         // Legacy disk rows may omit owner. Only the authoritative matching
         // envelope can supply it, on copies; explicit bad owners remain invalid.
-        const artifacts = state.artifacts.map((artifact: Artifact | null) =>
+        const artifacts: Array<Artifact | null> = state.artifacts.map((artifact: Artifact | null) =>
           artifact && artifact.sessionId === undefined && state.sessionId === id
             ? { ...artifact, sessionId: id } : artifact);
         if (!artifacts.every((a): a is Artifact => !!a && typeof a.id === "string" && a.id.length > 0 &&
