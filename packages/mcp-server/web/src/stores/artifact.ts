@@ -438,6 +438,7 @@ export interface ArtifactState {
   installingSnapshot: boolean;
   pendingOpen: { id: string; epoch: number; binding: string; replay: boolean; cursor: string } | null;
   fulfillPendingOpen: () => void;
+  reconcileAgentScope: () => void;
   exactNavigationId: string | null;
   navigationEpoch: number;
   filterBinding: { sessionId: string | null; projectRoot: string | null } | null;
@@ -746,6 +747,14 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   agentFilter: "all",
   installingSnapshot: false,
   pendingOpen: null,
+  reconcileAgentScope: () => {
+    const state = get();
+    if (state.agentFilter === "all" || state.installingSnapshot || (state.pendingOpen?.epoch === state.navigationEpoch) || state.exactNavigationId) return;
+    const visible = scopedVisibleArtifacts(state.artifacts);
+    if (visible.some((a) => a.id === state.selectedArtifactId)) return;
+    const target = orderedPendingArtifacts(visible)[0] ?? visible[0];
+    if (target) set({ selectedArtifactId: target.id, unreadIds: state.unreadIds.filter((id) => id !== target.id) });
+  },
   fulfillPendingOpen: () => {
     const state = get();
     const pending = state.pendingOpen;
@@ -761,6 +770,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   filterBinding: null,
   bindAgentFilter: (sessionId, projectRoot) => set((state) => {
     const previous = state.filterBinding;
+    if (sessionId === null && previous?.sessionId && (!projectRoot || !previous.projectRoot || previous.projectRoot === projectRoot)) return state;
+    if (previous?.sessionId === sessionId && (projectRoot === previous.projectRoot || !projectRoot)) return state;
     const switched = previous && (previous.sessionId !== sessionId ||
       (!!previous.projectRoot && !!projectRoot && previous.projectRoot !== projectRoot));
     return {
@@ -771,11 +782,11 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   chooseAgentFilter: (owner) => set((state) => {
     const visible = scopedVisibleArtifacts(state.artifacts, owner);
     const current = visible.find((a) => a.id === state.selectedArtifactId);
-    const target = (owner === "all" ? current : undefined) ?? orderedPendingArtifacts(visible)[0] ?? current ?? visible[0];
+    const target = current ?? orderedPendingArtifacts(visible)[0] ?? visible[0];
     const id = target?.id ?? null;
     // Empty transient scopes clear the pane without erasing bound visit intent.
     if (id !== null) persistLiveSelection(state, id);
-    return { agentFilter: owner, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1,
+    return { agentFilter: owner, pendingOpen: null, exactNavigationId: null, navigationEpoch: state.navigationEpoch + 1,
       selectedArtifactId: id, unreadIds: state.unreadIds.filter((uid) => uid !== id) };
   }),
   openArtifact: (id) => set((state) => {
@@ -786,7 +797,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       pendingOpen: { id, epoch: state.navigationEpoch + 1, binding: JSON.stringify(state.filterBinding), replay: replay.active, cursor: replay.cursor } };
     if (target && replay.active && replay.cursor && target.createdAt > replay.cursor) return {};
     persistLiveSelection(state, resolved);
-    return { agentFilter: state.agentFilter === "all" ? "all" : target?.sessionId ?? state.agentFilter,
+    return { pendingOpen: null, agentFilter: state.agentFilter === "all" ? "all" : target?.sessionId ?? state.agentFilter,
       navigationEpoch: state.navigationEpoch + 1, exactNavigationId: replay.active ? resolved : null, selectedArtifactId: resolved,
       unreadIds: state.unreadIds.filter((uid) => uid !== resolved) };
   }),

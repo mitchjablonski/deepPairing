@@ -145,7 +145,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     const select = screen.getByRole("combobox", { name: /^Agents/ }) as HTMLSelectElement;
     expect(select.tagName).toBe("SELECT");
     expect(select.closest("nav[aria-label='Artifacts']")).not.toBeNull();
-    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["All (2)", "Agent 1 (1)", "Agent 2 (1)"]);
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["All (2)", "Session 1 (1)", "Session 2 (1)"]);
     fireEvent.change(select, { target: { value: "s2" } });
     expect(inSidebar("a1")).toBeNull();
     expect(inSidebar("a2")).not.toBeNull();
@@ -157,7 +157,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     fakeDaemon();
     setArtifacts([art("a1", "Real"), art("d1", "Sample", { sessionId: "demo_1" })]);
     render(<ArtifactPanel />);
-    expect(Array.from(menu().options).map((o) => o.textContent)).toEqual(["All (2)", "Agent 1 (1)", "Agent 2 · Demo (1)"]);
+    expect(Array.from(menu().options).map((o) => o.textContent)).toEqual(["All (2)", "Session 1 (1)", "Session 2 · Demo (1)"]);
   });
 
   it("keeps the row when collapsed or narrow", () => {
@@ -623,7 +623,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     usePreferencesStore.setState({ sidebarCollapsed: true } as any);
     setArtifacts([...two(), art("a3", "From agent three", { sessionId: "s3" })]);
     render(<ArtifactPanel />);
-    const third = screen.getByRole("button", { name: /^Agent 3 \(/ });
+    const third = screen.getByRole("button", { name: /^Session 3 \(/ });
     fireEvent.click(third);
     third.focus();
     setArtifacts(two());
@@ -651,7 +651,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     render(<ArtifactPanel />);
     expect(inSidebar("a1")).not.toBeNull();
     expect(inSidebar("a2")).toBeNull();
-    expect(Array.from(menu().options).map((o) => o.textContent)).toEqual(["All (2)", "Agent 1 (1)", "Agent 2 (1)"]);
+    expect(Array.from(menu().options).map((o) => o.textContent)).toEqual(["All (2)", "Session 1 (1)", "Session 2 (1)"]);
   });
 
   it("the n shortcut stays out of the menu", async () => {

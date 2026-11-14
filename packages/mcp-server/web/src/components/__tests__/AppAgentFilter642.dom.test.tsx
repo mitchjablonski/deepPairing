@@ -58,6 +58,41 @@ describe("#642 mounted App filter-following navigation", () => {
     expect(pane("b1")).toBeNull();
   });
 
+  it("choosing an owner retains its current pending selection and scopes the Your turn cycle", () => {
+    seed(); render(<App />); choose("A");
+    act(() => useArtifactStore.getState().openArtifact("a2"));
+    choose("A"); expect(selected()).toBe("a2");
+    const pill = screen.getByRole("button", { name: /Your turn —/ });
+    fireEvent.click(pill); expect(selected()).toBe("a1");
+    act(() => useArtifactStore.getState().addArtifact(art("a3")));
+    fireEvent.click(pill); expect(selected()).toBe("a2");
+    fireEvent.click(pill); expect(selected()).toBe("a3");
+    expect(useArtifactStore.getState().agentFilter).toBe("A");
+  });
+
+  it("does not publish unchanged binding pings and repairs only an ineligible scoped pane", () => {
+    seed(); render(<App />); choose("A");
+    const listener = vi.fn(); const stop = useArtifactStore.subscribe(listener);
+    act(() => useConnectionStore.setState({ lastPingAt: Date.now() } as any));
+    expect(listener).not.toHaveBeenCalled(); stop();
+    act(() => useArtifactStore.setState({ selectedArtifactId: "b1" }));
+    act(() => useArtifactStore.getState().addArtifact(art("b2", "B")));
+    expect(selected()).toBe("a1");
+    act(() => useArtifactStore.getState().openArtifact("a2"));
+    act(() => useArtifactStore.getState().addArtifact(art("a0")));
+    expect(selected()).toBe("a2");
+  });
+
+  it("uses disambiguated shared session titles and remembers an unavailable selected title", () => {
+    seed(); useConnectionStore.setState({ activeSessions: [{ sessionId: "A", title: "Pair", live: true }, { sessionId: "B", title: "Pair", live: true }] as any });
+    render(<App />);
+    expect(menu().options[1].textContent).toContain("Pair (A)");
+    expect(menu().options[2].textContent).toContain("Pair (B)");
+    choose("A");
+    act(() => useConnectionStore.setState({ activeSessions: [] }));
+    expect(menu().selectedOptions[0].textContent).toContain("Pair (A)");
+  });
+
   it("n/N use the fresh scoped queue after arrivals, resolution, removal and nonpending selection", () => {
     seed(); render(<App />); choose("A");
     fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a2");
@@ -89,7 +124,7 @@ describe("#642 mounted App filter-following navigation", () => {
       addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false,
     }));
     seed(); render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: /^Agent 1 \(/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Session 1 \(/ }));
     expect(selected()).toBe("a1");
     fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a2");
     fireEvent.keyDown(document, { key: "j" }); expect(selected()).toBe("a2");

@@ -1,3 +1,4 @@
+import { scopedVisibleArtifacts } from "../stores/artifact";
 import { useEffect, useMemo, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
@@ -47,7 +48,6 @@ export function TurnIndicator({
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
   const selectArtifact = useArtifactStore((s) => s.openArtifact);
-  const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const connected = useConnectionStore((s) => s.connected);
   // B2 — heartbeat liveness. The daemon broadcasts a throttled agent_activity
   // on every internal API call the wrapper makes, so this keeps ticking during
@@ -186,9 +186,11 @@ export function TurnIndicator({
     // turn" then had to go hunt in the sidebar. Clicking jumps to the first
     // pending artifact; repeated clicks cycle through them.
     const jumpToPending = () => {
-      if (pending.length === 0) return;
-      const idx = pending.findIndex((a) => a.id === selectedArtifactId);
-      const next = pending[(idx + 1) % pending.length]; // idx=-1 → pending[0]
+      const store = useArtifactStore.getState();
+      const scoped = orderedPendingArtifacts(scopedVisibleArtifacts(store.artifacts));
+      if (scoped.length === 0) return;
+      const idx = scoped.findIndex((a) => a.id === store.selectedArtifactId);
+      const next = scoped[(idx + 1) % scoped.length]; // idx=-1 → pending[0]
       if (next) selectArtifact(next.id);
     };
 

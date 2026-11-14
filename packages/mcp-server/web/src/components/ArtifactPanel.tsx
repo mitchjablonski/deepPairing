@@ -1,3 +1,4 @@
+import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { orderedPendingArtifacts } from "../lib/attention";
 import { useMemo, useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
@@ -1442,8 +1443,17 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
   const filterSessionIds = chosenFilter !== "all" && !sessionIds.includes(chosenFilter)
     ? [...sessionIds, chosenFilter] : sessionIds;
   const showAgentFilter = sessionIds.length > 1 || chosenFilter !== "all";
-  const agentLabel = (sid: string, index: number) => sid === chosenFilter
-    ? `Selected agent — ${sid}` : `Agent ${index + 1}`;
+  const labelCatalog = useConnectionStore((s) => s.activeSessions);
+  const rememberedLabels = useRef<Record<string, string>>({});
+  const sharedLabels = sessionLabelsFrom(labelCatalog);
+  const agentLabel = (sid: string, index: number) => {
+    const entry = labelCatalog.find((session) => session.sessionId === sid);
+    const base = entry ? sharedLabels[sid] : rememberedLabels.current[sid] ?? "Session " + (index + 1);
+    const collision = entry && labelCatalog.filter((session) => sharedLabels[session.sessionId] === base).length > 1;
+    const label = collision ? base + " (" + sid.slice(-8) + ")" : base;
+    rememberedLabels.current[sid] = label;
+    return sid === chosenFilter ? "Selected agent — " + (entry?.title || entry?.project || !/^Session \d+$/.test(label) ? label : sid) : label;
+  };
 
   const visibleArtifacts = useMemo(
     () => artifacts.filter((a) => {

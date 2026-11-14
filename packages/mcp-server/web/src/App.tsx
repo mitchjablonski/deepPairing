@@ -158,7 +158,10 @@ function App() {
     bind();
     const stopBinding = useConnectionStore.subscribe(bind);
     const stopPendingOpen = useArtifactStore.subscribe((next, previous) => {
-      if (next.artifacts !== previous.artifacts && next.pendingOpen) next.fulfillPendingOpen();
+      if (next.artifacts !== previous.artifacts) {
+        if (next.pendingOpen) next.fulfillPendingOpen();
+        else next.reconcileAgentScope();
+      }
     });
     const stopReplay = useReplayStore.subscribe((next, previous) => {
       if (next.active !== previous.active || next.exiting !== previous.exiting || next.cursor !== previous.cursor) {

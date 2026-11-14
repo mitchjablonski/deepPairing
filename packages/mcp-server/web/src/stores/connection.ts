@@ -243,6 +243,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     } else sessionVisits.suspend(); // successfully installed demo snapshot only
     useArtifactStore.setState({ installingSnapshot: false });
     useArtifactStore.getState().fulfillPendingOpen();
+    useArtifactStore.getState().reconcileAgentScope();
   };
 
   // #339 — the transport snapshot contract. Every door that REPLACES the
