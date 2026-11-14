@@ -192,7 +192,10 @@ export function DecisionFooter({
         <div className="flex gap-2 mb-2">
           <input
             type="text"
-            placeholder="Why — becomes the 'don't propose these' reason for rejected options"
+            // #656 item 7d — the card's hint promises "Enter selects (3s, Esc
+            // cancels)"; here, after typing a reason, Enter commits at once
+            // (a deliberate path, Sol). Say so where it applies.
+            placeholder="Why — becomes the 'don't propose these' reason for rejected options (Enter selects now)"
             value={reasoning}
             onChange={(e) => setReasoning(e.target.value)}
             onKeyDown={(e) => {

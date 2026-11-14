@@ -24,16 +24,19 @@ import type { Provenance } from "../lib/provenance";
 export function ProvenanceChip({ provenance, className = "" }: { provenance: Provenance | null; className?: string }) {
   if (!provenance) return null;
   if (provenance.kind === "live") {
-    const word = provenance.history ? "Your project" : "Live";
+    // #656 item 7a — "● Live" next to "Claude has exited" read as a
+    // contradiction: the marker means REAL (not demo) work. Once the agent has
+    // exited, say "Your project" (the same word history uses) with a hollow dot.
+    const word = provenance.history || provenance.ended ? "Your project" : "Live";
     const name = provenance.projectName;
     return (
       <span
         data-testid="provenance-live"
         data-provenance="live"
         className={`inline-flex items-center gap-1 px-1 py-0.5 text-2xs shrink-0 min-w-0 text-text-secondary ${className}`}
-        title={`Real work${name ? ` in ${name}` : ""}${provenance.history ? " (past session, read-only)" : ""} — not demo content`}
+        title={`Real work${name ? ` in ${name}` : ""}${provenance.history ? " (past session, read-only)" : provenance.ended ? " (this session's agent has exited)" : ""} — not demo content`}
       >
-        <span className="w-1.5 h-1.5 rounded-full bg-accent-green shrink-0" aria-hidden="true" />
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${provenance.ended ? "border border-text-muted" : "bg-accent-green"}`} aria-hidden="true" />
         <span className="font-semibold shrink-0">{word}</span>
         {name && (
           <>
