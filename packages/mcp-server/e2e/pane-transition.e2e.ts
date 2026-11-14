@@ -13,7 +13,7 @@ for (const width of [1280, 1920]) for (const reduced of [false, true]) {
         } })),
       ]);
       await daemon.post("panes", "artifacts", { id: "broken", type: "debrief", title: "Broken renderer", content: { summary: "Synthetic renderer fault" } });
-      await page.route("**/DebriefArtifact-*.js", (route) => route.fulfill({ status: 200, contentType: "application/javascript", body: 'throw new Error("Synthetic malformed renderer");' }));
+      await page.route("**/DebriefArtifact-*.js", (route) => route.fulfill({ status: 200, contentType: "application/javascript", body: 'export function DebriefArtifact() { throw new Error("Synthetic malformed renderer"); }' }));
       await page.setViewportSize({ width, height: width === 1280 ? 800 : 1080 });
       await page.emulateMedia({ reducedMotion: reduced ? "reduce" : "no-preference" });
       await page.goto(daemon.baseURL + "/?session=panes");
@@ -53,7 +53,8 @@ for (const width of [1280, 1920]) for (const reduced of [false, true]) {
         expect(Math.abs(row.top - final.top)).toBeLessThan(reduced ? 1 : 5);
         expect(Math.abs(row.height - final.height)).toBeLessThan(1);
       }
-      await info.attach("pane-frame-geometry", { body: JSON.stringify(samples), contentType: "application/json" });
+      await info.attach("pane-frame-geometry-diagnostics", { body: JSON.stringify(samples), contentType: "text/plain" });
+      console.log("[pane-geometry] " + JSON.stringify({ width, reduced, frames: samples.length, overlapFrames: samples.filter((row) => row.exitingCount > 0).length, maxTopDelta: Math.max(...samples.map((row) => Math.abs(row.top - final.top))), maxHeightDelta: Math.max(...samples.map((row) => Math.abs(row.height - final.height))), maxRegionHeightDelta: Math.max(...samples.map((row) => Math.abs(row.regionHeight - final.regionHeight))) }));
       await page.keyboard.press("N");
       await expect(pane("a")).toBeVisible();
       const outside = page.getByRole("button", { name: /Comment threads/i });
