@@ -333,10 +333,35 @@ describe("#430 — canonical selection through real connected hydration", () => 
     render(createElement(App));
     fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "B" } });
     act(() => adapter.emit({ type: "connected", projectRoot: "/p", daemonStartedAt: "new-daemon" }));
-    expect(useConnectionStore.getState().sessionId).toBeNull();
+    await vi.waitFor(() => expect(useConnectionStore.getState().sessionId).toBeNull());
     expect(useArtifactStore.getState().agentFilter).toBe("B");
     await act(async () => { await hydrate([mk("a"), mk("b", { sessionId: "B" })]); });
     expect(useArtifactStore.getState().agentFilter).toBe("B");
+  });
+
+  it("a real deferred verdict cannot advance after wire restart authority null and accepted A return", async () => {
+    const cs = mk("cs", { type: "changeset", content: { summary: "change", files: [{ path: "a.ts", changeType: "modified", hunks: [] }], reviewState: { "a.ts": "needs_changes" }, reviewReasons: { "a.ts": "fix" } } });
+    await hydrate([cs, mk("next")]);
+    usePreferencesStore.setState({ sidebarCollapsed: false });
+    render(createElement(App));
+    act(() => useArtifactStore.getState().openArtifact("cs"));
+    let finish!: () => void;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = () => new Response(JSON.stringify({ sessions: [], blocks: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (init?.method === "POST" && String(input).includes("/cs/status")) return new Promise<Response>((resolve) => { finish = () => resolve(response()); });
+      return response();
+    });
+    fireEvent.click(await screen.findByTestId("send-back"));
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    useConnectionStore.setState({ daemonStartedAt: "old-daemon" });
+    act(() => adapter.emit({ type: "connected", projectRoot: "/p", daemonStartedAt: "new-daemon" }));
+    await vi.waitFor(() => expect(useConnectionStore.getState().sessionId).toBeNull());
+    await act(async () => { await hydrate([{ ...cs, status: "revised" }, mk("next")]); });
+    expect(useConnectionStore.getState().sessionId).toBe("A");
+    const selected = useArtifactStore.getState().selectedArtifactId;
+    await act(async () => { finish(); });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe(selected);
+    expect(selected).toBe("cs");
   });
 
   it.each([false, true])("complete same-binding snapshot fulfills requested sibling after installation (targetFirst=%s)", async (targetFirst) => {

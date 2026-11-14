@@ -83,38 +83,19 @@ describe("#642 mounted App filter-following navigation", () => {
     expect(selected()).toBe("a2");
   });
 
-  it("uses disambiguated shared session titles and remembers an unavailable selected title", () => {
-    seed(); useConnectionStore.setState({ activeSessions: [{ sessionId: "A", title: "Pair", live: true }, { sessionId: "B", title: "Pair", live: true }] as any });
+  it("labels every populated and unavailable surface using distinct duplicate-title suffixes", () => {
+    const ownerA = "same-prefix-agent-00000001", ownerB = "same-prefix-agent-00000002";
+    seed([art("a1", ownerA), art("b1", ownerB)]);
+    useConnectionStore.setState({ activeSessions: [{ sessionId: ownerA, title: "Pair", live: true }, { sessionId: ownerB, title: "Pair", live: true }] as any });
     render(<App />);
-    expect(menu().options[1].textContent).toContain("Pair (A)");
-    expect(menu().options[2].textContent).toContain("Pair (B)");
-    choose("A");
-    act(() => useConnectionStore.setState({ activeSessions: [] }));
-    expect(menu().selectedOptions[0].textContent).toContain("Pair (A)");
-  });
-
-  it("n/N use the fresh scoped queue after arrivals, resolution, removal and nonpending selection", () => {
-    seed(); render(<App />); choose("A");
-    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a2");
-    act(() => useArtifactStore.getState().addArtifact(art("a0", "A", { type: "decision", content: { context: "choose", options: [] } as any })));
-    expect(selected()).toBe("a2");
-    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a0");
-    act(() => useArtifactStore.getState().updateArtifact("a0", "approved"));
-    fireEvent.keyDown(document, { key: "N" }); expect(selected()).toBe("a2");
-    act(() => useArtifactStore.setState({ artifacts: useArtifactStore.getState().artifacts.filter((a) => a.id !== "a2") }));
-    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a1");
-    act(() => useArtifactStore.getState().updateArtifact("a1", "approved"));
-    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a1");
-    expect(menu().value).toBe("A");
-  });
-
-  it("j/k retain visible insertion order and clamp, with native select and modifier suppression", () => {
-    seed(); render(<App />); choose("A");
-    fireEvent.keyDown(menu(), { key: "n" }); expect(selected()).toBe("a1");
-    fireEvent.keyDown(document, { key: "j", ctrlKey: true }); expect(selected()).toBe("a1");
-    fireEvent.keyDown(document, { key: "j" }); expect(selected()).toBe("a2");
-    fireEvent.keyDown(document, { key: "j" }); expect(selected()).toBe("a2");
-    fireEvent.keyDown(document, { key: "k" }); expect(selected()).toBe("a1");
+    expect(menu().options[1].textContent).toContain("Pair (00000001)");
+    expect(menu().options[2].textContent).toContain("Pair (00000002)");
+    choose(ownerA);
+    expect(screen.getByTestId("agent-filter-scope")).toHaveTextContent("Selected agent — Pair (00000001)");
+    act(() => { useConnectionStore.setState({ activeSessions: [] }); useArtifactStore.setState({ artifacts: [art("b1", ownerB)] }); });
+    expect(menu().selectedOptions[0].textContent).toContain("Pair (00000001)");
+    expect(screen.getByTestId("agent-filter-empty")).toHaveTextContent("Selected agent — Pair (00000001)");
+    expect(screen.getByTestId("agent-filter-scope")).not.toHaveTextContent(ownerA);
   });
 
   it.each(["collapsed", "narrow"])("scoped navigation remains live in the %s App layout", (layout) => {

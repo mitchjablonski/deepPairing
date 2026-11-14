@@ -1554,7 +1554,7 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
     >
       <DemoContentBanner provenance={provenance} />
       {chosenFilter !== "all" && <div role="status" data-testid="agent-filter-scope" className="px-3 py-1 text-xs text-text-muted">
-        {orderedPendingArtifacts(visibleArtifacts).length} pending here · {orderedPendingArtifacts(scopedVisibleArtifacts(artifacts, "all")).filter((a) => a.sessionId !== chosenFilter).length} in other agents · Selected agent — {chosenFilter}
+        {orderedPendingArtifacts(visibleArtifacts).length} pending here · {orderedPendingArtifacts(scopedVisibleArtifacts(artifacts, "all")).filter((a) => a.sessionId !== chosenFilter).length} in other agents · {agentLabel(chosenFilter, filterSessionIds.indexOf(chosenFilter))}
       </div>}
 
       {/* #457 D6 — MultiAgentSync (other sessions' artifacts) is mounted by
@@ -1619,7 +1619,7 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
       {emptyAgentView && (
         <div data-agents-filter="" data-testid="agent-filter-empty" className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border-default text-2xs text-text-secondary">
           <div className="min-w-0 break-words">
-            <p className="font-medium text-text-primary">Selected agent — {chosenFilter}</p>
+            <p className="font-medium text-text-primary">{agentLabel(chosenFilter, filterSessionIds.indexOf(chosenFilter))}</p>
             <p>{emptyAgentCopy}</p>
           </div>
           <button
