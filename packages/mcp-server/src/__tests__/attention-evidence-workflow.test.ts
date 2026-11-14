@@ -213,6 +213,7 @@ describe("#430 slice 2 — the evidence workflow stays separate and bounded", ()
     expect(workflow).toContain("if: inputs.scope == 's3'");
     expect(workflow).toContain("if: inputs.scope != 's3'");
     expect(workflow).not.toContain("${{ inputs.scope }}");
+    expect(workflow).toContain("check-s3-evidence-selection.mjs");
     expect(workflow.indexOf("check-s3-evidence-selection.mjs")).toBeLessThan(workflow.indexOf("name: S3 persisted verdict walkthroughs"));
     expect(workflow).not.toMatch(/pull_request|schedule:|\bpush:/);
     expect(workflow).toMatch(/^permissions:\n {2}contents: read\n/m);
