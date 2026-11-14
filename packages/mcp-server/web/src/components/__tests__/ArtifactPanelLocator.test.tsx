@@ -371,7 +371,7 @@ describe("ArtifactPanel new-item locator", () => {
     expect(groups.get("art_5")!.map((x) => x.id)).toEqual(["art_5", "art_6"]);
   });
 
-  it("does not invent a causal breadcrumb from unrelated sessions", () => {
+  it("does not invent a causal breadcrumb from unrelated sessions", async () => {
     stubCollapsedSidebar();
     useArtifactStore.getState().addArtifact(mk(1, {
       sessionId: "billing", title: "Billing research", content: { summary: "Billing summary", findings: [] },
@@ -383,12 +383,13 @@ describe("ArtifactPanel new-item locator", () => {
 
     render(<ArtifactPanel />);
 
-    expect(screen.getByText("Billing summary", { exact: true })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Billing research" })).toBeTruthy();
+    expect(await screen.findByText("Billing summary", { exact: true })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Unrelated auth plan" })).toBeNull();
     expect(screen.queryByText("Related:", { exact: true })).toBeNull();
   });
 
-  it("keeps an explicit cross-session Related link neutral and navigable", () => {
+  it("keeps an explicit cross-session Related link neutral and navigable", async () => {
     stubCollapsedSidebar();
     useArtifactStore.getState().addArtifact(mk(1, {
       sessionId: "billing", title: "Billing research", content: { summary: "Billing summary", findings: [] },
@@ -401,7 +402,8 @@ describe("ArtifactPanel new-item locator", () => {
 
     render(<ArtifactPanel />);
 
-    expect(screen.getByText("Related:", { exact: true })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Billing research" })).toBeTruthy();
+    expect(await screen.findByText("Related:", { exact: true })).toBeTruthy();
     const related = screen.getByRole("button", { name: "Auth research" });
     expect(screen.getAllByRole("button", { name: "Auth research" })).toHaveLength(1);
     fireEvent.click(related);
