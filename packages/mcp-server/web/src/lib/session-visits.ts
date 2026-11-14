@@ -29,28 +29,36 @@ interface Options {
 }
 const empty = (): DocumentV1 => ({ version: 1, recent: [], entries: {} });
 const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+const plainRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
 function parseDocument(raw: string | null): DocumentV1 | null {
   if (raw === null) return empty();
   try {
     const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== "object" || !("version" in value) || value.version !== 1 ||
-        !("entries" in value) || !value.entries || typeof value.entries !== "object" ||
-        !("recent" in value) || !Array.isArray(value.recent)) return null;
+    if (!plainRecord(value) || value.version !== 1 || !Object.hasOwn(value, "entries") ||
+        !plainRecord(value.entries)) return null;
     const doc = empty();
-    for (const key of value.recent) {
-      if (!validId(key)) return null;
-      const identity: unknown = JSON.parse(key);
-      if (!Array.isArray(identity) || identity.length !== 2 || !identity.every(validId)) return null;
-      const entry: unknown = (value.entries as Record<string, unknown>)[key];
-      if (!entry || typeof entry !== "object" || !("observed" in entry) || !Array.isArray(entry.observed) ||
-          !entry.observed.every(validId) || !("selected" in entry) ||
-          (entry.selected !== null && !validId(entry.selected))) return null;
+    for (const key of Object.keys(value.entries)) {
+      let identity: unknown;
+      try { identity = JSON.parse(key); } catch { continue; }
+      if (!Array.isArray(identity) || identity.length !== 2 || !identity.every(validId) ||
+          JSON.stringify(identity) !== key) continue;
+      const entry = value.entries[key];
+      if (!plainRecord(entry) || !Object.hasOwn(entry, "observed") || !Array.isArray(entry.observed) ||
+          !entry.observed.every(validId) || !Object.hasOwn(entry, "selected") ||
+          (entry.selected !== null && !validId(entry.selected))) continue;
       doc.entries[key] = { observed: [...new Set(entry.observed)], selected: entry.selected };
-      if (!doc.recent.includes(key)) doc.recent.push(key);
     }
+    const listed = Array.isArray(value.recent) ? value.recent : [];
+    for (const key of listed) {
+      if (validId(key) && Object.hasOwn(doc.entries, key) && !doc.recent.includes(key)) doc.recent.push(key);
+    }
+    doc.recent.push(...Object.keys(doc.entries).filter((key) => !doc.recent.includes(key)).sort());
     return doc;
   } catch { return null; }
 }
+const quotaError = (error: unknown) => !!error && typeof error === "object" && "name" in error &&
+  (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED");
 const browserStorage = (): Storage | null => {
   try { return typeof localStorage === "undefined" ? null : localStorage; } catch { return null; }
 };
@@ -62,7 +70,7 @@ export class SessionVisits {
   private memory = new Map<string, Receipt>();
   private token = 0;
   private lifetime = 0;
-  private revisions = new Map<string, number>();
+  private revisions = new Map<string, symbol>();
   private dirty = new Set<string>();
   private writes: Promise<unknown>[] = [];
   private readonly storage: () => Storage | null;
@@ -113,7 +121,7 @@ export class SessionVisits {
     }
     if (!visit.projectRoot) return; // default lock adapter does no work when locking is unavailable
     const lifetime = this.lifetime;
-    const revision = (this.revisions.get(visit.key) ?? 0) + 1;
+    const revision = Symbol();
     this.revisions.set(visit.key, revision);
     const key = visit.key;
     let work: Promise<unknown>;
@@ -122,17 +130,48 @@ export class SessionVisits {
       try {
         const storage = this.storage();
         if (!storage) return;
-        const doc = parseDocument(storage.getItem(SESSION_VISITS_KEY));
-        if (!doc) return; // never overwrite corrupt or future-version data
-        doc.entries[key] = {
-          selected: receipt.selected,
-          observed: [...new Set([...(doc.entries[key]?.observed ?? []), ...receipt.observed])],
-        };
-        doc.recent = [key, ...doc.recent.filter((id) => id !== key)].slice(0, SESSION_VISITS_LIMIT);
-        for (const id of Object.keys(doc.entries)) if (!doc.recent.includes(id)) delete doc.entries[id];
-        storage.setItem(SESSION_VISITS_KEY, JSON.stringify(doc));
-        this.dirty.delete(key);
-      } catch { /* quota/private mode: retain coherent in-memory receipt */ }
+        const owned = () => lifetime === this.lifetime && revision === this.revisions.get(key);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (!owned()) return;
+          const doc = parseDocument(storage.getItem(SESSION_VISITS_KEY));
+          if (!doc) return; // never overwrite an unrecognized envelope or future version
+          const protectedKeys = new Set([key, this.active?.key]);
+          const removed = new Map<string, symbol | undefined>();
+          const evict = (id: string) => {
+            removed.set(id, this.revisions.get(id));
+            delete doc.entries[id];
+            doc.recent = doc.recent.filter((entry) => entry !== id);
+          };
+          doc.entries[key] = {
+            selected: receipt.selected,
+            observed: [...new Set([...(doc.entries[key]?.observed ?? []), ...receipt.observed])],
+          };
+          doc.recent = [key, ...doc.recent.filter((id) => id !== key)];
+          while (doc.recent.length > SESSION_VISITS_LIMIT) {
+            const oldest = [...doc.recent].reverse().find((id) => !protectedKeys.has(id));
+            if (!oldest) return;
+            evict(oldest);
+          }
+          if (attempt === 1) {
+            const oldest = [...doc.recent].reverse().find((id) => !protectedKeys.has(id));
+            if (!oldest) return;
+            evict(oldest);
+          }
+          if (!owned()) return;
+          try { storage.setItem(SESSION_VISITS_KEY, JSON.stringify(doc)); }
+          catch (error) {
+            if (attempt === 0 && quotaError(error)) continue;
+            return; // preserve exact memory and the prior durable boundary
+          }
+          // Publish eviction to the local cache only after durable success.
+          for (const [id, token] of removed) {
+            if (this.revisions.get(id) !== token) continue;
+            this.memory.delete(id); this.dirty.delete(id); this.revisions.delete(id);
+          }
+          if (owned()) this.dirty.delete(key);
+          return;
+        }
+      } catch { /* private mode: retain coherent in-memory receipt */ }
     }).catch(() => {}); } catch { return; }
     this.writes.push(work);
     void work.finally(() => { this.writes = this.writes.filter((pending) => pending !== work); });
