@@ -614,7 +614,7 @@ describe("#430 slice 2 D1 — the Agents filter with the bar OFF", () => {
     await act(async () => { await useConnectionStore.getState().refreshSessions(); });
     await waitFor(() => expect(inSidebar("a2")).not.toBeNull());
     expect(menu().value).toBe("s2");
-    expect(menu().selectedOptions[0]).toHaveTextContent("Selected agent — s2 (1)");
+    expect(menu().selectedOptions[0]).toHaveTextContent("Selected agent — p (s2) (1)");
     expect(inSidebar("a1")).toBeNull();
   });
 

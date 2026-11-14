@@ -13,7 +13,7 @@ import { spawnDiagnosticProcess, teardownDaemon, portOf } from "./daemon-harness
  * built dist, on an ISOLATED project root + HOME + port window, proves:
  *
  *   1. daemon restart → the tab notices the outage, reconnects to the NEW
- *      daemon process on the same deterministic port, and hydrates the
+ *      daemon process on the fixture-pinned browser origin, and hydrates the
  *      COMPLETE snapshot (artifacts persisted before the restart AND one
  *      created only on the new daemon) through the two live doors the store
  *      has — the `connected` frame and the AA2 `daemon_resumed` refetch.
@@ -253,12 +253,12 @@ test("daemon restart: the tab reconnects to the new process and hydrates the com
   await stopDaemon();
   await expect.poll(() => storeState(page).then((s) => s.connected), { timeout: 15_000 }).toBe(false);
 
-  // The replacement process: same project root → same deterministic port, so
+  // The fixture pins the replacement to the first verified owned port so
   // the tab's reconnect loop (1s/2s/4s/8s backoff) finds it on its own. The
   // wrapper re-registers the session (FileStore reloads it from disk) and
   // creates one artifact that only ever existed on the NEW daemon.
   daemon = await bootDaemon();
-  expect(portOf(daemon.baseURL), "restart rebinds the same deterministic port").toBe(port);
+  expect(portOf(daemon.baseURL), "fixture restart preserves the verified browser origin").toBe(port);
   expect(daemon.startedAt).not.toBe(firstStartedAt);
   const live = internal(daemon, LIVE);
   await live("register", { title: "Live session" });
