@@ -27,3 +27,38 @@ describe("#656 item 7 — status cues agree", () => {
     expect(statusLabelFor({ ...base, type: "plan", status: "draft" })).toBe("Draft, awaiting review");
   });
 });
+
+import { vi } from "vitest";
+import App from "../../App";
+import { useArtifactStore } from "../../stores/artifact";
+import { useConnectionStore } from "../../stores/connection";
+
+describe("#656 item 7b — the session tab badge counts what's waiting", () => {
+  const draft = (id: string, sessionId: string, status = "draft") =>
+    ({ id, sessionId, type: "plan", title: id, status, version: 1, createdAt: "2026-06-01T00:00:00.000Z", content: { summary: "s", steps: [] } }) as any;
+  const tabs = () => Array.from(document.querySelectorAll<HTMLElement>("nav button[title*='Artifacts:']"));
+  const tab = (sid: string) => tabs().find((b) => (b.getAttribute("title") ?? "").startsWith(sid))!;
+
+  it("loaded pending → the waiting count; loaded fully reviewed → hidden, tooltip says 0; unsynced → total fallback", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    try {
+      useConnectionStore.setState({ sessionId: "s-busy", activeSessions: [
+        { sessionId: "s-busy", title: "Busy", live: true, artifactCount: 3 },
+        { sessionId: "s-done", title: "Done", live: true, artifactCount: 2 },
+        { sessionId: "s-unsynced", title: "Elsewhere", live: false, artifactCount: 5 },
+      ] } as any);
+      useArtifactStore.setState({ artifacts: [
+        draft("b1", "s-busy"), draft("b2", "s-busy"), draft("b3", "s-busy", "approved"),
+        draft("d1", "s-done", "approved"), draft("d2", "s-done", "approved"),
+      ] } as any);
+      render(<App />);
+      expect(tab("s-busy").querySelector("[data-testid='session-badge']")?.textContent).toBe("2");
+      expect(tab("s-done").querySelector("[data-testid='session-badge']")).toBeNull();
+      expect(tab("s-done").getAttribute("title")).toContain("Waiting for you: 0");
+      expect(tab("s-unsynced").querySelector("[data-testid='session-badge']")?.textContent).toBe("5");
+      expect(tab("s-unsynced").getAttribute("title")).not.toContain("Waiting for you");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
