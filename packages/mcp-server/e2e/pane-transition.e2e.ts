@@ -19,6 +19,9 @@ for (const width of [1280, 1920]) for (const reduced of [false, true]) {
       await page.goto(daemon.baseURL + "/?session=panes");
       const pane = (id: string) => page.locator('[data-dp-pane][data-artifact-id="' + id + '"]:not([inert])');
       await expect(pane("a")).toBeVisible();
+      // The wrapper mounts before its lazy renderer; prove real long content and overflow first.
+      await expect(pane("a").getByText("Finding 39", { exact: true })).toBeAttached();
+      await expect.poll(() => pane("a").evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
       await pane("a").evaluate((el) => { el.scrollTop = 200; });
       await pane("a").evaluate((el) => { (el as HTMLElement).focus({ preventScroll: true }); });
       expect(await pane("a").evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
