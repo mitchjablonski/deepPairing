@@ -46,6 +46,22 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("#642 mounted App filter-following navigation", () => {
+  it("#648 x #650 — under agent A, the receipt's Next link opens B's queue head and the filter follows to B", async () => {
+    seed([
+      art("a-done", "A", { status: "approved", title: "A approved plan" } as any),
+      art("b-wait", "B", { type: "decision", title: "B open decision", content: { context: "choose", options: [] } as any }),
+    ]);
+    render(<App />);
+    choose("A");
+    act(() => useArtifactStore.getState().openArtifact("a-done"));
+    expect(selected()).toBe("a-done");
+    const next = await screen.findByRole("button", { name: /next waiting for you: b open decision/i });
+    fireEvent.click(next);
+    expect(selected()).toBe("b-wait");
+    expect(menu().value).toBe("B"); // the displayed filter agrees with the opened target
+    await waitFor(() => expect(pane("b-wait")).not.toBeNull());
+  });
+
   it("chooses the first canonical pending by owner identity and partitions global pending counts", async () => {
     seed([art("a-find"), art("b1", "B"), art("a-decision", "A", { type: "decision", content: { context: "choose", options: [] } as any })]);
     render(<App />);
