@@ -913,6 +913,10 @@ export function ArtifactStatusActions({
               // cancellable window. Take the same path as `a`: the
               // open-suggestion confirm first, else arm the keyboard countdown
               // (typing or Cancel/Esc disarms it).
+              // Sol P2 — the same act-eligibility guards handleAction has:
+              // never arm an approval while offline (the countdown's zero tick
+              // writes via the store directly), on a leaving pane, or mid-submit.
+              if (offline || !presentRef.current || submitting) return;
               if (openSugRef.current.total > 0) setApproveConfirm(true);
               else dispatch({ type: "armCountdown", seconds: KEYBOARD_CONFIRM_SECONDS });
             }
