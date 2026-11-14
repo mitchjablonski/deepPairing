@@ -157,8 +157,12 @@ for (const row of MATRIX) {
             if (row.mode === "ON") {
               await evidence.activate(page.getByRole("button", { name: "+1 high decision", exact: true }));
               await evidence.activate(page.getByRole("button", { name: /Drop the legacy sessions table during the cutover/ }).last());
-            } else for (let i = 0; i < 7; i++) await evidence.press("n");
-            await evidence.check("high-stakes target opened", () => expect(page.locator('[data-artifact-id="queue_7"]')).toBeVisible());
+            } else {
+              // Current bar-OFF UI exposes the hidden high decision explicitly.
+              // Canonical tier ordering no longer means seven n presses follows insertion order.
+              await evidence.activate(page.getByRole("button", { name: /^1 high-stakes decision waiting — open / }));
+            }
+            await evidence.check("high-stakes target opened", () => expect(page.locator('[data-dp-pane][data-artifact-id="queue_7"]:not([inert])')).toBeVisible());
             await evidence.capture("high-stakes");
             for (let i = 0; i < 13; i++) {
               // Real Tab/Enter only: never locator.click(), focus(), or store writes.
