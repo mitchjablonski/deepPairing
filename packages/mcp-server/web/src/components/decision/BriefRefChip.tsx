@@ -15,7 +15,7 @@ import { useArtifactStore } from "../../stores/artifact";
 export function BriefRefChip({ artifact }: { artifact: Artifact }) {
   const read = readBriefRef(artifact.briefRef);
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const selectExact = useArtifactStore((s) => s.selectArtifactExact);
+  const selectExact = useArtifactStore((s) => s.openArtifactExact);
   if (read === undefined) return null;
   const base = "mx-3 mt-3 -mb-1 inline-flex max-w-full items-center gap-1 rounded border px-2 py-0.5 text-2xs";
   if (!read.ok) {

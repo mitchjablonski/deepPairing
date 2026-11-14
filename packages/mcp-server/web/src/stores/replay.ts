@@ -3,6 +3,7 @@ import type { SessionAnnotation, DecisionOption } from "@deeppairing/shared";
 import { buildTimeline, type TimelineEvent, type TimelineInput, annotationsByEventId } from "../lib/timeline";
 import { apiBase, apiGet, sessionHeaders } from "../lib/api";
 import { useToastStore } from "./toast";
+import { sessionVisits } from "../lib/session-visits";
 import {
   beginSessionTransition,
   isCurrentSessionTransition,
@@ -193,6 +194,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     const operation = ++replayOperation;
     const transition = suppliedTransition ?? beginSessionTransition(sessionId);
     const events = buildTimeline(state);
+    sessionVisits.suspend();
     const initialCursor = events[0]?.at ?? new Date().toISOString();
 
     // `active` is the write lock. Commit it before annotation I/O yields and

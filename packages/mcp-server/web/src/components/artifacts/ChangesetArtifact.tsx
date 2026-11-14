@@ -1,3 +1,4 @@
+import { captureNavigationOwnership, advanceOwnedNavigation } from "../../stores/artifact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Artifact, Comment, ChangesetFile, ChangesetSource } from "@deeppairing/shared";
 import {
@@ -14,7 +15,6 @@ import { useChainComments } from "../../hooks/useChainComments";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { ApproveCountdown } from "./ApproveCountdown";
 import { useConfirmCountdown } from "../../hooks/useConfirmCountdown";
-import { orderedPendingArtifacts } from "../../lib/attention";
 import { resolveChangesetKey, type ChangesetIntent } from "../../lib/changesetKeymap";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import {
@@ -49,7 +49,8 @@ import { WalkMeThroughButton, hunkLineRange } from "../WalkMeThrough";
  *
  * Keyboard-first (routed through the ONE central keymap, lib/changesetKeymap.ts,
  * live only while the changeset is focused): a=looks-right+advance, r=needs-
- * changes (focus reason), j/k=next/prev file, ⏎=fire the derived action,
+ * changes (focus reason), j/k=next/prev file, ⏎=fire the derived action
+ * (once any file is marked; a no-op on an untouched changeset, #642 item 1),
  * ⇧⏎=approve-all. Reaching all-look-right ARMS the same confirm-countdown the
  * single-artifact approve uses (never a silent hard-commit). Terminal actions
  * auto-advance in the canonical Decide order — send-back
@@ -647,13 +648,6 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   const reasonBoxRef = useRef<HTMLTextAreaElement>(null);
 
   // --- Auto-advance to the next pending artifact after a terminal action ----
-  const advanceToNextPending = useCallback(() => {
-    const store = useArtifactStore.getState();
-    const pending = orderedPendingArtifacts(store.artifacts).filter((a) => a.id !== artifact.id);
-    const next = pending[0];
-    if (next) store.selectArtifact(next.id);
-  }, [artifact.id]);
-
   // --- The confirm-countdown that guards approve (never a silent commit) ----
   const runWhole = useCallback(
     async (
@@ -670,6 +664,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         setApproveConfirm(true);
         return;
       }
+      const navigationOwner = captureNavigationOwnership();
       setSubmitting(true);
       try {
         const trimmed = (overrideFeedback ?? feedback).trim();
@@ -681,14 +676,14 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         setRejectConcept("");
         // After the verdict (and, for send-back, its feedback comment) posts,
         // move to the next thing waiting on the human.
-        advanceToNextPending();
+        advanceOwnedNavigation(navigationOwner, artifact.id);
       } catch {
         /* store toasted + rolled back */
       } finally {
         setSubmitting(false);
       }
     },
-    [submitting, offline, feedback, rejectConcept, updateArtifactStatus, artifact.id, advanceToNextPending],
+    [submitting, offline, feedback, rejectConcept, updateArtifactStatus, artifact.id],
   );
 
   const approveCountdown = useConfirmCountdown(() => { void runWhole("approved"); });
@@ -819,6 +814,15 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable === true) return;
     const intent = resolveChangesetKey(e);
     if (!intent) return;
+    // #642 item 1 — this capture-phase listener runs while the changeset is
+    // SELECTED, whatever holds DOM focus. Enter on a focused button or link
+    // (the banner chip or Next-up "Open" you just pressed, a sidebar row, a
+    // button inside this card) is that control's own activation; taking it
+    // here ran the derived action, which with nothing flagged marks EVERY
+    // file reviewed server-side. Let the native activation through. a/r/j/k
+    // are unchanged.
+    if ((intent === "fireDerivedAction" || intent === "approveAll") &&
+      t?.closest?.("button, a[href], [role='button'], summary")) return;
     // Handle it here AND stop the global App handler (a/r/j/k) from also firing.
     e.preventDefault();
     e.stopPropagation();
@@ -846,7 +850,11 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
       },
       nextFile: () => goto(clampedIdx + 1),
       prevFile: () => goto(clampedIdx - 1),
-      fireDerivedAction: () => fireDerivedAction(),
+      // #642 item 1 (Mitch, 11-13) — with NO file marked yet, a bare ⏎ does
+      // nothing: approving every file unseen is ⇧⏎'s explicit job. Once any
+      // file is marked (looks right or needs changes), ⏎ runs the derived
+      // action as before.
+      fireDerivedAction: () => { if (lookRightCount > 0 || flaggedCount > 0) fireDerivedAction(); },
       approveAll: () => { void approveAll(); },
     };
     act[intent]();
@@ -1429,7 +1437,9 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                     <span><b className="text-text-secondary">a</b> looks right → next</span>
                     <span><b className="text-text-secondary">r</b> needs changes</span>
                     <span><b className="text-text-secondary">j</b>/<b className="text-text-secondary">k</b> next/prev file</span>
-                    <span><b className="text-text-secondary">⏎</b> {derived === "sendBack" ? "send back" : "approve"}</span>
+                    {lookRightCount === 0 && flaggedCount === 0
+                      ? <span><b className="text-text-secondary">⇧⏎</b> approve all</span>
+                      : <span><b className="text-text-secondary">⏎</b> {derived === "sendBack" ? "send back" : "approve"}</span>}
                     <span className="ml-auto">press <b className="text-text-secondary">?</b> for all shortcuts</span>
                   </div>
                 )}
@@ -1611,10 +1621,11 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   title={offline ?? undefined}
                   type="button"
                   onClick={() => {
+                    const navigationOwner = captureNavigationOwnership();
                     setConfirmDismiss(false);
                     setSubmitting(true);
                     void updateArtifactStatus(artifact.id, "obsolete", feedback.trim() || undefined)
-                      .then(() => advanceToNextPending())
+                      .then(() => advanceOwnedNavigation(navigationOwner, artifact.id))
                       .catch(() => {})
                       .finally(() => setSubmitting(false));
                   }}

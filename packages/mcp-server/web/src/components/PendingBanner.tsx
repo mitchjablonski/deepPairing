@@ -41,7 +41,7 @@ const EXPANDED_LEAD = "whitespace-normal break-words max-h-16 overflow-y-auto";
 export function PendingBanner() {
   const offline = useOfflineReason(); // #467 review — the dismiss chip is an act
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   // UX5 — dismissing marks a draft obsolete, which the API can't undo back to
@@ -75,6 +75,15 @@ export function PendingBanner() {
   const lead = next ? drafts.find((d) => d.id === next.artifactId) : undefined;
   const shown = drafts.slice(0, 3);
   const hidden = drafts.slice(3);
+  // #642 item 6 — the bar-ON line pins "+N high decision"; bar OFF (the
+  // default) capped the chips at 3 and buried a high-stakes decision in
+  // "+N more" (S3 evidence: 7 `n` presses to reach it). Pin the same set the
+  // bar counts (high, other than `next`), minus any already showing as a
+  // chip. Order and counts are unchanged; this is a pointer, not a re-rank.
+  const highHidden = attention.lanes.decide.filter(
+    (d) => d.kind === "decision" && d.stakes === "high" && d.id !== next?.id && !!d.artifactId &&
+      !shown.some((a) => a.id === d.artifactId),
+  );
   // J2b (#212) — lite-frame step-down: when the ONE pending draft is the card
   // already on screen, it IS the call to action (its own status badge + review
   // actions), so this banner would just restate what the card + the header count
@@ -236,6 +245,18 @@ export function PendingBanner() {
         </button>
       )}
       <div className="flex gap-1 ml-auto items-center min-w-0 max-w-[50%] shrink-0 overflow-x-auto">
+        {highHidden.length > 0 && (
+          <button
+            type="button"
+            data-high-decision-token
+            onClick={() => selectArtifact(highHidden[0]!.artifactId!)}
+            className="px-2 py-0.5 text-2xs font-semibold text-accent-red bg-accent-red-dim rounded shrink-0 hover:bg-accent-red-dim/80 transition-colors"
+            title={`High-stakes ${highHidden.length === 1 ? "decision" : "decisions"} waiting: ${highHidden.map((d) => d.title).join(", ")}`}
+            aria-label={`${highHidden.length} high-stakes ${highHidden.length === 1 ? "decision" : "decisions"} waiting — open ${highHidden[0]!.title}`}
+          >
+            +{highHidden.length} high decision
+          </button>
+        )}
         {shown.map((a) => (
           <span key={a.id} className="flex items-center bg-accent-amber-dim rounded shrink-0">
             <button

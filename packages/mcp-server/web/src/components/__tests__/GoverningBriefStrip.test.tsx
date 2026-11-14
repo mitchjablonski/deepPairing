@@ -50,6 +50,7 @@ describe("GoverningBriefStrip (#571 slice 2)", () => {
   beforeEach(() => {
     seq = 0;
     useArtifactStore.getState().reset();
+  useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
     useReplayStore.setState({ active: false } as any);
     usePreferencesStore.setState({ nextUpBar: false, sidebarCollapsed: false } as any);
   });

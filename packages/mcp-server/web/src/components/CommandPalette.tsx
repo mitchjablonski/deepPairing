@@ -37,7 +37,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { dialogProps } = useModal({ onClose });
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const nextUpBar = usePreferencesStore((s) => s.nextUpBar);

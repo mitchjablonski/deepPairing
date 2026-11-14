@@ -1,3 +1,5 @@
+import { sessionLabelsFrom } from "../lib/sessionLabel";
+import { orderedPendingArtifacts } from "../lib/attention";
 import { useMemo, useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
@@ -8,7 +10,7 @@ import type { Artifact, Comment } from "@deeppairing/shared";
 import { isDemoSessionId } from "@deeppairing/shared";
 import { useProvenance } from "../lib/provenance";
 import { DemoContentBanner, DemoTag, ProvenanceChip } from "./ProvenanceMarker";
-import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
+import { useArtifactStore, scopedVisibleArtifacts, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
 import { useSiblingSyncStore } from "../lib/siblingSync";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
@@ -164,7 +166,7 @@ const typeLabels: Record<string, string> = {
 
 function RelatedArtifacts({ ids }: { ids: string[] }) {
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const related = ids.map((id) => artifacts.find((a) => a.id === id)).filter(Boolean) as Artifact[];
 
   if (related.length === 0) return null;
@@ -813,7 +815,7 @@ function ArtifactSidebar({
   width: number;
   onToggle: () => void;
 }) {
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   // #430 PR 4 — each row's lane glyph comes from the bar's own selector.
   const laneMarks = useMemo(() => laneMarksFrom(computeAttention({ artifacts })), [artifacts]);
   // New-item locator plumbing. The scroll container + per-item nodes let the
@@ -963,6 +965,12 @@ function ArtifactSidebar({
     // the classes and the layout are untouched.
     <nav
       ref={navRef}
+      // #642 item 8 — the "Skip to review queue" link's target. axe's region
+      // rule exempts an in-page skip link only when its fragment target exists.
+      id="review-queue"
+      // Focusable by script only (never a Tab stop): the skip link's fallback
+      // target when the queue has no row to land on.
+      tabIndex={-1}
       aria-label="Artifacts"
       className={`relative shrink-0 border-r border-border-default bg-surface-secondary transition-all duration-[180ms] ease-out ${
         collapsed ? "w-12" : ""
@@ -1079,6 +1087,9 @@ function ArtifactSidebar({
                 key={a.id}
                 ref={(el) => { itemRefs.current[a.id] = el; }}
                 data-artifact-item={a.id}
+                // #642 item 8 — the selected row is named for assistive tech
+                // (it was colour-only) and is the skip link's landing target.
+                aria-current={isSelected ? "true" : undefined}
                 onClick={() => selectArtifact(a.id)}
                 className={`w-full flex items-center gap-2 transition-all duration-[180ms] ease-out ${
                   collapsed ? "justify-center px-1 py-1.5" : "px-3 py-1.5 text-left"
@@ -1392,13 +1403,15 @@ export function MultiAgentSync() {
 export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (active: boolean) => void } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  const exactNavigationId = useArtifactStore((s) => s.exactNavigationId);
   const unreadIds = useArtifactStore((s) => s.unreadIds);
   const sidebarCollapsed = usePreferencesStore((s) => s.sidebarCollapsed);
   const toggleSidebar = usePreferencesStore((s) => s.toggleSidebar);
   const sidebarWidth = usePreferencesStore((s) => s.sidebarWidth);
   const isNarrow = useIsNarrowViewport();
   const effectiveCollapsed = sidebarCollapsed || isNarrow;
-  const [chosenFilter, setSessionFilter] = useState<string | "all">("all");
+  const chosenFilter = useArtifactStore((s) => s.agentFilter);
+  const setSessionFilter = useArtifactStore((s) => s.chooseAgentFilter);
   const chooseFilter = (id: string) => {
     setSessionFilter(id);
     onAgentFilterChange?.(id !== "all");
@@ -1432,8 +1445,17 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
   const filterSessionIds = chosenFilter !== "all" && !sessionIds.includes(chosenFilter)
     ? [...sessionIds, chosenFilter] : sessionIds;
   const showAgentFilter = sessionIds.length > 1 || chosenFilter !== "all";
-  const agentLabel = (sid: string, index: number) => sid === chosenFilter
-    ? `Selected agent — ${sid}` : `Agent ${index + 1}`;
+  const labelCatalog = useConnectionStore((s) => s.activeSessions);
+  const rememberedLabels = useRef<Record<string, string>>({});
+  const sharedLabels = sessionLabelsFrom(labelCatalog);
+  const agentLabel = (sid: string, index: number) => {
+    const entry = labelCatalog.find((session) => session.sessionId === sid);
+    const base = (entry ? sharedLabels[sid] : rememberedLabels.current[sid]) ?? "Session " + (index + 1);
+    const collision = entry && labelCatalog.filter((session) => sharedLabels[session.sessionId] === base).length > 1;
+    const label = collision ? base + " (" + sid.slice(-8) + ")" : base;
+    rememberedLabels.current[sid] = label;
+    return sid === chosenFilter ? "Selected agent — " + (entry?.title || entry?.project || !/^Session \d+$/.test(label) ? label : sid) : label;
+  };
 
   const visibleArtifacts = useMemo(
     () => artifacts.filter((a) => {
@@ -1509,7 +1531,10 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
     return groups;
   }, [visibleArtifacts]);
 
-  const selectedArtifact = artifacts.find((a) => a.id === selectedArtifactId);
+  const selectedArtifact = artifacts.find((a) => a.id === selectedArtifactId &&
+    (a.status !== "superseded" || a.id === exactNavigationId) &&
+    (chosenFilter === "all" || a.sessionId === chosenFilter) &&
+    (!replayActive || !replayCursor || a.createdAt <= replayCursor));
   // #569 proposal 1 — label demo/sample content where the cards are. Keyed on
   // the SELECTED artifact's own session (MultiAgentSync can merge a demo beside
   // real work); falls back to the bound/replayed session. Labelling only.
@@ -1530,6 +1555,9 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
       data-testid="artifact-panel"
     >
       <DemoContentBanner provenance={provenance} />
+      {chosenFilter !== "all" && <div role="status" data-testid="agent-filter-scope" className="px-3 py-1 text-xs text-text-muted">
+        {orderedPendingArtifacts(visibleArtifacts).length} pending here · {orderedPendingArtifacts(scopedVisibleArtifacts(artifacts, "all")).filter((a) => a.sessionId !== chosenFilter).length} in other agents · {agentLabel(chosenFilter, filterSessionIds.indexOf(chosenFilter))}
+      </div>}
 
       {/* #457 D6 — MultiAgentSync (other sessions' artifacts) is mounted by
           App now, so it runs even while the bound session is empty. */}
@@ -1593,7 +1621,7 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
       {emptyAgentView && (
         <div data-agents-filter="" data-testid="agent-filter-empty" className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border-default text-2xs text-text-secondary">
           <div className="min-w-0 break-words">
-            <p className="font-medium text-text-primary">Selected agent — {chosenFilter}</p>
+            <p className="font-medium text-text-primary">{agentLabel(chosenFilter, filterSessionIds.indexOf(chosenFilter))}</p>
             <p>{emptyAgentCopy}</p>
           </div>
           <button
@@ -1654,7 +1682,7 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
             </ErrorBoundary>
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-text-muted">
-              Select an artifact to view details
+              {selectedArtifactId ? (artifacts.some((a) => a.id === selectedArtifactId) ? "This artifact is outside the selected view. Choose an item or show all agents to recover." : "This artifact is unavailable. Choose an item or show all agents to recover.") : "Select an artifact to view details"}
             </div>
           )}
         </AnimatePresence>

@@ -68,7 +68,7 @@ function grainText(g: ExceptionGrain): string {
 }
 
 function EntryButton({ entry, extra }: { entry: ExceptionEntry; extra?: string }) {
-  const selectExact = useArtifactStore((s) => s.selectArtifactExact);
+  const selectExact = useArtifactStore((s) => s.openArtifactExact);
   const parts = [
     entry.bucket === "other" ? `status ${entry.status}` : EXCEPTION_BUCKET_LABELS[entry.bucket],
     ...(entry.incompleteHistory ? ["history incomplete"] : []),
@@ -113,7 +113,7 @@ function Group({ label, testId, count, children }: { label: string; testId: stri
  */
 export function BriefExceptionsSection({ briefId, sessionId }: { briefId: string; sessionId: string | null | undefined }) {
   const state = useBriefExceptions(briefId, sessionId);
-  const selectExact = useArtifactStore((s) => s.selectArtifactExact);
+  const selectExact = useArtifactStore((s) => s.openArtifactExact);
   if (state.kind === "hidden") return null;
   const heading = (
     <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">Linked exception cards</h3>

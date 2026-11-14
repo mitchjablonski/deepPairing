@@ -47,7 +47,7 @@ export function resumePromptFor(n: number): string {
 
 export function ResumeQuestionsBanner() {
   const comments = useArtifactStore((s) => s.comments);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const connected = useConnectionStore((s) => s.connected);
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const [copied, setCopied] = useState(false);

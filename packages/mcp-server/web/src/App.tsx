@@ -1,5 +1,5 @@
 import { AllowOnceDialogHost } from "./components/AllowOnceDialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel, MultiAgentSync } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
@@ -11,6 +11,7 @@ import { attentionHolds } from "./lib/attentionCopy";
 import { selectDefaultSession } from "./lib/selectDefaultSession";
 import { enterSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
+import { useSessionVisits } from "./hooks/useSessionVisits";
 import { useAgentWorking } from "./hooks/useAgentWorking";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
@@ -41,7 +42,7 @@ import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ContextBankView } from "./components/ContextBankView";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
-import { useArtifactStore } from "./stores/artifact";
+import { useArtifactStore, scopedVisibleArtifacts } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
 import { useConnectionStore, selectHydratedForBinding } from "./stores/connection";
 import { usePreflightBlockStore } from "./stores/preflightBlocks";
@@ -60,6 +61,7 @@ import { useProvenance } from "./lib/provenance";
 import { ProvenanceChip, DemoTag } from "./components/ProvenanceMarker";
 
 function App() {
+  useSessionVisits();
   const connected = useConnectionStore((s) => s.connected);
   const connect = useConnectionStore((s) => s.connect);
   const sessionId = useConnectionStore((s) => s.sessionId);
@@ -118,6 +120,15 @@ function App() {
     }
   }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+  // #642 item 8 (Sol P2 x2) — does the queue have a row to skip to? Mirrors
+  // ArtifactPanel's own visibility rule: superseded rows never show, and
+  // replay hides rows created after the cursor (an all-future replay renders
+  // the walkthrough, which has no Artifacts nav).
+  const allArtifacts = useArtifactStore((s) => s.artifacts);
+  const replayOn = useReplayStore((s) => s.active);
+  const replayAt = useReplayStore((s) => s.cursor);
+  const queueHasRows = useMemo(() => allArtifacts.some((a) => a.status !== "superseded" &&
+    !(replayOn && replayAt && a.createdAt > replayAt)), [allArtifacts, replayOn, replayAt]);
   // IV9 — the demo "next step" CTA: a scripted demo session (sessionId
   // `demo_…`, daemon.ts) that has actually fired. D9 (H3) — the wrap card: the
   // bound session's wrapper exited (M8 live flag), the agent is quiet, and there
@@ -137,9 +148,28 @@ function App() {
   // #624/#637 — retain a chosen agent through same-session catalog/hydration
   // changes, but release the panel on All or an actual bound-session switch.
   const filterBinding = JSON.stringify(sessionId);
-  const [agentFilterBinding, setAgentFilterBinding] = useState<string | null>(null);
-  const keepAgentFilterPanel = agentFilterBinding === filterBinding;
-  useEffect(() => setAgentFilterBinding(null), [sessionId]);
+  const agentFilter = useArtifactStore((s) => s.agentFilter);
+  const keepAgentFilterPanel = agentFilter !== "all";
+  useLayoutEffect(() => {
+    const bind = () => {
+      const connection = useConnectionStore.getState();
+      useArtifactStore.getState().bindAgentFilter(connection.sessionId, connection.projectRoot);
+    };
+    bind();
+    const stopBinding = useConnectionStore.subscribe(bind);
+    const stopPendingOpen = useArtifactStore.subscribe((next, previous) => {
+      if (next.artifacts !== previous.artifacts) {
+        if (next.pendingOpen) next.fulfillPendingOpen();
+        else next.reconcileAgentScope();
+      }
+    });
+    const stopReplay = useReplayStore.subscribe((next, previous) => {
+      if (next.active !== previous.active || next.exiting !== previous.exiting || next.cursor !== previous.cursor) {
+        useArtifactStore.setState((state) => ({ navigationEpoch: state.navigationEpoch + 1 }));
+      }
+    });
+    return () => { stopBinding(); stopReplay(); stopPendingOpen(); };
+  }, []);
   const recoverEmptyFilterFocus = useRef(false);
   useEffect(() => {
     if (!recoverEmptyFilterFocus.current) return;
@@ -477,19 +507,14 @@ function App() {
         e.preventDefault();
         // F9 review — during replay, match the sidebar's cursor filter so
         // j/k can't select artifacts the replayed frame hides.
-        const replay = useReplayStore.getState();
-        const visible = store.artifacts.filter(
-          (a) =>
-            a.status !== "superseded" &&
-            (!replay.active || !replay.cursor || a.createdAt <= replay.cursor),
-        );
+        const visible = scopedVisibleArtifacts(store.artifacts);
         if (visible.length === 0) return;
         const currentIdx = visible.findIndex((a) => a.id === store.selectedArtifactId);
         const nextIdx = e.key === "j"
           ? Math.min(currentIdx + 1, visible.length - 1)
           : Math.max(currentIdx - 1, 0);
         const nextArtifact = visible[nextIdx];
-        if (nextArtifact) store.selectArtifact(nextArtifact.id);
+        if (nextArtifact) store.openArtifact(nextArtifact.id);
       }
 
       // E3 (L1) — `n`: next thing waiting on you. Same wrap-around cycle as
@@ -497,14 +522,14 @@ function App() {
       // #457 D7 (design §7) — Shift+`n` (`N`) goes to the PREVIOUS one, same
       // wrap-around; it was unbound.
       if (e.key === "n" || e.key === "N") {
-        const pending = orderedPendingArtifacts(store.artifacts);
+        const pending = orderedPendingArtifacts(scopedVisibleArtifacts(store.artifacts));
         if (pending.length === 0) return;
         e.preventDefault();
         const idx = pending.findIndex((a) => a.id === store.selectedArtifactId);
         const step = e.key === "N" ? -1 : 1;
         const from = idx === -1 && step === -1 ? 0 : idx;
         const nextPending = pending[(from + step + pending.length) % pending.length];
-        if (nextPending) store.selectArtifact(nextPending.id);
+        if (nextPending) store.openArtifact(nextPending.id);
       }
 
       if (e.key === "a" || e.key === "r") {
@@ -591,7 +616,7 @@ function App() {
       // (nothing visibly happened until Esc). LedgerDrawer already got
       // this right; the rail's dispatches route through here.
       setShowConversation(false);
-      useArtifactStore.getState().selectArtifact(detail.artifactId);
+      useArtifactStore.getState().openArtifact(detail.artifactId);
       if (detail.anchorKey) {
         // requestAnimationFrame waits one paint — usually enough for the
         // artifact panel to swap. If the element still isn't there, try
@@ -624,6 +649,28 @@ function App() {
           Jump to next up
         </a>
       )}
+      {/* #642 item 8 — with the bar off, the review queue sat ~23 Tab stops
+          deep (header, every banner chip and its ✕, Ask). A skip link, visible
+          only while focused, lands on the selected row (else the first). The
+          chip ✕ buttons stay in the tab order: they are the only keyboard path
+          to dismiss. Rendered only while its target (the Artifacts nav inside
+          ArtifactPanel) is mounted and shown — the empty / still-hydrating
+          routes have no queue to skip to (Sol P2). */}
+      {mountArtifactPanel && !hidePanelForHydration && queueHasRows && <a
+        href="#review-queue"
+        onClick={(e) => {
+          e.preventDefault();
+          const nav = document.querySelector<HTMLElement>('nav[aria-label="Artifacts"]');
+          const row = nav?.querySelector<HTMLElement>('[data-artifact-item][aria-current="true"]') ??
+            nav?.querySelector<HTMLElement>("[data-artifact-item]");
+          // No row (e.g. a selected agent with nothing in it keeps its empty
+          // recovery frame): land on the nav landmark itself (Sol P2 x3).
+          (row ?? nav)?.focus();
+        }}
+        className="sr-only focus:not-sr-only focus:absolute focus:top-1 focus:left-1 focus:z-50 focus:px-2 focus:py-1 focus:rounded focus:bg-surface-elevated focus:text-text-primary focus:text-xs"
+      >
+        Skip to review queue
+      </a>}
       {/* O6: surfaces when the pairing-protocol skill isn't active so the
           plugin-install path doesn't fail silently. Dismissible; auto-hides
           once any artifact arrives. */}
@@ -1007,7 +1054,6 @@ function App() {
                 // on the stable main landmark, without stealing unrelated focus.
                 recoverEmptyFilterFocus.current = !active && !hasArtifacts &&
                   !!document.activeElement?.closest("[data-agents-filter]");
-                setAgentFilterBinding(active ? filterBinding : null);
               }} />
             </div>
           )}

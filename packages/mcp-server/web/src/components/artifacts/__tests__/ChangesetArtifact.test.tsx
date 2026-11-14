@@ -219,8 +219,8 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     const art = changeset({ reviewState: { "auth/middleware.ts": "reviewed", "auth/session.ts": "reviewed", "auth/session.test.ts": "reviewed" } });
     seed(art, [], [other]);
     const updateStatus = vi.fn().mockResolvedValue(undefined);
-    const selectArtifact = vi.fn();
-    useArtifactStore.setState({ updateArtifactStatus: updateStatus, selectArtifact });
+    const openArtifact = vi.fn();
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus, openArtifact });
     render(<ChangesetArtifact artifact={art} />);
 
     // Explicit approve arms the countdown (all look right on mount → no auto-arm).
@@ -230,7 +230,7 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     await act(async () => { vi.advanceTimersByTime(3000); await Promise.resolve(); });
     expect(updateStatus).toHaveBeenCalledWith("art_cs", "approved", undefined, undefined);
     // Auto-advance to the next pending draft (AFTER the verdict posts).
-    expect(selectArtifact).toHaveBeenCalledWith("art_next");
+    expect(openArtifact).toHaveBeenCalledWith("art_next");
   });
 
   it("after approval posts, advances to a newer decision before an older finding in a shuffled queue", async () => {
@@ -252,18 +252,18 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     const prior = useArtifactStore.getState();
     let finishVerdict!: () => void;
     const updateStatus = vi.fn(() => new Promise<void>((resolve) => { finishVerdict = resolve; }));
-    const selectArtifact = vi.fn();
-    useArtifactStore.setState({ updateArtifactStatus: updateStatus, selectArtifact });
+    const openArtifact = vi.fn();
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus, openArtifact });
     try {
       render(<ChangesetArtifact artifact={art} />);
       act(() => { fireEvent.click(screen.getByTestId("approve-changeset")); });
       await act(async () => { vi.advanceTimersByTime(3000); });
       expect(updateStatus).toHaveBeenCalledWith("art_cs", "approved", undefined, undefined);
-      expect(selectArtifact).not.toHaveBeenCalled();
+      expect(openArtifact).not.toHaveBeenCalled();
       await act(async () => { finishVerdict(); });
-      expect(selectArtifact).toHaveBeenCalledExactlyOnceWith("decision");
+      expect(openArtifact).toHaveBeenCalledExactlyOnceWith("decision");
     } finally {
-      useArtifactStore.setState({ updateArtifactStatus: prior.updateArtifactStatus, selectArtifact: prior.selectArtifact });
+      useArtifactStore.setState({ updateArtifactStatus: prior.updateArtifactStatus, openArtifact: prior.openArtifact });
     }
   });
 
@@ -319,6 +319,58 @@ describe("ChangesetArtifact — keyboard, scoped to focus (#175 / #187 hazard)",
     render(<ChangesetArtifact artifact={art} />);
     act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
     await waitFor(() => expect(updateStatus).toHaveBeenCalledWith("art_cs", "revised", expect.stringContaining("auth/middleware.ts"), undefined));
+  });
+
+  it("#642 item 1 — Enter / Shift+Enter on a focused BUTTON or link is that control's activation, never a changeset approve", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art); // selected changeset, nothing marked yet
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview, updateArtifactStatus: updateStatus });
+    render(
+      <>
+        {/* e.g. the banner chip / Next-up "Open" that just opened this changeset */}
+        <button type="button">Open</button>
+        <a href="#elsewhere">Sidebar row</a>
+        <ChangesetArtifact artifact={art} />
+      </>,
+    );
+    const open = screen.getByRole("button", { name: "Open" });
+    open.focus();
+    act(() => { fireEvent.keyDown(open, { key: "Enter" }); });
+    act(() => { fireEvent.keyDown(open, { key: "Enter", shiftKey: true }); });
+    const link = screen.getByRole("link", { name: "Sidebar row" });
+    link.focus();
+    act(() => { fireEvent.keyDown(link, { key: "Enter" }); });
+    // Pre-fix: the derived action ran approveAll, marking every file reviewed.
+    expect(setReview).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+    // From a non-control target ⇧⏎ (the explicit approve-all) still acts.
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter", shiftKey: true }); });
+    expect(setReview).toHaveBeenCalled();
+  });
+
+  it("#642 item 1 (Mitch) — a bare ⏎ on an UNTOUCHED changeset does nothing; the hint offers ⇧⏎ approve all", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview, updateArtifactStatus: updateStatus });
+    render(<ChangesetArtifact artifact={art} />);
+    expect(screen.getByText("approve all")).toBeInTheDocument();
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    expect(setReview).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it("#642 item 1 — once a file is marked, ⏎ runs the derived action again (approve-all of the remainder)", () => {
+    const art = changeset({ reviewState: { "auth/middleware.ts": "reviewed" } });
+    seed(art);
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview });
+    render(<ChangesetArtifact artifact={art} />);
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    expect(setReview).toHaveBeenCalledWith("art_cs", "auth/session.ts", "reviewed");
   });
 
   it("the keys are DEAD when the changeset is not the focused artifact", () => {

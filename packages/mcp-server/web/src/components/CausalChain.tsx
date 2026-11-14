@@ -12,7 +12,7 @@ const typeOrder = ["research", "decision", "plan", "code_change", "reasoning"];
 export function CausalChain() {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
 
   const visible = artifacts.filter((a) => a.status !== "superseded");
   if (visible.length <= 1) return null;

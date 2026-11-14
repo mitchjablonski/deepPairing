@@ -48,6 +48,7 @@ const setConn = (over: Record<string, unknown> = {}) =>
 beforeEach(() => {
   t = 0;
   useArtifactStore.getState().reset();
+  useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
   usePreflightBlockStore.setState({ blocks: [], lastSeenAt: null } as any);
   useHookStatusStore.setState({ fires: [] } as any);
   useReplayStore.setState({ active: false, sessionId: null } as any);
