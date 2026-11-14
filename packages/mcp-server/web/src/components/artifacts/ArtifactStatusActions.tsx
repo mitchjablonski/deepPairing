@@ -892,7 +892,7 @@ export function ArtifactStatusActions({
         placeholder={
           rejecting
             ? "Why are you rejecting this?…  (⌘⏎ to send)"
-            : "Respond to the agent…  (⌘⏎ to send · empty ⌘⏎ = approve)"
+            : `Respond on this artifact…  (⌘⏎ to send · empty ⌘⏎ = approve in ${KEYBOARD_CONFIRM_SECONDS}s)`
         }
         value={comment}
         // B6 review — once the user engages the panel, latch it open:
@@ -908,7 +908,13 @@ export function ArtifactStatusActions({
             } else if (!hideApprove && !rejecting) {
               // R2 — never approve out from under an armed Reject (see the
               // placeholder note above).
-              handleAction("approved");
+              // #656 item 6 (Mitch, 11-14) — an empty ⌘⏎ approved INSTANTLY,
+              // while `a`, decision Enter and changeset approve-all all get a
+              // cancellable window. Take the same path as `a`: the
+              // open-suggestion confirm first, else arm the keyboard countdown
+              // (typing or Cancel/Esc disarms it).
+              if (openSugRef.current.total > 0) setApproveConfirm(true);
+              else dispatch({ type: "armCountdown", seconds: KEYBOARD_CONFIRM_SECONDS });
             }
           }
         }}
@@ -1072,10 +1078,10 @@ export function ArtifactStatusActions({
           {rejecting
             ? "Reject needs a reason — ⌘⏎ won't approve while a reject is armed"
             : informationalReport
-              ? "⌘⏎ on empty input acknowledges · Reject / Request changes need a reason (redo the digest)"
+              ? `⌘⏎ on empty input acknowledges after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (redo the digest)`
             : suppressRejectConcept
-              ? "⌘⏎ on empty input approves · Reject / Request changes need a reason (redo the digest)"
-              : "⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)"}
+              ? `⌘⏎ on empty input approves after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (redo the digest)`
+              : `⌘⏎ on empty input approves after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (remembered across sessions)`}
         </div>
       )}
       </>
