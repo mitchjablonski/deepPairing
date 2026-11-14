@@ -329,7 +329,9 @@ describe("#652 bounded receipt recovery", () => {
       if (fail) { fail = false; throw new DOMException("full", "QuotaExceededError"); }
       original(k, v);
     };
-    queue.splice(1, 1)[0](); // A successfully evicts B.
+    const flushA = queue.splice(1, 1)[0];
+    if (!flushA) throw new Error("Expected the queued A eviction callback");
+    flushA(); // A successfully evicts B.
     expect(documentOf(storage).entries[key("B")]).toBeUndefined();
     visits.leave();
     expect(enter(visits, ["fresh-b"], "B").unread).toEqual([]);
