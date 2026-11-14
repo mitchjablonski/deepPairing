@@ -372,6 +372,7 @@ describe("ArtifactPanel new-item locator", () => {
   });
 
   it("does not invent a causal breadcrumb from unrelated sessions", async () => {
+    vi.useRealTimers();
     stubCollapsedSidebar();
     useArtifactStore.getState().addArtifact(mk(1, {
       sessionId: "billing", title: "Billing research", content: { summary: "Billing summary", findings: [] },
@@ -390,6 +391,7 @@ describe("ArtifactPanel new-item locator", () => {
   });
 
   it("keeps an explicit cross-session Related link neutral and navigable", async () => {
+    vi.useRealTimers();
     stubCollapsedSidebar();
     useArtifactStore.getState().addArtifact(mk(1, {
       sessionId: "billing", title: "Billing research", content: { summary: "Billing summary", findings: [] },
