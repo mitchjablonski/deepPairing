@@ -206,7 +206,14 @@ describe("#430 slice 2 — the evidence workflow stays separate and bounded", ()
   const workflow = read("../../.github/workflows/attention-evidence.yml");
 
   it("runs only on dispatch, read-only, with no secrets and no persisted token", () => {
-    expect(workflow).toMatch(/^on:\n {2}workflow_dispatch:\n\n/m);
+    expect(workflow).toMatch(/^on:\n {2}workflow_dispatch:\n {4}inputs:\n/m);
+    expect(workflow).toContain("type: choice");
+    expect(workflow).toContain("options: [all, s3]");
+    expect(workflow).toContain("default: all");
+    expect(workflow).toContain("if: inputs.scope == 's3'");
+    expect(workflow).toContain("if: inputs.scope != 's3'");
+    expect(workflow).not.toContain("${{ inputs.scope }}");
+    expect(workflow.indexOf("check-s3-evidence-selection.mjs")).toBeLessThan(workflow.indexOf("name: S3 persisted verdict walkthroughs"));
     expect(workflow).not.toMatch(/pull_request|schedule:|\bpush:/);
     expect(workflow).toMatch(/^permissions:\n {2}contents: read\n/m);
     expect(workflow).not.toMatch(/secrets\.|GITHUB_TOKEN|DEEPPAIRING_PORT/);
