@@ -67,8 +67,13 @@ describe("#642 mounted App filter-following navigation", () => {
     render(<App />);
     choose("A");
     expect(screen.getByTestId("agent-filter-scope")).toHaveTextContent("1 in other agents");
-    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    const showAll = screen.getByRole("button", { name: "Show all" });
+    showAll.focus();
+    expect(document.activeElement).toBe(showAll);
+    fireEvent.click(showAll);
     expect(menu().value).toBe("all");
+    // The button removed itself; keyboard focus lands on the surviving filter menu, not <body>.
+    expect(document.activeElement).toBe(menu());
   });
 
   it("#648 x #650 — under agent A, the receipt's Next link opens B's queue head and the filter follows to B", async () => {
