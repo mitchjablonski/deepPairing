@@ -892,7 +892,7 @@ export function ArtifactStatusActions({
         placeholder={
           rejecting
             ? "Why are you rejecting this?…  (⌘⏎ to send)"
-            : `Respond on this artifact…  (⌘⏎ to send · empty ⌘⏎ = approve in ${KEYBOARD_CONFIRM_SECONDS}s)`
+            : `Respond to the agent on this artifact…  (⌘⏎ to send · empty ⌘⏎ = approve in ${KEYBOARD_CONFIRM_SECONDS}s)`
         }
         value={comment}
         // B6 review — once the user engages the panel, latch it open:
