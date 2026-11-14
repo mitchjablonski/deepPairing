@@ -371,7 +371,7 @@ describe("ArtifactPanel new-item locator", () => {
     expect(groups.get("art_5")!.map((x) => x.id)).toEqual(["art_5", "art_6"]);
   });
 
-  it("does not invent a causal breadcrumb from unrelated sessions", async () => {
+  it("does not invent a causal breadcrumb from unrelated sessions", () => {
     stubCollapsedSidebar();
     useArtifactStore.getState().addArtifact(mk(1, {
       sessionId: "billing", title: "Billing research", content: { summary: "Billing summary", findings: [] },
@@ -379,15 +379,16 @@ describe("ArtifactPanel new-item locator", () => {
     useArtifactStore.getState().addArtifact(mk(2, {
       sessionId: "auth", type: "plan", title: "Unrelated auth plan",
     }));
+    useArtifactStore.getState().openArtifact("art_1");
 
     render(<ArtifactPanel />);
 
-    await screen.findByText("Billing summary", { exact: true });
+    expect(screen.getByText("Billing summary", { exact: true })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Unrelated auth plan" })).toBeNull();
     expect(screen.queryByText("Related:", { exact: true })).toBeNull();
   });
 
-  it("keeps an explicit cross-session Related link neutral and navigable", async () => {
+  it("keeps an explicit cross-session Related link neutral and navigable", () => {
     stubCollapsedSidebar();
     useArtifactStore.getState().addArtifact(mk(1, {
       sessionId: "billing", title: "Billing research", content: { summary: "Billing summary", findings: [] },
@@ -396,10 +397,11 @@ describe("ArtifactPanel new-item locator", () => {
     useArtifactStore.getState().addArtifact(mk(2, {
       id: "auth_research", sessionId: "auth", title: "Auth research",
     }));
+    useArtifactStore.getState().openArtifact("art_1");
 
     render(<ArtifactPanel />);
 
-    expect(await screen.findByText("Related:", { exact: true })).toBeTruthy();
+    expect(screen.getByText("Related:", { exact: true })).toBeTruthy();
     const related = screen.getByRole("button", { name: "Auth research" });
     expect(screen.getAllByRole("button", { name: "Auth research" })).toHaveLength(1);
     fireEvent.click(related);
