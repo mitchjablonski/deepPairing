@@ -383,7 +383,7 @@ describe("ArtifactPanel new-item locator", () => {
     render(<ArtifactPanel />);
 
     await screen.findByText("Billing summary", { exact: true });
-    expect(screen.queryByRole("button", { name: "Unrelated auth plan", exact: true })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unrelated auth plan" })).toBeNull();
     expect(screen.queryByText("Related:", { exact: true })).toBeNull();
   });
 
@@ -400,8 +400,8 @@ describe("ArtifactPanel new-item locator", () => {
     render(<ArtifactPanel />);
 
     expect(await screen.findByText("Related:", { exact: true })).toBeTruthy();
-    const related = screen.getByRole("button", { name: "Auth research", exact: true });
-    expect(screen.getAllByRole("button", { name: "Auth research", exact: true })).toHaveLength(1);
+    const related = screen.getByRole("button", { name: "Auth research" });
+    expect(screen.getAllByRole("button", { name: "Auth research" })).toHaveLength(1);
     fireEvent.click(related);
     expect(useArtifactStore.getState().selectedArtifactId).toBe("auth_research");
     expect(useArtifactStore.getState().agentFilter).toBe("all");
