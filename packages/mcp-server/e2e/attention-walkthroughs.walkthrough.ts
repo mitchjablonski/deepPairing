@@ -163,9 +163,11 @@ for (const row of MATRIX) {
             for (let i = 0; i < 13; i++) {
               // Real Tab/Enter only: never locator.click(), focus(), or store writes.
               await evidence.activate(page.getByRole("button", { name: new RegExp(`^${queueTitles[i].replace(/[?]/g, "\\?")} ${i === 7 ? "Decision" : "Draft"}`) }));
-              await expect(page.locator(`[data-artifact-id="queue_${i}"]`)).toBeVisible();
+              const selectedPane = page.locator(`[data-dp-pane][data-artifact-id="queue_${i}"]:not([inert])`);
+              await expect(selectedPane).toHaveCount(1);
+              await expect(selectedPane).toBeVisible();
               await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
-              await evidence.activate(i === 7 ? page.getByRole("button", { name: "Select Redis", exact: true }) : page.getByRole("button", { name: "Approve", exact: true }));
+              await evidence.activate(i === 7 ? selectedPane.getByRole("button", { name: "Select Redis", exact: true }) : selectedPane.getByRole("button", { name: "Approve", exact: true }));
               await evidence.check(`queue_${i} persisted approved by keyboard`, () => expect.poll(async () => (await daemon!.artifacts("queue")).find((a) => a.id === `queue_${i}`)?.status).toBe("approved"));
             }
             await evidence.check("all thirteen persisted reviews are closed", () => expect.poll(async () => (await daemon!.artifacts("queue")).filter((a) => a.status === "draft").length).toBe(0));
