@@ -121,11 +121,11 @@ describe("#656 item 2 — accepted sibling baseline", () => {
       new Promise<Response>((resolve) => requests.push({ signal: init?.signal ?? undefined, resolve }))));
     return {
       requests,
-      async deliver(index: number, artifacts: unknown, status = 200) {
+      async deliver(index: number, artifacts: unknown, status = 200, envelope?: unknown) {
         const request = requests[index];
         if (!request) throw new Error("Expected deferred sibling request");
         await act(async () => {
-          request.resolve(new Response(JSON.stringify({ artifacts, comments: [], decisions: [] }), { status }));
+          request.resolve(new Response(JSON.stringify({ artifacts, comments: [], decisions: [], ...(envelope === undefined ? {} : { sessionId: envelope }) }), { status }));
           await Promise.resolve();
         });
       },
@@ -248,6 +248,56 @@ describe("#656 item 2 — accepted sibling baseline", () => {
     await waitFor(() => expect(network.requests).toHaveLength(3));
     await network.deliver(2, [artifact("history", "sess_B"), artifact("live", "sess_B")]);
     expect(useArtifactStore.getState().unreadIds).toEqual(["live"]);
+  });
+
+
+  it("normalizes copied omitted owners only with B envelope authority and fulfills an unknown Open", async () => {
+    const network = transport();
+    useArtifactStore.getState().bindAgentFilter("sess_tab", "/p");
+    useArtifactStore.getState().chooseAgentFilter("sess_tab");
+    useArtifactStore.getState().openArtifact("legacy");
+    render(<MultiAgentSync />);
+    await waitFor(() => expect(network.requests).toHaveLength(1));
+    const legacy = { ...artifact("legacy", "sess_B"), sessionId: undefined };
+    await network.deliver(0, [artifact("modern", "sess_B"), legacy], 200, "sess_B");
+    expect(legacy.sessionId).toBeUndefined();
+    expect(useArtifactStore.getState().artifacts.find((a) => a.id === "legacy")?.sessionId).toBe("sess_B");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("legacy");
+    expect(useArtifactStore.getState().pendingOpen).toBeNull();
+    expect(useArtifactStore.getState().agentFilter).toBe("sess_B");
+    expect(useArtifactStore.getState().unreadIds).toEqual([]);
+    expect(useConnectionStore.getState().sessionId).toBe("sess_tab");
+  });
+  it.each([
+    ["owner omitted, no envelope", undefined, undefined],
+    ["owner omitted, wrong envelope", undefined, "other"],
+    ["explicit null", null, "sess_B"],
+    ["explicit empty", "", "sess_B"],
+    ["explicit foreign", "other", "sess_B"],
+    ["explicit malformed", 123, "sess_B"],
+    ["modern owner, wrong envelope", "sess_B", "other"],
+    ["modern owner, null envelope", "sess_B", null],
+  ])("rejects the complete mixed batch (%s) and keeps retry as first history", async (_name, owner, envelope) => {
+    const network = transport();
+    render(<MultiAgentSync />);
+    await waitFor(() => expect(network.requests).toHaveLength(1));
+    await network.deliver(0, [artifact("good", "sess_B"), { ...artifact("bad", "sess_B"), sessionId: owner }], 200, envelope);
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["a"]);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+    try {
+      act(refresh);
+      await waitFor(() => expect(network.requests).toHaveLength(2));
+      await network.deliver(1, [artifact("good", "sess_B"), artifact("repaired", "sess_B")], 200, "sess_B");
+      expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["a", "good", "repaired"]);
+      expect(useArtifactStore.getState().unreadIds).toEqual([]);
+    } finally { clock.mockRestore(); }
+  });
+  it.each([null, { ...artifact("bad", "sess_B"), id: "" }])("refuses malformed row %j even with a matching envelope", async (bad) => {
+    const network = transport();
+    render(<MultiAgentSync />);
+    await waitFor(() => expect(network.requests).toHaveLength(1));
+    await network.deliver(0, [artifact("good", "sess_B"), bad], 200, "sess_B");
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["a"]);
   });
 
 });

@@ -620,4 +620,35 @@ describe("#430 — canonical selection through real connected hydration", () => 
     } finally { mounted.unmount(); }
   });
 
+
+  it("#662 omitted legacy owner uses only a matching sibling envelope and creates no visit receipt", async () => {
+    await hydrate([mk("a")]);
+    useArtifactStore.getState().openArtifact("a");
+    await sessionVisits.settled();
+    const receipt = localStorage.getItem(SESSION_VISITS_KEY);
+    const legacySelection = localStorage.getItem("dp-selected-artifact");
+    const legacy = { ...mk("legacy-target"), sessionId: undefined };
+    const payload = { sessionId: "B", artifacts: [mk("modern-b", { sessionId: "B" }), legacy], comments: [], decisions: [] };
+    vi.stubGlobal("fetch", async (url: string) => new Response(JSON.stringify(
+      String(url).includes("/api/live-session/B") ? payload : { blocks: [], sessions: [] }
+    ), { status: 200 }));
+    useConnectionStore.setState({ activeSessions: [{ sessionId: "B", title: "B", project: "p", artifactCount: 2, live: true }] });
+    useArtifactStore.getState().bindAgentFilter("A", "/p");
+    useArtifactStore.getState().chooseAgentFilter("A");
+    useArtifactStore.getState().openArtifact("legacy-target");
+    const mounted = render(createElement(MultiAgentSync));
+    try {
+      await vi.waitFor(() => expect(useArtifactStore.getState().pendingOpen).toBeNull());
+      expect(useArtifactStore.getState().selectedArtifactId).toBe("legacy-target");
+      expect(useArtifactStore.getState().artifacts.find((a) => a.id === "legacy-target")?.sessionId).toBe("B");
+      expect(useArtifactStore.getState().agentFilter).toBe("B");
+      expect(useArtifactStore.getState().unreadIds).toEqual([]);
+      expect(legacy.sessionId).toBeUndefined();
+      await sessionVisits.settled();
+      expect(localStorage.getItem(SESSION_VISITS_KEY)).toBe(receipt);
+      expect(localStorage.getItem("dp-selected-artifact")).toBe(legacySelection);
+      expect(useConnectionStore.getState().sessionId).toBe("A");
+    } finally { mounted.unmount(); }
+  });
+
 });

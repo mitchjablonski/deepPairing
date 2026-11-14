@@ -1288,13 +1288,18 @@ export function MultiAgentSync() {
         // Validate the whole artifact batch before publishing any item or consuming
         // even an empty baseline. Optional collections retain endpoint compatibility.
         if (!state || !Array.isArray(state.artifacts) ||
-            !state.artifacts.every((a: Artifact | null) => a && typeof a.id === "string" && a.id.length > 0 &&
+            (Object.hasOwn(state, "sessionId") && state.sessionId !== id)) continue;
+        // Legacy disk rows may omit owner. Only the authoritative matching
+        // envelope can supply it, on copies; explicit bad owners remain invalid.
+        const artifacts = state.artifacts.map((artifact: Artifact | null) =>
+          artifact && artifact.sessionId === undefined && state.sessionId === id
+            ? { ...artifact, sessionId: id } : artifact);
+        if (!artifacts.every((a): a is Artifact => !!a && typeof a.id === "string" && a.id.length > 0 &&
               a.sessionId === id) ||
             (state.comments !== undefined && (!Array.isArray(state.comments) ||
               !state.comments.every((c: Comment | null) => c && c.target && typeof c.id === "string"))) ||
             (state.decisions !== undefined && (!Array.isArray(state.decisions) ||
               !state.decisions.every((d: unknown) => d && typeof d === "object")))) continue;
-        const artifacts: Artifact[] = state.artifacts;
         const historical = id !== frame.sessionId && !frame.baseline.has(id);
         const store = useArtifactStore.getState();
         const installing = store.installingSnapshot;
