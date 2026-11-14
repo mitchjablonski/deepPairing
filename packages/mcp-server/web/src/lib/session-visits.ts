@@ -103,7 +103,10 @@ export class SessionVisits {
     try { return parseDocument(this.storage()?.getItem(SESSION_VISITS_KEY) ?? null); } catch { return null; }
   }
   private receipt(key: string): Receipt | undefined {
-    // Memory is authoritative for this UI lifetime, including quota/lock failure.
+    // Retained memory is authoritative after quota/lock failure. The captured
+    // writer and accepted active binding are protected from durable eviction;
+    // successfully evicted inactive receipts lose their cache and may rebaseline
+    // even within this UI lifetime.
     const local = this.memory.get(key);
     const disk = this.read()?.entries[key];
     if (!local) return disk;
