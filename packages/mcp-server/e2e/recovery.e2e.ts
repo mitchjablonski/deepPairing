@@ -57,6 +57,9 @@ let home: string;
 let projectRoot: string;
 let daemon: Daemon | undefined;
 let bootingProc: ChildProcess | undefined;
+// A temporary occupant can force the first child off its preferred port.
+// Restart the owned daemon on the port the browser actually connected to.
+let ownedRestartPort: number | undefined;
 
 async function bootDaemon(): Promise<Daemon> {
   const proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
@@ -65,8 +68,8 @@ async function bootDaemon(): Promise<Daemon> {
       HOME: home,
       DEEPPAIRING_PROJECT_ROOT: projectRoot,
       DEEPPAIRING_NO_OPEN: "1",
-      DEEPPAIRING_PORT_BASE: PORT_BASE,
-      DEEPPAIRING_PORT_SPAN: PORT_SPAN,
+      DEEPPAIRING_PORT_BASE: ownedRestartPort === undefined ? PORT_BASE : String(ownedRestartPort),
+      DEEPPAIRING_PORT_SPAN: ownedRestartPort === undefined ? PORT_SPAN : "1",
     },
   });
   // Publish ownership before readiness polling so a failed/timed-out beforeAll
@@ -87,6 +90,7 @@ async function bootDaemon(): Promise<Daemon> {
             const base = Number(PORT_BASE);
             expect(info.port, "daemon bound inside the isolated port window").toBeGreaterThanOrEqual(base);
             expect(info.port, "daemon bound inside the isolated port window").toBeLessThan(base + Number(PORT_SPAN));
+            ownedRestartPort ??= info.port;
             return { proc, baseURL: `http://localhost:${info.port}`, token: info.authToken, startedAt: di.startedAt ?? "" };
           }
         }
