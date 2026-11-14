@@ -25,7 +25,10 @@ export function isVerdictReceipt(a: Artifact): boolean {
  */
 export function NextPendingLink({ artifact }: { artifact: Artifact }) {
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  // #650 — an explicit open: when an agent filter is on and the queue head
+  // belongs to another agent, the filter follows it atomically (raw selection
+  // would leave the target hidden by the filter).
+  const openArtifact = useArtifactStore((s) => s.openArtifact);
   const replayActive = useReplayStore((s) => s.active);
   const queue = useMemo(() => orderedPendingArtifacts(artifacts), [artifacts]);
   if (replayActive) return null;
@@ -40,7 +43,7 @@ export function NextPendingLink({ artifact }: { artifact: Artifact }) {
     <button
       type="button"
       data-next-pending
-      onClick={() => selectArtifact(next.id)}
+      onClick={() => openArtifact(next.id)}
       className="ml-auto shrink-0 max-w-[45%] truncate px-2 py-0.5 text-2xs text-accent-blue rounded hover:bg-surface-hover transition-colors"
       title={more > 0 ? `${next.title} (${more} more waiting)` : next.title}
       aria-label={`Next waiting for you: ${next.title}${more > 0 ? `, ${more} more after it` : ""}`}
