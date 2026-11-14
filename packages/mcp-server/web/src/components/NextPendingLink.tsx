@@ -4,6 +4,8 @@ import { useArtifactStore } from "../stores/artifact";
 import { useReplayStore } from "../stores/replay";
 import { orderedPendingArtifacts } from "../lib/attention";
 import { REVIEWABLE_TYPES } from "../lib/pending";
+import { agentLabelOf } from "../lib/sessionLabel";
+import { useConnectionStore } from "../stores/connection";
 
 /** A verdict was recorded: approved (incl. a resolved decision, which flips to
  *  approved), sent back (revised), rejected, or dismissed (obsolete). Drafts,
@@ -30,15 +32,23 @@ export function NextPendingLink({ artifact }: { artifact: Artifact }) {
   // would leave the target hidden by the filter).
   const openArtifact = useArtifactStore((s) => s.openArtifact);
   const replayActive = useReplayStore((s) => s.active);
+  const agentFilter = useArtifactStore((s) => s.agentFilter);
+  const activeSessions = useConnectionStore((s) => s.activeSessions);
   const queue = useMemo(() => orderedPendingArtifacts(artifacts), [artifacts]);
   if (replayActive) return null;
   // Sol P2 — receipt-local only: shown on an artifact that received a verdict,
   // never on an unreviewed informational draft or a historical version.
   if (!isVerdictReceipt(artifact)) return null;
   if (queue.some((a) => a.id === artifact.id)) return null; // defensive: still needs you
-  const next = queue[0];
+  // #656 item 5 (Mitch, 11-14) — stay inside the agent filter first, like `n`.
+  // Only when the filtered agent has nothing left does the link name another
+  // agent ("Next in X: …") and follow it there (openArtifact re-scopes).
+  const scoped = agentFilter === "all" ? queue : queue.filter((a) => a.sessionId === agentFilter);
+  const next = scoped[0] ?? queue[0];
   if (!next) return null;
-  const more = queue.length - 1;
+  const crossAgent = agentFilter !== "all" && scoped.length === 0;
+  const otherName = crossAgent ? agentLabelOf(activeSessions, next.sessionId) ?? "another agent" : null;
+  const more = (crossAgent ? queue.length : scoped.length) - 1;
   return (
     <button
       type="button"
@@ -46,9 +56,9 @@ export function NextPendingLink({ artifact }: { artifact: Artifact }) {
       onClick={() => openArtifact(next.id)}
       className="ml-auto shrink-0 max-w-[45%] truncate px-2 py-0.5 text-2xs text-accent-blue rounded hover:bg-surface-hover transition-colors"
       title={more > 0 ? `${next.title} (${more} more waiting)` : next.title}
-      aria-label={`Next waiting for you: ${next.title}${more > 0 ? `, ${more} more after it` : ""}`}
+      aria-label={`Next waiting for you${otherName ? ` in ${otherName}` : ""}: ${next.title}${more > 0 ? `, ${more} more after it` : ""}`}
     >
-      Next: {next.title} →
+      {otherName ? `Next in ${otherName}: ` : "Next: "}{next.title} →
     </button>
   );
 }
