@@ -356,7 +356,7 @@ describe("#430 — canonical selection through real connected hydration", () => 
     useConnectionStore.setState({ daemonStartedAt: "old-daemon" });
     act(() => adapter.emit({ type: "connected", projectRoot: "/p", daemonStartedAt: "new-daemon" }));
     await vi.waitFor(() => expect(useConnectionStore.getState().sessionId).toBeNull());
-    await act(async () => { await hydrate([{ ...cs, status: "revised" }, mk("next")]); });
+    await act(async () => { await hydrate([cs, mk("next")]); });
     expect(useConnectionStore.getState().sessionId).toBe("A");
     const selected = useArtifactStore.getState().selectedArtifactId;
     await act(async () => { finish(); });
@@ -392,7 +392,7 @@ describe("#430 — canonical selection through real connected hydration", () => 
     usePreferencesStore.setState({ sidebarCollapsed: true });
     useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
     render(createElement(App));
-    fireEvent.click(screen.getByRole("button", { name: /^Agent 2 \(/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Session 2 \(/ }));
     act(() => useArtifactStore.setState({ artifacts: [mk("a")] }));
     fireEvent.click(screen.getByRole("button", { name: /^Selected agent — B \(/ }));
     expect(useArtifactStore.getState().selectedArtifactId).toBeNull();
