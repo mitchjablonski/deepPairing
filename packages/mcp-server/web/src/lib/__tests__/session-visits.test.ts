@@ -204,3 +204,139 @@ describe("#642 origin-local session visit receipts", () => {
     expect(enriched.selection).toBe("old");
   });
 });
+
+describe("#652 bounded receipt recovery", () => {
+  const key = (sid: string) => JSON.stringify(["/p", sid]);
+  const seed = (storage: Storage, names: string[], recent: unknown = names.map(key)) => {
+    storage.setItem(SESSION_VISITS_KEY, JSON.stringify({ version: 1, recent,
+      entries: Object.fromEntries(names.map((sid) => [key(sid), { observed: ["old"], selected: "old" }])) }));
+  };
+  const queuedVisits = (storage: Storage) => {
+    const queue: Array<() => void> = [];
+    const visits = new SessionVisits({ storage: () => storage,
+      lock: (work) => new Promise<void>((resolve) => queue.push(() => { work(); resolve(); })) });
+    return { visits, queue };
+  };
+  it.each([null, {}, ["bad", key("A"), key("A"), key("missing")]])("salvages complete own canonical receipts with malformed ordering %j", async (recent) => {
+    const storage = new MemoryStorage();
+    seed(storage, ["A", "B"], recent);
+    const doc = documentOf(storage);
+    doc.entries[key("broken")] = { observed: ["ok", null], selected: null };
+    doc.entries['[ "/p", "alias" ]'] = { observed: ["old"], selected: "old" };
+    doc.entries["__proto__"] = { observed: ["old"], selected: "old" };
+    storage.setItem(SESSION_VISITS_KEY, JSON.stringify(doc));
+    const visits = new SessionVisits(options(storage));
+    expect(enter(visits, ["old", "new"]).unread).toEqual(["new"]);
+    await visits.settled();
+    const saved = documentOf(storage);
+    expect(Object.keys(saved.entries).sort()).toEqual([key("A"), key("B")]);
+    expect(saved.recent).toEqual([key("A"), key("B")]);
+  });
+  it.each([{ version: 2, entries: {} }, { version: 1, entries: [] }, "{"])("refuses unrecognized envelopes %j", async (value) => {
+    const storage = new MemoryStorage();
+    const raw = typeof value === "string" ? value : JSON.stringify(value);
+    storage.setItem(SESSION_VISITS_KEY, raw);
+    const visits = new SessionVisits(options(storage));
+    enter(visits, ["old"]);
+    await visits.settled();
+    expect(storage.getItem(SESSION_VISITS_KEY)).toBe(raw);
+  });
+  it("rereads after quota, preserves concurrent entries, and keeps more than 2000 exact IDs", async () => {
+    const storage = new MemoryStorage();
+    seed(storage, ["A", "victim"]);
+    const original = storage.setItem.bind(storage);
+    let attempts = 0;
+    storage.setItem = (k, v) => {
+      attempts++;
+      if (attempts === 1) {
+        const fresh = documentOf(storage);
+        fresh.entries[key("concurrent")] = { observed: ["other"], selected: null };
+        fresh.recent.unshift(key("concurrent"));
+        original(k, JSON.stringify(fresh));
+        throw new DOMException("full", "QuotaExceededError");
+      }
+      original(k, v);
+    };
+    const visits = new SessionVisits(options(storage));
+    const ids = Array.from({ length: 2005 }, (_, i) => `id-${i}`);
+    enter(visits, ids);
+    await visits.settled();
+    expect(attempts).toBe(2);
+    const doc = documentOf(storage);
+    expect(doc.entries[key("victim")]).toBeUndefined();
+    expect(doc.entries[key("concurrent")].observed).toEqual(["other"]);
+    expect(doc.entries[key("A")].observed).toEqual(["old", ...ids]);
+  });
+  it.each(["quota-twice", "security", "no-victim", "future"])("bounds %s failure without evicting cached history", async (mode) => {
+    const storage = new MemoryStorage();
+    seed(storage, mode === "no-victim" ? ["A"] : ["A", "B"]);
+    const { visits, queue } = queuedVisits(storage);
+    enter(visits, ["old"], "B");
+    queue.shift()!();
+    await visits.settled();
+    visits.leave();
+    const prior = storage.getItem(SESSION_VISITS_KEY);
+    const original = storage.setItem.bind(storage);
+    let attempts = 0;
+    storage.setItem = (k, _v) => {
+      attempts++;
+      if (mode === "future") original(k, JSON.stringify({ version: 2 }));
+      throw new DOMException("full", mode === "security" ? "SecurityError" : "QuotaExceededError");
+    };
+    // Remove B durably only for the no-victim case; its cached receipt remains.
+    if (mode === "no-victim") original(SESSION_VISITS_KEY, JSON.stringify({ version: 1, recent: [key("A")],
+      entries: { [key("A")]: { observed: ["old"], selected: "old" } } }));
+    enter(visits, ["old", "new"]);
+    queue.shift()!();
+    await visits.settled();
+    expect(attempts).toBe(mode === "quota-twice" ? 2 : 1);
+    if (mode === "quota-twice" || mode === "security") expect(storage.getItem(SESSION_VISITS_KEY)).toBe(prior);
+    visits.leave();
+    expect(enter(visits, ["old", "new-b"], "B").unread).toEqual(["new-b"]);
+    // Do not execute the final queued write; this assertion examines retained memory.
+  });
+  it.each([false, true])("protects accepted B from delayed A flush (quota=%s)", async (quota) => {
+    const storage = new MemoryStorage();
+    const names = Array.from({ length: SESSION_VISITS_LIMIT }, (_, i) => `old-${i}`);
+    seed(storage, [...names.slice(0, -1), "B"]);
+    const { visits, queue } = queuedVisits(storage);
+    enter(visits, ["a"], "A");
+    visits.leave();
+    enter(visits, ["old", "new-b"], "B");
+    const original = storage.setItem.bind(storage);
+    let attempts = 0;
+    storage.setItem = (k, v) => {
+      if (++attempts === 1 && quota) throw new DOMException("full", "QuotaExceededError");
+      original(k, v);
+    };
+    queue.shift()!(); // A runs while B is the accepted active binding.
+    expect(documentOf(storage).entries[key("B")]).toBeDefined();
+    expect(documentOf(storage).entries[key("A")]).toBeDefined();
+    expect(visits.observe([art("old", "B"), art("new-b", "B")], "old")).toEqual(["new-b"]);
+    queue.splice(0).forEach((work) => work());
+    await visits.settled();
+  });
+  it("invalidates an evicted queued receipt without ABA resurrection after revisit", async () => {
+    const storage = new MemoryStorage();
+    seed(storage, ["A", "B"]);
+    const { visits, queue } = queuedVisits(storage);
+    enter(visits, ["old", "stale-b"], "B"); // B token 1, held behind A deliberately.
+    visits.leave();
+    enter(visits, ["a"], "A");
+    const original = storage.setItem.bind(storage);
+    let fail = true;
+    storage.setItem = (k, v) => {
+      if (fail) { fail = false; throw new DOMException("full", "QuotaExceededError"); }
+      original(k, v);
+    };
+    queue.splice(1, 1)[0](); // A successfully evicts B.
+    expect(documentOf(storage).entries[key("B")]).toBeUndefined();
+    visits.leave();
+    expect(enter(visits, ["fresh-b"], "B").unread).toEqual([]);
+    queue.shift()!(); // Old B callback must not match the new B write token.
+    expect(documentOf(storage).entries[key("B")]).toBeUndefined();
+    queue.shift()!();
+    await visits.settled();
+    expect(documentOf(storage).entries[key("B")].observed).toEqual(["fresh-b"]);
+  });
+});
