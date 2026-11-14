@@ -50,7 +50,8 @@ import { WalkMeThroughButton, hunkLineRange } from "../WalkMeThrough";
  * Keyboard-first (routed through the ONE central keymap, lib/changesetKeymap.ts,
  * live only while the changeset is focused): a=looks-right+advance, r=needs-
  * changes (focus reason), j/k=next/prev file, ⏎=fire the derived action
- * (once any file is marked; a no-op on an untouched changeset, #642 item 1),
+ * (a no-op on an untouched changeset, #642 item 1; the next unreviewed file
+ * while some are still unreviewed, #656 item 3; the derived action once all are marked),
  * ⇧⏎=approve-all. Reaching all-look-right ARMS the same confirm-countdown the
  * single-artifact approve uses (never a silent hard-commit). Terminal actions
  * auto-advance in the canonical Decide order — send-back
@@ -854,7 +855,22 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
       // nothing: approving every file unseen is ⇧⏎'s explicit job. Once any
       // file is marked (looks right or needs changes), ⏎ runs the derived
       // action as before.
-      fireDerivedAction: () => { if (lookRightCount > 0 || flaggedCount > 0) fireDerivedAction(); },
+      // #656 item 3 (Mitch, 11-14) — with SOME files marked and others still
+      // unreviewed, ⏎ moves to the next unreviewed file (wrapping) instead of
+      // marking the rest "looks right" unseen; ⇧⏎ stays the explicit
+      // approve-all. Once every file is marked, ⏎ runs the derived action
+      // (send back if any are flagged, else the approve countdown).
+      fireDerivedAction: () => {
+        if (lookRightCount === 0 && flaggedCount === 0) return;
+        if (pendingCount > 0) {
+          for (let k = 1; k <= files.length; k++) {
+            const j = (clampedIdx + k) % files.length;
+            if (dispositions[j] === "pending") { goto(j); return; }
+          }
+          return;
+        }
+        fireDerivedAction();
+      },
       approveAll: () => { void approveAll(); },
     };
     act[intent]();
@@ -1439,7 +1455,9 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                     <span><b className="text-text-secondary">j</b>/<b className="text-text-secondary">k</b> next/prev file</span>
                     {lookRightCount === 0 && flaggedCount === 0
                       ? <span><b className="text-text-secondary">⇧⏎</b> approve all</span>
-                      : <span><b className="text-text-secondary">⏎</b> {derived === "sendBack" ? "send back" : "approve"}</span>}
+                      : pendingCount > 0
+                        ? <span><b className="text-text-secondary">⏎</b> next unreviewed · <b className="text-text-secondary">⇧⏎</b> approve all</span>
+                        : <span><b className="text-text-secondary">⏎</b> {derived === "sendBack" ? "send back" : "approve"}</span>}
                     <span className="ml-auto">press <b className="text-text-secondary">?</b> for all shortcuts</span>
                   </div>
                 )}
