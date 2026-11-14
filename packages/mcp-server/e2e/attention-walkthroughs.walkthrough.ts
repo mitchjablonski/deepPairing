@@ -157,15 +157,21 @@ for (const row of MATRIX) {
             if (row.mode === "ON") {
               await evidence.activate(page.getByRole("button", { name: "+1 high decision", exact: true }));
               await evidence.activate(page.getByRole("button", { name: /Drop the legacy sessions table during the cutover/ }).last());
-            } else for (let i = 0; i < 7; i++) await evidence.press("n");
-            await evidence.check("high-stakes target opened", () => expect(page.locator('[data-artifact-id="queue_7"]')).toBeVisible());
+            } else {
+              // Current bar-OFF UI exposes the hidden high decision explicitly.
+              // Canonical tier ordering no longer means seven n presses follows insertion order.
+              await evidence.activate(page.getByRole("button", { name: /^1 high-stakes decision waiting — open / }));
+            }
+            await evidence.check("high-stakes target opened", () => expect(page.locator('[data-dp-pane][data-artifact-id="queue_7"]:not([inert])')).toBeVisible());
             await evidence.capture("high-stakes");
             for (let i = 0; i < 13; i++) {
               // Real Tab/Enter only: never locator.click(), focus(), or store writes.
               await evidence.activate(page.getByRole("button", { name: new RegExp(`^${queueTitles[i].replace(/[?]/g, "\\?")} ${i === 7 ? "Decision" : "Draft"}`) }));
-              await expect(page.locator(`[data-artifact-id="queue_${i}"]`)).toBeVisible();
+              const selectedPane = page.locator(`[data-dp-pane][data-artifact-id="queue_${i}"]:not([inert])`);
+              await expect(selectedPane).toHaveCount(1);
+              await expect(selectedPane).toBeVisible();
               await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
-              await evidence.activate(i === 7 ? page.getByRole("button", { name: "Select Redis", exact: true }) : page.getByRole("button", { name: "Approve", exact: true }));
+              await evidence.activate(i === 7 ? selectedPane.getByRole("button", { name: "Select Redis", exact: true }) : selectedPane.getByRole("button", { name: "Approve", exact: true }));
               await evidence.check(`queue_${i} persisted approved by keyboard`, () => expect.poll(async () => (await daemon!.artifacts("queue")).find((a) => a.id === `queue_${i}`)?.status).toBe("approved"));
             }
             await evidence.check("all thirteen persisted reviews are closed", () => expect.poll(async () => (await daemon!.artifacts("queue")).filter((a) => a.status === "draft").length).toBe(0));
