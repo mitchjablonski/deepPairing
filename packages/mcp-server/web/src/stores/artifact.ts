@@ -631,8 +631,8 @@ function persistLiveSelection(state: Pick<ArtifactState, "artifacts" | "sampleCo
 
 /**
  * Follow the supersede chain from `id` to the live (non-superseded) version.
- * Many callers select an artifact by a possibly-stale id — CausalChain rows,
- * related-artifact badges, the command palette, the `dp:focus-artifact` event —
+ * Many callers select an artifact by a possibly-stale id — related-artifact
+ * rows, the command palette, the `dp:focus-artifact` event —
  * and landing on a superseded/retracted version shows only disabled, read-only
  * actions (a dead end). Resolving here means every caller inherits the guard
  * (addArtifact/updateArtifact already avoid/advance on the hydration + live
