@@ -46,6 +46,36 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("#642 mounted App filter-following navigation", () => {
+  it("#656 item 5 — under agent A, Next stays inside A while A has pending work, even when B's item ranks first globally", async () => {
+    seed([
+      art("b-wait", "B", { type: "decision", title: "B open decision", createdAt: "2026-05-01T00:00:00.000Z", content: { context: "choose", options: [] } as any }),
+      art("a-done", "A", { status: "approved", title: "A approved plan" } as any),
+      art("a-wait", "A", { type: "decision", title: "A open decision", content: { context: "choose", options: [] } as any }),
+    ]);
+    render(<App />);
+    choose("A");
+    act(() => useArtifactStore.getState().openArtifact("a-done"));
+    const next = await screen.findByRole("button", { name: /^next waiting for you: a open decision/i });
+    expect(next).toHaveTextContent("Next: A open decision →");
+    fireEvent.click(next);
+    expect(selected()).toBe("a-wait");
+    expect(menu().value).toBe("A");
+  });
+
+  it("#656 item 5 — the scope line's Show all clears the filter", () => {
+    seed([art("a1"), art("b1", "B")]);
+    render(<App />);
+    choose("A");
+    expect(screen.getByTestId("agent-filter-scope")).toHaveTextContent("1 in other agents");
+    const showAll = screen.getByRole("button", { name: "Show all" });
+    showAll.focus();
+    expect(document.activeElement).toBe(showAll);
+    fireEvent.click(showAll);
+    expect(menu().value).toBe("all");
+    // The button removed itself; keyboard focus lands on the surviving filter menu, not <body>.
+    expect(document.activeElement).toBe(menu());
+  });
+
   it("#648 x #650 — under agent A, the receipt's Next link opens B's queue head and the filter follows to B", async () => {
     seed([
       art("a-done", "A", { status: "approved", title: "A approved plan" } as any),
@@ -55,7 +85,9 @@ describe("#642 mounted App filter-following navigation", () => {
     choose("A");
     act(() => useArtifactStore.getState().openArtifact("a-done"));
     expect(selected()).toBe("a-done");
-    const next = await screen.findByRole("button", { name: /next waiting for you: b open decision/i });
+    // A has nothing left, so the link names the other agent (#656 item 5).
+    const next = await screen.findByRole("button", { name: /next waiting for you in .+: b open decision/i });
+    expect(next).toHaveTextContent(/^Next in .+: B open decision →$/);
     fireEvent.click(next);
     expect(selected()).toBe("b-wait");
     expect(menu().value).toBe("B"); // the displayed filter agrees with the opened target
