@@ -48,6 +48,7 @@ const setConn = (over: Record<string, unknown> = {}) =>
 beforeEach(() => {
   t = 0;
   useArtifactStore.getState().reset();
+  useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
   usePreflightBlockStore.setState({ blocks: [], lastSeenAt: null } as any);
   useHookStatusStore.setState({ fires: [] } as any);
   useReplayStore.setState({ active: false, sessionId: null } as any);
@@ -162,7 +163,7 @@ describe("#569 P1 — a demo session shows the demo treatment everywhere it appe
     render(<ArtifactPanel />);
     expect(screen.getByTestId("demo-banner")).toBeInTheDocument();
     // The Agents menu names the demo session in its option text (#430 slice 2).
-    expect(within(screen.getByTestId("agents-filter-menu")).getByRole("option", { name: /^Agent \d · Demo \(1\)$/ })).toBeInTheDocument();
+    expect(within(screen.getByTestId("agents-filter-menu")).getByRole("option", { name: /^Session \d · Demo \(1\)$/ })).toBeInTheDocument();
 
     act(() => { useArtifactStore.getState().selectArtifact("real"); });
     expect(screen.queryByTestId("demo-banner")).not.toBeInTheDocument();

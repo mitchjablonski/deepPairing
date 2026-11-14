@@ -1,3 +1,4 @@
+import { captureNavigationOwnership, advanceOwnedNavigation } from "../../stores/artifact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Artifact, Comment, ChangesetFile, ChangesetSource } from "@deeppairing/shared";
 import {
@@ -14,7 +15,6 @@ import { useChainComments } from "../../hooks/useChainComments";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { ApproveCountdown } from "./ApproveCountdown";
 import { useConfirmCountdown } from "../../hooks/useConfirmCountdown";
-import { orderedPendingArtifacts } from "../../lib/attention";
 import { resolveChangesetKey, type ChangesetIntent } from "../../lib/changesetKeymap";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import {
@@ -648,13 +648,6 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   const reasonBoxRef = useRef<HTMLTextAreaElement>(null);
 
   // --- Auto-advance to the next pending artifact after a terminal action ----
-  const advanceToNextPending = useCallback(() => {
-    const store = useArtifactStore.getState();
-    const pending = orderedPendingArtifacts(store.artifacts).filter((a) => a.id !== artifact.id);
-    const next = pending[0];
-    if (next) store.selectArtifact(next.id);
-  }, [artifact.id]);
-
   // --- The confirm-countdown that guards approve (never a silent commit) ----
   const runWhole = useCallback(
     async (
@@ -671,6 +664,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         setApproveConfirm(true);
         return;
       }
+      const navigationOwner = captureNavigationOwnership();
       setSubmitting(true);
       try {
         const trimmed = (overrideFeedback ?? feedback).trim();
@@ -682,14 +676,14 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         setRejectConcept("");
         // After the verdict (and, for send-back, its feedback comment) posts,
         // move to the next thing waiting on the human.
-        advanceToNextPending();
+        advanceOwnedNavigation(navigationOwner, artifact.id);
       } catch {
         /* store toasted + rolled back */
       } finally {
         setSubmitting(false);
       }
     },
-    [submitting, offline, feedback, rejectConcept, updateArtifactStatus, artifact.id, advanceToNextPending],
+    [submitting, offline, feedback, rejectConcept, updateArtifactStatus, artifact.id],
   );
 
   const approveCountdown = useConfirmCountdown(() => { void runWhole("approved"); });
@@ -1627,10 +1621,11 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   title={offline ?? undefined}
                   type="button"
                   onClick={() => {
+                    const navigationOwner = captureNavigationOwnership();
                     setConfirmDismiss(false);
                     setSubmitting(true);
                     void updateArtifactStatus(artifact.id, "obsolete", feedback.trim() || undefined)
-                      .then(() => advanceToNextPending())
+                      .then(() => advanceOwnedNavigation(navigationOwner, artifact.id))
                       .catch(() => {})
                       .finally(() => setSubmitting(false));
                   }}

@@ -1,5 +1,8 @@
+import { createElement } from "react";
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import App from "../../App";
+import { usePreferencesStore } from "../preferences";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { fireEvent, renderHook } from "@testing-library/react";
 import { useSessionVisits } from "../../hooks/useSessionVisits";
 import { useArtifactStore } from "../artifact";
 import { useConnectionStore } from "../connection";
@@ -296,12 +299,17 @@ describe("#430 — canonical selection through real connected hydration", () => 
     useArtifactStore.getState().selectArtifact("a");
     useArtifactStore.getState().addArtifact(mk("b", { sessionId: "B" }));
     expect(useArtifactStore.getState().unreadIds).toContain("b");
+    usePreferencesStore.setState({ sidebarCollapsed: false });
+    useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
+    render(createElement(App));
+    fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "A" } });
     // The accepted visit, not the best-effort window bridge, owns persistence.
     const bridge = window as unknown as { __dpConnectionStore?: unknown };
     const original = bridge.__dpConnectionStore;
     try {
       bridge.__dpConnectionStore = bridgeMode === "missing" ? undefined : { getState: () => ({ sessionId: "B" }) };
-      useArtifactStore.getState().selectArtifact("b");
+      act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "b" } })));
+      expect(useArtifactStore.getState().agentFilter).toBe("B");
     } finally { bridge.__dpConnectionStore = original; }
     expect(useArtifactStore.getState().selectedArtifactId).toBe("b");
     expect(useConnectionStore.getState().sessionId).toBe("A");
@@ -315,6 +323,113 @@ describe("#430 — canonical selection through real connected hydration", () => 
     expect(receipts.entries[JSON.stringify(["/p", "B"])].observed).toEqual(["b", "b2"]);
     expect(useArtifactStore.getState().unreadIds).toEqual([]);
     expect(receipts.entries[JSON.stringify(["/p", "A"])].selected).toBe("a");
+  });
+
+  it("actual stateless daemon-restart null binding preserves the scoped choice until a known switch", async () => {
+    await hydrate([mk("a"), mk("b", { sessionId: "B" })]);
+    useConnectionStore.setState({ daemonStartedAt: "old-daemon" });
+    usePreferencesStore.setState({ sidebarCollapsed: false });
+    useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
+    render(createElement(App));
+    fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "B" } });
+    act(() => adapter.emit({ type: "connected", projectRoot: "/p", daemonStartedAt: "new-daemon" }));
+    await vi.waitFor(() => expect(useConnectionStore.getState().sessionId).toBeNull());
+    expect(useArtifactStore.getState().agentFilter).toBe("B");
+    await act(async () => { await hydrate([mk("a"), mk("b", { sessionId: "B" })]); });
+    expect(useArtifactStore.getState().agentFilter).toBe("B");
+  });
+
+  it("a real deferred verdict cannot advance after wire restart authority null and accepted A return", async () => {
+    const cs = mk("cs", { type: "changeset", content: { summary: "change", files: [{ path: "a.ts", changeType: "modified", hunks: [] }], reviewState: { "a.ts": "needs_changes" }, reviewReasons: { "a.ts": "fix" } } });
+    await hydrate([cs, mk("next")]);
+    usePreferencesStore.setState({ sidebarCollapsed: false });
+    render(createElement(App));
+    act(() => useArtifactStore.getState().openArtifact("cs"));
+    let finish!: () => void;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = () => new Response(JSON.stringify({ sessions: [], blocks: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (init?.method === "POST" && String(input).includes("/cs/status")) return new Promise<Response>((resolve) => { finish = () => resolve(response()); });
+      return response();
+    });
+    fireEvent.click(await screen.findByTestId("send-back"));
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    useConnectionStore.setState({ daemonStartedAt: "old-daemon" });
+    act(() => adapter.emit({ type: "connected", projectRoot: "/p", daemonStartedAt: "new-daemon" }));
+    await vi.waitFor(() => expect(useConnectionStore.getState().sessionId).toBeNull());
+    await act(async () => { await hydrate([cs, mk("next")]); });
+    expect(useConnectionStore.getState().sessionId).toBe("A");
+    const selected = useArtifactStore.getState().selectedArtifactId;
+    await act(async () => { finish(); });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe(selected);
+    expect(selected).toBe("cs");
+  });
+
+  it.each([false, true])("complete same-binding snapshot fulfills requested sibling after installation (targetFirst=%s)", async (targetFirst) => {
+    await hydrate([mk("a")]);
+    useArtifactStore.getState().selectArtifact("a");
+    useArtifactStore.getState().addArtifact(mk("b-marker", { sessionId: "B" }));
+    usePreferencesStore.setState({ sidebarCollapsed: false });
+    useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
+    render(createElement(App));
+    fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "A" } });
+    act(() => useArtifactStore.getState().openArtifact("requested-b"));
+    const saved = localStorage.getItem("dp-selected-artifact");
+    const rows = [mk("other-a"), mk("requested-b", { sessionId: "B" })];
+    await act(async () => { await hydrate(targetFirst ? rows.reverse() : rows); });
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("requested-b");
+    expect(useArtifactStore.getState().agentFilter).toBe("B");
+    expect(localStorage.getItem("dp-selected-artifact")).toBe(saved);
+    expect(JSON.parse(localStorage.getItem(SESSION_VISITS_KEY)!).entries[JSON.stringify(["/p", "A"])].selected).toBe("a");
+  });
+
+  it("mounted empty sibling filter and empty Show all clear only the pane, preserving bound A intent", async () => {
+    await hydrate([mk("a")]);
+    useArtifactStore.getState().selectArtifact("a");
+    await sessionVisits.settled();
+    const legacy = localStorage.getItem("dp-selected-artifact");
+    const receipt = localStorage.getItem(SESSION_VISITS_KEY);
+    useArtifactStore.getState().addArtifact(mk("b", { sessionId: "B" }));
+    usePreferencesStore.setState({ sidebarCollapsed: true });
+    useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
+    render(createElement(App));
+    fireEvent.click(screen.getByRole("button", { name: /^Session 2 \(/ }));
+    act(() => useArtifactStore.setState({ artifacts: [mk("a")] }));
+    fireEvent.click(screen.getByRole("button", { name: /^Selected agent — B \(/ }));
+    expect(useArtifactStore.getState().selectedArtifactId).toBeNull();
+    expect(useArtifactStore.getState().agentFilter).toBe("B");
+    await sessionVisits.settled();
+    expect(localStorage.getItem("dp-selected-artifact")).toBe(legacy);
+    expect(localStorage.getItem(SESSION_VISITS_KEY)).toBe(receipt);
+    act(() => useArtifactStore.setState({ artifacts: [] }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all agents" }));
+    expect(useArtifactStore.getState().agentFilter).toBe("all");
+    expect(useArtifactStore.getState().selectedArtifactId).toBeNull();
+    await sessionVisits.settled();
+    expect(localStorage.getItem("dp-selected-artifact")).toBe(legacy);
+    expect(localStorage.getItem(SESSION_VISITS_KEY)).toBe(receipt);
+  });
+
+  it("mounted explicit replay filter and exact opens never write the accepted live visit or legacy intent", async () => {
+    await hydrate([mk("live")]);
+    useArtifactStore.getState().selectArtifact("live");
+    await sessionVisits.settled();
+    const legacy = localStorage.getItem("dp-selected-artifact");
+    const receipt = localStorage.getItem(SESSION_VISITS_KEY);
+    usePreferencesStore.setState({ sidebarCollapsed: false });
+    useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
+    render(createElement(App));
+    act(() => {
+      sessionVisits.suspend();
+      useReplayStore.setState({ active: true, cursor: "2026-02-01T00:00:00.000Z" });
+      useArtifactStore.setState({ artifacts: [mk("historical", { sessionId: "history" }), mk("live")], selectedArtifactId: "live" });
+    });
+    fireEvent.change(screen.getByTestId("agents-filter-menu"), { target: { value: "history" } });
+    act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "historical" } })));
+    act(() => useArtifactStore.getState().openArtifactExact("historical"));
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("historical");
+    await sessionVisits.settled();
+    expect(localStorage.getItem("dp-selected-artifact")).toBe(legacy);
+    expect(localStorage.getItem(SESSION_VISITS_KEY)).toBe(receipt);
   });
 
   it("does not persist outgoing or unaccepted target selection during a real session switch", async () => {

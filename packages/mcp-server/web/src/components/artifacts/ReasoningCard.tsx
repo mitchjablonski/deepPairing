@@ -35,7 +35,7 @@ export function ReasoningCard({ artifact }: Props) {
   // trust the shape (arrays are arrays, action/reasoning are strings).
   const rc = coerceReasoningContent(artifact.content);
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const submitComment = useArtifactStore((s) => s.submitComment);
 
   const relatedArtifact = useMemo(

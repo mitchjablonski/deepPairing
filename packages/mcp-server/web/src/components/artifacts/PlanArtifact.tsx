@@ -23,7 +23,7 @@ function MotivatedByBadges({ labels }: { labels: string[] }) {
   const artifacts = useArtifactStore(
     useShallow((s) => s.artifacts.filter((a) => a.type === "research")),
   );
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
 
   return (
     <div className="flex flex-wrap gap-1 mt-1.5">

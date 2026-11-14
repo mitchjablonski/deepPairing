@@ -52,6 +52,7 @@ const setConn = (over: Record<string, unknown> = {}) =>
 beforeEach(() => {
   t = 0;
   useArtifactStore.getState().reset();
+  useArtifactStore.setState({ agentFilter: "all", filterBinding: null });
   usePreflightBlockStore.setState({ blocks: [], lastSeenAt: null } as any);
   useHookStatusStore.setState({ fires: [] } as any);
   useReplayStore.setState({ active: false } as any);
@@ -175,7 +176,7 @@ describe("#430 PR 5, slice 2 — the Agents row becomes a filter menu", () => {
     expect(screen.queryByText("Agents:")).not.toBeInTheDocument();
     const menu = screen.getByTestId("agents-filter-menu") as HTMLSelectElement;
     expect(menu.closest("nav[aria-label='Artifacts']")).not.toBeNull();
-    expect(Array.from(menu.options).map((o) => o.textContent)).toEqual(["All (2)", "Agent 1 (1)", "Agent 2 (1)"]);
+    expect(Array.from(menu.options).map((o) => o.textContent)).toEqual(["All (2)", "Session 1 (1)", "Session 2 (1)"]);
   });
 
   it("ON: a menu in the sidebar header with the same options, and it filters", () => {
@@ -185,7 +186,7 @@ describe("#430 PR 5, slice 2 — the Agents row becomes a filter menu", () => {
     expect(screen.queryByText("Agents:")).not.toBeInTheDocument();
     const menu = screen.getByTestId("agents-filter-menu") as HTMLSelectElement;
     expect(menu.closest("nav[aria-label='Artifacts']")).not.toBeNull();
-    expect(Array.from(menu.options).map((o) => o.textContent)).toEqual(["All (2)", "Agent 1 (1)", "Agent 2 (1)"]);
+    expect(Array.from(menu.options).map((o) => o.textContent)).toEqual(["All (2)", "Session 1 (1)", "Session 2 (1)"]);
     fireEvent.change(menu, { target: { value: "s2" } });
     expect(screen.queryAllByText("From agent one").filter((el) => el.closest("[data-artifact-item]"))).toHaveLength(0);
     expect(screen.queryAllByText("From agent two").filter((el) => el.closest("[data-artifact-item]")).length).toBeGreaterThan(0);

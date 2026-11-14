@@ -72,7 +72,7 @@ export function DebriefClaims({
 }
 
 function PinLine({ view }: { view: DebriefClaimsView }) {
-  const selectExact = useArtifactStore((s) => s.selectArtifactExact);
+  const selectExact = useArtifactStore((s) => s.openArtifactExact);
   const pin = view.pin;
   if (pin.kind === "ready") {
     return (
@@ -122,7 +122,7 @@ function OriginLine({ artifact, view }: { artifact: Artifact; view: DebriefClaim
 }
 
 function EvidenceItem({ e }: { e: EvidenceView }) {
-  const selectExact = useArtifactStore((s) => s.selectArtifactExact);
+  const selectExact = useArtifactStore((s) => s.openArtifactExact);
   const item = e.item;
   let body: ReactNode;
   if (item.kind === "check") {

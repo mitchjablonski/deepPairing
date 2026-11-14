@@ -41,7 +41,7 @@ interface ExplainerArtifactProps {
  *  action (directly testable) and also dispatches the app-wide focus event
  *  App.tsx listens for, so the selection works from any surface. */
 function focusArtifact(id: string): void {
-  useArtifactStore.getState().selectArtifact(id);
+  useArtifactStore.getState().openArtifact(id);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: id } }));
   }

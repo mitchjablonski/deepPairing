@@ -220,7 +220,7 @@ export function LedgerDrawer({
               // BB6 — round-trip backlink. Click a top-cited stance, jump
               // to a real artifact that cited it. Closes the drawer so
               // the user lands directly on the artifact panel.
-              useArtifactStore.getState().selectArtifact(artifactId);
+              useArtifactStore.getState().openArtifact(artifactId);
               onClose();
             }}
           />

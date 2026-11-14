@@ -13,7 +13,7 @@ import { spawnDiagnosticProcess, teardownDaemon, portOf } from "./daemon-harness
  * built dist, on an ISOLATED project root + HOME + port window, proves:
  *
  *   1. daemon restart → the tab notices the outage, reconnects to the NEW
- *      daemon process on the same deterministic port, and hydrates the
+ *      daemon process on the fixture-pinned browser origin, and hydrates the
  *      COMPLETE snapshot (artifacts persisted before the restart AND one
  *      created only on the new daemon) through the two live doors the store
  *      has — the `connected` frame and the AA2 `daemon_resumed` refetch.
@@ -57,6 +57,9 @@ let home: string;
 let projectRoot: string;
 let daemon: Daemon | undefined;
 let bootingProc: ChildProcess | undefined;
+// A temporary occupant can force the first child off its preferred port.
+// Restart the owned daemon on the port the browser actually connected to.
+let ownedRestartPort: number | undefined;
 
 async function bootDaemon(): Promise<Daemon> {
   const proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
@@ -65,8 +68,8 @@ async function bootDaemon(): Promise<Daemon> {
       HOME: home,
       DEEPPAIRING_PROJECT_ROOT: projectRoot,
       DEEPPAIRING_NO_OPEN: "1",
-      DEEPPAIRING_PORT_BASE: PORT_BASE,
-      DEEPPAIRING_PORT_SPAN: PORT_SPAN,
+      DEEPPAIRING_PORT_BASE: ownedRestartPort === undefined ? PORT_BASE : String(ownedRestartPort),
+      DEEPPAIRING_PORT_SPAN: ownedRestartPort === undefined ? PORT_SPAN : "1",
     },
   });
   // Publish ownership before readiness polling so a failed/timed-out beforeAll
@@ -87,6 +90,7 @@ async function bootDaemon(): Promise<Daemon> {
             const base = Number(PORT_BASE);
             expect(info.port, "daemon bound inside the isolated port window").toBeGreaterThanOrEqual(base);
             expect(info.port, "daemon bound inside the isolated port window").toBeLessThan(base + Number(PORT_SPAN));
+            ownedRestartPort ??= info.port;
             return { proc, baseURL: `http://localhost:${info.port}`, token: info.authToken, startedAt: di.startedAt ?? "" };
           }
         }
@@ -249,12 +253,12 @@ test("daemon restart: the tab reconnects to the new process and hydrates the com
   await stopDaemon();
   await expect.poll(() => storeState(page).then((s) => s.connected), { timeout: 15_000 }).toBe(false);
 
-  // The replacement process: same project root → same deterministic port, so
+  // The fixture pins the replacement to the first verified owned port so
   // the tab's reconnect loop (1s/2s/4s/8s backoff) finds it on its own. The
   // wrapper re-registers the session (FileStore reloads it from disk) and
   // creates one artifact that only ever existed on the NEW daemon.
   daemon = await bootDaemon();
-  expect(portOf(daemon.baseURL), "restart rebinds the same deterministic port").toBe(port);
+  expect(portOf(daemon.baseURL), "fixture restart preserves the verified browser origin").toBe(port);
   expect(daemon.startedAt).not.toBe(firstStartedAt);
   const live = internal(daemon, LIVE);
   await live("register", { title: "Live session" });

@@ -101,7 +101,7 @@ export function useRequestResumeBridge() {
 /** The served/unserved pips: a served pip jumps to the fulfilling artifact. */
 export function RequestPips() {
   const requests = useArtifactStore((s) => s.requests);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   if (requests.length === 0) return null;
   return (
     <div className="flex items-center gap-1 shrink-0 flex-wrap" data-testid="request-pips">

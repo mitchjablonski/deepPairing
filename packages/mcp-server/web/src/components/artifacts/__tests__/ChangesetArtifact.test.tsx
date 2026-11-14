@@ -219,8 +219,8 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     const art = changeset({ reviewState: { "auth/middleware.ts": "reviewed", "auth/session.ts": "reviewed", "auth/session.test.ts": "reviewed" } });
     seed(art, [], [other]);
     const updateStatus = vi.fn().mockResolvedValue(undefined);
-    const selectArtifact = vi.fn();
-    useArtifactStore.setState({ updateArtifactStatus: updateStatus, selectArtifact });
+    const openArtifact = vi.fn();
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus, openArtifact });
     render(<ChangesetArtifact artifact={art} />);
 
     // Explicit approve arms the countdown (all look right on mount → no auto-arm).
@@ -230,7 +230,7 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     await act(async () => { vi.advanceTimersByTime(3000); await Promise.resolve(); });
     expect(updateStatus).toHaveBeenCalledWith("art_cs", "approved", undefined, undefined);
     // Auto-advance to the next pending draft (AFTER the verdict posts).
-    expect(selectArtifact).toHaveBeenCalledWith("art_next");
+    expect(openArtifact).toHaveBeenCalledWith("art_next");
   });
 
   it("after approval posts, advances to a newer decision before an older finding in a shuffled queue", async () => {
@@ -252,18 +252,18 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     const prior = useArtifactStore.getState();
     let finishVerdict!: () => void;
     const updateStatus = vi.fn(() => new Promise<void>((resolve) => { finishVerdict = resolve; }));
-    const selectArtifact = vi.fn();
-    useArtifactStore.setState({ updateArtifactStatus: updateStatus, selectArtifact });
+    const openArtifact = vi.fn();
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus, openArtifact });
     try {
       render(<ChangesetArtifact artifact={art} />);
       act(() => { fireEvent.click(screen.getByTestId("approve-changeset")); });
       await act(async () => { vi.advanceTimersByTime(3000); });
       expect(updateStatus).toHaveBeenCalledWith("art_cs", "approved", undefined, undefined);
-      expect(selectArtifact).not.toHaveBeenCalled();
+      expect(openArtifact).not.toHaveBeenCalled();
       await act(async () => { finishVerdict(); });
-      expect(selectArtifact).toHaveBeenCalledExactlyOnceWith("decision");
+      expect(openArtifact).toHaveBeenCalledExactlyOnceWith("decision");
     } finally {
-      useArtifactStore.setState({ updateArtifactStatus: prior.updateArtifactStatus, selectArtifact: prior.selectArtifact });
+      useArtifactStore.setState({ updateArtifactStatus: prior.updateArtifactStatus, openArtifact: prior.openArtifact });
     }
   });
 

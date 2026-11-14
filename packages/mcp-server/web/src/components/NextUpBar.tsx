@@ -115,7 +115,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
   const requests = useArtifactStore((s) => s.requests);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const sampleContent = useArtifactStore((s) => s.sampleContent);
   const sampleSessionIds = useArtifactStore((s) => s.sampleSessionIds);
   const connected = useConnectionStore((s) => s.connected);
