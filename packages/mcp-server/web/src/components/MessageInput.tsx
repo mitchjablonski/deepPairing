@@ -60,21 +60,25 @@ export function MessageInput() {
   const activeSessions = useConnectionStore((st) => st.activeSessions);
   const switchSession = useConnectionStore((st) => st.switchSession);
   const agentFilter = useArtifactStore((st) => st.agentFilter);
+  // Sol P2 — disclosure keys on the KNOWN bound/filter identities, not on
+  // catalog membership: lazy re-registration and catalog loss (#632/#641/#650)
+  // can leave either id out of activeSessions while the pane still shows the
+  // filtered agent. Shared human label when known, else a stable short id.
   const labelOf = useMemo(() => {
     const base = sessionLabelsFrom(activeSessions);
-    return (sid: string | null | undefined) => {
-      if (!sid) return null;
+    return (sid: string) => {
       const label = base[sid];
-      if (!label) return null;
+      if (!label) return `session …${sid.slice(-8)}`;
       const clash = activeSessions.filter((x) => base[x.sessionId] === label).length > 1;
       return clash ? `${label} (${sid.slice(-8)})` : label;
     };
   }, [activeSessions]);
-  const multiAgent = activeSessions.length > 1;
-  const recipient = multiAgent ? labelOf(sessionId) : null;
-  const viewingOther = agentFilter !== "all" && !!sessionId && agentFilter !== sessionId &&
-    activeSessions.some((x) => x.sessionId === agentFilter);
-  const viewingLabel = viewingOther ? labelOf(agentFilter) ?? "another agent" : null;
+  const viewingOther = agentFilter !== "all" && !!sessionId && agentFilter !== sessionId;
+  const multiAgent = activeSessions.length > 1 || viewingOther;
+  const recipient = multiAgent && sessionId ? labelOf(sessionId) : null;
+  const viewingLabel = viewingOther ? labelOf(agentFilter) : null;
+  // Switch only to a target the catalog actually knows; never invent one.
+  const switchable = viewingOther && activeSessions.some((x) => x.sessionId === agentFilter);
   const draftKey = `msg:${sessionId ?? "unbound"}`;
   const [message, setMessage] = useDraft(draftKey);
   // #417 review — keyed per draft and held outside this instance (see
@@ -282,12 +286,14 @@ export function MessageInput() {
       {viewingOther && (
         <div data-testid="message-recipient-mismatch" className="flex items-center gap-2 mb-1.5 text-2xs text-accent-amber">
           <span className="min-w-0 truncate">
-            Viewing {viewingLabel} · messages go to {recipient ?? "this tab's agent"}
+            Viewing {viewingLabel} · messages go to {recipient}
           </span>
           <button
             type="button"
-            onClick={() => switchSession(agentFilter)}
-            className="shrink-0 px-1.5 py-0.5 rounded border border-accent-amber/40 hover:bg-accent-amber-dim transition-colors"
+            disabled={!switchable}
+            title={switchable ? undefined : "That agent isn't available to switch to yet"}
+            onClick={() => { if (switchable) switchSession(agentFilter); }}
+            className="shrink-0 px-1.5 py-0.5 rounded border border-accent-amber/40 hover:bg-accent-amber-dim disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Switch to {viewingLabel}
           </button>
