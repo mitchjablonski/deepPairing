@@ -98,6 +98,30 @@ describe("#642 mounted App filter-following navigation", () => {
     expect(screen.getByTestId("agent-filter-scope")).not.toHaveTextContent(ownerA);
   });
 
+  it("n/N use the fresh scoped queue after arrivals, resolution, removal and nonpending selection", () => {
+    seed(); render(<App />); choose("A");
+    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a2");
+    act(() => useArtifactStore.getState().addArtifact(art("a0", "A", { type: "decision", content: { context: "choose", options: [] } as any })));
+    expect(selected()).toBe("a2");
+    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a0");
+    act(() => useArtifactStore.getState().updateArtifact("a0", "approved"));
+    fireEvent.keyDown(document, { key: "N" }); expect(selected()).toBe("a2");
+    act(() => useArtifactStore.setState({ artifacts: useArtifactStore.getState().artifacts.filter((a) => a.id !== "a2") }));
+    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a1");
+    act(() => useArtifactStore.getState().updateArtifact("a1", "approved"));
+    fireEvent.keyDown(document, { key: "n" }); expect(selected()).toBe("a1");
+    expect(menu().value).toBe("A");
+  });
+
+  it("j/k retain visible insertion order and clamp, with native select and modifier suppression", () => {
+    seed(); render(<App />); choose("A");
+    fireEvent.keyDown(menu(), { key: "n" }); expect(selected()).toBe("a1");
+    fireEvent.keyDown(document, { key: "j", ctrlKey: true }); expect(selected()).toBe("a1");
+    fireEvent.keyDown(document, { key: "j" }); expect(selected()).toBe("a2");
+    fireEvent.keyDown(document, { key: "j" }); expect(selected()).toBe("a2");
+    fireEvent.keyDown(document, { key: "k" }); expect(selected()).toBe("a1");
+  });
+
   it.each(["collapsed", "narrow"])("scoped navigation remains live in the %s App layout", (layout) => {
     if (layout === "collapsed") usePreferencesStore.setState({ sidebarCollapsed: true });
     if (layout === "narrow") vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
