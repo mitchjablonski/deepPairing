@@ -50,6 +50,19 @@ function stubMatchMedia(reduceMotion: boolean) {
   })) as unknown as typeof window.matchMedia;
 }
 
+function stubCollapsedSidebar() {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes("max-width"),
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
 function rect(top: number, bottom: number): DOMRect {
   return {
     top,
@@ -356,5 +369,41 @@ describe("ArtifactPanel new-item locator", () => {
     expect([...groups.keys()]).toEqual(["art_1", "art_2", "art_5"]);
     expect(groups.get("art_2")!.map((x) => x.id)).toEqual(["art_2", "art_3"]);
     expect(groups.get("art_5")!.map((x) => x.id)).toEqual(["art_5", "art_6"]);
+  });
+
+  it("does not invent a causal breadcrumb from unrelated sessions", async () => {
+    stubCollapsedSidebar();
+    useArtifactStore.getState().addArtifact(mk(1, {
+      sessionId: "billing", title: "Billing research", content: { summary: "Billing summary", findings: [] },
+    }));
+    useArtifactStore.getState().addArtifact(mk(2, {
+      sessionId: "auth", type: "plan", title: "Unrelated auth plan",
+    }));
+
+    render(<ArtifactPanel />);
+
+    await screen.findByText("Billing summary", { exact: true });
+    expect(screen.queryByRole("button", { name: "Unrelated auth plan", exact: true })).toBeNull();
+    expect(screen.queryByText("Related:", { exact: true })).toBeNull();
+  });
+
+  it("keeps an explicit cross-session Related link neutral and navigable", async () => {
+    stubCollapsedSidebar();
+    useArtifactStore.getState().addArtifact(mk(1, {
+      sessionId: "billing", title: "Billing research", content: { summary: "Billing summary", findings: [] },
+      relatedArtifactIds: ["auth_research"],
+    }));
+    useArtifactStore.getState().addArtifact(mk(2, {
+      id: "auth_research", sessionId: "auth", title: "Auth research",
+    }));
+
+    render(<ArtifactPanel />);
+
+    expect(await screen.findByText("Related:", { exact: true })).toBeTruthy();
+    const related = screen.getByRole("button", { name: "Auth research", exact: true });
+    expect(screen.getAllByRole("button", { name: "Auth research", exact: true })).toHaveLength(1);
+    fireEvent.click(related);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("auth_research");
+    expect(useArtifactStore.getState().agentFilter).toBe("all");
   });
 });

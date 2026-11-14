@@ -50,7 +50,6 @@ import { CommentThread } from "./CommentThread";
 import { useChainComments } from "../hooks/useChainComments";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { FirstRunWalkthrough } from "./WalkthroughCards";
-import { CausalChain } from "./CausalChain";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 import { NextPendingLink } from "./NextPendingLink";
@@ -473,9 +472,6 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           from Cursor 3 was the LAST thing the user saw, after they'd
           already decided. Now it's the first thing under the header. */}
       <PreflightBreadcrumb artifactId={artifact.id} />
-
-      {/* Causal chain — shows artifact relationships */}
-      <CausalChain />
 
       {/* Related artifacts */}
       {artifact.relatedArtifactIds && artifact.relatedArtifactIds.length > 0 && (
