@@ -3,6 +3,8 @@ import { render, screen, waitFor, act, fireEvent } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { ArtifactStatusActions } from "../artifacts/ArtifactStatusActions";
 import { useArtifactStore } from "../../stores/artifact";
+import { useConnectionStore } from "../../stores/connection";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
 
 const artifact = {
   id: "a1", sessionId: "s1", type: "research", version: 1, parentId: null,
@@ -229,15 +231,61 @@ describe("R2 — the reject-composer hints split by armed intent", () => {
     expect(statusCalls).toHaveLength(0);
   });
 
-  it("with no reject armed, the approve fast-path is untouched", async () => {
-    render(<ArtifactStatusActions artifact={artifact as any} />);
-    const ta = screen.getByPlaceholderText(/empty ⌘⏎ = approve/i);
-    fireEvent.keyDown(ta, { key: "Enter", metaKey: true });
-    await waitFor(() => {
-      const calls = (fetch as any).mock.calls.filter(([u]: any[]) =>
+  it("#656 item 6 — with no reject armed, an empty ⌘⏎ ARMS the 3s countdown, then approves (not instantly)", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<ArtifactStatusActions artifact={artifact as any} />);
+      const ta = screen.getByPlaceholderText(/empty ⌘⏎ = approve in 3s/i);
+      const statusCalls = () => (fetch as any).mock.calls.filter(([u]: any[]) =>
         String(u).includes("/api/artifacts/a1/status"),
       );
-      expect(calls.length).toBeGreaterThan(0);
-    });
+      (fetch as any).mockClear();
+      fireEvent.keyDown(ta, { key: "Enter", metaKey: true });
+      expect(statusCalls()).toHaveLength(0); // armed, not committed
+      for (let i = 0; i < 4; i++) act(() => { vi.advanceTimersByTime(1100); });
+      await act(async () => { await Promise.resolve(); });
+      expect(statusCalls().length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#656 item 6 — typing during the ⌘⏎ countdown cancels it (nothing is approved)", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<ArtifactStatusActions artifact={artifact as any} />);
+      const ta = screen.getByPlaceholderText(/empty ⌘⏎ = approve/i);
+      (fetch as any).mockClear();
+      fireEvent.keyDown(ta, { key: "Enter", metaKey: true });
+      fireEvent.change(ta, { target: { value: "wait, one thing" } });
+      for (let i = 0; i < 5; i++) act(() => { vi.advanceTimersByTime(1100); });
+      await act(async () => { await Promise.resolve(); });
+      const calls = (fetch as any).mock.calls.filter(([u]: any[]) => String(u).includes("/api/artifacts/a1/status"));
+      expect(calls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("#656 item 6 (Sol P2) — an empty ⌘⏎ never arms an approval while offline", () => {
+  it("starting offline: no countdown, no status write, even after every timer", async () => {
+    useConnectionGraceStore.setState({ everConnected: true });
+    useConnectionStore.setState({ connected: false, disconnectedSince: Date.now() } as any);
+    vi.useFakeTimers();
+    try {
+      render(<ArtifactStatusActions artifact={artifact as any} />);
+      const ta = screen.getByPlaceholderText(/empty ⌘⏎ = approve/i);
+      (fetch as any).mockClear();
+      fireEvent.keyDown(ta, { key: "Enter", metaKey: true });
+      for (let i = 0; i < 6; i++) act(() => { vi.advanceTimersByTime(1100); });
+      await act(async () => { await Promise.resolve(); });
+      const calls = (fetch as any).mock.calls.filter(([u]: any[]) => String(u).includes("/api/artifacts/a1/status"));
+      expect(calls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+      useConnectionStore.setState({ connected: true, disconnectedSince: null } as any);
+      useConnectionGraceStore.setState({ everConnected: false, graceOver: false });
+    }
   });
 });

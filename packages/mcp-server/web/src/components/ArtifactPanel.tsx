@@ -150,6 +150,10 @@ export function statusLabelFor(artifact: Artifact): string {
   // "Read" — the SAME word the footer's acknowledge chip uses — so the state
   // reads coherently in the header and the footer.
   if (artifact.type === "explainer" && artifact.status === "approved") return "Read";
+  // #656 item 7c — a draft decision said "Draft, awaiting review" in its header
+  // chip while its sidebar tooltip (laneMarks) said "Decision, awaiting your
+  // pick". One phrase: you pick an option, you don't review a draft.
+  if (artifact.type === "decision" && artifact.status === "draft") return "Awaiting your pick";
   return statusLabels[artifact.status] ?? artifact.status;
 }
 
@@ -1546,9 +1550,25 @@ export function ArtifactPanel({ onAgentFilterChange }: { onAgentFilterChange?: (
       data-testid="artifact-panel"
     >
       <DemoContentBanner provenance={provenance} />
-      {chosenFilter !== "all" && <div role="status" data-testid="agent-filter-scope" className="px-3 py-1 text-xs text-text-muted">
-        {orderedPendingArtifacts(visibleArtifacts).length} pending here · {orderedPendingArtifacts(scopedVisibleArtifacts(artifacts, "all")).filter((a) => a.sessionId !== chosenFilter).length} in other agents · {agentLabel(chosenFilter, filterSessionIds.indexOf(chosenFilter))}
-      </div>}
+      {chosenFilter !== "all" && (() => {
+        const otherPending = orderedPendingArtifacts(scopedVisibleArtifacts(artifacts, "all")).filter((a) => a.sessionId !== chosenFilter).length;
+        return (
+          // data-agents-filter: Show all removes this line, so the existing
+          // filter focus recovery hands focus to the surviving menu (Sol P2).
+          <div data-agents-filter="" className="flex items-center gap-2 px-3 py-1 text-xs text-text-muted">
+            <span role="status" data-testid="agent-filter-scope" className="min-w-0">
+              {orderedPendingArtifacts(visibleArtifacts).length} pending here · {otherPending} in other agents · {agentLabel(chosenFilter, filterSessionIds.indexOf(chosenFilter))}
+            </span>
+            {/* #656 item 5 — "M in other agents" was text with no action. */}
+            {otherPending > 0 && (
+              <button type="button" onClick={() => chooseFilter("all")}
+                className="shrink-0 px-1.5 py-0.5 rounded text-accent-blue hover:bg-surface-hover transition-colors">
+                Show all
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* #457 D6 — MultiAgentSync (other sessions' artifacts) is mounted by
           App now, so it runs even while the bound session is empty. */}

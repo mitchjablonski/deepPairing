@@ -113,7 +113,8 @@ describe("#430 PR 4 — each lane gets its glyph and label (expanded sidebar)", 
     s.addArtifact(decision("dec", "Which store backs the cache?"));
     s.selectArtifact("dec");
     render(<ArtifactPanel />);
-    const chip = screen.getAllByText(/Draft, awaiting review/).find((el) => el.className.includes("rounded"))!;
+    // #656 item 7c — a draft decision's chip says "Awaiting your pick" (the lane tooltip's phrase).
+    const chip = screen.getAllByText(/Awaiting your pick/).find((el) => el.className.includes("rounded"))!;
     expect(chip.textContent?.startsWith("▲ ")).toBe(true);
   });
 });
