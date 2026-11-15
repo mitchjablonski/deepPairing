@@ -149,6 +149,10 @@ export function statusLabelFor(artifact: Artifact): string {
   // "Read" — the SAME word the footer's acknowledge chip uses — so the state
   // reads coherently in the header and the footer.
   if (artifact.type === "explainer" && artifact.status === "approved") return "Read";
+  // #656 item 7c — a draft decision said "Draft, awaiting review" in its header
+  // chip while its sidebar tooltip (laneMarks) said "Decision, awaiting your
+  // pick". One phrase: you pick an option, you don't review a draft.
+  if (artifact.type === "decision" && artifact.status === "draft") return "Awaiting your pick";
   return statusLabels[artifact.status] ?? artifact.status;
 }
 

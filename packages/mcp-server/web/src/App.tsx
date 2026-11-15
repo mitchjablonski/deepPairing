@@ -901,6 +901,12 @@ function App() {
             const isActive = sessionId === s.sessionId;
             // #457 D2 — the same name the Next-up bar uses (lib/sessionLabel).
             const label = sessionLabelOf(s, i);
+            // #656 item 7b — the badge showed the TOTAL artifact count, so a
+            // fully reviewed session still read "13". Show what's waiting when
+            // this session's artifacts are loaded; fall back to the total only
+            // when they aren't (an unsynced exited session).
+            const loaded = allArtifacts.filter((a) => a.sessionId === s.sessionId);
+            const waiting = loaded.length > 0 ? computePending(loaded).total : null;
             return (
               <button
                 key={s.sessionId}
@@ -910,7 +916,7 @@ function App() {
                     ? "bg-accent-blue-dim text-accent-blue font-medium border border-accent-blue/20"
                     : "text-text-secondary hover:text-text-primary hover:bg-surface-hover border border-transparent"
                 }`}
-                title={`${s.sessionId}${s.project ? `\nProject: ${s.project}` : ""}\nArtifacts: ${s.artifactCount}${s.live === false ? "\nAgent exited — history readable" : ""}`}
+                title={`${s.sessionId}${s.project ? `\nProject: ${s.project}` : ""}${waiting !== null ? `\nWaiting for you: ${waiting}` : ""}\nArtifacts: ${s.artifactCount}${s.live === false ? "\nAgent exited — history readable" : ""}`}
               >
                 {/* D8 (M8) — honest dots: green only while the wrapper is
                     REGISTERED; an exited session's history stays readable but
@@ -928,14 +934,15 @@ function App() {
                 <span className="truncate max-w-40">{label}</span>
                 {/* #569 proposal 1 — a demo session says so by name, in text. */}
                 {isDemoSessionId(s.sessionId) && <DemoTag />}
-                {s.artifactCount > 0 && (
+                {(waiting !== null ? waiting > 0 : s.artifactCount > 0) && (
                   /* R2 (contrast) — `opacity-70` on 9px text: 4.77:1 dark /
                      3.91:1 light on the inactive row, and 3.45 / 3.10 on the
                      SELECTED row where the count inherits accent-blue. At 9px
                      it is the smallest text in the shell, so it needed the
                      opposite of a dimmer. Solid: 8.29 / 8.77 inactive,
                      5.60 / 5.53 selected. */
-                  <span className="text-[9px] bg-surface-elevated px-1 py-0.5 rounded">{s.artifactCount}</span>
+                  <span data-testid="session-badge"
+                    className="text-[9px] bg-surface-elevated px-1 py-0.5 rounded">{waiting ?? s.artifactCount}</span>
                 )}
               </button>
             );
