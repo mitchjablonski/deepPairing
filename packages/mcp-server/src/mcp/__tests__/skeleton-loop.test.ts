@@ -16,7 +16,7 @@ import { FileStore } from "../../store/file-store.js";
 import { createMcpServer } from "../server.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { skeletonLeftovers } from "../skeleton-finalize.js";
-import { readSkeletonScopes, resolveSkeletonScopes } from "../../skeleton-scope.js";
+import { readSkeletonScopes, resolveSkeletonScopes, writeSkeletonScope } from "../../skeleton-scope.js";
 import { writeReshapeScope } from "../skeleton-reshape.js";
 
 class FailingFenceNoticeStore extends FileStore {
@@ -322,11 +322,13 @@ describe("#640 accepted completion/TODO notice", () => {
     vi.restoreAllMocks();
   });
   const notices = () => store.getComments().filter((c) => c.content.startsWith("Completion/TODO mismatch:"));
-  async function activePlan() {
-    const id = await presentApproved();
-    await progress(id, 0, "in_progress");
+  async function activePlan(approved = true) {
+    await callTool("present_plan", { title: "Smoothing skeleton", steps: STEPS, estimatedChanges: 1 });
+    const plan = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+    if (approved) store.updateArtifactStatus(plan.id, "approved", "ui_approve_button");
+    await progress(plan.id, 0, "in_progress");
     store.forceFlush(); // Establish actual pre-call authority, never called by the new path.
-    return id;
+    return plan.id;
   }
   function failScopeSync() {
     const rename = fs.renameSync;
@@ -374,13 +376,26 @@ describe("#640 accepted completion/TODO notice", () => {
     expect(notices()).toHaveLength(1); // Repeated done is not a new completion.
   });
   it.each(["clean", "skipped", "pending", "unapproved", "no-scope", "wrong-session", "wrong-worktree", "expired", "missing-file", "unreadable-scope"])("keeps %s completion notice-free", async (mode) => {
-    const id = await activePlan();
+    const id = await activePlan(mode !== "unapproved");
     const scopePath = path.join(root, ".deeppairing", "skeleton-scopes", id + ".json");
     if (mode === "clean") fs.writeFileSync(path.join(root, "a.ts"), FILLED);
     if (mode === "missing-file") fs.rmSync(path.join(root, "a.ts"));
     if (mode === "unreadable-scope") fs.writeFileSync(scopePath, "{");
     if (mode === "pending") { await progress(id, 0, "pending"); store.forceFlush(); }
-    if (mode === "unapproved") store.updateArtifactStatus(id, "rejected", "ui_reject_button");
+    if (mode === "unapproved") {
+      // A stale active marker cannot authorize a never-approved plan's completion.
+      writeSkeletonScope(root, {
+        artifactId: id, planTitle: "Smoothing skeleton", activeSkelIds: ["1"],
+        updatedAt: new Date().toISOString(), sessionId: store.getSessionId(), workspaceRoot: root,
+      });
+      expect(readSkeletonScopes(root)).toContainEqual(expect.objectContaining({
+        artifactId: id, sessionId: store.getSessionId(), workspaceRoot: root, activeSkelIds: ["1"],
+      }));
+      expect(store.getArtifacts().find((a) => a.id === id)).toMatchObject({
+        status: "draft", content: { steps: [{ status: "in_progress", skelId: "1" }] },
+      });
+      expect(fs.readFileSync(path.join(root, "a.ts"), "utf8")).toBe(SRC);
+    }
     if (mode === "no-scope") fs.rmSync(scopePath);
     if (["wrong-session", "wrong-worktree", "expired"].includes(mode)) {
       const scope = JSON.parse(fs.readFileSync(scopePath, "utf8"));
