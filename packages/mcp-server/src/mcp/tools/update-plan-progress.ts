@@ -1,5 +1,5 @@
 import { resolveProjectRoot } from "../../project-root.js";
-import { planDeclaredFiles, readSkeletonScopeFile, refreshReshapeRestores, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
+import { planDeclaredFiles, readSkeletonScopeFile, readSkeletonScopes, resolveSkeletonScopes, selectSkeletonScope, planOnDisk, refreshReshapeRestores, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
 import { isLivePlanVersion } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { resnapshotSkeleton } from "../skeleton-snapshot.js";
@@ -62,7 +62,17 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
     status: st?.status,
     skelId: st?.skelId,
   }));
+  const eligibleBefore = updates.some((u) => u.status === "done" && priorStatuses[u.stepIndex]?.status === "in_progress")
+    ? completionScopeIds(before, store.getSessionId()) : new Set<string>();
   const resnap = before && isLivePlanVersion(before, all) ? resnapshotSkeleton(before.content) : null;
+  let completionScan = resnap?.scan;
+  if (!completionScan && eligibleBefore.size > 0 && before) {
+    try {
+      const root = resolveProjectRoot();
+      completionScan = scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot,
+        { files: planDeclaredFiles(before.content) });
+    } catch { /* Missing scan evidence stays quiet under the new notice. */ }
+  }
   const artifact = resnap
     ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals, ...(resnap.readAt !== undefined ? { skeletonReadAt: resnap.readAt } : {}) })
     : await store.updatePlanProgress(artifactId, updates);
@@ -99,7 +109,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
     ? `\n⚠ WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.`
     : "";
   // #609 review L3 — one scan per call: the re-read's scan feeds the fence check.
-  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates, resnap?.scan);
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates, completionScan);
   // Parity PR 3 — the checklist vs the code. Steps finished in THIS call are
   // already named by syncSkeletonScope's own "still has SKEL_TODO" check.
   let mismatchNote = "";
@@ -139,6 +149,42 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
         : `\n⚠ Fence lifted without done: ${what}. The notice could not be saved to the plan; notify the human directly now. If you need a structural change, propose it and revise_artifact the plan (reason "Skeleton change: …") instead.`;
     }
   }
+
+  // #640 — a new accepted completion claim with a known active scope and TODO.
+  // Progress is debounced: this is not evidence of an fsync or immediate release.
+  let completionNote = "";
+  const completed = new Map<string, { index: number; locations: string[]; stillActive: boolean }>();
+  if (!isSpec && completionScan && c.steps) {
+    for (const { stepIndex } of updates) {
+      const prior = priorStatuses[stepIndex];
+      const final = c.steps[stepIndex];
+      const id = final?.skelId;
+      if (prior?.status !== "in_progress" || final?.status !== "done" ||
+          typeof id !== "string" || !id || prior.skelId !== id || !eligibleBefore.has(id)) continue;
+      const todo = completionScan.fences.filter((f) => f.id === id && f.status === "todo");
+      if (todo.length === 0 || completed.has(id)) continue;
+      completed.set(id, { index: stepIndex, locations: todo.map((f) => `${f.file}:${f.openLine}`),
+        stillActive: c.steps.some((step) => step.skelId === id && step.status === "in_progress") });
+    }
+  }
+  if (completed.size > 0) {
+    const what = [...completed].map(([id, item]) =>
+      `Step ${item.index + 1} (SKEL[${id}]) was marked done while SKEL_TODO remains at ${item.locations.join(", ")}.`).join(" ");
+    const released = [...completed].filter(([, item]) => !item.stillActive).map(([id]) => `SKEL[${id}]`);
+    const consequence = released.length > 0
+      ? ` Accepted progress for this plan no longer marks ${released.join(", ")} in progress. Actual hook scope release depends on the persisted plan and scope state; stale or failed scope synchronization may keep the fence active. Other active scopes may still gate edits.`
+      : " Another accepted step still marks the same fence ID in progress.";
+    let saved = false;
+    try {
+      await store.addComment({ id: `cmt_${nanoid(10)}`, artifactId: artifact.id, author: "agent",
+        content: `Completion/TODO mismatch: ${what}${consequence}` });
+      saved = true;
+    } catch { /* Accepted progress remains recorded; the notice is best effort. */ }
+    completionNote = `\n⚠ Completion/TODO mismatch: ${what}${consequence} ` + (saved
+      ? "A completion/TODO notice was saved to the plan's Comments thread."
+      : "The notice could not be saved to the plan; notify the human directly now.");
+  }
+
   // Parity PR 4 — reshape: a skeleton plan's newer version waits for approval
   // before fills resume.
   const isSkeleton = !isSpec && (c.steps ?? []).some((st) => typeof st.skelId === "string" && st.skelId);
@@ -156,7 +202,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${reshapeNote}${finalizeNote}`,
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${completionNote}${reshapeNote}${finalizeNote}`,
     }],
   };
 }
@@ -218,4 +264,23 @@ function syncSkeletonScope(
   } catch {
     return "";
   }
+}
+
+/** Observability only: use the hook's existing disk/session/worktree eligibility. */
+function completionScopeIds(artifact: { id: string; type: string; status: string } | undefined, sessionId: string): Set<string> {
+  const ids = new Set<string>();
+  if (!artifact || artifact.type !== "plan") return ids;
+  try {
+    const root = resolveProjectRoot();
+    const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
+    const { fenced } = resolveSkeletonScopes(root.projectRoot, readSkeletonScopes(root.projectRoot));
+    for (const scope of fenced) {
+      if (!selectSkeletonScope([scope], { sessionId, targetAbs: workspaceRoot })) continue;
+      const direct = scope.artifactId === artifact.id && artifact.status === "approved";
+      const restoring = scope.reshape?.fromId === artifact.id && scope.reshape.restoreApproved &&
+        ["rejected", "retracted"].includes(planOnDisk(root.projectRoot, sessionId, scope.artifactId)?.status ?? "");
+      if (direct || restoring) for (const id of scope.activeSkelIds) ids.add(id);
+    }
+  } catch { /* Uncertain scope evidence cannot authorize a completion notice. */ }
+  return ids;
 }
