@@ -467,7 +467,7 @@ export interface ArtifactState {
   sampleSessionIds: string[];
   setSampleContent: (on: boolean, sessionIds?: string[]) => void;
 
-  addArtifact: (artifact: Artifact) => void;
+  addArtifact: (artifact: Artifact, options?: { historical?: boolean }) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
   /** D10 — replace an artifact wholesale (content patches, e.g. plan progress). No-op if unknown. */
   replaceArtifact: (artifact: Artifact) => void;
@@ -828,7 +828,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   // reconnect-driven re-hydration multiplied the local count even though
   // the daemon's store had exactly one record. Idempotent upserts collapse
   // any redelivery (planned or accidental) into a single visible record.
-  addArtifact: (artifact) =>
+  addArtifact: (artifact, options) =>
     set((state) => {
       supersedeRollbacks(`art:${artifact.id}:`); // #422 — authoritative
       // #569 review — real work arriving ends the sample: its label must
@@ -851,7 +851,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         // whose first artifact was later revised opens the dead v1.
         selectedArtifactId:
           state.selectedArtifactId ?? (artifact.status === "superseded" ? null : artifact.id),
-        unreadIds: state.selectedArtifactId && state.selectedArtifactId !== artifact.id
+        unreadIds: !options?.historical && state.selectedArtifactId && state.selectedArtifactId !== artifact.id
           ? [...state.unreadIds, artifact.id]
           : state.unreadIds,
       };

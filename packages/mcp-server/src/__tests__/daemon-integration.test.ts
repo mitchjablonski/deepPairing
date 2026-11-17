@@ -110,6 +110,32 @@ describe("S1 — createActiveSessionRoutes gates the root-app session reads (rea
     expect(unknown.status).toBe(404);
   });
 
+
+  it("#662 serves a matching envelope but leaves omitted legacy artifact owners untouched", async () => {
+    const sid = "legacy_B";
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", sid);
+    fs.mkdirSync(dir, { recursive: true });
+    const modern = { id: "modern", sessionId: sid, type: "research", version: 1, parentId: null,
+      title: "Modern", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+    const legacy = { ...modern, id: "legacy", sessionId: undefined };
+    const raw = JSON.stringify([modern, legacy]);
+    fs.writeFileSync(path.join(dir, "artifacts.json"), raw);
+    const store = createTestSession(sid);
+    try {
+      const routes = createActiveSessionRoutes(sessions, sessionMeta, "hashA");
+      const response = await routes.request(`/api/live-session/${sid}`, { headers: { "X-Project-Hash": "hashA" } });
+      expect(response.status).toBe(200);
+      const payload = await response.json();
+      expect(payload).toMatchObject({ sessionId: sid,
+        artifacts: [{ id: "modern", sessionId: sid }, { id: "legacy" }] });
+      expect(Object.hasOwn(payload.artifacts[1], "sessionId")).toBe(false);
+      const result = store.getFullState();
+      expect(Object.hasOwn(result.artifacts[1]!, "sessionId")).toBe(false);
+      expect(fs.readFileSync(path.join(dir, "artifacts.json"), "utf8")).toBe(raw);
+    } finally { store.dispose(); }
+  });
+
   it("also gates /api/active-sessions", async () => {
     const routes = createActiveSessionRoutes(sessions, sessionMeta, "hashA");
     expect((await routes.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashB" } })).status).toBe(403);
