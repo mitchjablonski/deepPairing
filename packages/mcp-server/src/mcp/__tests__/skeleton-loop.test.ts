@@ -16,7 +16,7 @@ import { FileStore } from "../../store/file-store.js";
 import { createMcpServer } from "../server.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { skeletonLeftovers } from "../skeleton-finalize.js";
-import { readSkeletonScopes, resolveSkeletonScopes, writeSkeletonScope } from "../../skeleton-scope.js";
+import { planOnDisk, readSkeletonScopes, resolveSkeletonScopes, writeSkeletonScope } from "../../skeleton-scope.js";
 import { writeReshapeScope } from "../skeleton-reshape.js";
 
 class FailingFenceNoticeStore extends FileStore {
@@ -368,12 +368,38 @@ describe("#640 accepted completion/TODO notice", () => {
     expect(notices()[0]?.target.artifactId).toBe(id);
     expect(notices()[0]?.content).toContain("SKEL_TODO remains at a.ts:2");
     expect(result.text).toContain("A completion/TODO notice was saved");
-    expect(result.text).toContain("once the hook reads that state");
+    expect(result.text).toContain("stale or failed scope synchronization may keep the fence active");
+    expect(notices()[0]?.content).toContain("stale or failed scope synchronization may keep the fence active");
     expect(result.text).toContain("Other active scopes may still gate edits");
     expect(notices()[0]?.content).not.toContain("the fence was released");
     expect(notices()[0]?.content).not.toContain("saved to disk");
     await progress(id, 0, "done");
     expect(notices()).toHaveLength(1); // Repeated done is not a new completion.
+  });
+  it("does not promise release when an ordinary scope survives accepted done on disk", async () => {
+    const id = await activePlan();
+    failScopeSync();
+    vi.useFakeTimers();
+    const flush = vi.spyOn(store, "forceFlush");
+
+    const result = await progress(id, 0, "done");
+    expect(flush).not.toHaveBeenCalled();
+    // Test-only publication: the hook can read accepted done, but failed scope
+    // removal still leaves the ordinary scope's old active ID authoritative.
+    store.forceFlush();
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(planOnDisk(root, store.getSessionId(), id)).toEqual({
+      status: "approved", inProgressSkelIds: [],
+    });
+    expect(resolveSkeletonScopes(root, readSkeletonScopes(root)).fenced).toContainEqual(
+      expect.objectContaining({ artifactId: id, activeSkelIds: ["1"] }),
+    );
+    expect(notices()).toHaveLength(1);
+    for (const text of [result.text, notices()[0]!.content]) {
+      expect(text).toContain("Accepted progress for this plan no longer marks SKEL[1] in progress");
+      expect(text).toContain("stale or failed scope synchronization may keep the fence active");
+      expect(text).not.toContain("will no longer supply their active fences");
+    }
   });
   it.each(["clean", "skipped", "pending", "unapproved", "no-scope", "wrong-session", "wrong-worktree", "expired", "missing-file", "unreadable-scope"])("keeps %s completion notice-free", async (mode) => {
     const id = await activePlan(mode !== "unapproved");

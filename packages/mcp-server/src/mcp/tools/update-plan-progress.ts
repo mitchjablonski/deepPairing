@@ -172,7 +172,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
       `Step ${item.index + 1} (SKEL[${id}]) was marked done while SKEL_TODO remains at ${item.locations.join(", ")}.`).join(" ");
     const released = [...completed].filter(([, item]) => !item.stillActive).map(([id]) => `SKEL[${id}]`);
     const consequence = released.length > 0
-      ? ` Accepted progress for this plan no longer marks ${released.join(", ")} in progress; once the hook reads that state, these steps will no longer supply their active fences. Other active scopes may still gate edits.`
+      ? ` Accepted progress for this plan no longer marks ${released.join(", ")} in progress. Actual hook scope release depends on the persisted plan and scope state; stale or failed scope synchronization may keep the fence active. Other active scopes may still gate edits.`
       : " Another accepted step still marks the same fence ID in progress.";
     let saved = false;
     try {
