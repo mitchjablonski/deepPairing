@@ -37195,6 +37195,64 @@ function writeSkeletonScope(projectRoot2, scope) {
   } catch {
   }
 }
+function planOnDisk(projectRoot2, sessionId, artifactId) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
+  try {
+    const arr2 = JSON.parse(fs11.readFileSync(path12.join(projectRoot2, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
+    if (!Array.isArray(arr2)) return null;
+    const plan = arr2.find((a) => !!a && typeof a === "object" && a.id === artifactId);
+    if (plan?.type !== "plan" || typeof plan.status !== "string") return null;
+    const steps = Array.isArray(plan.content?.steps) ? plan.content.steps : [];
+    const inProgressSkelIds = steps.filter((st) => st && typeof st.skelId === "string" && st.skelId && st.status === "in_progress").map((st) => st.skelId);
+    return { status: plan.status, inProgressSkelIds };
+  } catch {
+    return null;
+  }
+}
+function resolveSkeletonScopes(projectRoot2, scopes) {
+  const fenced = [];
+  const paused = [];
+  for (const s of scopes) {
+    if (!s.sessionId) continue;
+    const plan = planOnDisk(projectRoot2, s.sessionId, s.artifactId);
+    if (!plan) continue;
+    if (!s.reshape) {
+      if (plan.status === "approved" && s.activeSkelIds.length > 0) fenced.push(s);
+      continue;
+    }
+    if (plan.status === "draft" || plan.status === "revised") {
+      paused.push(s);
+    } else if (plan.status === "approved") {
+      const ids = [.../* @__PURE__ */ new Set([...s.activeSkelIds, ...plan.inProgressSkelIds])];
+      if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
+    } else if ((plan.status === "rejected" || plan.status === "retracted") && s.reshape.restoreApproved) {
+      const ids = restoredSkelIds(projectRoot2, s.sessionId, s.artifactId, s.reshape);
+      if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
+    }
+  }
+  return { fenced, paused };
+}
+var RESTORABLE = /* @__PURE__ */ new Set(["superseded", "approved"]);
+function restoredSkelIds(projectRoot2, sessionId, reshapeId, reshape) {
+  const arr2 = readSessionArtifacts(projectRoot2, sessionId);
+  if (!arr2) return [];
+  const idx = arr2.findIndex((a) => a.id === reshape.fromId);
+  if (idx === -1) return reshape.restoreSkelIds;
+  const v1 = arr2[idx];
+  if (v1.type !== "plan" || typeof v1.status !== "string" || !RESTORABLE.has(v1.status)) return [];
+  const mine = arr2.findIndex((a) => a.id === reshapeId);
+  if (arr2.some((a, i) => a.parentId === reshape.fromId && a.id !== reshapeId && i > mine)) return [];
+  return inProgressSkelIdsOf(v1.content);
+}
+function readSessionArtifacts(projectRoot2, sessionId) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
+  try {
+    const arr2 = JSON.parse(fs11.readFileSync(path12.join(projectRoot2, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
+    return Array.isArray(arr2) ? arr2.filter((a) => !!a && typeof a === "object") : null;
+  } catch {
+    return null;
+  }
+}
 function inProgressSkelIdsOf(content) {
   const steps = content?.steps;
   if (!Array.isArray(steps)) return [];
@@ -37237,6 +37295,19 @@ function readSkeletonScopeFile(projectRoot2, artifactId, now = Date.now()) {
 function within(dir, abs) {
   const rel = path12.relative(dir, abs);
   return rel === "" || !rel.startsWith("..") && !path12.isAbsolute(rel);
+}
+function selectSkeletonScope(scopes, args) {
+  const mine = scopes.filter(
+    (s) => s.sessionId === args.sessionId && (!s.workspaceRoot || within(s.workspaceRoot, args.targetAbs))
+  );
+  if (mine.length === 0) return null;
+  const titles = [...new Set(mine.map((s) => s.planTitle).filter((t) => !!t))];
+  return {
+    artifactId: mine.map((s) => s.artifactId).join(","),
+    activeSkelIds: [...new Set(mine.flatMap((s) => s.activeSkelIds))],
+    updatedAt: mine.map((s) => s.updatedAt).sort().at(-1),
+    ...titles.length > 0 ? { planTitle: titles.join(", ") } : {}
+  };
 }
 
 // src/mcp/skeleton-snapshot.ts
@@ -37641,7 +37712,19 @@ async function handleUpdatePlanProgress(ctx, args) {
     status: st?.status,
     skelId: st?.skelId
   }));
+  const eligibleBefore = updates.some((u) => u.status === "done" && priorStatuses[u.stepIndex]?.status === "in_progress") ? completionScopeIds(before, store.getSessionId()) : /* @__PURE__ */ new Set();
   const resnap = before && isLivePlanVersion(before, all) ? resnapshotSkeleton(before.content) : null;
+  let completionScan = resnap?.scan;
+  if (!completionScan && eligibleBefore.size > 0 && before) {
+    try {
+      const root = resolveProjectRoot();
+      completionScan = scanSkeletonFences(
+        root.worktree?.workspaceRoot ?? root.projectRoot,
+        { files: planDeclaredFiles(before.content) }
+      );
+    } catch {
+    }
+  }
   const artifact = resnap ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals, ...resnap.readAt !== void 0 ? { skeletonReadAt: resnap.readAt } : {} }) : await store.updatePlanProgress(artifactId, updates);
   if (!artifact) {
     return {
@@ -37666,7 +37749,7 @@ async function handleUpdatePlanProgress(ctx, args) {
   };
   const warning = NOT_EXECUTABLE[artifact.status] ? `
 \u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
-  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates, resnap?.scan);
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates, completionScan);
   let mismatchNote = "";
   if (resnap?.scan && c.steps) {
     const finishedNow = new Set(
@@ -37697,6 +37780,41 @@ async function handleUpdatePlanProgress(ctx, args) {
 \u26A0 Fence lifted without done: ${what}. The notice could not be saved to the plan; notify the human directly now. If you need a structural change, propose it and revise_artifact the plan (reason "Skeleton change: \u2026") instead.`;
     }
   }
+  let completionNote = "";
+  const completed = /* @__PURE__ */ new Map();
+  if (!isSpec && completionScan && c.steps) {
+    for (const { stepIndex } of updates) {
+      const prior = priorStatuses[stepIndex];
+      const final = c.steps[stepIndex];
+      const id = final?.skelId;
+      if (prior?.status !== "in_progress" || final?.status !== "done" || typeof id !== "string" || !id || prior.skelId !== id || !eligibleBefore.has(id)) continue;
+      const todo = completionScan.fences.filter((f) => f.id === id && f.status === "todo");
+      if (todo.length === 0 || completed.has(id)) continue;
+      completed.set(id, {
+        index: stepIndex,
+        locations: todo.map((f) => `${f.file}:${f.openLine}`),
+        stillActive: c.steps.some((step) => step.skelId === id && step.status === "in_progress")
+      });
+    }
+  }
+  if (completed.size > 0) {
+    const what = [...completed].map(([id, item]) => `Step ${item.index + 1} (SKEL[${id}]) was marked done while SKEL_TODO remains at ${item.locations.join(", ")}.`).join(" ");
+    const released = [...completed].filter(([, item]) => !item.stillActive).map(([id]) => `SKEL[${id}]`);
+    const consequence = released.length > 0 ? ` Accepted progress for this plan no longer marks ${released.join(", ")} in progress. Actual hook scope release depends on the persisted plan and scope state; stale or failed scope synchronization may keep the fence active. Other active scopes may still gate edits.` : " Another accepted step still marks the same fence ID in progress.";
+    let saved = false;
+    try {
+      await store.addComment({
+        id: `cmt_${nanoid3(10)}`,
+        artifactId: artifact.id,
+        author: "agent",
+        content: `Completion/TODO mismatch: ${what}${consequence}`
+      });
+      saved = true;
+    } catch {
+    }
+    completionNote = `
+\u26A0 Completion/TODO mismatch: ${what}${consequence} ` + (saved ? "A completion/TODO notice was saved to the plan's Comments thread." : "The notice could not be saved to the plan; notify the human directly now.");
+  }
   const isSkeleton = !isSpec && (c.steps ?? []).some((st) => typeof st.skelId === "string" && st.skelId);
   const reshapeNote = isSkeleton && artifact.status === "draft" && artifact.parentId ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused. Until your pair approves it, the preflight hook asks before any edit to this plan's files." : "";
   let finalizeNote = "";
@@ -37708,7 +37826,7 @@ async function handleUpdatePlanProgress(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${reshapeNote}${finalizeNote}`
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${completionNote}${reshapeNote}${finalizeNote}`
     }]
   };
 }
@@ -37742,6 +37860,23 @@ Skeleton fence active: edits are gated to ${activeSkelIds.map((id) => `SKEL[${id
   } catch {
     return "";
   }
+}
+function completionScopeIds(artifact, sessionId) {
+  const ids = /* @__PURE__ */ new Set();
+  if (!artifact || artifact.type !== "plan") return ids;
+  try {
+    const root = resolveProjectRoot();
+    const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
+    const { fenced } = resolveSkeletonScopes(root.projectRoot, readSkeletonScopes(root.projectRoot));
+    for (const scope of fenced) {
+      if (!selectSkeletonScope([scope], { sessionId, targetAbs: workspaceRoot })) continue;
+      const direct = scope.artifactId === artifact.id && artifact.status === "approved";
+      const restoring = scope.reshape?.fromId === artifact.id && scope.reshape.restoreApproved && ["rejected", "retracted"].includes(planOnDisk(root.projectRoot, sessionId, scope.artifactId)?.status ?? "");
+      if (direct || restoring) for (const id of scope.activeSkelIds) ids.add(id);
+    }
+  } catch {
+  }
+  return ids;
 }
 
 // src/store/retirement.ts
