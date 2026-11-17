@@ -81,9 +81,9 @@ describe("revision selection — land on the live version, not the dead one", ()
     expect(useArtifactStore.getState().selectedArtifactId).toBe("v2");
   });
 
-  // U8 — selectArtifact() itself resolves a stale id (handed by CausalChain
-  // rows, related badges, the command palette, dp:focus-artifact, …) to the
-  // live successor, so no caller lands on a dead read-only version.
+  // U8 — selectArtifact() resolves stale ids from a related-artifact row,
+  // command palette or dp:focus-artifact event to the live successor, so
+  // no caller lands on a dead read-only version.
   it("selectArtifact resolves a superseded id to its live successor", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(mkV("v1", { status: "superseded" }));
