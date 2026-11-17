@@ -452,17 +452,22 @@ describe("ArtifactStatusActions — draft interactions", () => {
     expect(screen.getByLabelText(/what pattern are you rejecting/i)).toHaveValue("");
   });
 
-  it("Cmd+Enter in the textarea submits approve", async () => {
+  it("Cmd+Enter on an empty textarea arms the 3s countdown, then submits approve (#656 item 6)", async () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
     const textarea = screen.getByRole("textbox");
-    await userEvent.click(textarea);
-    await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
-    await waitFor(() =>
+    vi.useFakeTimers();
+    try {
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+      expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/artifacts/art_x/status"), expect.any(Object));
+      for (let i = 0; i < 4; i++) act(() => { vi.advanceTimersByTime(1100); });
+      await act(async () => { await Promise.resolve(); });
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining("/api/artifacts/art_x/status"),
         expect.any(Object),
-      ),
-    );
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("Approve label changes to 'Approve with note' when a comment is typed", async () => {

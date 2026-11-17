@@ -30,7 +30,6 @@ import { ExportMenu } from "../ExportMenu";
 import { KeyboardShortcutHelp } from "../KeyboardShortcutHelp";
 import { SettingsSheet } from "../SettingsSheet";
 import { CommandPalette } from "../CommandPalette";
-import { CausalChain } from "../CausalChain";
 import { SessionMetrics } from "../SessionMetrics";
 
 import { useArtifactStore } from "../../stores/artifact";
@@ -210,10 +209,6 @@ describe("layout / chrome — smoke", () => {
 
   it("CommandPalette renders", () => {
     expect(() => render(<CommandPalette onClose={() => {}} />)).not.toThrow();
-  });
-
-  it("CausalChain renders", () => {
-    expect(() => render(<CausalChain />)).not.toThrow();
   });
 
   it("SessionMetrics renders", () => {
