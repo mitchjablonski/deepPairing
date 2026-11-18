@@ -267,6 +267,7 @@ export class AttentionEvidence {
 
   constructor(readonly page: Page, readonly info: TestInfo, readonly row: {
     scenario: WalkthroughCase; mode: "OFF" | "ON"; viewport: { width: number; height: number }; manifest: string[];
+    reducedMotion?: "reduce" | "no-preference";
     limitations?: string[];
   }) {}
 
@@ -391,6 +392,7 @@ export class AttentionEvidence {
       (window as unknown as { __attentionEvidence?: unknown }).__attentionEvidence ?? { entries: [], truncated: false },
     ).catch(() => ({ entries: [], truncated: false, unavailable: true }));
     const atSave = await runtimeProvenance();
+    const motion = this.row.reducedMotion === "no-preference" ? "standard motion" : "reduced motion";
     const evidence = {
       schemaVersion: 1,
       runtime: {
@@ -413,7 +415,7 @@ export class AttentionEvidence {
       assertions: this.assertions, captures: this.captures, liveRegions,
       limitations: [
         "Synthetic internal API seeding is not a live Claude task; seeding influences agent-activity signals.",
-        `Chromium, ${this.theme}, reduced motion, desktop only; no humans, real screen readers, speech timing, usability verdict, pilot or default-rollout approval.`,
+        `Chromium, ${this.theme}, ${motion}, desktop only; no humans, real screen readers, speech timing, usability verdict, pilot or default-rollout approval.`,
         "ARIA/live DOM changes are bounded potential-announcement proxies, not accessibility speech; aria-live=off is excluded.",
         "Disconnected sampled after browser-observed outage; the 60-second escalation is not measured.",
         "Tab-search journeys are reproducible automation, not optimal human paths or legacy keystroke-count replication.",
