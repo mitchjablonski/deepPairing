@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
@@ -13,10 +13,12 @@ const mk = (type: string, content: any, over: any = {}) =>
 const comment = (artifactId: string, content: string) =>
   ({ id: `c_${content}`, author: "human", content, createdAt: "2026-06-01T00:00:01.000Z", parentCommentId: null,
     target: { artifactId } }) as any;
+const cleanupAll = () => cleanup();
 const research = (over: any = {}) => mk("research", { summary: "s", findings: [] }, over);
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  sessionStorage.clear();
   useArtifactStore.getState().reset();
   useReplayStore.setState({ active: false } as any);
   useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true }], disconnectedSince: null } as any);
@@ -74,5 +76,66 @@ describe("#668 item 3 — single Respond box on a reviewable draft", () => {
     useArtifactStore.setState({ artifacts: [a] } as any);
     render(<ArtifactStatusActions artifact={a} />);
     expect(screen.queryByRole("button", { name: "Ask" })).toBeNull();
+  });
+});
+
+describe("Sol (#672) — Respond owns the saved Comments draft", () => {
+  const KEY = "dp:draft:comment:art1:{}";
+  const box = () => screen.getByPlaceholderText(/Respond to the agent on this artifact/) as HTMLTextAreaElement;
+
+  it("a pre-existing saved Comments draft loads into Respond (not stranded)", async () => {
+    sessionStorage.setItem(KEY, "half-written thought");
+    const a = research();
+    useArtifactStore.setState({ artifacts: [a], comments: {} } as any);
+    render(<ArtifactDetail artifact={a} />);
+    expect((await screen.findByPlaceholderText(/Respond to the agent on this artifact/) as HTMLTextAreaElement).value).toBe("half-written thought");
+  });
+
+  it("Respond text survives a remount (reload / re-entry)", () => {
+    const a = mk("plan", { steps: [] });
+    useArtifactStore.setState({ artifacts: [a] } as any);
+    const first = render(<ArtifactStatusActions artifact={a} />);
+    fireEvent.change(box(), { target: { value: "keep this across reload" } });
+    first.unmount();
+    render(<ArtifactStatusActions artifact={a} />);
+    expect(box().value).toBe("keep this across reload");
+  });
+
+  it("Respond and Ask success both retire the saved draft", async () => {
+    for (const verb of ["Respond", "Ask"]) {
+      sessionStorage.clear();
+      const a = mk("plan", { steps: [] });
+      const submitComment = vi.fn().mockResolvedValue(undefined);
+      useArtifactStore.setState({ artifacts: [a], submitComment } as any);
+      const r = render(<ArtifactStatusActions artifact={a} />);
+      fireEvent.change(box(), { target: { value: `sent via ${verb}` } });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: verb })); });
+      expect(box().value).toBe("");
+      r.unmount();
+      render(<ArtifactStatusActions artifact={a} />);
+      expect(box().value).toBe("");
+      cleanupAll();
+    }
+  });
+
+  it("a stale completion does not clear text typed after the send", async () => {
+    const a = mk("plan", { steps: [] });
+    let resolve!: () => void;
+    const submitComment = vi.fn(() => new Promise<void>((r) => { resolve = r; }));
+    useArtifactStore.setState({ artifacts: [a], submitComment } as any);
+    render(<ArtifactStatusActions artifact={a} />);
+    fireEvent.change(box(), { target: { value: "first" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Respond" })); });
+    fireEvent.change(box(), { target: { value: "first, and a follow-up" } });
+    await act(async () => { resolve(); });
+    expect(box().value).toBe("first, and a follow-up");
+  });
+
+  it("the footer is the eligible editor only where it renders: an approved artifact uses the thread", async () => {
+    sessionStorage.setItem(KEY, "after approval");
+    const a = research({ status: "approved" });
+    useArtifactStore.setState({ artifacts: [a], comments: {} } as any);
+    render(<ArtifactDetail artifact={a} />);
+    expect((await screen.findByPlaceholderText(/Add a comment/) as HTMLTextAreaElement).value).toBe("after approval");
   });
 });
