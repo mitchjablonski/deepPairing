@@ -160,7 +160,8 @@ test("live changes and disappearing queue focus", async ({ page }, info) => {
 // pane's exit animation, so it can pass with the bug present. Moving focus by
 // script here is timing control: Approve fires while the pane is still leaving.
 test("approving just after switching keeps focus on the open artifact", async ({ page }, info) => {
-  const e = new AttentionEvidence(page, info, { scenario, mode: "ON", viewport: { width: 1280, height: 800 }, manifest: ["approve-during-exit"] });
+  const reducedMotion = "no-preference";
+  const e = new AttentionEvidence(page, info, { scenario, mode: "ON", viewport: { width: 1280, height: 800 }, manifest: ["approve-during-exit"], reducedMotion });
   let daemon: AttentionDaemon | undefined;
   let failure: unknown;
   let cleanup: "removed" | "retained" = "retained";
@@ -169,7 +170,7 @@ test("approving just after switching keeps focus on the open artifact", async ({
     await daemon.seed(scenario.seed);
     await e.observe();
     // This row needs the exit animation. Keep reduced motion for the other rows.
-    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.emulateMedia({ reducedMotion });
     await page.goto(`${daemon.baseURL}/?session=probe`);
     await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review one");
     await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
