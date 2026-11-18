@@ -1,5 +1,6 @@
 import { test, expect } from "./test.js";
 import { AttentionDaemon } from "./attention-walkthrough-harness.js";
+import { attachDiagnosticFile } from "./diagnostics.js";
 
 for (const moveToSidebar of [true, false]) {
   test(`lazy decision Enter follows ${moveToSidebar ? "sidebar" : "pane"} focus ownership`, async ({ page }, info) => {
@@ -18,10 +19,6 @@ for (const moveToSidebar of [true, false]) {
         { session, route: "artifacts", body: { id: "plan", type: "plan", title: "First review", content: {
           summary: "Synthetic plan", steps: [{ description: "Synthetic step", reasoning: "Focus probe", files: [] }],
         } } },
-        { session, route: "artifacts", body: { id: "decision", type: "decision", title: "Choose a cache", content: {
-          title: "Choose a cache", context: "Synthetic choice", decisionId: "cache", stakes: "high", stakesReason: "Synthetic focus probe", options,
-        } } },
-        { session, route: "decisions", body: { decisionId: "cache", artifactId: "decision", context: "Synthetic choice", stakes: "high", options } },
       ]);
       const decisionChunk = "**/DecisionCard-*.js";
       await page.route(decisionChunk, async (route) => {
@@ -49,6 +46,14 @@ for (const moveToSidebar of [true, false]) {
       const decisionPane = activePane.and(page.locator('[data-artifact-id="decision"]'));
       const sidebarPlan = page.locator('[data-artifact-item="plan"]');
       await expect(planPane.getByRole("button", { name: "Approve", exact: true })).toBeVisible();
+      // Land on the plan before publishing its peer, independently of how
+      // equal-priority drafts are ordered on initial hydration.
+      await daemon.post(session, "artifacts", { id: "decision", type: "decision", title: "Choose a cache", content: {
+        title: "Choose a cache", context: "Synthetic choice", decisionId: "cache", stakes: "high", stakesReason: "Synthetic focus probe", options,
+      } });
+      await daemon.post(session, "decisions", { decisionId: "cache", artifactId: "decision", context: "Synthetic choice", stakes: "high", options });
+      await expect(page.locator('[data-artifact-item="decision"]')).toBeVisible();
+      await expect(planPane).toBeVisible();
       await planPane.focus();
       await Promise.all([page.waitForRequest(decisionChunk), page.keyboard.press("n")]);
       await expect(decisionPane).toBeFocused();
@@ -84,7 +89,7 @@ for (const moveToSidebar of [true, false]) {
         decision: artifacts.find((a) => a.id === "decision")?.status,
       };
       // CI retains diagnostics text along with its failure screenshot.
-      await info.attach("lazy-decision-focus-diagnostics", { body: JSON.stringify(observed), contentType: "text/plain" });
+      await attachDiagnosticFile(info, "lazy-decision-focus-diagnostics", Buffer.from(JSON.stringify(observed)));
       expect(observed).toEqual(moveToSidebar ? {
         deferredChunks: 1, enters: [{ tag: "BUTTON", sidebar: "plan", pane: null }],
         activePane: "plan", countdownVisible: false, plan: "draft", decision: "draft",
