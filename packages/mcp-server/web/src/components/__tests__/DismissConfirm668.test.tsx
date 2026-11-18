@@ -145,3 +145,39 @@ describe("#668 #1 — pane Dismiss asks before closing for good", () => {
     expect(statusPosts).toHaveLength(0);
   });
 });
+
+describe("Sol (#670) follow-up — exclusive verdicts and armed identity", () => {
+  it("while Dismiss is armed, `a` and empty ⌘⏎ start no approve countdown", () => {
+    render(<ArtifactStatusActions artifact={art("a1", "One")} />);
+    fireEvent.click(dismiss());
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "a1", action: "approve" } }));
+    });
+    expect(screen.queryByText(/in 3s/)).toBeNull();
+    fireEvent.click(keep()); // back out, then try ⌘⏎ with the confirm open again
+    fireEvent.click(dismiss());
+    // The textarea is still in the footer; empty ⌘⏎ must not arm while confirming.
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", metaKey: true });
+    expect(screen.queryByText(/in 3s/)).toBeNull();
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(updateArtifactStatus).not.toHaveBeenCalled();
+  });
+
+  it("the destructive confirm is on its own row, not the trigger's line", () => {
+    render(<ArtifactStatusActions artifact={art("a1", "One")} />);
+    fireEvent.click(dismiss());
+    const row = screen.getByTestId("dismiss-confirm-row");
+    expect(row).toContainElement(confirm());
+    expect(row).not.toContainElement(keep());
+  });
+
+  it("the write checks the armed version and binding, not just live status", async () => {
+    render(<ArtifactStatusActions artifact={art("a1", "One")} />);
+    fireEvent.click(dismiss());
+    settle();
+    // Same id and still draft, but a newer version landed in the store.
+    act(() => { useArtifactStore.setState({ artifacts: [art("a1", "One", { version: 2 })] } as any); });
+    await act(async () => { fireEvent.click(confirm()); });
+    expect(updateArtifactStatus).not.toHaveBeenCalled();
+  });
+});

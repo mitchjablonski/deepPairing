@@ -253,10 +253,20 @@ export function ArtifactStatusActions({
   const keepItRef = useRef<HTMLButtonElement | null>(null);
   const restoreDismissFocusRef = useRef(false);
   const boundSessionId = useConnectionStore((s) => s.sessionId);
+  const confirmDismissRef = useRef(false);
+  confirmDismissRef.current = confirmDismiss;
+  // The identity that was armed; the write must still match it.
+  const armedDismissRef = useRef<{ id: string; version: number; sessionId: string | null } | null>(null);
   // Disarm on any change of pane, binding or eligibility (status/version).
   useEffect(() => {
     setConfirmDismiss(false);
   }, [artifact.id, artifact.status, artifact.version, boundSessionId]);
+  // Sol (#670) — Dismiss and approve are competing verdicts: while the
+  // confirmation is open no approve countdown may run, whatever armed it
+  // (`a`, empty ⌘⏎, confidence auto-arm). The arm sites refuse too.
+  useEffect(() => {
+    if (confirmDismiss && countdown !== null) dispatch({ type: "cancelCountdown" });
+  }, [confirmDismiss, countdown]);
   useEffect(() => {
     if (!confirmDismiss) { setConfirmReady(false); return; }
     keepItRef.current?.focus({ preventScroll: true });
@@ -472,6 +482,7 @@ export function ArtifactStatusActions({
       if (!detail || detail.artifactId !== artifact.id) return;
       if (artifact.status !== "draft") return;
       if (!presentRef.current) return; // #623 — a leaving pane takes no shortcuts
+      if (confirmDismissRef.current) return; // Sol (#670) — Dismiss confirmation open
 
       // F10 (G5) — a typed note must never be silently dropped: the zero-tick
       // approves via updateArtifactStatus directly (no submitComment), so
@@ -737,6 +748,7 @@ export function ArtifactStatusActions({
     // An armed approve countdown must not resolve the artifact while you're
     // deciding whether to dismiss it.
     if (countdown !== null) dispatch({ type: "cancelCountdown" });
+    armedDismissRef.current = { id: artifact.id, version: artifact.version, sessionId: useConnectionStore.getState().sessionId };
     setConfirmDismiss(true);
   };
   const cancelDismiss = () => {
@@ -749,7 +761,12 @@ export function ArtifactStatusActions({
     if (!presentRef.current) return; // #623
     // Recheck at commit: still this draft, online, idle.
     const live = useArtifactStore.getState().artifacts.find((a) => a.id === artifact.id);
+    const armed = armedDismissRef.current;
+    armedDismissRef.current = null;
     if (offline || submitting || live?.status !== "draft") return;
+    // Sol (#670) — still the exact draft (id + version) and binding that was armed.
+    if (!armed || armed.id !== live.id || armed.version !== live.version ||
+      armed.sessionId !== useConnectionStore.getState().sessionId) return;
     dispatch({ type: "submitStart" });
     try {
       await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
@@ -962,6 +979,7 @@ export function ArtifactStatusActions({
               // never arm an approval while offline (the countdown's zero tick
               // writes via the store directly), on a leaving pane, or mid-submit.
               if (offline || !presentRef.current || submitting) return;
+              if (confirmDismissRef.current) return; // Sol (#670) — Dismiss confirmation open
               if (openSugRef.current.total > 0) setApproveConfirm(true);
               else dispatch({ type: "armCountdown", seconds: KEYBOARD_CONFIRM_SECONDS });
             }
@@ -1109,7 +1127,7 @@ export function ArtifactStatusActions({
           reject). Mirrors the agent's revise_artifact mode="obsolete". */}
       {confirmDismiss ? (
         <div
-          className="flex items-center gap-2 flex-wrap"
+          className="flex flex-col items-start gap-1"
           role="group"
           aria-label="Confirm dismiss"
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelDismiss(); } }}
@@ -1124,6 +1142,9 @@ export function ArtifactStatusActions({
           >
             Keep it
           </button>
+          {/* The destructive target sits on its OWN row, below the line the
+              trigger occupied, so no repeat at the trigger's spot can reach it. */}
+          <div className="flex items-center gap-2 flex-wrap" data-testid="dismiss-confirm-row">
           <button
             type="button"
             onClick={() => void handleDismissObsolete()}
@@ -1137,6 +1158,7 @@ export function ArtifactStatusActions({
           {comment.trim() && (
             <span className="text-2xs text-text-muted" data-testid="dismiss-note-hint">Your note is sent as the reason.</span>
           )}
+          </div>
         </div>
       ) : (
         <button
