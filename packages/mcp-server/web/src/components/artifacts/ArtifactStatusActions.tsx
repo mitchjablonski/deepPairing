@@ -249,6 +249,10 @@ export function ArtifactStatusActions({
   // "Keep it" (which takes the trigger's place and focus) and stays inert for a
   // beat, so a rapid double-click on the trigger can't commit.
   const [confirmReady, setConfirmReady] = useState(false);
+  // The trigger's width at arm time: "Keep it" reserves it, so the destructive
+  // confirm starts beyond the trigger's original hit area on the SAME row (a
+  // bottom-anchored footer that grew a row would shift content up under it).
+  const [dismissTriggerWidth, setDismissTriggerWidth] = useState<number | undefined>(undefined);
   const dismissTriggerRef = useRef<HTMLButtonElement | null>(null);
   const keepItRef = useRef<HTMLButtonElement | null>(null);
   const restoreDismissFocusRef = useRef(false);
@@ -749,6 +753,7 @@ export function ArtifactStatusActions({
     // deciding whether to dismiss it.
     if (countdown !== null) dispatch({ type: "cancelCountdown" });
     armedDismissRef.current = { id: artifact.id, version: artifact.version, sessionId: useConnectionStore.getState().sessionId };
+    setDismissTriggerWidth(dismissTriggerRef.current?.offsetWidth || undefined);
     setConfirmDismiss(true);
   };
   const cancelDismiss = () => {
@@ -1127,7 +1132,7 @@ export function ArtifactStatusActions({
           reject). Mirrors the agent's revise_artifact mode="obsolete". */}
       {confirmDismiss ? (
         <div
-          className="flex flex-col items-start gap-1"
+          className="flex items-center gap-2 whitespace-nowrap"
           role="group"
           aria-label="Confirm dismiss"
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelDismiss(); } }}
@@ -1138,13 +1143,15 @@ export function ArtifactStatusActions({
             ref={keepItRef}
             type="button"
             onClick={cancelDismiss}
-            className="enabled:cursor-pointer text-2xs text-text-muted hover:text-text-secondary"
+            style={dismissTriggerWidth ? { minWidth: dismissTriggerWidth } : undefined}
+            data-testid="dismiss-keep-it"
+            className="enabled:cursor-pointer text-left text-2xs text-text-muted hover:text-text-secondary"
           >
             Keep it
           </button>
-          {/* The destructive target sits on its OWN row, below the line the
-              trigger occupied, so no repeat at the trigger's spot can reach it. */}
-          <div className="flex items-center gap-2 flex-wrap" data-testid="dismiss-confirm-row">
+          {/* The destructive target sits AFTER the trigger's reserved width on
+              the same row, so no repeat at the trigger's spot can reach it. */}
+          <div className="flex items-center gap-2" data-testid="dismiss-confirm-row">
           <button
             type="button"
             onClick={() => void handleDismissObsolete()}
