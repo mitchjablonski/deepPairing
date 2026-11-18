@@ -91,6 +91,17 @@
   --color-badge-text-high: var(--color-accent-red);
 }
 
+/* #668 #5 — Tailwind v4's preflight resets buttons to cursor: default, so the
+ * main actions (Approve / Request changes / Reject / Dismiss, banner chips)
+ * showed an arrow. Restore the pointer for enabled buttons; utilities
+ * (cursor-not-allowed, cursor-grab, …) still override this base layer. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
 /* Base styles — dark mode default */
 html {
   background: var(--color-surface-primary);

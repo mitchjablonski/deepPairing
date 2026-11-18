@@ -238,6 +238,11 @@ export function ArtifactStatusActions({
   // records which verb asked, focuses the field and shows the inline prompt;
   // the prompt clears itself as soon as a reason exists.
   const [reasonAsk, setReasonAsk] = useState<null | "reject" | "revise">(null);
+  // #668 #1 — obsolete can't be undone, so the pane's Dismiss is two-step,
+  // like the PendingBanner chip and the changeset's own Dismiss. Switching
+  // artifacts drops an armed confirm.
+  const [confirmDismiss, setConfirmDismiss] = useState(false);
+  useEffect(() => { setConfirmDismiss(false); }, [artifact.id]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -704,6 +709,7 @@ export function ArtifactStatusActions({
    * Any typed comment rides along as the reason.
    */
   const handleDismissObsolete = async () => {
+    setConfirmDismiss(false);
     if (!presentRef.current) return; // #623
     dispatch({ type: "submitStart" });
     try {
@@ -1062,14 +1068,36 @@ export function ArtifactStatusActions({
 
       {/* Tertiary — close as overcome by new information (neither approve nor
           reject). Mirrors the agent's revise_artifact mode="obsolete". */}
-      <button
-        onClick={handleDismissObsolete}
-        disabled={submitting || !!offline}
-        className="text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
-        title={offline ?? "This was valid but the discussion moved past it — close it without approving or rejecting"}
-      >
-        Dismiss — overcome by new information
-      </button>
+      {confirmDismiss ? (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleDismissObsolete}
+            disabled={submitting || !!offline}
+            className="text-2xs text-text-secondary underline disabled:opacity-50"
+            title={offline ?? undefined}
+          >
+            Dismiss? (can&apos;t be undone)
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDismiss(false)}
+            className="text-2xs text-text-muted hover:text-text-secondary"
+          >
+            Keep it
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setConfirmDismiss(true)}
+          disabled={submitting || !!offline}
+          className="text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
+          title={offline ?? "This was valid but the discussion moved past it — close it without approving or rejecting"}
+        >
+          Dismiss — overcome by new information
+        </button>
+      )}
 
       {!comment.trim() && (
         <div className="text-2xs text-text-muted">
