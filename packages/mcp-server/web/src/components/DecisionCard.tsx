@@ -326,14 +326,6 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     // already lists handleSelect for the same reason).
   }, [focusedIndex, resolved, showReasoning, event.options, handleSelect, offline, writeLocked]);
 
-  // UX2 — auto-focus the card when a draft decision is shown, so its keyboard
-  // nav (↑↓/Enter, advertised in the footer) is live without a Tab/click first.
-  useEffect(() => {
-    // preventScroll — the breadcrumb + artifact header render above the card;
-    // a scrolling focus would jump the view past them on mount.
-    if (!resolved) containerRef.current?.focus({ preventScroll: true });
-  }, [resolved]);
-
   // F8 (M4) — keyboard-armed select confirm. null = disarmed.
   const [armedSelect, setArmedSelect] = useState<{ optionId: string; left: number } | null>(null);
   // Latest-ref (the F10/G5 idiom): handleSelect is an inline arrow with new
@@ -347,6 +339,20 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // an armed select would otherwise resolve the decision you just left.
   // Outside AnimatePresence it is true.
   const isPresent = useIsPresent();
+
+  // The lazy card can mount after focus has moved. Transfer focus only from
+  // the selected pane's wrapper, or from the body for a standalone card.
+  useEffect(() => {
+    const card = containerRef.current;
+    if (!card || resolved || !isPresent) return;
+    const pane = card.closest("[data-dp-pane]");
+    if (document.activeElement !== (pane ?? document.body)) return;
+    if (pane && (!artifactId || pane.hasAttribute("inert") ||
+      pane.getAttribute("data-artifact-id") !== artifactId ||
+      useArtifactStore.getState().selectedArtifactId !== artifactId)) return;
+    card.focus({ preventScroll: true });
+  }, [artifactId, isPresent, resolved]);
+
   useEffect(() => {
     if (!armedSelect) return;
     if (!isPresent) {

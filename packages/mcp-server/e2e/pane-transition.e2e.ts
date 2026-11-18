@@ -1,5 +1,108 @@
 import { test, expect } from "./test.js";
 import { AttentionDaemon } from "./attention-walkthrough-harness.js";
+import { attachDiagnosticFile } from "./diagnostics.js";
+
+for (const moveToSidebar of [true, false]) {
+  test(`lazy decision Enter follows ${moveToSidebar ? "sidebar" : "pane"} focus ownership`, async ({ page }, info) => {
+    const daemon = await AttentionDaemon.create(info);
+    let releaseDecision = () => {};
+    const decisionGate = new Promise<void>((resolve) => { releaseDecision = () => resolve(); });
+    let deferredChunks = 0;
+    try {
+      const session = "focus";
+      const options = [
+        { id: "redis", title: "Redis", description: "Synthetic external cache", pros: ["Fast"], cons: ["Operations"], effort: "low", risk: "low", recommendation: true },
+        { id: "local", title: "Local", description: "Synthetic local cache", pros: ["Simple"], cons: ["Cold starts"], effort: "low", risk: "low", recommendation: false },
+      ];
+      await daemon.seed([
+        { session, route: "register", body: { title: "Decision focus probe" } },
+        { session, route: "artifacts", body: { id: "plan", type: "plan", title: "First review", content: {
+          summary: "Synthetic plan", steps: [{ description: "Synthetic step", reasoning: "Focus probe", files: [] }],
+        } } },
+      ]);
+      const decisionChunk = "**/DecisionCard-*.js";
+      await page.route(decisionChunk, async (route) => {
+        deferredChunks++;
+        await decisionGate;
+        await route.continue();
+      });
+      await page.addInitScript(() => {
+        const receipt = { enters: [] as Array<{ tag: string; sidebar: string | null; pane: string | null }> };
+        Object.assign(window, { decisionFocusReceipt: receipt });
+        window.addEventListener("keydown", (event) => {
+          if (!event.isTrusted || event.key !== "Enter" || !(event.target instanceof Element)) return;
+          receipt.enters.push({
+            tag: event.target.tagName,
+            sidebar: event.target.closest("[data-artifact-item]")?.getAttribute("data-artifact-item") ?? null,
+            pane: event.target.closest("[data-dp-pane]")?.getAttribute("data-artifact-id") ?? null,
+          });
+        }, { capture: true });
+      });
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.goto(daemon.baseURL + "/?session=" + session);
+      const activePane = page.locator("[data-dp-pane]:not([inert])");
+      const planPane = activePane.and(page.locator('[data-artifact-id="plan"]'));
+      const decisionPane = activePane.and(page.locator('[data-artifact-id="decision"]'));
+      const sidebarPlan = page.locator('[data-artifact-item="plan"]');
+      await expect(planPane.getByRole("button", { name: "Approve", exact: true })).toBeVisible();
+      // Land on the plan before publishing its peer, independently of how
+      // equal-priority drafts are ordered on initial hydration.
+      await daemon.post(session, "artifacts", { id: "decision", type: "decision", title: "Choose a cache", content: {
+        title: "Choose a cache", context: "Synthetic choice", decisionId: "cache", stakes: "high", stakesReason: "Synthetic focus probe", options,
+      } });
+      await daemon.post(session, "decisions", { decisionId: "cache", artifactId: "decision", context: "Synthetic choice", stakes: "high", options });
+      await expect(page.locator('[data-artifact-item="decision"]')).toBeVisible();
+      await expect(planPane).toBeVisible();
+      await planPane.focus();
+      await Promise.all([page.waitForRequest(decisionChunk), page.keyboard.press("n")]);
+      await expect(decisionPane).toBeFocused();
+      await expect(decisionPane.getByLabel("Loading artifact view")).toBeVisible();
+      if (moveToSidebar) {
+        for (let i = 0; i < 60 && !(await sidebarPlan.evaluate((el) => el === document.activeElement)); i++) {
+          await page.keyboard.press("Tab");
+        }
+        await expect(sidebarPlan).toBeFocused();
+      }
+      releaseDecision();
+      await expect(decisionPane.getByRole("button", { name: "Select Redis", exact: true })).toBeVisible();
+      // Let the lazy commit and its focus effect run before sending the key.
+      await page.evaluate(() => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }));
+      await page.keyboard.press("Enter");
+      const countdown = decisionPane.getByText(/Will select .*Redis.* in /);
+      if (!moveToSidebar) await expect(countdown).toBeVisible();
+      const countdownVisible = await countdown.isVisible();
+      // Observe the real confirmation window so a misdirected Enter can leave
+      // an authoritative server verdict in the failure receipt.
+      await page.waitForTimeout(4_200);
+      const artifacts = await daemon.artifacts(session);
+      const observed = {
+        deferredChunks,
+        enters: await page.evaluate(() => (window as unknown as {
+          decisionFocusReceipt: { enters: Array<{ tag: string; sidebar: string | null; pane: string | null }> };
+        }).decisionFocusReceipt.enters),
+        activePane: await activePane.getAttribute("data-artifact-id"),
+        countdownVisible,
+        plan: artifacts.find((a) => a.id === "plan")?.status,
+        decision: artifacts.find((a) => a.id === "decision")?.status,
+      };
+      // CI retains diagnostics text along with its failure screenshot.
+      await attachDiagnosticFile(info, "lazy-decision-focus-diagnostics", Buffer.from(JSON.stringify(observed)));
+      expect(observed).toEqual(moveToSidebar ? {
+        deferredChunks: 1, enters: [{ tag: "BUTTON", sidebar: "plan", pane: null }],
+        activePane: "plan", countdownVisible: false, plan: "draft", decision: "draft",
+      } : {
+        deferredChunks: 1, enters: [{ tag: "DIV", sidebar: null, pane: "decision" }],
+        activePane: "decision", countdownVisible: true, plan: "draft", decision: "approved",
+      });
+    } finally {
+      releaseDecision();
+      await daemon.close(info);
+    }
+  });
+}
 
 for (const width of [1280, 1920]) for (const reduced of [false, true]) {
   test("selected pane preserves its region and focus at " + width + " reduced=" + reduced, async ({ page }, info) => {
