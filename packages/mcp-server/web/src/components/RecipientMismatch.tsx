@@ -38,6 +38,9 @@ export function useMessageRecipient() {
     // Switch only to a target the catalog actually knows; never invent one.
     switchable: viewingOther && activeSessions.some((x) => x.sessionId === agentFilter),
     switchToViewed: () => { if (agentFilter !== "all") switchSession(agentFilter); },
+    // Sol (#671) — no bound session while several agents are around: a write
+    // would carry no X-Session-Id, so there is no honest recipient to name.
+    ambiguous: !sessionId && activeSessions.length > 1,
   };
 }
 
