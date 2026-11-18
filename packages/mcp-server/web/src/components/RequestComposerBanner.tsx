@@ -180,6 +180,11 @@ export function RequestComposerBanner({ compact = false }: {
   const textRef = useRef(text);
   textRef.current = text;
 
+  // #668 item 2 — like the message box, this posts to the tab's BOUND session
+  // (sessionHeaders), whatever the agent filter shows. Say who gets it.
+  // Called before the early returns below (rules-of-hooks).
+  const { recipient } = useMessageRecipient();
+
   // #430 PR 5 — the header "Request" button (bar ON) opens the composer.
   useEffect(() => {
     const openComposer = () => {
@@ -260,10 +265,6 @@ export function RequestComposerBanner({ compact = false }: {
       setSubmitting(false);
     }
   };
-
-  // #668 item 2 — like the message box, this posts to the tab's BOUND session
-  // (sessionHeaders), whatever the agent filter shows. Say who gets it.
-  const { recipient } = useMessageRecipient();
 
   // #430 PR 5 — bar ON and not composing: no standing row at all.
   if (compact && !open) return null;
