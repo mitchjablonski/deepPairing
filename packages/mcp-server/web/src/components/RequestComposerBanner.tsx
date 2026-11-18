@@ -8,6 +8,7 @@ import { noAgentLive } from "../lib/liveness";
 import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 import { useConnectionGraceStore } from "../lib/connectionGrace";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { RecipientMismatch, useMessageRecipient } from "./RecipientMismatch";
 
 /**
  * G1 (#198b) — the REQUEST COMPOSER. A quiet banner-row affordance that lets the
@@ -260,6 +261,10 @@ export function RequestComposerBanner({ compact = false }: {
     }
   };
 
+  // #668 item 2 — like the message box, this posts to the tab's BOUND session
+  // (sessionHeaders), whatever the agent filter shows. Say who gets it.
+  const { recipient } = useMessageRecipient();
+
   // #430 PR 5 — bar ON and not composing: no standing row at all.
   if (compact && !open) return null;
 
@@ -284,7 +289,10 @@ export function RequestComposerBanner({ compact = false }: {
       ) : (
         <>
           <span className="text-2xs shrink-0" aria-hidden="true">✎</span>
-          <span className="text-2xs text-accent-blue font-medium shrink-0">Ask Claude for something</span>
+          <span className="text-2xs text-accent-blue font-medium shrink-0">
+            Ask Claude for something
+            {recipient && <span className="font-normal text-text-secondary" data-testid="request-recipient"> · to the agent in {recipient}</span>}
+          </span>
           {/* Preset chips — only while expanded */}
           <div className="flex items-center gap-1 shrink-0" role="group" aria-label="Request presets">
             {PRESETS.map((p) => (
@@ -316,6 +324,7 @@ export function RequestComposerBanner({ compact = false }: {
       {!compact && <RequestResumeButton bridge={bridge} />}
 
       {/* The expanded composer input + a persistent example (UX L3). */}
+      {open && <RecipientMismatch noun="requests" testId="request-recipient-mismatch" className="basis-full mt-1" />}
       {open && (
         <div className="basis-full flex items-center gap-2 mt-1.5 flex-wrap">
           <input
@@ -328,7 +337,7 @@ export function RequestComposerBanner({ compact = false }: {
               if (e.key === "Escape") { setOpen(false); }
             }}
             placeholder={activePreset?.placeholder ?? ""}
-            aria-label="Your request to Claude"
+            aria-label={recipient ? `Your request to the agent in ${recipient}` : "Your request to Claude"}
             disabled={submitting}
             className="flex-1 min-w-0 px-2.5 py-1 bg-surface-secondary border border-border-default rounded text-xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
           />
