@@ -83,6 +83,26 @@ describe("#430 PR 5 — requests: row (OFF) vs header Request + bar (ON)", () =>
     const row = screen.getByTestId("request-composer");
     expect(within(row).getByTestId("request-pips")).toBeInTheDocument();
     expect(screen.getByTestId("header-request")).toHaveAccessibleName("Request");
+    // Sol (#674) P3 — one trigger: the collapsed row keeps pips, not its own trigger.
+    expect(within(row).queryByTestId("request-composer-trigger")).not.toBeInTheDocument();
+  });
+
+  it("Sol (#674) P2 — reopening from the header keeps the draft and its intent (row with pips)", () => {
+    seed();
+    render(<App />);
+    fireEvent.click(screen.getByTestId("header-request"));
+    let composer = screen.getByTestId("request-composer");
+    fireEvent.click(within(composer).getByRole("button", { name: /^Plan…$/ })); // explicit preset
+    fireEvent.change(within(composer).getByRole("textbox"), { target: { value: "Plan the cache eviction" } });
+    fireEvent.click(within(composer).getByRole("button", { name: "Cancel" }));
+    // Row stays (pips) without its own trigger; the header reopens with the text intact.
+    fireEvent.click(screen.getByTestId("header-request"));
+    composer = screen.getByTestId("request-composer");
+    expect((within(composer).getByRole("textbox") as HTMLInputElement).value).toBe("Plan the cache eviction");
+    expect(within(composer).getByRole("button", { name: /^Plan…$/ })).toHaveAttribute("aria-pressed", "true");
+    // Clicking Request again while editing doesn't overwrite either.
+    fireEvent.click(screen.getByTestId("header-request"));
+    expect((within(screen.getByTestId("request-composer")).getByRole("textbox") as HTMLInputElement).value).toBe("Plan the cache eviction");
   });
 
   it("#668 item 4 — OFF with nothing pending: no standing row; the header Request opens the composer", () => {

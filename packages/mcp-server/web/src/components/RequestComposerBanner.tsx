@@ -193,8 +193,12 @@ export function RequestComposerBanner({ compact = false, headerTrigger = false }
   // #430 PR 5 — the header "Request" button (bar ON) opens the composer.
   useEffect(() => {
     const openComposer = () => {
-      setIntent(PRESETS[0]!.intent);
-      setText(PRESETS[0]!.template);
+      // Sol (#674) — a plain open/reopen keeps a saved or in-progress draft and
+      // its intent; only an explicit preset pick (pickPreset) replaces text.
+      if (!textRef.current.trim()) {
+        setIntent(PRESETS[0]!.intent);
+        setText(PRESETS[0]!.template);
+      }
       setOpen(true);
     };
     window.addEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
@@ -286,6 +290,9 @@ export function RequestComposerBanner({ compact = false, headerTrigger = false }
           composer (presets + input) on demand rather than always occupying a
           heavy band of label + chips. */}
       {!open ? (
+        // Sol (#674) — with the header owning the trigger, the collapsed row
+        // carries only its pips / resume prompt.
+        headerTrigger ? null : (
         <button
           type="button"
           onClick={() => pickPreset(PRESETS[0]!)}
@@ -295,6 +302,7 @@ export function RequestComposerBanner({ compact = false, headerTrigger = false }
           <span aria-hidden="true">✎</span>
           <span>Ask Claude for something</span>
         </button>
+        )
       ) : (
         <>
           <span className="text-2xs shrink-0" aria-hidden="true">✎</span>
