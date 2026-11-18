@@ -167,6 +167,9 @@ export function footerReducer(s: FooterState, a: FooterAction): FooterState {
   }
 }
 
+/** Sol (#670) — the confirm ignores activation for this long after arming. */
+const DISMISS_CONFIRM_DELAY_MS = 400;
+
 export function ArtifactStatusActions({
   artifact,
   hideApprove = false,
@@ -242,7 +245,29 @@ export function ArtifactStatusActions({
   // like the PendingBanner chip and the changeset's own Dismiss. Switching
   // artifacts drops an armed confirm.
   const [confirmDismiss, setConfirmDismiss] = useState(false);
-  useEffect(() => { setConfirmDismiss(false); }, [artifact.id]);
+  // Sol (#670) — the confirm must be a SEPARATE activation: it renders after
+  // "Keep it" (which takes the trigger's place and focus) and stays inert for a
+  // beat, so a rapid double-click on the trigger can't commit.
+  const [confirmReady, setConfirmReady] = useState(false);
+  const dismissTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const keepItRef = useRef<HTMLButtonElement | null>(null);
+  const restoreDismissFocusRef = useRef(false);
+  const boundSessionId = useConnectionStore((s) => s.sessionId);
+  // Disarm on any change of pane, binding or eligibility (status/version).
+  useEffect(() => {
+    setConfirmDismiss(false);
+  }, [artifact.id, artifact.status, artifact.version, boundSessionId]);
+  useEffect(() => {
+    if (!confirmDismiss) { setConfirmReady(false); return; }
+    keepItRef.current?.focus({ preventScroll: true });
+    const t = setTimeout(() => setConfirmReady(true), DISMISS_CONFIRM_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [confirmDismiss]);
+  useEffect(() => {
+    if (confirmDismiss || !restoreDismissFocusRef.current) return;
+    restoreDismissFocusRef.current = false;
+    dismissTriggerRef.current?.focus({ preventScroll: true });
+  }, [confirmDismiss]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -708,9 +733,23 @@ export function ArtifactStatusActions({
    * agent's `revise_artifact mode="obsolete"` so it leaves the review queue.
    * Any typed comment rides along as the reason.
    */
+  const armDismiss = () => {
+    // An armed approve countdown must not resolve the artifact while you're
+    // deciding whether to dismiss it.
+    if (countdown !== null) dispatch({ type: "cancelCountdown" });
+    setConfirmDismiss(true);
+  };
+  const cancelDismiss = () => {
+    restoreDismissFocusRef.current = true;
+    setConfirmDismiss(false);
+  };
   const handleDismissObsolete = async () => {
+    if (!confirmReady) return;
     setConfirmDismiss(false);
     if (!presentRef.current) return; // #623
+    // Recheck at commit: still this draft, online, idle.
+    const live = useArtifactStore.getState().artifacts.find((a) => a.id === artifact.id);
+    if (offline || submitting || live?.status !== "draft") return;
     dispatch({ type: "submitStart" });
     try {
       await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
@@ -1069,28 +1108,41 @@ export function ArtifactStatusActions({
       {/* Tertiary — close as overcome by new information (neither approve nor
           reject). Mirrors the agent's revise_artifact mode="obsolete". */}
       {confirmDismiss ? (
-        <div className="flex items-center gap-2">
+        <div
+          className="flex items-center gap-2 flex-wrap"
+          role="group"
+          aria-label="Confirm dismiss"
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelDismiss(); } }}
+        >
+          {/* "Keep it" takes the trigger's place (and focus), so a repeat
+              click where the trigger was cancels instead of committing. */}
+          <button
+            ref={keepItRef}
+            type="button"
+            onClick={cancelDismiss}
+            className="text-2xs text-text-muted hover:text-text-secondary"
+          >
+            Keep it
+          </button>
           <button
             type="button"
-            onClick={handleDismissObsolete}
-            disabled={submitting || !!offline}
+            onClick={() => void handleDismissObsolete()}
+            disabled={!confirmReady || submitting || !!offline}
+            aria-disabled={!confirmReady || undefined}
             className="text-2xs text-text-secondary underline disabled:opacity-50"
             title={offline ?? undefined}
           >
             Dismiss? (can&apos;t be undone)
           </button>
-          <button
-            type="button"
-            onClick={() => setConfirmDismiss(false)}
-            className="text-2xs text-text-muted hover:text-text-secondary"
-          >
-            Keep it
-          </button>
+          {comment.trim() && (
+            <span className="text-2xs text-text-muted" data-testid="dismiss-note-hint">Your note is sent as the reason.</span>
+          )}
         </div>
       ) : (
         <button
+          ref={dismissTriggerRef}
           type="button"
-          onClick={() => setConfirmDismiss(true)}
+          onClick={armDismiss}
           disabled={submitting || !!offline}
           className="text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
           title={offline ?? "This was valid but the discussion moved past it — close it without approving or rejecting"}
