@@ -187,6 +187,11 @@ function App() {
   // header pill collapses to a bare count. Computed with the SHARED predicate so
   // the banner-gate here and the banner's own self-suppress can't disagree.
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  // A retained selection can outlive its visible detail during hydration,
+  // an agent filter change, or a replay cursor move.
+  const visibleSelectedArtifactId = selectedArtifactId != null && mountArtifactPanel && !hidePanelForHydration &&
+    scopedVisibleArtifacts(artifactsList, agentFilter).some((artifact) => artifact.id === selectedArtifactId)
+    ? selectedArtifactId : null;
   const singlePendingInView = isSinglePendingInView(artifactsList, selectedArtifactId);
   const blocks = usePreflightBlockStore((s) => s.blocks);
   const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
@@ -966,6 +971,7 @@ function App() {
           the bar is absent and those existing banners remain. */}
       {nextUpBar && (
         <NextUpBar
+          visibleSelectedArtifactId={visibleSelectedArtifactId}
           quietCards={{
             // #430 PR 5 (design §5) — ON only: the demo CTA and the wrap card
             // render inside the bar (inline in its quiet state, else in ⌄).
@@ -1006,7 +1012,7 @@ function App() {
           Where each piece went: docs/design/attention-hierarchy.md §5 and the
           PR 3 checklist test (NextUpBarAbsorb.test.tsx). */}
       {/* Pending decision/plan banner */}
-      {!nextUpBar && <PendingBanner />}
+      {!nextUpBar && <PendingBanner visibleSelectedArtifactId={visibleSelectedArtifactId} />}
 
       {/* #192 — questions the human asked that the agent never answered, shown
           only when no agent is live (it exited) with a one-click resume prompt. */}

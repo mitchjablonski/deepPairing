@@ -195,6 +195,27 @@ describe("most-consequential-first `next` (#430 slice 1) and the '+N high decisi
     expect(a.highDecisionsBeyondNext).toBe(0);
   });
 
+  it("projects the high cue from Next and the visible selection without changing Decide", () => {
+    const artifacts = ["lead", "shown", "other"].map((id, index) =>
+      art("decision", "draft", { id, createdAt: `2026-06-01T0${index}:00:00.000Z`, content: { stakes: "high" } }),
+    );
+    const cases = [
+      { visibleSelectedArtifactId: null, candidates: ["shown", "other"] },
+      { visibleSelectedArtifactId: "lead", candidates: ["shown", "other"] },
+      { visibleSelectedArtifactId: "shown", candidates: ["other"] },
+      { visibleSelectedArtifactId: "missing", candidates: ["shown", "other"] },
+    ];
+    for (const { visibleSelectedArtifactId, candidates } of cases) {
+      const attention = computeAttention({ artifacts, visibleSelectedArtifactId });
+      expect(attention.next?.id).toBe("lead");
+      expect(attention.highDecisionCandidates.map((item) => item.id)).toEqual(candidates);
+      expect(attention.line.summary.slice(0, 2)).toEqual([
+        { lane: "high-decision", count: candidates.length }, { lane: "decide", count: 3 },
+      ]);
+      expect(attention.lanes.decide.map((item) => item.id)).toEqual(["lead", "shown", "other"]);
+    }
+  });
+
   it("when `next` is an older blocking plan, every high decision behind it counts", () => {
     const artifacts = [
       art("plan", "draft", { id: "p", createdAt: "2026-06-01T01:00:00.000Z" }),

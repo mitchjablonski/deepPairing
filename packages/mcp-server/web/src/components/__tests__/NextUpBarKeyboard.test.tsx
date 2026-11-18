@@ -85,6 +85,32 @@ describe("#529 — Next-up disclosure keyboard ownership", () => {
     expect(high).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("recovers focus when the only high recommendation opens, while full Decide still lists it", () => {
+    useArtifactStore.setState({ artifacts: [artifact("two", 2, true), artifact("three", 3, true)] });
+    const { rerender } = render(<NextUpBar />);
+    const high = () => screen.getByRole("button", { name: "+1 high decision" });
+    high().focus();
+    fireEvent.click(high());
+    const row = queueButton();
+    expect(row).toHaveTextContent("Review three");
+    row.focus();
+    fireEvent.click(row);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("three");
+    rerender(<NextUpBar visibleSelectedArtifactId="three" />);
+    expect(row).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "+1 high decision" })).toBeNull();
+    expect(toggle()).toHaveFocus();
+    fireEvent.keyDown(toggle(), { key: "Escape" });
+    fireEvent.click(toggle());
+    expect(queueButtons().map((button) => button.textContent)).toEqual(["Review two", "Review three"]);
+
+    // Focus can also be on the token before it opens the high-only list.
+    rerender(<NextUpBar visibleSelectedArtifactId="two" />);
+    high().focus();
+    rerender(<NextUpBar visibleSelectedArtifactId="three" />);
+    expect(toggle()).toHaveFocus();
+  });
+
   it("uses a stable disclosure when Why's opener disappears after marking a hold seen", () => {
     useArtifactStore.setState({ artifacts: [] });
     usePreflightBlockStore.setState({ blocks: [{ id: "hold", at: "2026-01-01T00:00:00Z", source: "session", concept: "Synthetic hold", via: "concept" }] });
