@@ -734,8 +734,10 @@ function App() {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {/* #430 PR 5 (design §5) — bar ON: the request composer row collapses
-              to this button; it opens the same composer (presets + input). */}
-          {nextUpBar && connected && (
+              to this button; it opens the same composer (presets + input).
+              #668 item 4 (Mitch, 11-18) — bar OFF too: the always-on row cost
+              a strip of the 1280×800 screen. */}
+          {connected && (
             <button
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT))}
@@ -1014,7 +1016,7 @@ function App() {
 
       {/* G1 (#198b) — the request composer: the human can initiate a request to
           the agent (free text + intent preset). A quiet peer of the strips above. */}
-      <RequestComposerBanner compact={nextUpBar} />
+      <RequestComposerBanner compact={nextUpBar} headerTrigger />
 
       {/* Main content.
           III10 — when the WS is connected but no wrapper has registered a

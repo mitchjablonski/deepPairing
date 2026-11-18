@@ -77,12 +77,23 @@ describe("#430 PR 5 — requests: row (OFF) vs header Request + bar (ON)", () =>
     } as any);
   };
 
-  it("OFF: the composer row renders with its pips; no header Request button", () => {
+  it("OFF: the composer row renders with its pips; the header Request button is there too (#668 item 4)", () => {
     seed();
     render(<App />);
     const row = screen.getByTestId("request-composer");
     expect(within(row).getByTestId("request-pips")).toBeInTheDocument();
-    expect(screen.queryByTestId("header-request")).not.toBeInTheDocument();
+    expect(screen.getByTestId("header-request")).toHaveAccessibleName("Request");
+  });
+
+  it("#668 item 4 — OFF with nothing pending: no standing row; the header Request opens the composer", () => {
+    useArtifactStore.setState({ artifacts: [], requests: [] } as any);
+    render(<App />);
+    expect(screen.queryByTestId("request-composer")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("header-request"));
+    const composer = screen.getByTestId("request-composer");
+    expect(within(composer).getByRole("textbox", { name: "Your request to Claude" })).toBeInTheDocument();
+    fireEvent.click(within(composer).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("request-composer")).not.toBeInTheDocument();
   });
 
   it("ON: no standing row; the header Request opens the same composer; pips live in the bar's ⌄ with the served jump", () => {

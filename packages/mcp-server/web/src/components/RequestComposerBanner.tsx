@@ -153,11 +153,16 @@ export function RequestResumeButton({ bridge, className = "ml-auto", label = "Co
  *  header button (design §5); it opens the same composer. */
 export const OPEN_REQUEST_COMPOSER_EVENT = "dp:open-request-composer";
 
-export function RequestComposerBanner({ compact = false }: {
+export function RequestComposerBanner({ compact = false, headerTrigger = false }: {
   /** #430 PR 5 — the Next-up bar is ON: no standing row. The header "Request"
    *  button opens the composer (the row shows only while composing), and the
-   *  pips + resume bridge live in the bar. OFF (default): exactly as before. */
+   *  pips + resume bridge live in the bar. */
   compact?: boolean;
+  /** #668 item 4 (Mitch, 11-18) — the header carries the "✎ Request" trigger in
+   *  BOTH modes, so with the bar OFF the row stands only while composing or
+   *  while it has pips / a resume prompt to show. Without it (standalone), the
+   *  collapsed row keeps its own trigger as before. */
+  headerTrigger?: boolean;
 } = {}) {
   const offline = useOfflineReason(); // #477 — act paths gate on the shared offline condition (#467)
   const everConnected = useConnectionGraceStore((s) => s.everConnected);
@@ -268,6 +273,9 @@ export function RequestComposerBanner({ compact = false }: {
 
   // #430 PR 5 — bar ON and not composing: no standing row at all.
   if (compact && !open) return null;
+  // #668 item 4 — bar OFF with the header trigger: no standing row unless it
+  // carries something (request pips or the resume prompt).
+  if (headerTrigger && !open && bridge.requests.length === 0 && !bridge.showResumeBridge) return null;
 
   return (
     <div
