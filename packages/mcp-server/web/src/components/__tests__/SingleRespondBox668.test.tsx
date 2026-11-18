@@ -139,3 +139,46 @@ describe("Sol (#672) — Respond owns the saved Comments draft", () => {
     expect((await screen.findByPlaceholderText(/Add a comment/) as HTMLTextAreaElement).value).toBe("after approval");
   });
 });
+
+describe("Sol (#672) follow-up — same-mounted transitions and the raw-text fence", () => {
+  const box = () => screen.getByPlaceholderText(/Respond to the agent on this artifact/) as HTMLTextAreaElement;
+
+  it("a mounted draft turning approved renders the follow-up editor (no hook-order crash)", async () => {
+    const a = research();
+    useArtifactStore.setState({ artifacts: [a], comments: {} } as any);
+    const { rerender } = render(<ArtifactDetail artifact={a} />);
+    await screen.findByPlaceholderText(/Respond to the agent on this artifact/);
+    const approved = { ...a, status: "approved" };
+    act(() => { useArtifactStore.setState({ artifacts: [approved] } as any); });
+    rerender(<ArtifactDetail artifact={approved} />);
+    expect(await screen.findByPlaceholderText(/Add a comment/)).toBeInTheDocument();
+    expect(screen.getAllByText("Approved").length).toBeGreaterThan(0);
+  });
+
+  it("replay starting on a mounted draft freezes it without crashing", async () => {
+    const a = research();
+    useArtifactStore.setState({ artifacts: [a], comments: {} } as any);
+    render(<ArtifactDetail artifact={a} />);
+    await screen.findByPlaceholderText(/Respond to the agent on this artifact/);
+    act(() => { useReplayStore.setState({ active: true } as any); });
+    expect(screen.queryByPlaceholderText(/Respond to the agent on this artifact/)).toBeNull();
+    act(() => { useReplayStore.setState({ active: false } as any); });
+    expect(await screen.findByPlaceholderText(/Respond to the agent on this artifact/)).toBeInTheDocument();
+  });
+
+  it("a whitespace-only edit during an in-flight send is kept (editor and saved draft)", async () => {
+    const a = mk("plan", { steps: [] });
+    let resolve!: () => void;
+    const submitComment = vi.fn(() => new Promise<void>((r) => { resolve = r; }));
+    useArtifactStore.setState({ artifacts: [a], submitComment } as any);
+    const first = render(<ArtifactStatusActions artifact={a} />);
+    fireEvent.change(box(), { target: { value: "note" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Respond" })); });
+    fireEvent.change(box(), { target: { value: "note\n" } });
+    await act(async () => { resolve(); });
+    expect(box().value).toBe("note\n");
+    first.unmount();
+    render(<ArtifactStatusActions artifact={a} />);
+    expect(box().value).toBe("note\n");
+  });
+});

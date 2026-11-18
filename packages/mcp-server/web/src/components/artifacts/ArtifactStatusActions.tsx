@@ -147,7 +147,7 @@ export function footerReducer(s: FooterState, a: FooterAction): FooterState {
       // concept (main's behavior): a clarifying comment mid-reject must not
       // discard the hand-tuned ledger key.
       // Sol (#672) — a stale completion never clears text typed since the send.
-      if (a.sent !== undefined && s.comment.trim() !== a.sent) return s;
+      if (a.sent !== undefined && s.comment !== a.sent) return s;
       return { ...s, comment: "" };
     case "rejectConceptTyped":
       // E6 review — typing the concept is JUST typing (main: setRejectConcept
@@ -251,8 +251,27 @@ export function ArtifactStatusActions({
   // same compare-and-clear): an existing unsent draft loads here, and Respond
   // text survives reloads and supersede auto-advance like the thread's did.
   const chainRootId = useArtifactStore((st) => rootArtifactId(st.artifacts, artifact.id));
-  const respondDraftKey = showAsk ? `comment:${chainRootId}:{}` : `respond-unowned:${artifact.id}`;
+  // Owned only while Respond is actually the live editor (a draft, not in
+  // replay). Once the artifact leaves review the Comments thread's composer
+  // takes the key back, so the two never hold it at the same time.
+  const ownsCommentDraft = showAsk && artifact.status === "draft" && !replayActive;
+  const respondDraftKey = ownsCommentDraft ? `comment:${chainRootId}:{}` : `respond-unowned:${artifact.id}`;
   const [savedRespondDraft, setSavedRespondDraft] = useDraft(respondDraftKey);
+  // Sol (#672) P1 — these run BEFORE the status/replay early returns below,
+  // so a mounted draft turning approved (or replay starting) keeps the same
+  // hook order.
+  // Load a saved draft into an empty editor (mount, key change); then mirror
+  // edits back so a reload or remount finds them.
+  useEffect(() => {
+    if (!ownsCommentDraft) return;
+    if (savedRespondDraft && !comment) dispatch({ type: "typed", comment: savedRespondDraft });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- seed on key change only
+  }, [respondDraftKey, ownsCommentDraft]);
+  useEffect(() => {
+    if (ownsCommentDraft && comment !== savedRespondDraft) setSavedRespondDraft(comment);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mirror the editor into the draft
+  }, [comment, ownsCommentDraft]);
+
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -699,24 +718,13 @@ export function ArtifactStatusActions({
    * (often via revise_artifact with mode='supersede'). Approve/Revise/Reject
    * remain as explicit terminal actions.
    */
-  // Load a saved draft into an empty editor (mount, key change); then mirror
-  // edits back so a reload or remount finds them.
-  useEffect(() => {
-    if (!showAsk) return;
-    if (savedRespondDraft && !comment) dispatch({ type: "typed", comment: savedRespondDraft });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- seed on key change only
-  }, [respondDraftKey, showAsk]);
-  useEffect(() => {
-    if (showAsk && comment !== savedRespondDraft) setSavedRespondDraft(comment);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mirror the editor into the draft
-  }, [comment, showAsk]);
-
   // A successful write that carried the editor's text retires the saved copy
   // (compare-and-clear, so newer text typed meanwhile survives). Terminal
   // actions can unmount this footer before the mirror effect runs.
-  const retireRespondDraft = () => { if (showAsk) clearDraftIfUnchanged(respondDraftKey, comment); };
+  const retireRespondDraft = () => { if (ownsCommentDraft) clearDraftIfUnchanged(respondDraftKey, comment); };
 
   const handleRespond = async (intent?: "question") => {
+    const rawComment = comment;
     const trimmedComment = comment.trim();
     if (!trimmedComment || !presentRef.current) return;
     dispatch({ type: "submitStart" });
@@ -725,8 +733,9 @@ export function ArtifactStatusActions({
       // Comments thread: same post, tagged as a question the agent owes an answer.
       if (intent === "question") await submitComment(artifact.id, trimmedComment, undefined, { intent });
       else await submitComment(artifact.id, trimmedComment);
-      dispatch({ type: "respondSucceeded", sent: trimmedComment }); // only clears on success
-      if (showAsk) clearDraftIfUnchanged(respondDraftKey, comment);
+      // Sol (#672) P2 — fence on the RAW text sent (whitespace edits count).
+      dispatch({ type: "respondSucceeded", sent: rawComment }); // only clears on success
+      if (ownsCommentDraft) clearDraftIfUnchanged(respondDraftKey, rawComment);
     } catch {
       // store already toasted; keep the panel usable (see handleAction)
     } finally {
