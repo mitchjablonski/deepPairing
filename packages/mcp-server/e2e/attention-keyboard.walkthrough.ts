@@ -275,7 +275,7 @@ const barStates = [
   { id: "B-decision-outranks-older-review", expected: "DECIDE", seed: [finding("review", "Synthetic review oldest"), decision("high", "Synthetic urgent choice")] },
   { id: "C-info", expected: "Nothing needs you", seed: [op("artifacts", { id: "info", type: "explainer", title: "Synthetic informational artifact", content: { title: "Synthetic informational artifact", overview: "Synthetic overview", sections: [{ heading: "Read", body: "Synthetic information" }] } })] },
   { id: "D-waiting", expected: "WAITING ON CLAUDE", seed: waiting },
-  { id: "E-exited", expected: "Exited with 1 of your question open", seed: [...waiting, op("unregister", {})] },
+  { id: "E-exited", expected: "Exited · 1 question still open", seed: [...waiting, op("unregister", {})] },
   { id: "F-held", expected: "HELD", seed: [hold] },
   { id: "G-disconnected", expected: "DISCONNECTED", seed: [finding("review", "Synthetic last-known review")] },
   { id: "empty", expected: "Nothing needs you", seed: [] },

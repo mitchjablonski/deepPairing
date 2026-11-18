@@ -221,8 +221,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const primary = attention.line.primary;
   const item = primary.item;
   // #430 PR 3 — absorbing ResumeQuestionsBanner: when the agent exited with
-  // your questions open, the bar carries the banner's count ("Exited with N of
-  // your questions open"), its jump (Open → the oldest question's artifact) and
+  // your questions open, the bar carries the banner's count ("Exited · N
+  // questions still open", #668 item 7), its jump (Open → the oldest question's artifact) and
   // its Copy-resume-prompt action.
   //
   // #452 review — this is a SUMMARY action, shown whenever the agent is gone
@@ -495,7 +495,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
               className={`px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
               title="Claude exited with your questions open — jump to the oldest one"
             >
-              💤 Exited with {openQuestionCount} of your question{openQuestionCount === 1 ? "" : "s"} open
+              💤 Exited · {openQuestionCount} question{openQuestionCount === 1 ? "" : "s"} still open
             </button>
             <button
               type="button"
@@ -566,13 +566,6 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         </button>
       </div>
 
-      {(demoInline || wrapInline) && (
-        <div className="px-3 pb-2 space-y-1" data-testid="next-up-quiet-cards">
-          {demoInline && quietCards.demo!(() => setDemoDismissed(true))}
-          {wrapInline && quietCards.wrap}
-        </div>
-      )}
-
       {expanded && (
         <div id="next-up-details" className="px-3 pb-2 space-y-1 text-2xs text-text-secondary">
           {why && <div><span className="text-text-muted">Why </span>{why}</div>}
@@ -624,6 +617,15 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
               {quietCards.wrap && !wrapInline && quietCards.wrap}
             </>
           )}
+        </div>
+      )}
+
+      {/* #668 item 7 — quiet cards (demo / wrap recap) render AFTER the
+          lead's Why / If-you-leave-it / After lines, not between them. */}
+      {(demoInline || wrapInline) && (
+        <div className="px-3 pb-2 space-y-1" data-testid="next-up-quiet-cards">
+          {demoInline && quietCards.demo!(() => setDemoDismissed(true))}
+          {wrapInline && quietCards.wrap}
         </div>
       )}
 
