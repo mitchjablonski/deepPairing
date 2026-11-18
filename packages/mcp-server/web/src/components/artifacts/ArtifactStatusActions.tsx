@@ -907,7 +907,7 @@ export function ArtifactStatusActions({
             <button
               onClick={() => handleAction("approved")}
               disabled={submitting || !!offline}
-              className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
+              className="enabled:cursor-pointer px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
               title={offline ?? (informationalReport ? "Acknowledge this report" : "Approve as-is")}
             >
@@ -1004,7 +1004,7 @@ export function ArtifactStatusActions({
         <button
           onClick={handleRespond}
           disabled={(submitting || !comment.trim()) || !!offline}
-          className="px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
+          className="enabled:cursor-pointer px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
                      hover:bg-accent-violet-strong-hover disabled:bg-surface-elevated disabled:text-text-muted
                      transition-all duration-[180ms] ease-out press-scale"
           title={offline ?? "Send the comment; the agent will iterate (keeps artifact in draft)"}
@@ -1020,7 +1020,7 @@ export function ArtifactStatusActions({
             <button
               onClick={() => handleAction("approved")}
               disabled={submitting || !!offline}
-              className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
+              className="enabled:cursor-pointer px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
               title={offline ?? (informationalReport ? "Acknowledge this report and send any note" : comment.trim() ? "Approve and send this comment" : "Approve as-is")}
             >
@@ -1030,7 +1030,7 @@ export function ArtifactStatusActions({
           <button
             onClick={() => (comment.trim() ? handleAction("revised") : askForReason("revise"))}
             disabled={submitting || !!offline}
-            className="px-2.5 py-1 text-2xs font-medium text-accent-amber rounded border border-accent-amber/30
+            className="enabled:cursor-pointer px-2.5 py-1 text-2xs font-medium text-accent-amber rounded border border-accent-amber/30
                        hover:bg-accent-amber-dim disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-[180ms] ease-out press-scale"
             title={offline ?? (comment.trim() ? "Request changes — agent will redraft" : "Request changes — you'll add a short reason first")}
           >
@@ -1039,7 +1039,7 @@ export function ArtifactStatusActions({
           <button
             onClick={() => (comment.trim() ? beginReject() : askForReason("reject"))}
             disabled={(submitting || rejecting) || !!offline}
-            className="px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
+            className="enabled:cursor-pointer px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
                        hover:bg-accent-red-dim disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-[180ms] ease-out press-scale"
             title={offline ?? (
               !comment.trim()
@@ -1138,7 +1138,7 @@ export function ArtifactStatusActions({
             ref={keepItRef}
             type="button"
             onClick={cancelDismiss}
-            className="text-2xs text-text-muted hover:text-text-secondary"
+            className="enabled:cursor-pointer text-2xs text-text-muted hover:text-text-secondary"
           >
             Keep it
           </button>
@@ -1150,7 +1150,7 @@ export function ArtifactStatusActions({
             onClick={() => void handleDismissObsolete()}
             disabled={!confirmReady || submitting || !!offline}
             aria-disabled={!confirmReady || undefined}
-            className="text-2xs text-text-secondary underline disabled:opacity-50"
+            className="enabled:cursor-pointer text-2xs text-text-secondary underline disabled:opacity-50"
             title={offline ?? undefined}
           >
             Dismiss? (can&apos;t be undone)
@@ -1166,7 +1166,7 @@ export function ArtifactStatusActions({
           type="button"
           onClick={armDismiss}
           disabled={submitting || !!offline}
-          className="text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
+          className="enabled:cursor-pointer text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
           title={offline ?? "This was valid but the discussion moved past it — close it without approving or rejecting"}
         >
           Dismiss — overcome by new information
