@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { RESPOND_COMPOSER_TYPES } from "../../lib/respondComposer";
 import { useIsPresent } from "motion/react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
@@ -238,6 +239,10 @@ export function ArtifactStatusActions({
   // records which verb asked, focuses the field and shows the inline prompt;
   // the prompt clears itself as soon as a reason exists.
   const [reasonAsk, setReasonAsk] = useState<null | "reject" | "revise">(null);
+
+  // #668 item 3 — Ask lives beside Respond for the types where Respond is the
+  // single artifact-level composer (see RESPOND_COMPOSER_TYPES).
+  const showAsk = RESPOND_COMPOSER_TYPES.has(artifact.type) && !acknowledgeMode;
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -683,12 +688,15 @@ export function ArtifactStatusActions({
    * (often via revise_artifact with mode='supersede'). Approve/Revise/Reject
    * remain as explicit terminal actions.
    */
-  const handleRespond = async () => {
+  const handleRespond = async (intent?: "question") => {
     const trimmedComment = comment.trim();
     if (!trimmedComment || !presentRef.current) return;
     dispatch({ type: "submitStart" });
     try {
-      await submitComment(artifact.id, trimmedComment);
+      // #668 item 3 — "Ask" moved here from the (now read-only while drafting)
+      // Comments thread: same post, tagged as a question the agent owes an answer.
+      if (intent === "question") await submitComment(artifact.id, trimmedComment, undefined, { intent });
+      else await submitComment(artifact.id, trimmedComment);
       dispatch({ type: "respondSucceeded" }); // only clears on success
     } catch {
       // store already toasted; keep the panel usable (see handleAction)
@@ -939,7 +947,7 @@ export function ArtifactStatusActions({
       {/* Primary action: Respond (pair programming default) */}
       <div className="flex items-center gap-2">
         <button
-          onClick={handleRespond}
+          onClick={() => void handleRespond()}
           disabled={(submitting || !comment.trim()) || !!offline}
           className="px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
                      hover:bg-accent-violet-strong-hover disabled:bg-surface-elevated disabled:text-text-muted
@@ -948,6 +956,18 @@ export function ArtifactStatusActions({
         >
           Respond
         </button>
+        {showAsk && (
+          <button
+            type="button"
+            onClick={() => void handleRespond("question")}
+            disabled={(submitting || !comment.trim() || rejecting) || !!offline}
+            className="px-2.5 py-1.5 bg-accent-violet-dim text-accent-violet text-xs rounded
+                       hover:bg-accent-violet-dim/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+            title={offline ?? "Post as a question — the agent owes you an answer before it moves on"}
+          >
+            Ask
+          </button>
+        )}
 
         <span className="text-2xs text-text-muted">or</span>
 
