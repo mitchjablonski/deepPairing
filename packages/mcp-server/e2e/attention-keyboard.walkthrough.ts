@@ -160,7 +160,8 @@ test("live changes and disappearing queue focus", async ({ page }, info) => {
 // pane's exit animation, so it can pass with the bug present. Moving focus by
 // script here is timing control: Approve fires while the pane is still leaving.
 test("approving just after switching keeps focus on the open artifact", async ({ page }, info) => {
-  const e = new AttentionEvidence(page, info, { scenario, mode: "ON", viewport: { width: 1280, height: 800 }, manifest: ["approve-during-exit"] });
+  const reducedMotion = "no-preference";
+  const e = new AttentionEvidence(page, info, { scenario, mode: "ON", viewport: { width: 1280, height: 800 }, manifest: ["approve-during-exit"], reducedMotion });
   let daemon: AttentionDaemon | undefined;
   let failure: unknown;
   let cleanup: "removed" | "retained" = "retained";
@@ -168,6 +169,8 @@ test("approving just after switching keeps focus on the open artifact", async ({
     daemon = await AttentionDaemon.create(info);
     await daemon.seed(scenario.seed);
     await e.observe();
+    // This row needs the exit animation. Keep reduced motion for the other rows.
+    await page.emulateMedia({ reducedMotion });
     await page.goto(`${daemon.baseURL}/?session=probe`);
     await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review one");
     await expect(page.getByLabel("Loading artifact view")).toHaveCount(0);
@@ -176,25 +179,22 @@ test("approving just after switching keeps focus on the open artifact", async ({
     await e.activate(page.getByRole("button", { name: "Expand next-up details", exact: true }));
     await daemon.post("probe", "artifacts/one/status", { status: "approved" });
     await expect(page.getByTestId("next-up-bar")).toContainText("Synthetic review two");
-    await e.activate(page.locator("#next-up-details").getByRole("button", { name: "Synthetic review two", exact: true }));
-    // #623 — this row is only about the exit window if pane `one` is still
-    // leaving when Enter lands; otherwise "the old pane leaves" below passes
-    // with nothing to leave. The 0.2s exit can't be held open from the test,
-    // so a capture-phase listener records pane one's presence and the key's
-    // target synchronously ON the real Enter keydown (not before it). A run
-    // that misses the window fails here instead of passing vacuously.
+    // Arm the probe before switching so it uses none of the exit window.
+    // Ignore the selection Enter and sample the real Approve keydown.
     await page.evaluate(() => {
       const w = window as unknown as { __dp623Enter?: { oneMounted: boolean; target: string | null } };
       delete w.__dp623Enter;
       window.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" || w.__dp623Enter) return;
-        const target = event.target instanceof Element ? event.target : null;
+        const target = event.target;
+        if (!(target instanceof HTMLButtonElement) || target.textContent?.trim() !== "Approve") return;
         w.__dp623Enter = {
           oneMounted: document.querySelector('[data-artifact-id="one"]') !== null,
-          target: target?.closest("[data-artifact-id]")?.getAttribute("data-artifact-id") ?? null,
+          target: target.closest("[data-artifact-id]")?.getAttribute("data-artifact-id") ?? null,
         };
       }, { capture: true });
     });
+    await e.activate(page.locator("#next-up-details").getByRole("button", { name: "Synthetic review two", exact: true }));
     await page.locator('[data-artifact-id="two"]').getByRole("button", { name: "Approve", exact: true }).focus();
     await e.press("Enter");
     const atEnter = await page.evaluate(() => (window as unknown as { __dp623Enter?: { oneMounted: boolean; target: string | null } }).__dp623Enter ?? null);
