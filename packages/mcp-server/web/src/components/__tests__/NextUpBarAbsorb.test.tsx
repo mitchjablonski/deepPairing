@@ -199,7 +199,7 @@ describe("#430 PR 3 — nothing lost: each absorbed piece is reachable from the 
     seedExitedWithQuestions();
     render(<App />);
     const bar = within(screen.getByTestId("next-up-bar"));
-    expect(bar.getByText(/Exited with 2 of your questions open/)).toBeInTheDocument(); // count
+    expect(bar.getByText(/Exited · 2 questions still open/)).toBeInTheDocument(); // count
     expect(bar.getByText(/answered when the session resumes/)).toBeInTheDocument(); // exited wording
     expect(screen.getByText(/Agent exited — resume to continue/)).toBeInTheDocument(); // header agent state stays
     fireEvent.click(bar.getByRole("button", { name: "Open" }));
@@ -224,8 +224,8 @@ describe("#452 review — resume flow, agent-state announcements", () => {
     const bar = within(screen.getByTestId("next-up-bar"));
     expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toBe("● Guard changeset · Decide 2 · Waiting 1");
     const resume = within(screen.getByTestId("next-up-resume"));
-    expect(resume.getByText(/Exited with 1 of your question open/)).toBeInTheDocument();
-    fireEvent.click(resume.getByRole("button", { name: /Exited with 1/ }));
+    expect(resume.getByText(/Exited · 1 question still open/)).toBeInTheDocument();
+    fireEvent.click(resume.getByRole("button", { name: /Exited · 1 question/ }));
     expect(useArtifactStore.getState().selectedArtifactId).toBe("done");
     await act(async () => { fireEvent.click(bar.getByRole("button", { name: /Copy resume prompt/ })); });
     expect(writeText).toHaveBeenCalledWith(resumePromptFor(1));
@@ -238,7 +238,7 @@ describe("#452 review — resume flow, agent-state announcements", () => {
       comments: { qa: [question("q1", "qa")] },
     });
     render(<NextUpBarAbsorbProbe />);
-    fireEvent.click(within(screen.getByTestId("next-up-resume")).getByRole("button", { name: /Exited with 1/ }));
+    fireEvent.click(within(screen.getByTestId("next-up-resume")).getByRole("button", { name: /Exited · 1 question/ }));
     expect(useArtifactStore.getState().selectedArtifactId).toBe("qa");
   });
 
