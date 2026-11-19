@@ -142,9 +142,11 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
   const leadExpanded = !!lead && focusedChipId === lead.id;
   const bannerHidden = !isPendingBannerVisible(artifacts, selectedArtifactId, heldLead);
   const confirmingChipHidden = confirmingId != null && !shown.some((draft) => draft.id === confirmingId);
+  const focusedChipHidden = focusedChipId != null && !shown.some((draft) => draft.id === focusedChipId);
   useEffect(() => {
     if (bannerHidden || confirmingChipHidden) setConfirmingId(null);
-  }, [bannerHidden, confirmingChipHidden]);
+    if (bannerHidden || focusedChipHidden) setFocusedChipId(null);
+  }, [bannerHidden, confirmingChipHidden, focusedChipHidden]);
 
   // #430 slice 2 review — Why also unmounts without being pressed: an older
   // draft takes the lead, a grant writes seenAt, or the cap prunes the ask. Read
