@@ -8,6 +8,7 @@ import { noAgentLive } from "../lib/liveness";
 import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 import { useConnectionGraceStore } from "../lib/connectionGrace";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { RecipientMismatch, useMessageRecipient } from "./RecipientMismatch";
 
 /**
  * G1 (#198b) — the REQUEST COMPOSER. A quiet banner-row affordance that lets the
@@ -179,6 +180,13 @@ export function RequestComposerBanner({ compact = false }: {
   const textRef = useRef(text);
   textRef.current = text;
 
+  // #668 item 2 — like the message box, this posts to the tab's BOUND session
+  // (sessionHeaders), whatever the agent filter shows. Say who gets it.
+  // Called before the early returns below (rules-of-hooks).
+  const { recipient, ambiguous } = useMessageRecipient();
+  const ambiguousRef = useRef(ambiguous);
+  ambiguousRef.current = ambiguous;
+
   // #430 PR 5 — the header "Request" button (bar ON) opens the composer.
   useEffect(() => {
     const openComposer = () => {
@@ -208,6 +216,9 @@ export function RequestComposerBanner({ compact = false }: {
 
   const send = async () => {
     if (offline) return; // #477 — refused offline (the control is disabled too)
+    // Sol (#671) — refuse at invocation (Enter and button alike) while there is
+    // no bound recipient; the draft stays put until you pick an agent's tab.
+    if (ambiguousRef.current || !useConnectionStore.getState().sessionId && useConnectionStore.getState().activeSessions.length > 1) return;
     const t = text.trim();
     if (!t || submitting) return;
     setSubmitting(true);
@@ -284,7 +295,10 @@ export function RequestComposerBanner({ compact = false }: {
       ) : (
         <>
           <span className="text-2xs shrink-0" aria-hidden="true">✎</span>
-          <span className="text-2xs text-accent-blue font-medium shrink-0">Ask Claude for something</span>
+          <span className="text-2xs text-accent-blue font-medium shrink-0">
+            Ask Claude for something
+            {recipient && <span className="font-normal text-text-secondary" data-testid="request-recipient"> · to the agent in {recipient}</span>}
+          </span>
           {/* Preset chips — only while expanded */}
           <div className="flex items-center gap-1 shrink-0" role="group" aria-label="Request presets">
             {PRESETS.map((p) => (
@@ -316,6 +330,12 @@ export function RequestComposerBanner({ compact = false }: {
       {!compact && <RequestResumeButton bridge={bridge} />}
 
       {/* The expanded composer input + a persistent example (UX L3). */}
+      {open && <RecipientMismatch noun="requests" testId="request-recipient-mismatch" className="basis-full mt-1" />}
+      {open && ambiguous && (
+        <p role="status" data-testid="request-recipient-ambiguous" className="basis-full mt-1 text-2xs text-accent-amber">
+          No agent selected for this tab — pick an agent&apos;s session to send this request. Your text is kept.
+        </p>
+      )}
       {open && (
         <div className="basis-full flex items-center gap-2 mt-1.5 flex-wrap">
           <input
@@ -328,7 +348,7 @@ export function RequestComposerBanner({ compact = false }: {
               if (e.key === "Escape") { setOpen(false); }
             }}
             placeholder={activePreset?.placeholder ?? ""}
-            aria-label="Your request to Claude"
+            aria-label={recipient ? `Your request to the agent in ${recipient}` : "Your request to Claude"}
             disabled={submitting}
             className="flex-1 min-w-0 px-2.5 py-1 bg-surface-secondary border border-border-default rounded text-xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
           />
@@ -336,7 +356,7 @@ export function RequestComposerBanner({ compact = false }: {
             title={offline ?? undefined}
             type="button"
             onClick={() => void send()}
-            disabled={(!text.trim() || submitting) || !!offline}
+            disabled={(!text.trim() || submitting || ambiguous) || !!offline}
             className="shrink-0 px-2.5 py-1 rounded text-2xs font-semibold text-white bg-accent-blue-strong hover:bg-accent-blue/80 disabled:opacity-50 transition-colors"
           >
             Send request
