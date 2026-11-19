@@ -1,0 +1,1 @@
+import{S as e}from"./artifact-CXV_uQKk.js";import{O as t}from"./index-CmsMo_aL.js";function n(n){let r=t(n,e(e=>e.active));return r===`closed`||r===`frozen`}export{n as t};
