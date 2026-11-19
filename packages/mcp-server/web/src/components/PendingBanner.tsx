@@ -207,7 +207,7 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
               type="button"
               tabIndex={-1}
               onClick={() => selectArtifact(next.artifactId!)}
-              className="font-medium text-text-primary hover:underline focus-visible:underline outline-none"
+              className="enabled:cursor-pointer font-medium text-text-primary hover:underline focus-visible:underline outline-none"
             >
               {next.title}
             </button>
@@ -240,7 +240,7 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
           onClick={askWhy}
           aria-label="Why this is held"
           title="Open the gate log at this hold. It doesn't answer the terminal."
-          className="px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
+          className="enabled:cursor-pointer px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
         >
           Why
         </button>
@@ -252,7 +252,7 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
             ref={highTokenRef}
             data-high-decision-token
             onClick={() => selectArtifact(highHidden[0]!.artifactId!)}
-            className="px-2 py-0.5 text-2xs font-semibold text-accent-red bg-accent-red-dim rounded shrink-0 hover:bg-accent-red-dim/80 transition-colors"
+            className="enabled:cursor-pointer px-2 py-0.5 text-2xs font-semibold text-accent-red bg-accent-red-dim rounded shrink-0 hover:bg-accent-red-dim/80 transition-colors"
             title={`High-stakes ${highHidden.length === 1 ? "decision" : "decisions"} waiting: ${highHidden.map((d) => d.title).join(", ")}`}
             aria-label={`${highHidden.length} high-stakes ${highHidden.length === 1 ? "decision" : "decisions"} waiting — open ${highHidden[0]!.title}`}
           >
@@ -266,7 +266,7 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
               {...(a === lead && next && copy ? { "aria-describedby": leadLineId } : {})}
               onFocus={() => setFocusedChipId(a.id)}
               onBlur={() => setFocusedChipId((id) => (id === a.id ? null : id))}
-              className="px-2 py-0.5 text-accent-amber rounded-l text-2xs hover:bg-accent-amber-dim/80 transition-colors"
+              className="enabled:cursor-pointer px-2 py-0.5 text-accent-amber rounded-l text-2xs hover:bg-accent-amber-dim/80 transition-colors"
               title={a.title}
             >
               {a.title.slice(0, 28)}{a.title.length > 28 ? "…" : ""}
@@ -294,7 +294,7 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
               // draft. The /70 only bought a rest-vs-hover distinction the
               // hover BACKGROUND already carries — drop it and the same chip
               // reads 5.85:1 light / 5.61:1 dark.
-              className={`px-1.5 py-0.5 rounded-r text-2xs border-l border-accent-amber/20 transition-colors ${
+              className={`enabled:cursor-pointer px-1.5 py-0.5 rounded-r text-2xs border-l border-accent-amber/20 transition-colors ${
                 confirmingId === a.id
                   ? "text-accent-amber font-semibold bg-accent-amber-dim"
                   : "text-accent-amber hover:bg-accent-amber-dim/80"
@@ -316,7 +316,7 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
             // Sits on the chip background (like the sibling chips) rather than the
             // darker banner surface so the small text keeps AA contrast (a bare
             // text-accent-amber/70 on the banner bg fails 4.5:1 — caught by axe).
-            className="px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
+            className="enabled:cursor-pointer px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
             title={`${hidden.length} more waiting: ${hidden.map((d) => d.title).join(", ")}`}
             aria-label={`${hidden.length} more waiting — jump to the next`}
           >
