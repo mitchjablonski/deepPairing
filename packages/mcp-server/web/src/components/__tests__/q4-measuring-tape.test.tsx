@@ -368,7 +368,14 @@ function artifact(over: Partial<Artifact> = {}): Artifact {
 describe("Q4 #4 — the app has real landmarks and a heading outline without skips", () => {
   beforeEach(() => {
     const art = artifact();
-    useArtifactStore.setState({ artifacts: [art], comments: {}, selectedArtifactId: art.id });
+    // #668 item 3 — while a research draft is in review, Respond is its single
+    // composer and an EMPTY Comments thread is hidden; seed one earlier comment
+    // so the read-only thread (and its h3) renders for the outline check.
+    const earlier = {
+      id: "c_q4", author: "human", content: "earlier note", createdAt: new Date().toISOString(),
+      parentCommentId: null, target: { artifactId: art.id },
+    } as any;
+    useArtifactStore.setState({ artifacts: [art], comments: { [art.id]: [earlier] }, selectedArtifactId: art.id });
   });
 
   it("the artifact rail is a NAV with an accessible name (was: a bare <div> outside every landmark)", () => {

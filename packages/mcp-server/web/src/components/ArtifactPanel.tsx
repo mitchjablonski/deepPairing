@@ -1,4 +1,5 @@
 import { sessionLabelsFrom } from "../lib/sessionLabel";
+import { RESPOND_COMPOSER_TYPES } from "../lib/respondComposer";
 import { orderedPendingArtifacts } from "../lib/attention";
 import { forwardRef, useMemo, useState, useEffect, useCallback, useLayoutEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
@@ -399,6 +400,13 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
     const lc = reviewLifecycle(artifact.status, replayActive);
     return lc === "closed" || lc === "frozen";
   })();
+  // #668 item 3 (Mitch, 11-18) — while a reviewable draft shows the footer's
+  // "Respond to the agent…" box (with Ask beside it), a second artifact-level
+  // composer here posted the identical comment with a different ⌘⏎ meaning.
+  // Keep Respond; this thread is read-only history until Respond goes away
+  // (approved → follow-up comments come back here).
+  const respondOwnsComposer =
+    RESPOND_COMPOSER_TYPES.has(artifact.type) && reviewLifecycle(artifact.status, replayActive) === "review";
   // Bug2 — aggregate comments across the version chain so v1's general
   // comments render on v2 after a supersede auto-advance.
   const comments = useChainComments(artifact.id);
@@ -505,7 +513,8 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           artifact-level comment. Fold it away for those two types; the
           renderer's ask-anything thread is the single composer. Every other type
           keeps this thread byte-for-byte unchanged. */}
-      {artifact.type !== "debrief" && artifact.type !== "explainer" && (
+      {artifact.type !== "debrief" && artifact.type !== "explainer" &&
+        !(respondOwnsComposer && generalComments.length === 0) && (
       <div className="pt-3 border-t border-border-default">
         {/* Q4 — artifact section headings step to h3 under the h2 title. */}
         <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
@@ -530,7 +539,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <CommentThread
             artifactId={artifact.id}
             comments={generalComments}
-            readOnly={commentsReadOnly}
+            readOnly={commentsReadOnly || respondOwnsComposer}
             secondarySubmitLabel="Ask"
             secondarySubmitTitle="Post as a question — the agent owes you an answer before it moves on"
           />

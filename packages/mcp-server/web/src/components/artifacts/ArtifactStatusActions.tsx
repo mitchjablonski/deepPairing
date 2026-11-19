@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { RESPOND_COMPOSER_TYPES } from "../../lib/respondComposer";
 import { useIsPresent } from "motion/react";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore } from "../../stores/artifact";
+import { useArtifactStore, rootArtifactId } from "../../stores/artifact";
+import { useDraft, clearDraftIfUnchanged } from "../../hooks/useDraft";
 import { useToastStore } from "../../stores/toast";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
@@ -95,7 +97,7 @@ type FooterAction =
   | { type: "submitStart" }
   | { type: "submitEnd" }
   | { type: "actionSucceeded" }
-  | { type: "respondSucceeded" }
+  | { type: "respondSucceeded"; sent?: string }
   | { type: "rejectConceptTyped"; concept: string }
   | { type: "sentinel"; atEnd: boolean }
   | { type: "expand" }
@@ -144,6 +146,8 @@ export function footerReducer(s: FooterState, a: FooterAction): FooterState {
       // E6 review — Respond keeps an open reject panel AND the user's edited
       // concept (main's behavior): a clarifying comment mid-reject must not
       // discard the hand-tuned ledger key.
+      // Sol (#672) — a stale completion never clears text typed since the send.
+      if (a.sent !== undefined && s.comment !== a.sent) return s;
       return { ...s, comment: "" };
     case "rejectConceptTyped":
       // E6 review — typing the concept is JUST typing (main: setRejectConcept
@@ -282,6 +286,36 @@ export function ArtifactStatusActions({
     restoreDismissFocusRef.current = false;
     dismissTriggerRef.current?.focus({ preventScroll: true });
   }, [confirmDismiss]);
+
+  // #668 item 3 — Ask lives beside Respond for the types where Respond is the
+  // single artifact-level composer (see RESPOND_COMPOSER_TYPES).
+  const showAsk = RESPOND_COMPOSER_TYPES.has(artifact.type) && !acknowledgeMode;
+  // Sol (#672) — Respond is now the single artifact-level editor for these
+  // types, so it owns the Comments thread's saved draft (same chain-root key,
+  // same compare-and-clear): an existing unsent draft loads here, and Respond
+  // text survives reloads and supersede auto-advance like the thread's did.
+  const chainRootId = useArtifactStore((st) => rootArtifactId(st.artifacts, artifact.id));
+  // Owned only while Respond is actually the live editor (a draft, not in
+  // replay). Once the artifact leaves review the Comments thread's composer
+  // takes the key back, so the two never hold it at the same time.
+  const ownsCommentDraft = showAsk && artifact.status === "draft" && !replayActive;
+  const respondDraftKey = ownsCommentDraft ? `comment:${chainRootId}:{}` : `respond-unowned:${artifact.id}`;
+  const [savedRespondDraft, setSavedRespondDraft] = useDraft(respondDraftKey);
+  // Sol (#672) P1 — these run BEFORE the status/replay early returns below,
+  // so a mounted draft turning approved (or replay starting) keeps the same
+  // hook order.
+  // Load a saved draft into an empty editor (mount, key change); then mirror
+  // edits back so a reload or remount finds them.
+  useEffect(() => {
+    if (!ownsCommentDraft) return;
+    if (savedRespondDraft && !comment) dispatch({ type: "typed", comment: savedRespondDraft });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- seed on key change only
+  }, [respondDraftKey, ownsCommentDraft]);
+  useEffect(() => {
+    if (ownsCommentDraft && comment !== savedRespondDraft) setSavedRespondDraft(comment);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mirror the editor into the draft
+  }, [comment, ownsCommentDraft]);
+
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -701,6 +735,7 @@ export function ArtifactStatusActions({
           .noteStanceRecorded(useConnectionStore.getState().sessionId);
       }
       dispatch({ type: "actionSucceeded" }); // only on success — a failed action keeps the text to retry
+      retireRespondDraft(); // Sol (#672) — the note went with the action
     } catch {
       // The store mutations re-throw AFTER toasting a user-facing error. Swallow
       // here so the click handler doesn't reject — but the `finally` MUST run so
@@ -728,13 +763,24 @@ export function ArtifactStatusActions({
    * (often via revise_artifact with mode='supersede'). Approve/Revise/Reject
    * remain as explicit terminal actions.
    */
-  const handleRespond = async () => {
+  // A successful write that carried the editor's text retires the saved copy
+  // (compare-and-clear, so newer text typed meanwhile survives). Terminal
+  // actions can unmount this footer before the mirror effect runs.
+  const retireRespondDraft = () => { if (ownsCommentDraft) clearDraftIfUnchanged(respondDraftKey, comment); };
+
+  const handleRespond = async (intent?: "question") => {
+    const rawComment = comment;
     const trimmedComment = comment.trim();
     if (!trimmedComment || !presentRef.current) return;
     dispatch({ type: "submitStart" });
     try {
-      await submitComment(artifact.id, trimmedComment);
-      dispatch({ type: "respondSucceeded" }); // only clears on success
+      // #668 item 3 — "Ask" moved here from the (now read-only while drafting)
+      // Comments thread: same post, tagged as a question the agent owes an answer.
+      if (intent === "question") await submitComment(artifact.id, trimmedComment, undefined, { intent });
+      else await submitComment(artifact.id, trimmedComment);
+      // Sol (#672) P2 — fence on the RAW text sent (whitespace edits count).
+      dispatch({ type: "respondSucceeded", sent: rawComment }); // only clears on success
+      if (ownsCommentDraft) clearDraftIfUnchanged(respondDraftKey, rawComment);
     } catch {
       // store already toasted; keep the panel usable (see handleAction)
     } finally {
@@ -776,6 +822,7 @@ export function ArtifactStatusActions({
     try {
       await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
       dispatch({ type: "actionSucceeded" }); // only clears on success
+      retireRespondDraft(); // Sol (#672) — the note went with the action
     } catch {
       // store already toasted; keep the panel usable (see handleAction)
     } finally {
@@ -795,6 +842,7 @@ export function ArtifactStatusActions({
     try {
       await updateArtifactStatus(artifact.id, "approved");
       dispatch({ type: "actionSucceeded" });
+      retireRespondDraft(); // Sol (#672) — the note went with the action
     } catch {
       // store already toasted; keep the panel usable (see handleAction)
     } finally {
@@ -1007,7 +1055,7 @@ export function ArtifactStatusActions({
       {/* Primary action: Respond (pair programming default) */}
       <div className="flex items-center gap-2">
         <button
-          onClick={handleRespond}
+          onClick={() => void handleRespond()}
           disabled={(submitting || !comment.trim()) || !!offline}
           className="enabled:cursor-pointer px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
                      hover:bg-accent-violet-strong-hover disabled:bg-surface-elevated disabled:text-text-muted
@@ -1016,6 +1064,18 @@ export function ArtifactStatusActions({
         >
           Respond
         </button>
+        {showAsk && (
+          <button
+            type="button"
+            onClick={() => void handleRespond("question")}
+            disabled={(submitting || !comment.trim() || rejecting) || !!offline}
+            className="px-2.5 py-1.5 bg-accent-violet-dim text-accent-violet text-xs rounded
+                       hover:bg-accent-violet-dim/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+            title={offline ?? "Post as a question — the agent owes you an answer before it moves on"}
+          >
+            Ask
+          </button>
+        )}
 
         <span className="text-2xs text-text-muted">or</span>
 

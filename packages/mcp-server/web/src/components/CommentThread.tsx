@@ -238,7 +238,13 @@ export function CommentThread({
   const artifacts = useArtifactStore((s) => s.artifacts);
   const rootId = rootArtifactId(artifacts, artifactId);
   const draftKey = `comment:${rootId}:${JSON.stringify(target ?? {})}`;
-  const [input, setInput] = useDraft(draftKey);
+  // Sol (#672) — a read-only thread has no composer, so it must not hold a
+  // writer on the shared draft key: while a reviewable draft is in review,
+  // Respond owns `comment:<root>:{}` and this hidden instance's debounce,
+  // pagehide and unmount flushes would overwrite it with a stale value. A
+  // throwaway key keeps the hook unconditional; when the thread becomes
+  // editable (e.g. approved) the re-key loads the live saved draft.
+  const [input, setInput] = useDraft(readOnly ? `readonly:${draftKey}` : draftKey);
   const [submitting, setSubmitting] = useState(false);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const composerRef = useRef<HTMLTextAreaElement>(null);
