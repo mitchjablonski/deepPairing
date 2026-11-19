@@ -742,13 +742,17 @@ function App() {
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT))}
               data-testid="header-request"
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
+              aria-label="Request"
+              className="enabled:cursor-pointer flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
               title="Request something from Claude (explain, plan, status)"
             >
               {/* #455 review — "Request", not "Ask": "Ask" is AskTrigger's
-                  question-on-this-artifact verb across the app. */}
+                  question-on-this-artifact verb across the app.
+                  #668 item 4 — now shown in the default layout too, so the
+                  label is icon-only below `sm` to keep a 320px header from
+                  overflowing (pending-banner-narrow e2e). */}
               <span aria-hidden="true">✎</span>
-              <span>Request</span>
+              <span className="hidden sm:inline" aria-hidden="true">Request</span>
             </button>
           )}
           {/* #212 (J4) — the top-level Ledger button is GONE. It was a second
