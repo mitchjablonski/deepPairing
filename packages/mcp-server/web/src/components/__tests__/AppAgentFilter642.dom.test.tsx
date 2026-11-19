@@ -239,15 +239,79 @@ describe("#642 mounted App filter-following navigation", () => {
     render(<App />); choose("A");
     const publications: { owner: string; id: string | null }[] = [];
     const stop = useArtifactStore.subscribe((s) => publications.push({ owner: s.agentFilter, id: s.selectedArtifactId }));
-    fireEvent.click(screen.getByRole("button", { name: /1 high-stakes decision waiting/ })); stop();
+    const token = screen.getByRole("button", { name: /1 high-stakes decision waiting/ });
+    token.focus();
+    fireEvent.click(token); stop();
     expect(publications).toEqual([{ owner: "B", id: "b-high" }]);
     expect(menu().value).toBe("B"); expect(selected()).toBe("b-high");
     expect(useConnectionStore.getState().sessionId).toBe("bound");
+    expect(token).not.toBeInTheDocument();
+    expect(screen.getByTestId("pending-banner")).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByTestId("pending-banner")).toHaveTextContent("6 items waiting for you");
     act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "b-high" } })));
     expect(menu().value).toBe("B");
     choose("all");
     act(() => window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "b-high" } })));
     expect(menu().value).toBe("all"); expect(selected()).toBe("b-high");
+  });
+
+  it.each([false, true])("#668 counts a high recommendation with no visible detail (bar ON=%s)", (nextUpBar) => {
+    usePreferencesStore.setState({ nextUpBar });
+    useConnectionStore.setState({ sessionId: null, hydratedBinding: null, activeSessions: [] });
+    useArtifactStore.setState({
+      artifacts: ["lead", "chip-one", "chip-two", "b-high"].map((id, index) =>
+        art(id, id === "b-high" ? "B" : "A", {
+          type: "decision", title: id, createdAt: `2026-06-0${index + 1}T00:00:00.000Z`,
+          content: {
+            context: "Choose", decisionId: id, stakes: id === "lead" || id === "b-high" ? "high" : "medium",
+            options: [{ id: "option", title: "Synthetic option", description: "Test choice" }],
+          },
+        }),
+      ),
+      selectedArtifactId: "b-high",
+    });
+    render(<App />);
+    const token = () => screen.queryByRole("button", {
+      name: nextUpBar ? "+1 high decision" : /1 high-stakes decision waiting.*b-high/,
+    });
+    const activeDetail = () => document.querySelector('[data-artifact-id="b-high"]:not([inert])');
+    expect(useConnectionStore.getState().sessionId).toBeNull();
+    expect(activeDetail()).not.toBeNull();
+    expect(token()).toBeNull();
+
+    act(() => useArtifactStore.setState({ agentFilter: "A" }));
+    expect(selected()).toBe("b-high");
+    expect(activeDetail()).toBeNull();
+    expect(token()).toBeInTheDocument();
+    act(() => useArtifactStore.setState({ agentFilter: "all" }));
+    expect(token()).toBeNull();
+
+    act(() => useReplayStore.setState({ active: true, cursor: "2026-06-03T00:00:00.000Z" }));
+    expect(activeDetail()).toBeNull();
+    expect(token()).toBeInTheDocument();
+    act(() => useReplayStore.setState({ active: false }));
+    expect(token()).toBeNull();
+
+    act(() => useConnectionStore.setState({ hydrated: false }));
+    expect(screen.getByLabelText("Loading session")).toBeInTheDocument();
+    expect(token()).toBeInTheDocument();
+    act(() => useConnectionStore.setState({ hydrated: true }));
+    expect(token()).toBeNull();
+
+    for (const selectedArtifactId of ["lead", "missing", null]) {
+      act(() => useArtifactStore.setState({ selectedArtifactId }));
+      expect(token()).toBeInTheDocument();
+    }
+    const outside = screen.getByRole("main");
+    outside.focus();
+    act(() => useArtifactStore.setState({ selectedArtifactId: "b-high" }));
+    expect(token()).toBeNull();
+    expect(outside).toHaveFocus();
+    const lead = screen.getByTestId(nextUpBar ? "next-up-bar" : "pending-next");
+    expect(lead.getAttribute("data-next-copy")).toContain("lead");
+    expect(screen.getByTestId(nextUpBar ? "next-up-bar" : "pending-banner")).toHaveTextContent(
+      nextUpBar ? "Decide 4" : "4 items waiting for you",
+    );
   });
 
   it("replay navigation respects cutoff and scoped n/N, rejecting a future explicit open", () => {

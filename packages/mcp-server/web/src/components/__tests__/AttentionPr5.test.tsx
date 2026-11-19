@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import App from "../../App";
 import { ArtifactPanel } from "../ArtifactPanel";
@@ -77,12 +78,71 @@ describe("#430 PR 5 — requests: row (OFF) vs header Request + bar (ON)", () =>
     } as any);
   };
 
-  it("OFF: the composer row renders with its pips; no header Request button", () => {
+  it("OFF: the composer row renders with its pips; the header Request button is there too (#668 item 4)", () => {
     seed();
     render(<App />);
     const row = screen.getByTestId("request-composer");
     expect(within(row).getByTestId("request-pips")).toBeInTheDocument();
-    expect(screen.queryByTestId("header-request")).not.toBeInTheDocument();
+    expect(screen.getByTestId("header-request")).toHaveAccessibleName("Request");
+    // Sol (#674) P3 — one VISIBLE trigger per width: the row's own trigger is
+    // narrow-only (hidden from sm up), the header one is sm-up only.
+    expect(within(row).getByTestId("request-composer-trigger").className).toMatch(/\bsm:hidden\b/);
+    expect(screen.getByTestId("header-request").className).toMatch(/\bhidden sm:flex\b/);
+  });
+
+  it("Sol (#674) P2 — reopening from the header keeps the draft and its intent (row with pips)", () => {
+    seed();
+    render(<App />);
+    fireEvent.click(screen.getByTestId("header-request"));
+    let composer = screen.getByTestId("request-composer");
+    fireEvent.click(within(composer).getByRole("button", { name: /^Plan…$/ })); // explicit preset
+    fireEvent.change(within(composer).getByRole("textbox"), { target: { value: "Plan the cache eviction" } });
+    fireEvent.click(within(composer).getByRole("button", { name: "Cancel" }));
+    // Row stays (pips) without its own trigger; the header reopens with the text intact.
+    fireEvent.click(screen.getByTestId("header-request"));
+    composer = screen.getByTestId("request-composer");
+    expect((within(composer).getByRole("textbox") as HTMLInputElement).value).toBe("Plan the cache eviction");
+    expect(within(composer).getByRole("button", { name: /^Plan…$/ })).toHaveAttribute("aria-pressed", "true");
+    // Clicking Request again while editing doesn't overwrite either.
+    fireEvent.click(screen.getByTestId("header-request"));
+    expect((within(screen.getByTestId("request-composer")).getByRole("textbox") as HTMLInputElement).value).toBe("Plan the cache eviction");
+  });
+
+  it("Sol (#674) — the narrow row trigger also keeps the draft and its intent", () => {
+    useArtifactStore.setState({ artifacts: [], requests: [] } as any);
+    render(<App />);
+    const row = () => screen.getByTestId("request-composer");
+    fireEvent.click(within(row()).getByTestId("request-composer-trigger"));
+    fireEvent.click(within(row()).getByRole("button", { name: /^Plan…$/ }));
+    fireEvent.change(within(row()).getByRole("textbox"), { target: { value: "Plan the narrow case" } });
+    fireEvent.click(within(row()).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(row()).getByTestId("request-composer-trigger"));
+    expect((within(row()).getByRole("textbox") as HTMLInputElement).value).toBe("Plan the narrow case");
+    expect(within(row()).getByRole("button", { name: /^Plan…$/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Sol (#674) — during an outage after connecting, the header Request stays to reopen a collapsed draft", () => {
+    useArtifactStore.setState({ artifacts: [], requests: [] } as any);
+    useConnectionGraceStore.setState({ everConnected: true } as any);
+    useConnectionStore.setState({ connected: false, disconnectedSince: Date.now() } as any);
+    render(<App />);
+    fireEvent.click(screen.getByTestId("header-request"));
+    expect(within(screen.getByTestId("request-composer")).getByRole("textbox")).toBeInTheDocument();
+    useConnectionGraceStore.setState({ everConnected: false } as any);
+  });
+
+  it("#668 item 4 — OFF with nothing pending: no standing row; the header Request opens the composer", () => {
+    useArtifactStore.setState({ artifacts: [], requests: [] } as any);
+    render(<App />);
+    // The standing row exists only for phone widths (hidden from sm up).
+    const narrowRow = screen.getByTestId("request-composer");
+    expect(narrowRow).toHaveAttribute("data-narrow-only", "true");
+    expect(narrowRow.className).toMatch(/\bsm:hidden\b/);
+    fireEvent.click(screen.getByTestId("header-request"));
+    const composer = screen.getByTestId("request-composer");
+    expect(within(composer).getByRole("textbox", { name: "Your request to Claude" })).toBeInTheDocument();
+    fireEvent.click(within(composer).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("request-composer")).toHaveAttribute("data-narrow-only", "true");
   });
 
   it("ON: no standing row; the header Request opens the same composer; pips live in the bar's ⌄ with the served jump", () => {

@@ -111,7 +111,10 @@ export interface QuietCards {
   wrap?: ReactNode | null;
 }
 
-export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {}) {
+export function NextUpBar({ quietCards = {}, visibleSelectedArtifactId }: {
+  quietCards?: QuietCards;
+  visibleSelectedArtifactId?: string | null;
+} = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
   const requests = useArtifactStore((s) => s.requests);
@@ -133,6 +136,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const boundSessionId = useConnectionStore((s) => s.sessionId);
   const attention = useMemo(() => computeAttention({
     artifacts,
+    visibleSelectedArtifactId,
     comments,
     requests,
     sessionLabels,
@@ -150,7 +154,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       // `ask` is terminal-held (#430 slice 1 — lib/attentionCopy).
       holds: attentionHolds(blocks, lastSeenAt),
     },
-  }), [artifacts, comments, requests, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, tabOffline, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
+  }), [artifacts, visibleSelectedArtifactId, comments, requests, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, tabOffline, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
 
   const agentGone = noAgentLive(activeSessions);
   // #457 state G — the outage clock (ticks only while disconnected).
@@ -164,6 +168,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const prolongedOutage = tabOffline && disconnectedSince != null && nowMs - disconnectedSince >= 60_000;
   const [expanded, setExpanded] = useState<false | "all" | "high">(false);
   const disclosureRef = useRef<HTMLButtonElement>(null);
+  const highTokenRef = useRef<HTMLButtonElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const focusedControlRef = useRef<HTMLElement | null>(null);
   const expandFrom = (mode: false | "all" | "high", opener: HTMLElement) => {
@@ -405,7 +410,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       onKeyDown={queueKeyDown}
       onFocusCapture={(event) => {
         const target = event.target as HTMLElement;
-        focusedControlRef.current = target.matches("[data-next-up-queue-item]") || target === openerRef.current ? target : null;
+          focusedControlRef.current = target.matches("[data-next-up-queue-item]") ||
+            target === openerRef.current || target === highTokenRef.current ? target : null;
       }}
       onBlurCapture={(event) => {
         // Leaving the bar/control relinquishes ownership, even when the new
@@ -512,6 +518,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
           s.lane === "high-decision" ? (
             <button
               key={s.lane}
+              ref={highTokenRef}
               type="button"
               data-token
               onClick={(event) => expandFrom(expanded === "high" ? false : "high", event.currentTarget)}
@@ -574,8 +581,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
           {expanded === "high" ? (
             <Queue
               title="High-stakes decisions"
-              // Exactly the ones "+N high decision" counts: high, other than `next`.
-              items={attention.lanes.decide.filter((d) => d.kind === "decision" && d.stakes === "high" && d.id !== attention.next?.id)}
+              items={attention.highDecisionCandidates}
               onOpen={selectArtifact}
             />
           ) : (

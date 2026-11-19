@@ -38,7 +38,7 @@ import { DemoTag } from "./ProvenanceMarker";
  *  why/after can never push the composer or the content off screen. */
 const EXPANDED_LEAD = "whitespace-normal break-words max-h-16 overflow-y-auto";
 
-export function PendingBanner() {
+export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedArtifactId?: string | null } = {}) {
   const offline = useOfflineReason(); // #467 review — the dismiss chip is an act
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.openArtifact);
@@ -65,9 +65,9 @@ export function PendingBanner() {
   // Holds are passed so a terminal-held hook `ask` can lead (blocking tier,
   // #430 slice 1) exactly as on the bar; the count below is still drafts only.
   const attention = useMemo(() => computeAttention({
-    artifacts, sessionLabels, boundSessionId, sample: { content: sampleContent, sessionIds: sampleSessionIds },
+    artifacts, visibleSelectedArtifactId, sessionLabels, boundSessionId, sample: { content: sampleContent, sessionIds: sampleSessionIds },
     system: { holds: attentionHolds(blocks, lastSeenAt) },
-  }), [artifacts, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, blocks, lastSeenAt]);
+  }), [artifacts, visibleSelectedArtifactId, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, blocks, lastSeenAt]);
   const { next } = attention;
   const drafts = orderedPendingArtifacts(artifacts, attention);
   const reach = reachFrom({ replay: replayActive, tabOffline, agentGone: noAgentLive(activeSessions) });
@@ -77,12 +77,10 @@ export function PendingBanner() {
   const hidden = drafts.slice(3);
   // #642 item 6 — the bar-ON line pins "+N high decision"; bar OFF (the
   // default) capped the chips at 3 and buried a high-stakes decision in
-  // "+N more" (S3 evidence: 7 `n` presses to reach it). Pin the same set the
-  // bar counts (high, other than `next`), minus any already showing as a
-  // chip. Order and counts are unchanged; this is a pointer, not a re-rank.
-  const highHidden = attention.lanes.decide.filter(
-    (d) => d.kind === "decision" && d.stakes === "high" && d.id !== next?.id && !!d.artifactId &&
-      !shown.some((a) => a.id === d.artifactId),
+  // "+N more" (S3 evidence: 7 `n` presses to reach it). Pin the bar's
+  // candidates that have no chip here.
+  const highHidden = attention.highDecisionCandidates.filter(
+    (d) => !shown.some((a) => a.id === d.artifactId),
   );
   // J2b (#212) — lite-frame step-down: when the ONE pending draft is the card
   // already on screen, it IS the call to action (its own status badge + review
@@ -142,9 +140,12 @@ export function PendingBanner() {
   // A pending log request means Why was pressed: the log takes focus itself.
   const bannerRef = useRef<HTMLDivElement>(null);
   const whyRef = useRef<HTMLButtonElement>(null);
+  const highTokenRef = useRef<HTMLButtonElement>(null);
   const whyHeldFocus = !!whyRef.current && whyRef.current === document.activeElement;
+  const highTokenHeldFocus = !!highTokenRef.current && highTokenRef.current === document.activeElement;
   useEffect(() => {
-    if (!whyHeldFocus || whyRef.current) return;
+    const focusedControlRemoved = (whyHeldFocus && !whyRef.current) || (highTokenHeldFocus && !highTokenRef.current);
+    if (!focusedControlRemoved) return;
     if (usePreflightBlockStore.getState().focusRequest) return;
     const active = document.activeElement;
     if (active && active !== document.body) return;
@@ -206,7 +207,7 @@ export function PendingBanner() {
               type="button"
               tabIndex={-1}
               onClick={() => selectArtifact(next.artifactId!)}
-              className="font-medium text-text-primary hover:underline focus-visible:underline outline-none"
+              className="enabled:cursor-pointer font-medium text-text-primary hover:underline focus-visible:underline outline-none"
             >
               {next.title}
             </button>
@@ -239,7 +240,7 @@ export function PendingBanner() {
           onClick={askWhy}
           aria-label="Why this is held"
           title="Open the gate log at this hold. It doesn't answer the terminal."
-          className="px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
+          className="enabled:cursor-pointer px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
         >
           Why
         </button>
@@ -248,9 +249,10 @@ export function PendingBanner() {
         {highHidden.length > 0 && (
           <button
             type="button"
+            ref={highTokenRef}
             data-high-decision-token
             onClick={() => selectArtifact(highHidden[0]!.artifactId!)}
-            className="px-2 py-0.5 text-2xs font-semibold text-accent-red bg-accent-red-dim rounded shrink-0 hover:bg-accent-red-dim/80 transition-colors"
+            className="enabled:cursor-pointer px-2 py-0.5 text-2xs font-semibold text-accent-red bg-accent-red-dim rounded shrink-0 hover:bg-accent-red-dim/80 transition-colors"
             title={`High-stakes ${highHidden.length === 1 ? "decision" : "decisions"} waiting: ${highHidden.map((d) => d.title).join(", ")}`}
             aria-label={`${highHidden.length} high-stakes ${highHidden.length === 1 ? "decision" : "decisions"} waiting — open ${highHidden[0]!.title}`}
           >
@@ -264,7 +266,7 @@ export function PendingBanner() {
               {...(a === lead && next && copy ? { "aria-describedby": leadLineId } : {})}
               onFocus={() => setFocusedChipId(a.id)}
               onBlur={() => setFocusedChipId((id) => (id === a.id ? null : id))}
-              className="px-2 py-0.5 text-accent-amber rounded-l text-2xs hover:bg-accent-amber-dim/80 transition-colors"
+              className="enabled:cursor-pointer px-2 py-0.5 text-accent-amber rounded-l text-2xs hover:bg-accent-amber-dim/80 transition-colors"
               title={a.title}
             >
               {a.title.slice(0, 28)}{a.title.length > 28 ? "…" : ""}
@@ -292,7 +294,7 @@ export function PendingBanner() {
               // draft. The /70 only bought a rest-vs-hover distinction the
               // hover BACKGROUND already carries — drop it and the same chip
               // reads 5.85:1 light / 5.61:1 dark.
-              className={`px-1.5 py-0.5 rounded-r text-2xs border-l border-accent-amber/20 transition-colors ${
+              className={`enabled:cursor-pointer px-1.5 py-0.5 rounded-r text-2xs border-l border-accent-amber/20 transition-colors ${
                 confirmingId === a.id
                   ? "text-accent-amber font-semibold bg-accent-amber-dim"
                   : "text-accent-amber hover:bg-accent-amber-dim/80"
@@ -314,7 +316,7 @@ export function PendingBanner() {
             // Sits on the chip background (like the sibling chips) rather than the
             // darker banner surface so the small text keeps AA contrast (a bare
             // text-accent-amber/70 on the banner bg fails 4.5:1 — caught by axe).
-            className="px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
+            className="enabled:cursor-pointer px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
             title={`${hidden.length} more waiting: ${hidden.map((d) => d.title).join(", ")}`}
             aria-label={`${hidden.length} more waiting — jump to the next`}
           >

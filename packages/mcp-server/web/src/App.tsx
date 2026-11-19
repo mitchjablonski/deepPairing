@@ -18,7 +18,7 @@ import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
 import { sessionLabelOf } from "./lib/sessionLabel";
 import { outageMinutes } from "./lib/outage";
-import { useConnectionGraceDriver, useTabOffline, useHydrationStalled, HYDRATION_STALLED_TEXT, RELOAD_TITLE, reloadPage } from "./lib/connectionGrace";
+import { useConnectionGraceDriver, useConnectionGraceStore, useTabOffline, useHydrationStalled, HYDRATION_STALLED_TEXT, RELOAD_TITLE, reloadPage } from "./lib/connectionGrace";
 import { ReloadConfirmDialog } from "./components/ReloadConfirmDialog";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
@@ -63,6 +63,7 @@ import { ProvenanceChip, DemoTag } from "./components/ProvenanceMarker";
 function App() {
   useSessionVisits();
   const connected = useConnectionStore((s) => s.connected);
+  const everConnected = useConnectionGraceStore((s) => s.everConnected);
   const connect = useConnectionStore((s) => s.connect);
   const sessionId = useConnectionStore((s) => s.sessionId);
   // #569 proposal 1 — live work vs demo/sample, labelled in the session bar.
@@ -187,6 +188,11 @@ function App() {
   // header pill collapses to a bare count. Computed with the SHARED predicate so
   // the banner-gate here and the banner's own self-suppress can't disagree.
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  // A retained selection can outlive its visible detail during hydration,
+  // an agent filter change, or a replay cursor move.
+  const visibleSelectedArtifactId = selectedArtifactId != null && mountArtifactPanel && !hidePanelForHydration &&
+    scopedVisibleArtifacts(artifactsList, agentFilter).some((artifact) => artifact.id === selectedArtifactId)
+    ? selectedArtifactId : null;
   const singlePendingInView = isSinglePendingInView(artifactsList, selectedArtifactId);
   const blocks = usePreflightBlockStore((s) => s.blocks);
   const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
@@ -734,13 +740,22 @@ function App() {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {/* #430 PR 5 (design §5) — bar ON: the request composer row collapses
-              to this button; it opens the same composer (presets + input). */}
-          {nextUpBar && connected && (
+              to this button; it opens the same composer (presets + input).
+              #668 item 4 (Mitch, 11-18) — bar OFF too: the always-on row cost
+              a strip of the 1280×800 screen. */}
+          {/* Sol (#674) — also during an outage once connected: the composer
+              stays on screen offline (#477), and from `sm` up this is its only
+              visible trigger, so a collapsed draft stays reopenable. */}
+          {(connected || everConnected) && (
             <button
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT))}
               data-testid="header-request"
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
+              // #668 item 4 — bar OFF: from `sm` up only. At phone widths the
+              // header's shrink-0 right group already fills 320px (the
+              // pending-banner-narrow e2e caught a +0.3px overflow), so there
+              // the request row keeps its own compact trigger instead.
+              className={`enabled:cursor-pointer ${nextUpBar ? "flex" : "hidden sm:flex"} items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors`}
               title="Request something from Claude (explain, plan, status)"
             >
               {/* #455 review — "Request", not "Ask": "Ask" is AskTrigger's
@@ -966,6 +981,7 @@ function App() {
           the bar is absent and those existing banners remain. */}
       {nextUpBar && (
         <NextUpBar
+          visibleSelectedArtifactId={visibleSelectedArtifactId}
           quietCards={{
             // #430 PR 5 (design §5) — ON only: the demo CTA and the wrap card
             // render inside the bar (inline in its quiet state, else in ⌄).
@@ -1006,7 +1022,7 @@ function App() {
           Where each piece went: docs/design/attention-hierarchy.md §5 and the
           PR 3 checklist test (NextUpBarAbsorb.test.tsx). */}
       {/* Pending decision/plan banner */}
-      {!nextUpBar && <PendingBanner />}
+      {!nextUpBar && <PendingBanner visibleSelectedArtifactId={visibleSelectedArtifactId} />}
 
       {/* #192 — questions the human asked that the agent never answered, shown
           only when no agent is live (it exited) with a one-click resume prompt. */}
@@ -1014,7 +1030,7 @@ function App() {
 
       {/* G1 (#198b) — the request composer: the human can initiate a request to
           the agent (free text + intent preset). A quiet peer of the strips above. */}
-      <RequestComposerBanner compact={nextUpBar} />
+      <RequestComposerBanner compact={nextUpBar} headerTrigger />
 
       {/* Main content.
           III10 — when the WS is connected but no wrapper has registered a

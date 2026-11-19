@@ -71,6 +71,8 @@ export interface AttentionItem {
 
 export interface AttentionInput {
   artifacts: Artifact[];
+  /** The selected detail currently shown by the panel, if known. */
+  visibleSelectedArtifactId?: string | null;
   /** Per-artifact comment buckets, as the artifact store holds them. */
   comments?: Record<string, Comment[]>;
   requests?: Request[];
@@ -104,7 +106,9 @@ export interface Attention {
   /** The most consequential Decide item: blocking tier first, then oldest
    *  (#430 slice 1 — Mitch's decision, revising §10 decision 3). */
   next: AttentionItem | null;
-  /** Open decisions with `stakes === "high"` other than `next` ("+N high decision"). */
+  /** Open high decisions beyond Next and the detail already in view. */
+  highDecisionCandidates: AttentionItem[];
+  /** The count for the "+N high decision" cue. */
   highDecisionsBeyondNext: number;
   lanes: {
     decide: AttentionItem[];
@@ -245,9 +249,11 @@ export function computeAttention(input: AttentionInput): Attention {
   // #430 slice 1 — `next` is the most consequential item: the Decide head, or
   // a terminal-held hook `ask` (blocking tier too), oldest first between them.
   const next = [...decide.slice(0, 1), ...held.filter((h) => h.terminal)].sort(byConsequence)[0] ?? null;
-  const highDecisionsBeyondNext = decide.filter(
-    (d) => d !== next && d.kind === "decision" && d.stakes === "high",
-  ).length;
+  const highDecisionCandidates = decide.filter(
+    (d) => d !== next && d.kind === "decision" && d.stakes === "high" && !!d.artifactId &&
+      d.artifactId !== input.visibleSelectedArtifactId,
+  );
+  const highDecisionsBeyondNext = highDecisionCandidates.length;
 
   // Rule 1 — failure prefix.
   const prefix = FAILURE_ORDER.find(([key]) => system[key] === true)?.[1] ?? null;
@@ -297,6 +303,7 @@ export function computeAttention(input: AttentionInput): Attention {
 
   return {
     next,
+    highDecisionCandidates,
     highDecisionsBeyondNext,
     lanes: { decide, read, waiting, flags, held },
     line: { prefix, primary, summary },
