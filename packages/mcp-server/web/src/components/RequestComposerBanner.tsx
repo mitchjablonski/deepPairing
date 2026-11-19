@@ -189,20 +189,13 @@ export function RequestComposerBanner({ compact = false, headerTrigger = false }
   // (sessionHeaders), whatever the agent filter shows. Say who gets it.
   // Called before the early returns below (rules-of-hooks).
   const { recipient, ambiguous } = useMessageRecipient();
+  const openKeepingDraftRef = useRef<() => void>(() => {});
   const ambiguousRef = useRef(ambiguous);
   ambiguousRef.current = ambiguous;
 
   // #430 PR 5 — the header "Request" button (bar ON) opens the composer.
   useEffect(() => {
-    const openComposer = () => {
-      // Sol (#674) — a plain open/reopen keeps a saved or in-progress draft and
-      // its intent; only an explicit preset pick (pickPreset) replaces text.
-      if (!textRef.current.trim()) {
-        setIntent(PRESETS[0]!.intent);
-        setText(PRESETS[0]!.template);
-      }
-      setOpen(true);
-    };
+    const openComposer = () => openKeepingDraftRef.current();
     window.addEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
     return () => window.removeEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
   }, [setText]); // #487 — setText is now useDraft's setter
@@ -215,11 +208,23 @@ export function RequestComposerBanner({ compact = false, headerTrigger = false }
   // (offline also covers the post-grace "never connected" case).
   if (!connected && !(offline && everConnected)) return null;
 
+  // Sol (#674) — a plain open/reopen (header trigger OR the row's own
+  // trigger) keeps a saved or in-progress draft and its intent; only an
+  // explicit preset pick (pickPreset) replaces the text.
+  const openKeepingDraft = () => {
+    if (!textRef.current.trim()) {
+      setIntent(PRESETS[0]!.intent);
+      setText(PRESETS[0]!.template);
+    }
+    setOpen(true);
+  };
   const pickPreset = (p: (typeof PRESETS)[number]) => {
     setIntent(p.intent);
     setText(p.template);
     setOpen(true);
   };
+
+  openKeepingDraftRef.current = openKeepingDraft;
 
   const activePreset = PRESETS.find((p) => p.intent === intent);
 
@@ -303,7 +308,7 @@ export function RequestComposerBanner({ compact = false, headerTrigger = false }
         // one is hidden; there is exactly one visible trigger at every width.
         <button
           type="button"
-          onClick={() => pickPreset(PRESETS[0]!)}
+          onClick={openKeepingDraft}
           data-testid="request-composer-trigger"
           className={`shrink-0 ${headerTrigger ? "flex sm:hidden" : "flex"} items-center gap-1.5 px-2 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors`}
         >

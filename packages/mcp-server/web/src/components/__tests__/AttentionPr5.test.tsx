@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import App from "../../App";
 import { ArtifactPanel } from "../ArtifactPanel";
@@ -105,6 +106,29 @@ describe("#430 PR 5 — requests: row (OFF) vs header Request + bar (ON)", () =>
     // Clicking Request again while editing doesn't overwrite either.
     fireEvent.click(screen.getByTestId("header-request"));
     expect((within(screen.getByTestId("request-composer")).getByRole("textbox") as HTMLInputElement).value).toBe("Plan the cache eviction");
+  });
+
+  it("Sol (#674) — the narrow row trigger also keeps the draft and its intent", () => {
+    useArtifactStore.setState({ artifacts: [], requests: [] } as any);
+    render(<App />);
+    const row = () => screen.getByTestId("request-composer");
+    fireEvent.click(within(row()).getByTestId("request-composer-trigger"));
+    fireEvent.click(within(row()).getByRole("button", { name: /^Plan…$/ }));
+    fireEvent.change(within(row()).getByRole("textbox"), { target: { value: "Plan the narrow case" } });
+    fireEvent.click(within(row()).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(row()).getByTestId("request-composer-trigger"));
+    expect((within(row()).getByRole("textbox") as HTMLInputElement).value).toBe("Plan the narrow case");
+    expect(within(row()).getByRole("button", { name: /^Plan…$/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Sol (#674) — during an outage after connecting, the header Request stays to reopen a collapsed draft", () => {
+    useArtifactStore.setState({ artifacts: [], requests: [] } as any);
+    useConnectionGraceStore.setState({ everConnected: true } as any);
+    useConnectionStore.setState({ connected: false, disconnectedSince: Date.now() } as any);
+    render(<App />);
+    fireEvent.click(screen.getByTestId("header-request"));
+    expect(within(screen.getByTestId("request-composer")).getByRole("textbox")).toBeInTheDocument();
+    useConnectionGraceStore.setState({ everConnected: false } as any);
   });
 
   it("#668 item 4 — OFF with nothing pending: no standing row; the header Request opens the composer", () => {

@@ -18,7 +18,7 @@ import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
 import { sessionLabelOf } from "./lib/sessionLabel";
 import { outageMinutes } from "./lib/outage";
-import { useConnectionGraceDriver, useTabOffline, useHydrationStalled, HYDRATION_STALLED_TEXT, RELOAD_TITLE, reloadPage } from "./lib/connectionGrace";
+import { useConnectionGraceDriver, useConnectionGraceStore, useTabOffline, useHydrationStalled, HYDRATION_STALLED_TEXT, RELOAD_TITLE, reloadPage } from "./lib/connectionGrace";
 import { ReloadConfirmDialog } from "./components/ReloadConfirmDialog";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
@@ -63,6 +63,7 @@ import { ProvenanceChip, DemoTag } from "./components/ProvenanceMarker";
 function App() {
   useSessionVisits();
   const connected = useConnectionStore((s) => s.connected);
+  const everConnected = useConnectionGraceStore((s) => s.everConnected);
   const connect = useConnectionStore((s) => s.connect);
   const sessionId = useConnectionStore((s) => s.sessionId);
   // #569 proposal 1 — live work vs demo/sample, labelled in the session bar.
@@ -737,7 +738,10 @@ function App() {
               to this button; it opens the same composer (presets + input).
               #668 item 4 (Mitch, 11-18) — bar OFF too: the always-on row cost
               a strip of the 1280×800 screen. */}
-          {connected && (
+          {/* Sol (#674) — also during an outage once connected: the composer
+              stays on screen offline (#477), and from `sm` up this is its only
+              visible trigger, so a collapsed draft stays reopenable. */}
+          {(connected || everConnected) && (
             <button
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT))}
