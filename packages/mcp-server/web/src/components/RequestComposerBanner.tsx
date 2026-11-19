@@ -284,30 +284,32 @@ export function RequestComposerBanner({ compact = false, headerTrigger = false }
   if (compact && !open) return null;
   // #668 item 4 — bar OFF with the header trigger: no standing row unless it
   // carries something (request pips or the resume prompt).
-  if (headerTrigger && !open && bridge.requests.length === 0 && !bridge.showResumeBridge) return null;
+  // Below `sm` the header trigger is hidden (App), so the row stays as a
+  // compact trigger there and disappears from `sm` up.
+  const rowOnlyNarrow = headerTrigger && !open && bridge.requests.length === 0 && !bridge.showResumeBridge;
 
   return (
     <div
       data-testid="request-composer"
-      className="px-3 py-1 bg-accent-blue-dim/40 border-b border-accent-blue/15 flex items-center gap-2 flex-wrap"
+      data-narrow-only={rowOnlyNarrow ? "true" : undefined}
+      className={`px-3 py-1 bg-accent-blue-dim/40 border-b border-accent-blue/15 ${rowOnlyNarrow ? "flex sm:hidden" : "flex"} items-center gap-2 flex-wrap`}
     >
       {/* #204 (UX M3) — COLLAPSED: a single compact trigger. Expands the full
           composer (presets + input) on demand rather than always occupying a
           heavy band of label + chips. */}
       {!open ? (
-        // Sol (#674) — with the header owning the trigger, the collapsed row
-        // carries only its pips / resume prompt.
-        headerTrigger ? null : (
+        // Sol (#674) — with the header owning the trigger (from `sm` up), the
+        // collapsed row's own trigger shows only below `sm`, where the header
+        // one is hidden; there is exactly one visible trigger at every width.
         <button
           type="button"
           onClick={() => pickPreset(PRESETS[0]!)}
           data-testid="request-composer-trigger"
-          className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
+          className={`shrink-0 ${headerTrigger ? "flex sm:hidden" : "flex"} items-center gap-1.5 px-2 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors`}
         >
           <span aria-hidden="true">✎</span>
           <span>Ask Claude for something</span>
         </button>
-        )
       ) : (
         <>
           <span className="text-2xs shrink-0" aria-hidden="true">✎</span>

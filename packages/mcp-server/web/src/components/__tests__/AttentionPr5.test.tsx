@@ -83,8 +83,10 @@ describe("#430 PR 5 — requests: row (OFF) vs header Request + bar (ON)", () =>
     const row = screen.getByTestId("request-composer");
     expect(within(row).getByTestId("request-pips")).toBeInTheDocument();
     expect(screen.getByTestId("header-request")).toHaveAccessibleName("Request");
-    // Sol (#674) P3 — one trigger: the collapsed row keeps pips, not its own trigger.
-    expect(within(row).queryByTestId("request-composer-trigger")).not.toBeInTheDocument();
+    // Sol (#674) P3 — one VISIBLE trigger per width: the row's own trigger is
+    // narrow-only (hidden from sm up), the header one is sm-up only.
+    expect(within(row).getByTestId("request-composer-trigger").className).toMatch(/\bsm:hidden\b/);
+    expect(screen.getByTestId("header-request").className).toMatch(/\bhidden sm:flex\b/);
   });
 
   it("Sol (#674) P2 — reopening from the header keeps the draft and its intent (row with pips)", () => {
@@ -108,12 +110,15 @@ describe("#430 PR 5 — requests: row (OFF) vs header Request + bar (ON)", () =>
   it("#668 item 4 — OFF with nothing pending: no standing row; the header Request opens the composer", () => {
     useArtifactStore.setState({ artifacts: [], requests: [] } as any);
     render(<App />);
-    expect(screen.queryByTestId("request-composer")).not.toBeInTheDocument();
+    // The standing row exists only for phone widths (hidden from sm up).
+    const narrowRow = screen.getByTestId("request-composer");
+    expect(narrowRow).toHaveAttribute("data-narrow-only", "true");
+    expect(narrowRow.className).toMatch(/\bsm:hidden\b/);
     fireEvent.click(screen.getByTestId("header-request"));
     const composer = screen.getByTestId("request-composer");
     expect(within(composer).getByRole("textbox", { name: "Your request to Claude" })).toBeInTheDocument();
     fireEvent.click(within(composer).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByTestId("request-composer")).not.toBeInTheDocument();
+    expect(screen.getByTestId("request-composer")).toHaveAttribute("data-narrow-only", "true");
   });
 
   it("ON: no standing row; the header Request opens the same composer; pips live in the bar's ⌄ with the served jump", () => {

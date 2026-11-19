@@ -742,17 +742,17 @@ function App() {
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT))}
               data-testid="header-request"
-              aria-label="Request"
-              className="enabled:cursor-pointer flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
+              // #668 item 4 — bar OFF: from `sm` up only. At phone widths the
+              // header's shrink-0 right group already fills 320px (the
+              // pending-banner-narrow e2e caught a +0.3px overflow), so there
+              // the request row keeps its own compact trigger instead.
+              className={`enabled:cursor-pointer ${nextUpBar ? "flex" : "hidden sm:flex"} items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors`}
               title="Request something from Claude (explain, plan, status)"
             >
               {/* #455 review — "Request", not "Ask": "Ask" is AskTrigger's
-                  question-on-this-artifact verb across the app.
-                  #668 item 4 — now shown in the default layout too, so the
-                  label is icon-only below `sm` to keep a 320px header from
-                  overflowing (pending-banner-narrow e2e). */}
+                  question-on-this-artifact verb across the app. */}
               <span aria-hidden="true">✎</span>
-              <span className="hidden sm:inline" aria-hidden="true">Request</span>
+              <span>Request</span>
             </button>
           )}
           {/* #212 (J4) — the top-level Ledger button is GONE. It was a second
