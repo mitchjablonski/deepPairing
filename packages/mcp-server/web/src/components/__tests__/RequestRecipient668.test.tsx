@@ -11,6 +11,10 @@ const sessions = [
 ];
 
 beforeEach(() => {
+  // The shared setup deletes the window-exposed connection store that
+  // sessionHeaders() reads for X-Session-Id; re-install it (as
+  // MessageInput.session / DraftLateSuccess do).
+  (window as any).__dpConnectionStore = { getState: () => useConnectionStore.getState() };
   useArtifactStore.getState().reset();
   useArtifactStore.setState({ agentFilter: "all" } as any);
   useConnectionStore.setState({ sessionId: "sess-auth-0001", activeSessions: sessions, connected: true, agentActivityAt: null } as any);
