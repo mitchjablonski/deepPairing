@@ -182,3 +182,37 @@ describe("Sol (#672) follow-up — same-mounted transitions and the raw-text fen
     expect(box().value).toBe("note\n");
   });
 });
+
+describe("Sol (#672) — the read-only thread holds no writer on Respond's draft key", () => {
+  const KEY = "dp:draft:comment:art1:{}";
+  const respondBox = () => screen.getByPlaceholderText(/Respond to the agent on this artifact/) as HTMLTextAreaElement;
+
+  it("existing comment + new Respond text survive pagehide and remount, then move to the follow-up editor on approval", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      sessionStorage.setItem(KEY, "older saved text");
+      const a = research();
+      useArtifactStore.setState({ artifacts: [a], comments: { [a.id]: [comment(a.id, "EARLIER-NOTE")] } } as any);
+      const first = render(<ArtifactDetail artifact={a} />);
+      await screen.findByText("EARLIER-NOTE");
+      fireEvent.change(respondBox(), { target: { value: "newer respond text" } });
+      act(() => { vi.advanceTimersByTime(400); }); // debounced writes settle
+      act(() => { window.dispatchEvent(new Event("pagehide")); });
+      expect(sessionStorage.getItem(KEY)).toBe("newer respond text");
+      first.unmount();
+      expect(sessionStorage.getItem(KEY)).toBe("newer respond text");
+
+      const second = render(<ArtifactDetail artifact={a} />);
+      await screen.findByText("EARLIER-NOTE");
+      expect(respondBox().value).toBe("newer respond text");
+
+      // Approved elsewhere: the thread becomes the editor and shows the live draft.
+      const approved = { ...a, status: "approved" };
+      act(() => { useArtifactStore.setState({ artifacts: [approved] } as any); });
+      second.rerender(<ArtifactDetail artifact={approved} />);
+      expect(((await screen.findByPlaceholderText(/Add a comment/)) as HTMLTextAreaElement).value).toBe("newer respond text");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
