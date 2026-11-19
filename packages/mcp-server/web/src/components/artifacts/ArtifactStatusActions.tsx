@@ -1180,7 +1180,11 @@ export function ArtifactStatusActions({
         </button>
       )}
 
-      {!comment.trim() && (
+      {/* #668 item 4 (Mitch, 11-18) — the default hint only repeated the
+          textarea placeholder ("empty ⌘⏎ = approve in 3s"); the reason ask
+          appears on click. Keep the line only where it says something the
+          placeholder doesn't: an armed Reject, or a report that acknowledges. */}
+      {!comment.trim() && (rejecting || informationalReport) && (
         <div className="text-2xs text-text-muted">
           {/* R2 — split by ARMED INTENT, same as the textarea placeholder above.
               Clearing the reason while the reject panel is open used to leave
@@ -1190,11 +1194,7 @@ export function ArtifactStatusActions({
               now says what the keystroke actually does. */}
           {rejecting
             ? "Reject needs a reason — ⌘⏎ won't approve while a reject is armed"
-            : informationalReport
-              ? `⌘⏎ on empty input acknowledges after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (redo the digest)`
-            : suppressRejectConcept
-              ? `⌘⏎ on empty input approves after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (redo the digest)`
-              : `⌘⏎ on empty input approves after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (remembered across sessions)`}
+            : `⌘⏎ on empty input acknowledges after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (redo the digest)`}
         </div>
       )}
       </>
