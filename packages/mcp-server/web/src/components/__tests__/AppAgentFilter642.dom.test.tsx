@@ -1,6 +1,6 @@
 import { sessionVisits } from "../../lib/session-visits";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Artifact } from "@deeppairing/shared";
 import App from "../../App";
 import { useArtifactStore } from "../../stores/artifact";
@@ -312,6 +312,92 @@ describe("#642 mounted App filter-following navigation", () => {
     expect(screen.getByTestId(nextUpBar ? "next-up-bar" : "pending-banner")).toHaveTextContent(
       nextUpBar ? "Decide 4" : "4 items waiting for you",
     );
+  });
+
+  it("scopes only the OFF lead, with a keyboard chip even beyond the global cap", () => {
+    const foreign = [1, 2, 3, 4].map((index) => art(`b${index}`, "B", {
+      type: "decision", title: `Foreign ${index}`, content: { context: "Choose", decisionId: `b${index}`, options: [] },
+      createdAt: `2026-05-0${index}T00:00:00.000Z`,
+    }));
+    seed([...foreign, art("a1", "A", { title: "Local first" }), art("a2", "A", { title: "Local second" })]);
+    render(<App />);
+    const banner = screen.getByTestId("pending-banner");
+    const line = () => screen.getByTestId("pending-next");
+    expect(line()).toHaveTextContent("Foreign 1");
+    const thirdDismiss = within(banner).getByRole("button", { name: "Dismiss Foreign 3" });
+    thirdDismiss.focus();
+    fireEvent.click(thirdDismiss);
+    expect(thirdDismiss).toHaveAccessibleName("Confirm dismiss Foreign 3");
+
+    choose("A");
+    expect(line()).toHaveTextContent("Local first");
+    const chip = within(banner).getByTitle("Local first");
+    expect(chip).toHaveAttribute("aria-describedby", line().id);
+    expect(chip.tabIndex).toBe(0);
+    expect(thirdDismiss).not.toBeInTheDocument();
+    expect(banner).toContainElement(document.activeElement as HTMLElement);
+    expect(banner).toHaveTextContent("6 items waiting for you");
+    expect(within(banner).getByRole("button", { name: /3 more waiting/ })).toHaveAttribute(
+      "title", "3 more waiting: Foreign 3, Foreign 4, Local second",
+    );
+    act(() => useArtifactStore.getState().openArtifact("a2"));
+    fireEvent.click(chip);
+    expect(selected()).toBe("a1");
+    expect(menu().value).toBe("A");
+    expect(useConnectionStore.getState().sessionId).toBe("bound");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(line()).toHaveTextContent("Foreign 1");
+    expect(within(banner).getByRole("button", { name: "Dismiss Foreign 3" })).toBeInTheDocument();
+    choose("A");
+    act(() => usePreferencesStore.setState({ nextUpBar: true }));
+    expect(screen.getByTestId("next-up-bar").getAttribute("data-next-copy")).toContain("Foreign 1");
+    expect(screen.getByTestId("next-up-bar")).toHaveTextContent("Decide 6");
+  });
+
+  it("leaves an empty agent without a foreign artifact lead and keeps a terminal-held lead global", () => {
+    seed([art("a1", "A", { status: "approved" }), art("b1", "B", { title: "Foreign review" })]);
+    render(<App />);
+    choose("A");
+    expect(screen.queryByTestId("pending-next")).toBeNull();
+    expect(screen.getByTestId("pending-banner")).toHaveTextContent("1 item waiting for you");
+    expect(screen.getByTestId("agent-filter-scope")).toHaveTextContent("0 pending here · 1 in other agents");
+
+    act(() => usePreflightBlockStore.setState({ blocks: [{
+      id: "hold", at: "2026-06-02T00:00:00.000Z", source: "session",
+      concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/m.sql",
+    }] }));
+    expect(screen.getByTestId("pending-next")).toHaveTextContent("HELD IN TERMINAL");
+    expect(screen.getByRole("button", { name: "Why this is held" })).toBeInTheDocument();
+    act(() => useReplayStore.setState({ active: true, cursor: "2026-06-03T00:00:00.000Z" }));
+    expect(screen.getByTestId("pending-next")).toHaveTextContent("HELD IN TERMINAL");
+    expect(screen.queryByRole("button", { name: "Why this is held" })).toBeNull();
+    act(() => {
+      useReplayStore.setState({ active: false });
+      usePreflightBlockStore.setState({ blocks: [] });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(screen.getByTestId("pending-next")).toHaveTextContent("Foreign review");
+  });
+
+  it("updates the scoped lead at the replay cursor without changing global pending totals", () => {
+    seed([
+      art("a1", "A", { title: "Local research" }),
+      art("future", "A", { title: "Future decision", type: "decision", createdAt: "2026-06-03T00:00:00.000Z",
+        content: { context: "Choose", decisionId: "future", options: [] } }),
+      art("b1", "B", { title: "Foreign research" }),
+    ]);
+    render(<App />);
+    choose("A");
+    expect(screen.getByTestId("pending-next")).toHaveTextContent("Future decision");
+    act(() => useReplayStore.setState({ active: true, cursor: "2026-06-02T00:00:00.000Z" }));
+    expect(screen.getByTestId("pending-next")).toHaveTextContent("Local research");
+    const main = screen.getByRole("main");
+    main.focus();
+    act(() => useReplayStore.setState({ cursor: "2026-05-31T00:00:00.000Z" }));
+    expect(screen.queryByTestId("pending-next")).toBeNull();
+    expect(screen.getByTestId("pending-banner")).toHaveTextContent("3 items waiting for you");
+    expect(main).toHaveFocus();
   });
 
   it("replay navigation respects cutoff and scoped n/N, rejecting a future explicit open", () => {

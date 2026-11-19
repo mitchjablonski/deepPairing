@@ -1566,8 +1566,11 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 }));
 
 /** Same membership for sidebar, keyboard and verdict advance; order stays caller-owned. */
-export function scopedVisibleArtifacts(artifacts: Artifact[], owner = useArtifactStore.getState().agentFilter): Artifact[] {
-  const replay = useReplayStore.getState();
+export function scopedVisibleArtifacts(
+  artifacts: Artifact[],
+  owner = useArtifactStore.getState().agentFilter,
+  replay: { active: boolean; cursor: string } = useReplayStore.getState(),
+): Artifact[] {
   return artifacts.filter((a) => a.status !== "superseded" &&
     (owner === "all" || a.sessionId === owner) &&
     (!replay.active || !replay.cursor || a.createdAt <= replay.cursor));

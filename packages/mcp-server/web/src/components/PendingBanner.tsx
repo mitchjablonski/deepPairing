@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { useArtifactStore } from "../stores/artifact";
+import { scopedVisibleArtifacts, useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
@@ -26,7 +26,7 @@ import { DemoTag } from "./ProvenanceMarker";
  * the tertiary dismiss link.
  *
  * #430 slice 1 — the default view's needs-you line. The LEAD chip is the
- * attention model's `next` (most consequential first), and under the chips one
+ * attention model's most consequential eligible item, and under the chips one
  * line says what it is, what waits on it and what happens when you respond —
  * from lib/attentionCopy, the SAME module the opt-in Next-up bar reads. The
  * count, the 3-chip cap, "+N more", Open and the two-step dismiss are
@@ -37,12 +37,14 @@ import { DemoTag } from "./ProvenanceMarker";
 /** Focus expansion is BOUNDED (≈4 lines, then the row scrolls) so a long
  *  why/after can never push the composer or the content off screen. */
 const EXPANDED_LEAD = "whitespace-normal break-words max-h-16 overflow-y-auto";
+const CHIP_LIMIT = 3;
 
 export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedArtifactId?: string | null } = {}) {
   const offline = useOfflineReason(); // #467 review — the dismiss chip is an act
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.openArtifact);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  const agentFilter = useArtifactStore((s) => s.agentFilter);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   // UX5 — dismissing marks a draft obsolete, which the API can't undo back to
   // draft, so require a two-step confirm instead of a one-click destructive ✕.
@@ -52,6 +54,7 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const boundSessionId = useConnectionStore((s) => s.sessionId);
   const replayActive = useReplayStore((s) => s.active);
+  const replayCursor = useReplayStore((s) => s.cursor);
   const replayExiting = useReplayStore((s) => s.exiting);
   const tabOffline = useTabOffline();
   const blocks = usePreflightBlockStore((s) => s.blocks);
@@ -68,13 +71,24 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
     artifacts, visibleSelectedArtifactId, sessionLabels, boundSessionId, sample: { content: sampleContent, sessionIds: sampleSessionIds },
     system: { holds: attentionHolds(blocks, lastSeenAt) },
   }), [artifacts, visibleSelectedArtifactId, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, blocks, lastSeenAt]);
-  const { next } = attention;
   const drafts = orderedPendingArtifacts(artifacts, attention);
+  // Filter the artifact recommendation, while preserving any terminal ask
+  // that already leads the global queue.
+  const heldLead = attention.next?.kind === "held" && attention.next.terminal === true;
+  const keepGlobalLead = agentFilter === "all" || heldLead;
+  const scopedLead = keepGlobalLead ? undefined
+    : scopedVisibleArtifacts(drafts, agentFilter, { active: replayActive, cursor: replayCursor }).find((draft) => !!draft.id);
+  const next = keepGlobalLead ? attention.next
+    : attention.lanes.decide.find((item) => item.artifactId === scopedLead?.id) ?? null;
   const reach = reachFrom({ replay: replayActive, tabOffline, agentGone: noAgentLive(activeSessions) });
   const copy = next ? copyFor(next, artifacts, reach, blocks) : null;
   const lead = next ? drafts.find((d) => d.id === next.artifactId) : undefined;
-  const shown = drafts.slice(0, 3);
-  const hidden = drafts.slice(3);
+  // A lead outside the cap still needs its keyboard chip. Keep every other
+  // draft in canonical order, and leave the chip order alone when it fits.
+  const chipOrder = lead && drafts.indexOf(lead) >= CHIP_LIMIT
+    ? [lead, ...drafts.filter((draft) => draft !== lead)] : drafts;
+  const shown = chipOrder.slice(0, CHIP_LIMIT);
+  const hidden = chipOrder.slice(CHIP_LIMIT);
   // #642 item 6 — the bar-ON line pins "+N high decision"; bar OFF (the
   // default) capped the chips at 3 and buried a high-stakes decision in
   // "+N more" (S3 evidence: 7 `n` presses to reach it). Pin the bar's
@@ -94,14 +108,12 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
   // instance never UNMOUNTS: a chip left in the armed "Dismiss?" state would
   // persist across a suppress → reappear cycle (select the draft to hide the
   // banner, deselect to bring it back), collapsing the two-step confirm to a
-  // single click across a hidden interval. Disarm whenever we suppress, so the
-  // banner always reappears with its chips reset (the onBlur reset can't fire —
-  // an unmounted-by-return chip never blurs).
+  // single click across a hidden interval. A promoted lead can also displace
+  // a chip without hiding the banner. Disarm whenever its control is removed.
   // #430 slice 1 (Sol review 5676282653, P1) — a terminal-held hook `ask` is
   // not an artifact card: the empty-drafts and single-card-in-view step-downs
   // are artifact-only, so they never hide a held lead (it has no card to be
   // the call to action). Draft count membership is unchanged.
-  const heldLead = next?.kind === "held" && next.terminal === true;
   // The lead line is ONE truncated row; it unwraps while the lead chip (the
   // single keyboard stop for the lead) or the held row has focus, and the
   // chip names the line as its description so the full what/after/why text
@@ -129,9 +141,10 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
   const [focusedChipId, setFocusedChipId] = useState<string | null>(null);
   const leadExpanded = !!lead && focusedChipId === lead.id;
   const bannerHidden = !isPendingBannerVisible(artifacts, selectedArtifactId, heldLead);
+  const confirmingChipHidden = confirmingId != null && !shown.some((draft) => draft.id === confirmingId);
   useEffect(() => {
-    if (bannerHidden) setConfirmingId(null);
-  }, [bannerHidden]);
+    if (bannerHidden || confirmingChipHidden) setConfirmingId(null);
+  }, [bannerHidden, confirmingChipHidden]);
 
   // #430 slice 2 review — Why also unmounts without being pressed: an older
   // draft takes the lead, a grant writes seenAt, or the cap prunes the ask. Read
@@ -143,8 +156,12 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
   const highTokenRef = useRef<HTMLButtonElement>(null);
   const whyHeldFocus = !!whyRef.current && whyRef.current === document.activeElement;
   const highTokenHeldFocus = !!highTokenRef.current && highTokenRef.current === document.activeElement;
+  const focusedElement = document.activeElement;
+  const focusedChipControl = focusedElement?.closest("[data-pending-chip]") && bannerRef.current?.contains(focusedElement)
+    ? focusedElement : null;
   useEffect(() => {
-    const focusedControlRemoved = (whyHeldFocus && !whyRef.current) || (highTokenHeldFocus && !highTokenRef.current);
+    const focusedControlRemoved = (whyHeldFocus && !whyRef.current) || (highTokenHeldFocus && !highTokenRef.current) ||
+      (focusedChipControl != null && !focusedChipControl.isConnected);
     if (!focusedControlRemoved) return;
     if (usePreflightBlockStore.getState().focusRequest) return;
     const active = document.activeElement;
@@ -260,7 +277,7 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
           </button>
         )}
         {shown.map((a) => (
-          <span key={a.id} className="flex items-center bg-accent-amber-dim rounded shrink-0">
+          <span key={a.id} data-pending-chip className="flex items-center bg-accent-amber-dim rounded shrink-0">
             <button
               onClick={() => selectArtifact(a.id)}
               {...(a === lead && next && copy ? { "aria-describedby": leadLineId } : {})}
