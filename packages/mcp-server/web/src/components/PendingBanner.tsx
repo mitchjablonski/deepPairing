@@ -38,7 +38,7 @@ import { DemoTag } from "./ProvenanceMarker";
  *  why/after can never push the composer or the content off screen. */
 const EXPANDED_LEAD = "whitespace-normal break-words max-h-16 overflow-y-auto";
 
-export function PendingBanner() {
+export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedArtifactId?: string | null } = {}) {
   const offline = useOfflineReason(); // #467 review — the dismiss chip is an act
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.openArtifact);
@@ -65,9 +65,9 @@ export function PendingBanner() {
   // Holds are passed so a terminal-held hook `ask` can lead (blocking tier,
   // #430 slice 1) exactly as on the bar; the count below is still drafts only.
   const attention = useMemo(() => computeAttention({
-    artifacts, sessionLabels, boundSessionId, sample: { content: sampleContent, sessionIds: sampleSessionIds },
+    artifacts, visibleSelectedArtifactId, sessionLabels, boundSessionId, sample: { content: sampleContent, sessionIds: sampleSessionIds },
     system: { holds: attentionHolds(blocks, lastSeenAt) },
-  }), [artifacts, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, blocks, lastSeenAt]);
+  }), [artifacts, visibleSelectedArtifactId, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, blocks, lastSeenAt]);
   const { next } = attention;
   const drafts = orderedPendingArtifacts(artifacts, attention);
   const reach = reachFrom({ replay: replayActive, tabOffline, agentGone: noAgentLive(activeSessions) });
@@ -77,12 +77,10 @@ export function PendingBanner() {
   const hidden = drafts.slice(3);
   // #642 item 6 — the bar-ON line pins "+N high decision"; bar OFF (the
   // default) capped the chips at 3 and buried a high-stakes decision in
-  // "+N more" (S3 evidence: 7 `n` presses to reach it). Pin the same set the
-  // bar counts (high, other than `next`), minus any already showing as a
-  // chip. Order and counts are unchanged; this is a pointer, not a re-rank.
-  const highHidden = attention.lanes.decide.filter(
-    (d) => d.kind === "decision" && d.stakes === "high" && d.id !== next?.id && !!d.artifactId &&
-      !shown.some((a) => a.id === d.artifactId),
+  // "+N more" (S3 evidence: 7 `n` presses to reach it). Pin the bar's
+  // candidates that have no chip here.
+  const highHidden = attention.highDecisionCandidates.filter(
+    (d) => !shown.some((a) => a.id === d.artifactId),
   );
   // J2b (#212) — lite-frame step-down: when the ONE pending draft is the card
   // already on screen, it IS the call to action (its own status badge + review
@@ -142,9 +140,12 @@ export function PendingBanner() {
   // A pending log request means Why was pressed: the log takes focus itself.
   const bannerRef = useRef<HTMLDivElement>(null);
   const whyRef = useRef<HTMLButtonElement>(null);
+  const highTokenRef = useRef<HTMLButtonElement>(null);
   const whyHeldFocus = !!whyRef.current && whyRef.current === document.activeElement;
+  const highTokenHeldFocus = !!highTokenRef.current && highTokenRef.current === document.activeElement;
   useEffect(() => {
-    if (!whyHeldFocus || whyRef.current) return;
+    const focusedControlRemoved = (whyHeldFocus && !whyRef.current) || (highTokenHeldFocus && !highTokenRef.current);
+    if (!focusedControlRemoved) return;
     if (usePreflightBlockStore.getState().focusRequest) return;
     const active = document.activeElement;
     if (active && active !== document.body) return;
@@ -248,6 +249,7 @@ export function PendingBanner() {
         {highHidden.length > 0 && (
           <button
             type="button"
+            ref={highTokenRef}
             data-high-decision-token
             onClick={() => selectArtifact(highHidden[0]!.artifactId!)}
             className="enabled:cursor-pointer px-2 py-0.5 text-2xs font-semibold text-accent-red bg-accent-red-dim rounded shrink-0 hover:bg-accent-red-dim/80 transition-colors"
