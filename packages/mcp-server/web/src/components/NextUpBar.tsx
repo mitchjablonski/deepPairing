@@ -518,7 +518,7 @@ export function NextUpBar({ quietCards = {}, visibleSelectedArtifactId }: {
           s.lane === "high-decision" ? (
             <button
               key={s.lane}
-                ref={highTokenRef}
+              ref={highTokenRef}
               type="button"
               data-token
               onClick={(event) => expandFrom(expanded === "high" ? false : "high", event.currentTarget)}
