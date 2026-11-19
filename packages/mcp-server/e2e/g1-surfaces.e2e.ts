@@ -131,11 +131,11 @@ test("(b) request composer + (a) changeset suggestion card + (c) withdrawn state
   for (const theme of ["dark", "light"] as const) {
     await load(page, theme);
 
-    // (b) Request composer: #204 (M3) — the row is COLLAPSED to a trigger; click
-    // it to expand the composer (opens on the Explain preset), then confirm the
-    // preset chips + input show and the example helper text persists (L3).
+    // (b) Request composer: #668 item 4 — no standing row; the header
+    // "✎ Request" opens the composer (Explain preset), then confirm the preset
+    // chips + input show and the example helper text persists (#204 L3).
+    await page.getByTestId("header-request").click();
     await expect(page.getByTestId("request-composer")).toBeVisible();
-    await page.getByTestId("request-composer-trigger").click();
     await expect(page.getByRole("button", { name: /Explain how…/ })).toBeVisible();
     await expect(page.getByLabel(/Your request to Claude/i)).toBeVisible();
     await expect(page.getByTestId("request-example-hint")).toContainText("the auth middleware works");

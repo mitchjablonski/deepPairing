@@ -171,6 +171,9 @@ export function footerReducer(s: FooterState, a: FooterAction): FooterState {
   }
 }
 
+/** Sol (#670) — the confirm ignores activation for this long after arming. */
+const DISMISS_CONFIRM_DELAY_MS = 400;
+
 export function ArtifactStatusActions({
   artifact,
   hideApprove = false,
@@ -242,6 +245,47 @@ export function ArtifactStatusActions({
   // records which verb asked, focuses the field and shows the inline prompt;
   // the prompt clears itself as soon as a reason exists.
   const [reasonAsk, setReasonAsk] = useState<null | "reject" | "revise">(null);
+  // #668 #1 — obsolete can't be undone, so the pane's Dismiss is two-step,
+  // like the PendingBanner chip and the changeset's own Dismiss. Switching
+  // artifacts drops an armed confirm.
+  const [confirmDismiss, setConfirmDismiss] = useState(false);
+  // Sol (#670) — the confirm must be a SEPARATE activation: it renders after
+  // "Keep it" (which takes the trigger's place and focus) and stays inert for a
+  // beat, so a rapid double-click on the trigger can't commit.
+  const [confirmReady, setConfirmReady] = useState(false);
+  // The trigger's width at arm time: "Keep it" reserves it, so the destructive
+  // confirm starts beyond the trigger's original hit area on the SAME row (a
+  // bottom-anchored footer that grew a row would shift content up under it).
+  const [dismissTriggerWidth, setDismissTriggerWidth] = useState<number | undefined>(undefined);
+  const dismissTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const keepItRef = useRef<HTMLButtonElement | null>(null);
+  const restoreDismissFocusRef = useRef(false);
+  const boundSessionId = useConnectionStore((s) => s.sessionId);
+  const confirmDismissRef = useRef(false);
+  confirmDismissRef.current = confirmDismiss;
+  // The identity that was armed; the write must still match it.
+  const armedDismissRef = useRef<{ id: string; version: number; sessionId: string | null } | null>(null);
+  // Disarm on any change of pane, binding or eligibility (status/version).
+  useEffect(() => {
+    setConfirmDismiss(false);
+  }, [artifact.id, artifact.status, artifact.version, boundSessionId]);
+  // Sol (#670) — Dismiss and approve are competing verdicts: while the
+  // confirmation is open no approve countdown may run, whatever armed it
+  // (`a`, empty ⌘⏎, confidence auto-arm). The arm sites refuse too.
+  useEffect(() => {
+    if (confirmDismiss && countdown !== null) dispatch({ type: "cancelCountdown" });
+  }, [confirmDismiss, countdown]);
+  useEffect(() => {
+    if (!confirmDismiss) { setConfirmReady(false); return; }
+    keepItRef.current?.focus({ preventScroll: true });
+    const t = setTimeout(() => setConfirmReady(true), DISMISS_CONFIRM_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [confirmDismiss]);
+  useEffect(() => {
+    if (confirmDismiss || !restoreDismissFocusRef.current) return;
+    restoreDismissFocusRef.current = false;
+    dismissTriggerRef.current?.focus({ preventScroll: true });
+  }, [confirmDismiss]);
 
   // #668 item 3 — Ask lives beside Respond for the types where Respond is the
   // single artifact-level composer (see RESPOND_COMPOSER_TYPES).
@@ -476,6 +520,7 @@ export function ArtifactStatusActions({
       if (!detail || detail.artifactId !== artifact.id) return;
       if (artifact.status !== "draft") return;
       if (!presentRef.current) return; // #623 — a leaving pane takes no shortcuts
+      if (confirmDismissRef.current) return; // Sol (#670) — Dismiss confirmation open
 
       // F10 (G5) — a typed note must never be silently dropped: the zero-tick
       // approves via updateArtifactStatus directly (no submitComment), so
@@ -749,8 +794,30 @@ export function ArtifactStatusActions({
    * agent's `revise_artifact mode="obsolete"` so it leaves the review queue.
    * Any typed comment rides along as the reason.
    */
+  const armDismiss = () => {
+    // An armed approve countdown must not resolve the artifact while you're
+    // deciding whether to dismiss it.
+    if (countdown !== null) dispatch({ type: "cancelCountdown" });
+    armedDismissRef.current = { id: artifact.id, version: artifact.version, sessionId: useConnectionStore.getState().sessionId };
+    setDismissTriggerWidth(dismissTriggerRef.current?.offsetWidth || undefined);
+    setConfirmDismiss(true);
+  };
+  const cancelDismiss = () => {
+    restoreDismissFocusRef.current = true;
+    setConfirmDismiss(false);
+  };
   const handleDismissObsolete = async () => {
+    if (!confirmReady) return;
+    setConfirmDismiss(false);
     if (!presentRef.current) return; // #623
+    // Recheck at commit: still this draft, online, idle.
+    const live = useArtifactStore.getState().artifacts.find((a) => a.id === artifact.id);
+    const armed = armedDismissRef.current;
+    armedDismissRef.current = null;
+    if (offline || submitting || live?.status !== "draft") return;
+    // Sol (#670) — still the exact draft (id + version) and binding that was armed.
+    if (!armed || armed.id !== live.id || armed.version !== live.version ||
+      armed.sessionId !== useConnectionStore.getState().sessionId) return;
     dispatch({ type: "submitStart" });
     try {
       await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
@@ -893,7 +960,7 @@ export function ArtifactStatusActions({
             <button
               onClick={() => handleAction("approved")}
               disabled={submitting || !!offline}
-              className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
+              className="enabled:cursor-pointer px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
               title={offline ?? (informationalReport ? "Acknowledge this report" : "Approve as-is")}
             >
@@ -965,6 +1032,7 @@ export function ArtifactStatusActions({
               // never arm an approval while offline (the countdown's zero tick
               // writes via the store directly), on a leaving pane, or mid-submit.
               if (offline || !presentRef.current || submitting) return;
+              if (confirmDismissRef.current) return; // Sol (#670) — Dismiss confirmation open
               if (openSugRef.current.total > 0) setApproveConfirm(true);
               else dispatch({ type: "armCountdown", seconds: KEYBOARD_CONFIRM_SECONDS });
             }
@@ -989,7 +1057,7 @@ export function ArtifactStatusActions({
         <button
           onClick={() => void handleRespond()}
           disabled={(submitting || !comment.trim()) || !!offline}
-          className="px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
+          className="enabled:cursor-pointer px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
                      hover:bg-accent-violet-strong-hover disabled:bg-surface-elevated disabled:text-text-muted
                      transition-all duration-[180ms] ease-out press-scale"
           title={offline ?? "Send the comment; the agent will iterate (keeps artifact in draft)"}
@@ -1017,7 +1085,7 @@ export function ArtifactStatusActions({
             <button
               onClick={() => handleAction("approved")}
               disabled={submitting || !!offline}
-              className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
+              className="enabled:cursor-pointer px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
               title={offline ?? (informationalReport ? "Acknowledge this report and send any note" : comment.trim() ? "Approve and send this comment" : "Approve as-is")}
             >
@@ -1027,7 +1095,7 @@ export function ArtifactStatusActions({
           <button
             onClick={() => (comment.trim() ? handleAction("revised") : askForReason("revise"))}
             disabled={submitting || !!offline}
-            className="px-2.5 py-1 text-2xs font-medium text-accent-amber rounded border border-accent-amber/30
+            className="enabled:cursor-pointer px-2.5 py-1 text-2xs font-medium text-accent-amber rounded border border-accent-amber/30
                        hover:bg-accent-amber-dim disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-[180ms] ease-out press-scale"
             title={offline ?? (comment.trim() ? "Request changes — agent will redraft" : "Request changes — you'll add a short reason first")}
           >
@@ -1036,7 +1104,7 @@ export function ArtifactStatusActions({
           <button
             onClick={() => (comment.trim() ? beginReject() : askForReason("reject"))}
             disabled={(submitting || rejecting) || !!offline}
-            className="px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
+            className="enabled:cursor-pointer px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
                        hover:bg-accent-red-dim disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-[180ms] ease-out press-scale"
             title={offline ?? (
               !comment.trim()
@@ -1122,16 +1190,61 @@ export function ArtifactStatusActions({
 
       {/* Tertiary — close as overcome by new information (neither approve nor
           reject). Mirrors the agent's revise_artifact mode="obsolete". */}
-      <button
-        onClick={handleDismissObsolete}
-        disabled={submitting || !!offline}
-        className="text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
-        title={offline ?? "This was valid but the discussion moved past it — close it without approving or rejecting"}
-      >
-        Dismiss — overcome by new information
-      </button>
+      {confirmDismiss ? (
+        <div
+          className="flex items-center gap-2 whitespace-nowrap"
+          role="group"
+          aria-label="Confirm dismiss"
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelDismiss(); } }}
+        >
+          {/* "Keep it" takes the trigger's place (and focus), so a repeat
+              click where the trigger was cancels instead of committing. */}
+          <button
+            ref={keepItRef}
+            type="button"
+            onClick={cancelDismiss}
+            style={dismissTriggerWidth ? { minWidth: dismissTriggerWidth } : undefined}
+            data-testid="dismiss-keep-it"
+            className="enabled:cursor-pointer text-left text-2xs text-text-muted hover:text-text-secondary"
+          >
+            Keep it
+          </button>
+          {/* The destructive target sits AFTER the trigger's reserved width on
+              the same row, so no repeat at the trigger's spot can reach it. */}
+          <div className="flex items-center gap-2" data-testid="dismiss-confirm-row">
+          <button
+            type="button"
+            onClick={() => void handleDismissObsolete()}
+            disabled={!confirmReady || submitting || !!offline}
+            aria-disabled={!confirmReady || undefined}
+            className="enabled:cursor-pointer text-2xs text-text-secondary underline disabled:opacity-50"
+            title={offline ?? undefined}
+          >
+            Dismiss? (can&apos;t be undone)
+          </button>
+          {comment.trim() && (
+            <span className="text-2xs text-text-muted" data-testid="dismiss-note-hint">Your note is sent as the reason.</span>
+          )}
+          </div>
+        </div>
+      ) : (
+        <button
+          ref={dismissTriggerRef}
+          type="button"
+          onClick={armDismiss}
+          disabled={submitting || !!offline}
+          className="enabled:cursor-pointer text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
+          title={offline ?? "This was valid but the discussion moved past it — close it without approving or rejecting"}
+        >
+          Dismiss — overcome by new information
+        </button>
+      )}
 
-      {!comment.trim() && (
+      {/* #668 item 4 (Mitch, 11-18) — the default hint only repeated the
+          textarea placeholder ("empty ⌘⏎ = approve in 3s"); the reason ask
+          appears on click. Keep the line only where it says something the
+          placeholder doesn't: an armed Reject, or a report that acknowledges. */}
+      {!comment.trim() && (rejecting || informationalReport) && (
         <div className="text-2xs text-text-muted">
           {/* R2 — split by ARMED INTENT, same as the textarea placeholder above.
               Clearing the reason while the reject panel is open used to leave
@@ -1141,11 +1254,7 @@ export function ArtifactStatusActions({
               now says what the keystroke actually does. */}
           {rejecting
             ? "Reject needs a reason — ⌘⏎ won't approve while a reject is armed"
-            : informationalReport
-              ? `⌘⏎ on empty input acknowledges after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (redo the digest)`
-            : suppressRejectConcept
-              ? `⌘⏎ on empty input approves after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (redo the digest)`
-              : `⌘⏎ on empty input approves after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (remembered across sessions)`}
+            : `⌘⏎ on empty input acknowledges after ${KEYBOARD_CONFIRM_SECONDS}s (Esc cancels) · Reject / Request changes need a reason (redo the digest)`}
         </div>
       )}
       </>

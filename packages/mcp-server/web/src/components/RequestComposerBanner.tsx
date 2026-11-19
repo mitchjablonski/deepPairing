@@ -8,6 +8,7 @@ import { noAgentLive } from "../lib/liveness";
 import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 import { useConnectionGraceStore } from "../lib/connectionGrace";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { RecipientMismatch, useMessageRecipient } from "./RecipientMismatch";
 
 /**
  * G1 (#198b) — the REQUEST COMPOSER. A quiet banner-row affordance that lets the
@@ -152,11 +153,16 @@ export function RequestResumeButton({ bridge, className = "ml-auto", label = "Co
  *  header button (design §5); it opens the same composer. */
 export const OPEN_REQUEST_COMPOSER_EVENT = "dp:open-request-composer";
 
-export function RequestComposerBanner({ compact = false }: {
+export function RequestComposerBanner({ compact = false, headerTrigger = false }: {
   /** #430 PR 5 — the Next-up bar is ON: no standing row. The header "Request"
    *  button opens the composer (the row shows only while composing), and the
-   *  pips + resume bridge live in the bar. OFF (default): exactly as before. */
+   *  pips + resume bridge live in the bar. */
   compact?: boolean;
+  /** #668 item 4 (Mitch, 11-18) — the header carries the "✎ Request" trigger in
+   *  BOTH modes, so with the bar OFF the row stands only while composing or
+   *  while it has pips / a resume prompt to show. Without it (standalone), the
+   *  collapsed row keeps its own trigger as before. */
+  headerTrigger?: boolean;
 } = {}) {
   const offline = useOfflineReason(); // #477 — act paths gate on the shared offline condition (#467)
   const everConnected = useConnectionGraceStore((s) => s.everConnected);
@@ -179,13 +185,17 @@ export function RequestComposerBanner({ compact = false }: {
   const textRef = useRef(text);
   textRef.current = text;
 
+  // #668 item 2 — like the message box, this posts to the tab's BOUND session
+  // (sessionHeaders), whatever the agent filter shows. Say who gets it.
+  // Called before the early returns below (rules-of-hooks).
+  const { recipient, ambiguous } = useMessageRecipient();
+  const openKeepingDraftRef = useRef<() => void>(() => {});
+  const ambiguousRef = useRef(ambiguous);
+  ambiguousRef.current = ambiguous;
+
   // #430 PR 5 — the header "Request" button (bar ON) opens the composer.
   useEffect(() => {
-    const openComposer = () => {
-      setIntent(PRESETS[0]!.intent);
-      setText(PRESETS[0]!.template);
-      setOpen(true);
-    };
+    const openComposer = () => openKeepingDraftRef.current();
     window.addEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
     return () => window.removeEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
   }, [setText]); // #487 — setText is now useDraft's setter
@@ -198,16 +208,31 @@ export function RequestComposerBanner({ compact = false }: {
   // (offline also covers the post-grace "never connected" case).
   if (!connected && !(offline && everConnected)) return null;
 
+  // Sol (#674) — a plain open/reopen (header trigger OR the row's own
+  // trigger) keeps a saved or in-progress draft and its intent; only an
+  // explicit preset pick (pickPreset) replaces the text.
+  const openKeepingDraft = () => {
+    if (!textRef.current.trim()) {
+      setIntent(PRESETS[0]!.intent);
+      setText(PRESETS[0]!.template);
+    }
+    setOpen(true);
+  };
   const pickPreset = (p: (typeof PRESETS)[number]) => {
     setIntent(p.intent);
     setText(p.template);
     setOpen(true);
   };
 
+  openKeepingDraftRef.current = openKeepingDraft;
+
   const activePreset = PRESETS.find((p) => p.intent === intent);
 
   const send = async () => {
     if (offline) return; // #477 — refused offline (the control is disabled too)
+    // Sol (#671) — refuse at invocation (Enter and button alike) while there is
+    // no bound recipient; the draft stays put until you pick an agent's tab.
+    if (ambiguousRef.current || !useConnectionStore.getState().sessionId && useConnectionStore.getState().activeSessions.length > 1) return;
     const t = text.trim();
     if (!t || submitting) return;
     setSubmitting(true);
@@ -262,21 +287,30 @@ export function RequestComposerBanner({ compact = false }: {
 
   // #430 PR 5 — bar ON and not composing: no standing row at all.
   if (compact && !open) return null;
+  // #668 item 4 — bar OFF with the header trigger: no standing row unless it
+  // carries something (request pips or the resume prompt).
+  // Below `sm` the header trigger is hidden (App), so the row stays as a
+  // compact trigger there and disappears from `sm` up.
+  const rowOnlyNarrow = headerTrigger && !open && bridge.requests.length === 0 && !bridge.showResumeBridge;
 
   return (
     <div
       data-testid="request-composer"
-      className="px-3 py-1 bg-accent-blue-dim/40 border-b border-accent-blue/15 flex items-center gap-2 flex-wrap"
+      data-narrow-only={rowOnlyNarrow ? "true" : undefined}
+      className={`px-3 py-1 bg-accent-blue-dim/40 border-b border-accent-blue/15 ${rowOnlyNarrow ? "flex sm:hidden" : "flex"} items-center gap-2 flex-wrap`}
     >
       {/* #204 (UX M3) — COLLAPSED: a single compact trigger. Expands the full
           composer (presets + input) on demand rather than always occupying a
           heavy band of label + chips. */}
       {!open ? (
+        // Sol (#674) — with the header owning the trigger (from `sm` up), the
+        // collapsed row's own trigger shows only below `sm`, where the header
+        // one is hidden; there is exactly one visible trigger at every width.
         <button
           type="button"
-          onClick={() => pickPreset(PRESETS[0]!)}
+          onClick={openKeepingDraft}
           data-testid="request-composer-trigger"
-          className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
+          className={`shrink-0 ${headerTrigger ? "flex sm:hidden" : "flex"} items-center gap-1.5 px-2 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors`}
         >
           <span aria-hidden="true">✎</span>
           <span>Ask Claude for something</span>
@@ -284,7 +318,10 @@ export function RequestComposerBanner({ compact = false }: {
       ) : (
         <>
           <span className="text-2xs shrink-0" aria-hidden="true">✎</span>
-          <span className="text-2xs text-accent-blue font-medium shrink-0">Ask Claude for something</span>
+          <span className="text-2xs text-accent-blue font-medium shrink-0">
+            Ask Claude for something
+            {recipient && <span className="font-normal text-text-secondary" data-testid="request-recipient"> · to the agent in {recipient}</span>}
+          </span>
           {/* Preset chips — only while expanded */}
           <div className="flex items-center gap-1 shrink-0" role="group" aria-label="Request presets">
             {PRESETS.map((p) => (
@@ -316,6 +353,12 @@ export function RequestComposerBanner({ compact = false }: {
       {!compact && <RequestResumeButton bridge={bridge} />}
 
       {/* The expanded composer input + a persistent example (UX L3). */}
+      {open && <RecipientMismatch noun="requests" testId="request-recipient-mismatch" className="basis-full mt-1" />}
+      {open && ambiguous && (
+        <p role="status" data-testid="request-recipient-ambiguous" className="basis-full mt-1 text-2xs text-accent-amber">
+          No agent selected for this tab — pick an agent&apos;s session to send this request. Your text is kept.
+        </p>
+      )}
       {open && (
         <div className="basis-full flex items-center gap-2 mt-1.5 flex-wrap">
           <input
@@ -328,7 +371,7 @@ export function RequestComposerBanner({ compact = false }: {
               if (e.key === "Escape") { setOpen(false); }
             }}
             placeholder={activePreset?.placeholder ?? ""}
-            aria-label="Your request to Claude"
+            aria-label={recipient ? `Your request to the agent in ${recipient}` : "Your request to Claude"}
             disabled={submitting}
             className="flex-1 min-w-0 px-2.5 py-1 bg-surface-secondary border border-border-default rounded text-xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
           />
@@ -336,7 +379,7 @@ export function RequestComposerBanner({ compact = false }: {
             title={offline ?? undefined}
             type="button"
             onClick={() => void send()}
-            disabled={(!text.trim() || submitting) || !!offline}
+            disabled={(!text.trim() || submitting || ambiguous) || !!offline}
             className="shrink-0 px-2.5 py-1 rounded text-2xs font-semibold text-white bg-accent-blue-strong hover:bg-accent-blue/80 disabled:opacity-50 transition-colors"
           >
             Send request
