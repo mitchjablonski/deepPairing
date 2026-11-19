@@ -196,7 +196,8 @@ describe("most-consequential-first `next` (#430 slice 1) and the '+N high decisi
   });
 
   it("projects the high cue from Next and the visible selection without changing Decide", () => {
-    const artifacts = ["lead", "shown", "other"].map((id, index) =>
+    // Legacy empty IDs stay in Decide but cannot be opened from the high cue.
+    const artifacts = ["lead", "shown", "other", ""].map((id, index) =>
       art("decision", "draft", { id, createdAt: `2026-06-01T0${index}:00:00.000Z`, content: { stakes: "high" } }),
     );
     const cases = [
@@ -210,9 +211,9 @@ describe("most-consequential-first `next` (#430 slice 1) and the '+N high decisi
       expect(attention.next?.id).toBe("lead");
       expect(attention.highDecisionCandidates.map((item) => item.id)).toEqual(candidates);
       expect(attention.line.summary.slice(0, 2)).toEqual([
-        { lane: "high-decision", count: candidates.length }, { lane: "decide", count: 3 },
+        { lane: "high-decision", count: candidates.length }, { lane: "decide", count: 4 },
       ]);
-      expect(attention.lanes.decide.map((item) => item.id)).toEqual(["lead", "shown", "other"]);
+      expect(attention.lanes.decide.map((item) => item.id)).toEqual(["lead", "shown", "other", ""]);
     }
   });
 

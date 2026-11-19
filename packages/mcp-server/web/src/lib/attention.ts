@@ -250,7 +250,7 @@ export function computeAttention(input: AttentionInput): Attention {
   // a terminal-held hook `ask` (blocking tier too), oldest first between them.
   const next = [...decide.slice(0, 1), ...held.filter((h) => h.terminal)].sort(byConsequence)[0] ?? null;
   const highDecisionCandidates = decide.filter(
-    (d) => d !== next && d.kind === "decision" && d.stakes === "high" &&
+    (d) => d !== next && d.kind === "decision" && d.stakes === "high" && !!d.artifactId &&
       d.artifactId !== input.visibleSelectedArtifactId,
   );
   const highDecisionsBeyondNext = highDecisionCandidates.length;
