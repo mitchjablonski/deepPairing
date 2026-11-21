@@ -1,1 +1,0 @@
-import{S as e}from"./artifact-DiR6KFLX.js";import{O as t}from"./index-6hoENBRH.js";function n(n){let r=t(n,e(e=>e.active));return r===`closed`||r===`frozen`}export{n as t};

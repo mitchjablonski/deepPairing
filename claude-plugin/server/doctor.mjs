@@ -15116,6 +15116,13 @@ var SkeletonFenceViewSchema = external_exports.object({
   closeLine: external_exports.number(),
   status: external_exports.enum(["todo", "filled"])
 });
+var SkeletonExteriorDigestSchema = external_exports.object({
+  sha256: external_exports.string(),
+  lines: external_exports.number().int().nonnegative(),
+  /** The file's fence ids at snapshot time (ids only), so a later check can
+   *  tell stripped markers from a changed exterior. */
+  fenceIds: external_exports.array(external_exports.string()).optional()
+});
 var SkeletonCodeSnapshotSchema = external_exports.object({
   fences: external_exports.array(SkeletonFenceViewSchema),
   /** An unfenced skeleton file (a file_map "create" entry with no fences). */
@@ -15133,7 +15140,13 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   takenAt: external_exports.string().optional(),
   /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
    *  the newest read, so concurrent progress calls can't regress the view. */
-  readAt: external_exports.number().optional()
+  readAt: external_exports.number().optional(),
+  /** #686 P1b — this file's exterior digest at snapshot time. */
+  exterior: SkeletonExteriorDigestSchema.optional(),
+  /** #686 P1b — fenced files past the snapshot cap (no visual of their own):
+   *  path and exterior digest only, never content. No digest = past the
+   *  digest budget too (listed so it reads as "not checked"). */
+  omitted: external_exports.array(external_exports.object({ path: external_exports.string(), exterior: SkeletonExteriorDigestSchema.optional() })).optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()
