@@ -12,23 +12,56 @@ describe("extractPageTextBlocks", () => {
 
   it("keeps inline elements inside their block", () => {
     expect(extractPageTextBlocks("<p>Use <strong>write-through</strong> <em>purge</em>.</p>"))
-      .toEqual(["Use write-through purge ."]);
+      .toEqual(["Use write-through purge."]);
   });
 
-  it("drops script, style, template, noscript, head and comments whole", () => {
+  it("inline tags vanish rather than splitting a word (review P3)", () => {
+    expect(extractPageTextBlocks("<p>Rail<b></b>way</p>")).toEqual(["Railway"]);
+    expect(extractPageTextBlocks("<p>Rail<span class='x'>way</span> now</p>")).toEqual(["Railway now"]);
+  });
+
+  it("drops the bodies of script, style, template and title, and comments", () => {
     const html =
       "<html><head><title>T</title><style>p{color:red}</style></head><body>" +
       "<script>var hidden = 'Railway';</script><!-- Railway --><template><p>Railway</p></template>" +
-      "<noscript>Railway</noscript><p>Visible text</p></body></html>";
+      "<p>Visible text</p></body></html>";
     expect(extractPageTextBlocks(html)).toEqual(["Visible text"]);
+  });
+
+  it("an unclosed <head> does not hide the body (review P1)", () => {
+    expect(extractPageTextBlocks("<html><head><title>x</title><body><p>Deploy on Railway</p>"))
+      .toEqual(["Deploy on Railway"]);
+  });
+
+  it("text a browser moves out of <head> is extracted (review P1)", () => {
+    expect(extractPageTextBlocks("<head><p>visible</p></head><body></body>")).toEqual(["visible"]);
+  });
+
+  it("<noscript> text is extracted: the first render has scripting disabled (review P2)", () => {
+    expect(extractPageTextBlocks("<noscript><p>Deploy on Railway</p></noscript><p>after</p>"))
+      .toEqual(["Deploy on Railway", "after"]);
+  });
+
+  it("abrupt empty comments end immediately (review P2)", () => {
+    expect(extractPageTextBlocks("<p><!-->Deploy on Railway<!-- --></p>")).toEqual(["Deploy on Railway"]);
+    expect(extractPageTextBlocks("<p><!--->Deploy on Railway<!-- --></p>")).toEqual(["Deploy on Railway"]);
+    expect(extractPageTextBlocks("<p><!-- a --!>shown</p>")).toEqual(["shown"]);
+  });
+
+  it("a comment opener inside <textarea> or <title> is not a comment (review P2)", () => {
+    expect(extractPageTextBlocks("<textarea><!-- not a comment</textarea><p>Deploy on Railway</p><!-- real -->"))
+      .toEqual(["<!-- not a comment", "Deploy on Railway"]);
+    expect(extractPageTextBlocks("<title><!--</title><p>Deploy on Railway</p><!-- -->")).toEqual(["Deploy on Railway"]);
   });
 
   it("is case-insensitive about tag names", () => {
     expect(extractPageTextBlocks("<SCRIPT>bad()</SCRIPT><P>ok</P>")).toEqual(["ok"]);
   });
 
-  it("drops the rest of the page after an unterminated script", () => {
-    expect(extractPageTextBlocks("<p>before</p><script>never closed <p>after</p>")).toEqual(["before"]);
+  it("an unterminated drop element skips only its opening tag, never the rest of the page (review P1)", () => {
+    expect(extractPageTextBlocks("<p>before</p><script>never closed <p>after</p>"))
+      .toEqual(["before", "never closed", "after"]);
+    expect(extractPageTextBlocks("<style><p>Deploy on Railway</p>")).toEqual(["Deploy on Railway"]);
   });
 
   it("treats a stray < with no closing > as text", () => {
@@ -56,7 +89,7 @@ describe("extractPageTextBlocks", () => {
   });
 
   it("stays fast on many unterminated tags (linear scan)", () => {
-    const hostile = "<script".repeat(50_000) + "<a".repeat(50_000);
+    const hostile = "<script".repeat(50_000) + "<a".repeat(50_000) + "<script>".repeat(50_000) + "<!--x-->".repeat(50_000);
     const started = Date.now();
     extractPageTextBlocks(hostile);
     expect(Date.now() - started).toBeLessThan(2000);

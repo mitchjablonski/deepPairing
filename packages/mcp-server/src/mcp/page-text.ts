@@ -6,9 +6,19 @@
  * Deliberately simple and dependency-free: it is NOT an HTML parser and never
  * renders anything. It only needs to recover the words a reviewer would read.
  *
- *  - <script>, <style>, <template>, <noscript>, <head> and comments are
- *    dropped whole (code and metadata, not page text).
- *  - Block-level tags become line breaks; every other tag becomes a space.
+ *  - The BODIES of <script>, <style>, <template> and <title> are dropped
+ *    (code and metadata, not page text), as are comments. <head> is NOT
+ *    dropped: `</head>` is optional and a browser leaves head at the first
+ *    body element, so dropping it wholesale would hide visible text. Nor is
+ *    <noscript>: the companion first renders pages with scripting disabled, so
+ *    its content is what the reviewer sees.
+ *  - A dropped element with no closing tag skips only its opening tag, never
+ *    the rest of the page (failing toward gating more text, not less).
+ *  - <textarea> is RCDATA: its content is text, never markup or a comment.
+ *  - Comments follow HTML's rules, including the abrupt empty forms `<!-->`
+ *    and `<!--->` and the `--!>` closer.
+ *  - Block-level tags become line breaks; every other tag becomes nothing, so
+ *    `Rail<b></b>way` reads "Railway".
  *  - A handful of common entities are decoded.
  *  - The result is split into one string per block, so a rejected concept has
  *    to appear WITHIN one block to match by concept tokens. Feeding the whole
@@ -20,8 +30,10 @@
  * stays linear.
  */
 
-/** Elements whose entire content is dropped. */
-const DROP_ELEMENTS = ["script", "style", "template", "noscript", "head", "title"] as const;
+/** Elements whose content is dropped (when closed). */
+const DROP_ELEMENTS = ["script", "style", "template", "title"] as const;
+/** RCDATA elements whose content is literal text (no tags, no comments). */
+const TEXT_ELEMENTS = ["textarea"] as const;
 
 /** Tags that start a new visual block (their text becomes its own string). */
 const BLOCK_TAGS = new Set([
@@ -29,6 +41,7 @@ const BLOCK_TAGS = new Set([
   "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr",
   "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot",
   "th", "thead", "tr", "ul", "body", "html", "label", "button", "option", "legend", "fieldset",
+  "head", "noscript", "textarea",
 ]);
 
 /** Upper bound on blocks handed to the matcher (cost guard for huge pages). */
@@ -66,6 +79,24 @@ export function extractPageTextBlocks(html: string): string[] {
   // ASCII-only lowercasing keeps `lower` index-aligned with `html` (a full
   // toLowerCase can change length, e.g. "İ" → "i̇"); tag names are ASCII.
   const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  // Once a closing `</tag` is known to be absent after some point, it is absent
+  // after every later point too: remember that, so many unclosed elements of
+  // one kind stay linear instead of rescanning the rest of the page each time.
+  const neverClosed = new Set<string>();
+  const findClose = (tag: string, from: number): number => {
+    if (neverClosed.has(tag)) return -1;
+    const at = lower.indexOf(`</${tag}`, from);
+    if (at === -1) neverClosed.add(tag);
+    return at;
+  };
+  // Same memo for the comment closers (`-->` / `--!>`).
+  const missingMarkers = new Set<string>();
+  const findMarker = (marker: string, from: number): number => {
+    if (missingMarkers.has(marker)) return -1;
+    const at = html.indexOf(marker, from);
+    if (at === -1) missingMarkers.add(marker);
+    return at;
+  };
   let text = "";
   let i = 0;
   const n = html.length;
@@ -76,20 +107,15 @@ export function extractPageTextBlocks(html: string): string[] {
       break;
     }
     text += html.slice(i, lt);
-    // Comment: drop through `-->` (or to the end when unterminated).
     if (lower.startsWith("<!--", lt)) {
-      const end = html.indexOf("-->", lt + 4);
-      i = end === -1 ? n : end + 3;
-      text += " ";
-      continue;
-    }
-    const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
-    if (drop) {
-      const close = lower.indexOf(`</${drop}`, lt + 1);
-      if (close === -1) break; // unterminated: the rest is that element's content
-      const gt = html.indexOf(">", close);
-      i = gt === -1 ? n : gt + 1;
-      text += "\n";
+      // Abrupt empty comments are complete: `<!-->` and `<!--->`.
+      if (lower.startsWith("<!-->", lt)) { i = lt + 5; continue; }
+      if (lower.startsWith("<!--->", lt)) { i = lt + 6; continue; }
+      const a = findMarker("-->", lt + 4);
+      const b = findMarker("--!>", lt + 4);
+      const end = a === -1 ? (b === -1 ? -1 : b + 4) : b === -1 || a < b ? a + 3 : b + 4;
+      // An unterminated comment hides the rest of the page in a browser too.
+      i = end === -1 ? n : end;
       continue;
     }
     const gt = html.indexOf(">", lt + 1);
@@ -98,8 +124,27 @@ export function extractPageTextBlocks(html: string): string[] {
       text += html.slice(lt);
       break;
     }
+    const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const literal = drop ? undefined : TEXT_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const raw = drop ?? literal;
+    if (raw) {
+      const close = findClose(raw, gt + 1);
+      if (close === -1) {
+        // Unclosed: skip only the opening tag and keep reading the page.
+        text += "\n";
+        i = gt + 1;
+        continue;
+      }
+      if (literal) text += "\n" + html.slice(gt + 1, close);
+      const closeEnd = html.indexOf(">", close);
+      text += "\n";
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
     const m = /^<\/?\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
-    text += m && BLOCK_TAGS.has(m[1]!) ? "\n" : " ";
+    // Block tags break the text into a new block; inline tags vanish, so
+    // `Rail<b></b>way` stays one word.
+    if (m && BLOCK_TAGS.has(m[1]!)) text += "\n";
     i = gt + 1;
   }
   const blocks: string[] = [];

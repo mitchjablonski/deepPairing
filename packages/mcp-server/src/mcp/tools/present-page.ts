@@ -3,7 +3,7 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import { PAGE_HTML_MAX_BYTES, type PageContent } from "@deeppairing/shared";
 import { preflightArtifact } from "../artifact-preflight.js";
-import { validatePresentPageInput, pageTooLargeError, utf8ByteLength, type ToolErrorResponse } from "../validate-tool-input.js";
+import { validatePresentPageInput, pageTooLargeError, type ToolErrorResponse } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { resolveProjectRoot } from "../../project-root.js";
@@ -88,23 +88,39 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
   if (!isWithin(rootReal, real)) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
   }
-  let stat: fs.Stats;
+  // Open once and work from the descriptor: the checks above resolved `real`,
+  // and O_NOFOLLOW refuses a symlink swapped in at that path since, so the
+  // file we stat and read is the file we checked (no TOCTOU window).
+  // O_NONBLOCK keeps a FIFO from hanging the open. Both flags are absent on
+  // Windows, where they are simply omitted.
+  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  let fd: number;
   try {
-    stat = fs.statSync(real);
+    fd = fs.openSync(real, O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0));
   } catch {
-    return refuse(`\`path\` "${requested}" could not be read.`);
+    return refuse(`\`path\` "${requested}" could not be opened.`);
   }
-  if (!stat.isFile()) return refuse(`\`path\` "${requested}" is not a regular file.`);
-  if (stat.size > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", stat.size) };
   let html: string;
   try {
-    html = fs.readFileSync(real, "utf8");
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return refuse(`\`path\` "${requested}" is not a regular file.`);
+    if (stat.size > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", stat.size) };
+    // Read at most cap + 1 bytes, so a file that grew after the fstat is
+    // caught without reading all of it.
+    const buf = Buffer.alloc(PAGE_HTML_MAX_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const got = fs.readSync(fd, buf, total, buf.length - total, total);
+      if (got === 0) break;
+      total += got;
+    }
+    if (total > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", total) };
+    html = buf.subarray(0, total).toString("utf8");
   } catch {
     return refuse(`\`path\` "${requested}" could not be read.`);
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
   }
-  // Re-check after the read (the file may have grown since the stat).
-  const bytes = utf8ByteLength(html);
-  if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", bytes) };
   if (!html.trim()) return refuse(`the file at \`path\` "${requested}" is empty.`);
   const sourcePath = path.relative(rootReal, real).split(path.sep).join("/");
   return { ok: true, html, sourcePath };

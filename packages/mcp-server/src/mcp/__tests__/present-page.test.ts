@@ -200,6 +200,39 @@ describe("present_page — the rejection gate", () => {
     expect(pages()).toHaveLength(0);
   });
 
+  it("refuses a comparison table whose single-word cell names the rejected option (review P2)", async () => {
+    store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale", concept: "Railway" });
+    const res = await callTool("present_page", {
+      title: "Hosting comparison",
+      html: "<table><tr><th>Railway</th><th>Fly.io</th></tr><tr><td>$20</td><td>$15</td></tr></table>",
+    });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("REJECTED_APPROACH_BLOCKED");
+    expect(res.text).toContain("too expensive for our scale");
+    expect(pages()).toHaveLength(0);
+  });
+
+  it("a lone generic cell does not match backwards inside an unrelated stance", async () => {
+    store.recordRejectedApproach({ description: "Overview of the auth rewrite", reason: "out of scope" });
+    const res = await callTool("present_page", {
+      title: "Cache options",
+      html: "<h2>Overview</h2><table><tr><td>None</td><td>Up to 60s</td></tr></table>",
+    });
+    expect(res.isError).toBeFalsy();
+    expect(pages()).toHaveLength(1);
+  });
+
+  it("body text after an unclosed <head> reaches the gate (review P1)", async () => {
+    store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });
+    const res = await callTool("present_page", {
+      title: "Hosting proposal",
+      html: "<html><head><title>x</title><body><p>Deploy everything on Railway next week.</p>",
+    });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("too expensive for our scale");
+    expect(pages()).toHaveLength(0);
+  });
+
   it("ignores script, style and comment text (only VISIBLE text is a proposal)", async () => {
     store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });
     const res = await callTool("present_page", {

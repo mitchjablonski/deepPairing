@@ -30,7 +30,9 @@ const HOOK_NAME = "stop";
 const MAX_AGE_MS = 30 * 60 * 1000;
 // #195 F1 — `changeset` joins the blocking set: a drafted multi-file changeset
 // awaiting review is exactly the "don't declare done" case the hook guards.
-const BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
+// #680 — a draft `page` awaiting review blocks "done" the same way. Pinned
+// equal to PENDING_DRAFT_TYPES by stop-hook-blocking-types.test.ts.
+const BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "page"];
 
 type StopArtifact = { status?: string; type?: string; createdAt?: string };
 

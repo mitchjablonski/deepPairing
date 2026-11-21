@@ -139,6 +139,9 @@ export interface PreflightOpts {
   deferRecord?: boolean;
   /** #470 — the re-gate: ignore exactly these stance rows for this call only. */
   excludeStances?: StanceRef[];
+  /** #680 — the proposal strings are free page text (present_page): pass the
+   *  matcher's #621 raw-text rule, which tightens only the reverse phrase lane. */
+  rawEditText?: boolean;
 }
 
 
@@ -231,6 +234,7 @@ export async function preflightRejectedApproaches(
     rejectedApproaches: memory.rejectedApproaches,
     teamPreferences: teamPrefs,
     globalAdvisoryConcepts,
+    ...(opts.rawEditText ? { rawEditText: true } : {}),
   });
   const result = guarded.result;
   if (guarded.coerced.length > 0 || guarded.skipped.length > 0) {

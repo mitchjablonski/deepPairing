@@ -1,7 +1,6 @@
 import type { ToolContext } from "./tools/types.js";
 import type { PreflightOpts } from "./tool-helpers.js";
 import { extractPageTextBlocks } from "./page-text.js";
-import { meaningfulTokens } from "./preflight-validator.js";
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -52,13 +51,15 @@ export function artifactProposal(type: string, title: string, value: unknown) {
       break;
     case "page":
       // #680 — the page's VISIBLE text, one string per block (page-text.ts).
-      // Body blocks need 2+ meaningful words: a lone table cell or heading
-      // ("None", "Overview") would otherwise match backwards INSIDE any stance
-      // that happens to use that word. Title, summary and concept always count.
+      // Every block is checked forward (a stance found IN the block blocks,
+      // so a lone `<th>Railway</th>` still counts). The reverse lane — a short
+      // block found inside a stance — is tightened via `rawEditText` below,
+      // so a lone cell or heading ("None", "Overview") can't match backwards
+      // inside any stance that merely uses that word.
       text = [
         title,
         c.summary,
-        ...(typeof c.html === "string" ? extractPageTextBlocks(c.html) : []).filter((b) => meaningfulTokens(b).length >= 2),
+        ...(typeof c.html === "string" ? extractPageTextBlocks(c.html) : []),
       ];
       concepts = [record(c.concept).name];
       break;
@@ -73,10 +74,19 @@ export function artifactProposal(type: string, title: string, value: unknown) {
     // Recalled rejections still surface as advice, but cannot prevent the
     // historical record from naming the rejected path.
     advisory: type === "debrief" || (type === "changeset" && c.reviewIntent === "external"),
+    // #680 — page text is free prose, not a named proposal: reuse the matcher's
+    // #621 raw-text rule (reverse phrase match needs real stance coverage).
+    ...(type === "page" ? { rawEditText: true } : {}),
   };
 }
 
 export function preflightArtifact(ctx: ToolContext, toolName: string, type: string, title: string, content: unknown, opts: Omit<PreflightOpts, "advisory"> = {}) {
   const proposal = artifactProposal(type, title, content);
-  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { ...opts, advisory: proposal.advisory }) : null;
+  return proposal
+    ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, {
+      ...opts,
+      advisory: proposal.advisory,
+      ...(proposal.rawEditText ? { rawEditText: true } : {}),
+    })
+    : null;
 }
