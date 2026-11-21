@@ -19650,6 +19650,23 @@ var ExplainerContentSchema = external_exports.object({
    */
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
+var PAGE_HTML_MAX_BYTES = 2 * 1024 * 1024;
+var PageContentSchema = external_exports.object({
+  /** The page's title (also the artifact title). `.min(1)` — required core. */
+  title: external_exports.string().min(1),
+  /** One or two sentences on what the page shows and what you want from the
+   *  reviewer. Rendered above the frame. Optional. */
+  summary: external_exports.string().optional(),
+  /** The page itself: self-contained HTML (inline CSS/JS, no network). */
+  html: external_exports.string().min(1),
+  /** Project-relative path of the file the page was read from, when it came
+   *  from `path` rather than inline `html`. Server-set; optional. */
+  sourcePath: external_exports.string().optional(),
+  /** The named pattern this page proposes, if any — same shape as the
+   *  option/code-change concept, so a reject records it on the ledger and the
+   *  gate can match it concept-to-concept. Optional. */
+  concept: DecisionOptionConceptSchema.optional()
+});
 
 // ../shared/dist/schemas/stance-exception.js
 var StanceRefSchema = external_exports.object({
@@ -19760,7 +19777,10 @@ var ArtifactTypeSchema = external_exports.enum([
   // #190 A2 — the read-only comprehension surface: a narrated, ordered
   // walk-through of how something WORKS (code archaeology / onboarding / spike
   // readout). Sections anchored to Evidence, WITHOUT findings' problem-framing.
-  "explainer"
+  "explainer",
+  // #680 — an agent-authored HTML page, reviewed as its own artifact in the
+  // sandboxed frame (approve / request changes / reject, like research/plan).
+  "page"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",
@@ -20858,6 +20878,22 @@ function coerceExplainerContent(raw2) {
     out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
   if (Array.isArray(c.unknowns))
     out.unknowns = strArr(c.unknowns);
+  return out;
+}
+function coercePageContent(raw2) {
+  const c = obj(raw2);
+  const out = { title: str(c.title), html: str(c.html) };
+  if (typeof c.summary === "string" && c.summary.trim())
+    out.summary = c.summary;
+  if (typeof c.sourcePath === "string" && c.sourcePath.trim())
+    out.sourcePath = c.sourcePath;
+  const concept = obj(c.concept);
+  if (typeof concept.name === "string" && concept.name.trim()) {
+    out.concept = {
+      name: concept.name,
+      ...typeof concept.oneLineExplanation === "string" ? { oneLineExplanation: concept.oneLineExplanation } : {}
+    };
+  }
   return out;
 }
 
@@ -31313,6 +31349,11 @@ function explainerBody(a, ctx) {
   });
   return parts.join("");
 }
+function pageBody(a, ctx) {
+  const content = coercePageContent(a.content);
+  const kb = Math.max(1, Math.ceil(Buffer.byteLength(content.html, "utf8") / 1024));
+  return (content.summary ? renderMarkdown(content.summary, 4, ctx.includeCode) : "") + (content.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(content.concept.name)}</strong></p>` : "") + `<p class="pending">An HTML page (${kb} KB)${content.sourcePath ? ` from <code>${escText(content.sourcePath)}</code>` : ""}. It is reviewed in the companion's sandboxed frame and is not embedded in this export.</p>`;
+}
 function reasoningBody(a, includeCode) {
   const content = coerceReasoningContent(a.content);
   const concept = content.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(content.concept.name)}</strong>${content.concept.oneLineExplanation ? ` \u2014 ${renderInline(content.concept.oneLineExplanation)}` : ""}</p>` : "";
@@ -31336,6 +31377,8 @@ function artifactBody(a, ctx, ownComments) {
       return debriefBody(a, ctx);
     case "explainer":
       return explainerBody(a, ctx);
+    case "page":
+      return pageBody(a, ctx);
     case "reasoning":
       return reasoningBody(a, ctx.includeCode);
     default:
@@ -32221,6 +32264,24 @@ function formatExplainerSections(state) {
   }
   return sections;
 }
+function formatPageSections(state) {
+  const sections = [];
+  const pages = state.artifacts.filter((a) => a.type === "page" && a.status !== "superseded");
+  for (const pg of pages) {
+    const content = coercePageContent(pg.content);
+    sections.push(`## Page \u2014 ${content.title || pg.title}
+`);
+    const note = rejectionNote(pg);
+    if (note) sections.push(note);
+    if (content.summary) sections.push(`${content.summary}
+`);
+    if (content.concept?.name) sections.push(`**Pattern**: ${content.concept.name}
+`);
+    sections.push(`_HTML page${content.sourcePath ? ` from \`${content.sourcePath}\`` : ""}; reviewed in the companion, not inlined here._
+`);
+  }
+  return sections;
+}
 function formatSpecSections(state) {
   const sections = [];
   const specs = state.artifacts.filter((a) => a.type === "spec" && a.status !== "superseded");
@@ -32382,6 +32443,7 @@ function formatFull(state) {
   sections.push(...formatChangesetSections(state));
   sections.push(...formatDebriefSections(state));
   sections.push(...formatExplainerSections(state));
+  sections.push(...formatPageSections(state));
   const reasoning = state.artifacts.filter((a) => a.type === "reasoning");
   if (reasoning.length > 0) {
     sections.push("<details><summary>Reasoning Log</summary>\n");
@@ -37081,7 +37143,7 @@ function createDaemon(deps) {
     stanceExceptions
   );
   app.route("/", publicRoutes);
-  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
+  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "page"]);
   function computeDaemonPendingCount() {
     let n = 0;
     for (const store of sessions.values()) {

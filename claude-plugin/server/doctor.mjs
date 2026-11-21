@@ -15449,6 +15449,23 @@ var ExplainerContentSchema = external_exports.object({
    */
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
+var PAGE_HTML_MAX_BYTES = 2 * 1024 * 1024;
+var PageContentSchema = external_exports.object({
+  /** The page's title (also the artifact title). `.min(1)` — required core. */
+  title: external_exports.string().min(1),
+  /** One or two sentences on what the page shows and what you want from the
+   *  reviewer. Rendered above the frame. Optional. */
+  summary: external_exports.string().optional(),
+  /** The page itself: self-contained HTML (inline CSS/JS, no network). */
+  html: external_exports.string().min(1),
+  /** Project-relative path of the file the page was read from, when it came
+   *  from `path` rather than inline `html`. Server-set; optional. */
+  sourcePath: external_exports.string().optional(),
+  /** The named pattern this page proposes, if any — same shape as the
+   *  option/code-change concept, so a reject records it on the ledger and the
+   *  gate can match it concept-to-concept. Optional. */
+  concept: DecisionOptionConceptSchema.optional()
+});
 
 // ../shared/dist/schemas/stance-exception.js
 var StanceRefSchema = external_exports.object({
@@ -15559,7 +15576,10 @@ var ArtifactTypeSchema = external_exports.enum([
   // #190 A2 — the read-only comprehension surface: a narrated, ordered
   // walk-through of how something WORKS (code archaeology / onboarding / spike
   // readout). Sections anchored to Evidence, WITHOUT findings' problem-framing.
-  "explainer"
+  "explainer",
+  // #680 — an agent-authored HTML page, reviewed as its own artifact in the
+  // sandboxed frame (approve / request changes / reject, like research/plan).
+  "page"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",
