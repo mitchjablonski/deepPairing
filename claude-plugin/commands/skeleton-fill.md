@@ -17,9 +17,16 @@ For each step:
 1. `update_plan_progress` → `in_progress`. That opens the step's fence.
 2. Say in 2–4 lines how you'll do it and the one non-obvious choice. In
    one-step mode this is my moment to redirect.
-3. Replace only the `SKEL_TODO` stub, with `old_string` from inside the fence
-   (leave the marker lines). Make the step's fenced test real in the same step.
-4. Run the tests or the typechecker, and fix problems inside the fence.
+3. Hand the fill to the `skeleton-filler` agent. It edits only inside the
+   step's fences and has no shell or Write tool. Brief it with the step's
+   `skelId`, each fence (file, line range, current body), the step's contract,
+   the approach we agreed, and on a retry the failing output. It replaces only
+   the `SKEL_TODO` stub (marker lines untouched), makes the step's fenced test
+   real, and ends with a STATUS report. If it reports `blocked`, treat that as
+   a skeleton change (below), not something to work around. If the agent isn't
+   available, make the same edits yourself under the same rules.
+4. Run the tests or the typechecker yourself. On a failure, send the output
+   back to the filler for a fix inside the fence.
 5. `update_plan_progress` → `done` (the reply warns if `SKEL_TODO` is left, or
    if the checklist and the code disagree).
 6. Report what landed in one or two lines. In one-step mode, **stop here**.
