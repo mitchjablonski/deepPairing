@@ -11,7 +11,7 @@ import { useSiblingSyncStore } from "../lib/siblingSync";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { LANE_MARKS, NOTHING_GLYPH } from "../lib/laneMarks";
-import { attentionHolds, copyFor, copyLineText, reachFrom, LANE_WORD } from "../lib/attentionCopy";
+import { attentionHolds, copyFor, copyLineText, reachForItem, LANE_WORD } from "../lib/attentionCopy";
 import { DemoTag } from "./ProvenanceMarker";
 import { resumePromptFor } from "./ResumeQuestionsBanner";
 import { RequestPips, RequestResumeButton, useRequestResumeBridge } from "./RequestComposerBanner";
@@ -237,9 +237,10 @@ export function NextUpBar({ quietCards = {}, visibleSelectedArtifactId }: {
   const openQuestionCount = openQuestions.length;
   const resumeCase = agentGone && openQuestionCount > 0;
   const oldestQuestion = openQuestions[0]; // waiting is oldest-first
-  const reach = reachFrom({ replay: replayActive, tabOffline, agentGone });
   // #430 slice 1 — the SAME copy PendingBanner shows for its lead item.
-  const copy = item ? copyFor(item, artifacts, reach, blocks) : null;
+  const copy = item ? copyFor(item, artifacts, reachForItem(item, artifacts, {
+    replay: replayActive, tabOffline, activeSessions,
+  }), blocks) : null;
   const why = copy?.why ?? "";
   const ifIgnored = copy?.ifIgnored ?? "";
   const after = copy?.after ?? "";
