@@ -48,4 +48,20 @@ describe("PrototypeFrame", () => {
     expect(screen.getByText(/too large to render safely/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /run prototype/i })).not.toBeInTheDocument();
   });
+
+  it("maxBytes overrides the default cap (#680 pages use 2 MB)", () => {
+    const html = "<div>" + "x".repeat(520 * 1024) + "</div>";
+    render(<PrototypeFrame html={html} maxBytes={2 * 1024 * 1024} />);
+    expect(screen.queryByText(/too large to render safely/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run prototype/i })).toBeInTheDocument();
+  });
+
+  it("staticFirst renders a script-less sandboxed frame before Run (#680)", async () => {
+    render(<PrototypeFrame html="<p>hi</p><script>1</script>" staticFirst noun="page" />);
+    const iframe = document.querySelector("iframe")!;
+    expect(iframe).not.toBeNull();
+    expect(iframe.getAttribute("sandbox")).toBe("");
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    expect(document.querySelector("iframe")!.getAttribute("sandbox")).toBe("allow-scripts");
+  });
 });

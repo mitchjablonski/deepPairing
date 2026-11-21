@@ -12,6 +12,7 @@ import {
   coerceExplainerContent,
   coerceSpecContent,
   coerceChangesetContent,
+  coercePageContent,
   isPostableFinding,
 } from "@deeppairing/shared";
 
@@ -510,6 +511,23 @@ function formatExplainerSections(state: SessionState): string[] {
   return sections;
 }
 
+/** #680 — page artifacts: title, summary and source. The HTML itself is not
+ *  inlined into the report (it renders only in the companion's sandbox). */
+function formatPageSections(state: SessionState): string[] {
+  const sections: string[] = [];
+  const pages = state.artifacts.filter((a) => a.type === "page" && a.status !== "superseded");
+  for (const pg of pages) {
+    const content = coercePageContent(pg.content);
+    sections.push(`## Page — ${content.title || pg.title}\n`);
+    const note = rejectionNote(pg);
+    if (note) sections.push(note);
+    if (content.summary) sections.push(`${content.summary}\n`);
+    if (content.concept?.name) sections.push(`**Pattern**: ${content.concept.name}\n`);
+    sections.push(`_HTML page${content.sourcePath ? ` from \`${content.sourcePath}\`` : ""}; reviewed in the companion, not inlined here._\n`);
+  }
+  return sections;
+}
+
 /** Spec artifacts rendered as markdown — objective + requirements (each with
  *  rationale + acceptance criteria). #192 secondary: the review flagged spec as
  *  a pre-existing formatFull omission alongside debrief/explainer. */
@@ -708,6 +726,9 @@ function formatFull(state: SessionState): string {
 
   // Explainer (#192) — read-only walk-through of how something works.
   sections.push(...formatExplainerSections(state));
+
+  // Page (#680) — agent-authored HTML pages, summarized (never inlined).
+  sections.push(...formatPageSections(state));
 
   // Reasoning log
   const reasoning = state.artifacts.filter((a) => a.type === "reasoning");

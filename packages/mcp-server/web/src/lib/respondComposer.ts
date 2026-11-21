@@ -5,4 +5,5 @@
  * Comments thread is read-only history. Debrief and explainer keep their own
  * ask-anything composer; changeset and decision have their own review surfaces.
  */
-export const RESPOND_COMPOSER_TYPES: ReadonlySet<string> = new Set(["plan", "spec", "research", "code_change"]);
+// #680 — `page` uses the Respond box too (its frame has no composer of its own).
+export const RESPOND_COMPOSER_TYPES: ReadonlySet<string> = new Set(["plan", "spec", "research", "code_change", "page"]);

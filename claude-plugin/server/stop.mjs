@@ -290,7 +290,7 @@ function hookStatePath(projectRoot) {
 // src/hooks/stop-hook.ts
 var HOOK_NAME = "stop";
 var MAX_AGE_MS = 30 * 60 * 1e3;
-var BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
+var BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "page"];
 function runStopHook(stdin2 = "", now = Date.now()) {
   const projectRoot = resolveHookProjectRoot();
   function exit(code, reason) {

@@ -856,3 +856,33 @@ export const ExplainerContentSchema = z.object({
     .describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered — I didn't read cli/init.ts'). Renders above the fold with a one-click Ask."),
 });
 export type ExplainerContent = z.infer<typeof ExplainerContentSchema>;
+
+// --- Page (#680 — the HTML-first review artifact) ----------------------------
+//
+// An agent-authored HTML page presented for review as its own artifact. The
+// companion renders it full-width in the same opaque-origin, no-network
+// sandbox PrototypeFrame uses for prototype visuals. It is a reviewable draft
+// like research/plan: approve, request changes, or reject with a reason — and a
+// reject feeds rejection memory exactly as the structured types do.
+
+/** The page HTML cap, in UTF-8 bytes. Enforced by present_page (and the
+ *  revise validator); the renderer refuses anything larger. */
+export const PAGE_HTML_MAX_BYTES = 2 * 1024 * 1024;
+
+export const PageContentSchema = z.object({
+  /** The page's title (also the artifact title). `.min(1)` — required core. */
+  title: z.string().min(1),
+  /** One or two sentences on what the page shows and what you want from the
+   *  reviewer. Rendered above the frame. Optional. */
+  summary: z.string().optional(),
+  /** The page itself: self-contained HTML (inline CSS/JS, no network). */
+  html: z.string().min(1),
+  /** Project-relative path of the file the page was read from, when it came
+   *  from `path` rather than inline `html`. Server-set; optional. */
+  sourcePath: z.string().optional(),
+  /** The named pattern this page proposes, if any — same shape as the
+   *  option/code-change concept, so a reject records it on the ledger and the
+   *  gate can match it concept-to-concept. Optional. */
+  concept: DecisionOptionConceptSchema.optional(),
+});
+export type PageContent = z.infer<typeof PageContentSchema>;

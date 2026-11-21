@@ -100,6 +100,7 @@ export {
   coerceChangesetContent,
   coerceDebriefContent,
   coerceExplainerContent,
+  coercePageContent,
 } from "./schemas/coerce-content.js";
 
 export {
@@ -317,6 +318,8 @@ export {
   DebriefContentSchema,
   ExplainerSectionSchema,
   ExplainerContentSchema,
+  PageContentSchema,
+  PAGE_HTML_MAX_BYTES,
   type Finding,
   type FindingSeverity,
   type ResearchContent,
@@ -354,6 +357,7 @@ export {
   type DebriefContent,
   type ExplainerSection,
   type ExplainerContent,
+  type PageContent,
 } from "./schemas/content-types.js";
 export {
   composeSendBackFeedback,

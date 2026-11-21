@@ -21,3 +21,26 @@ describe("artifact preflight projection", () => {
     expect(artifactProposal("changeset", "Local", { files: [] })?.advisory).toBe(false);
   });
 });
+
+describe("artifact preflight projection — page (#680)", () => {
+  it("projects title, summary, every visible text block and the concept; drops scripts; raw-text reverse lane", () => {
+    const p = artifactProposal("page", "Hosting proposal", {
+      summary: "Which host should we use?",
+      html: "<h1>Hosting</h1><script>const x = 'Railway';</script><p>Move the API to Railway.</p><td>None</td>",
+      concept: { name: "pay-per-request hosting" },
+    });
+    expect(p).toEqual({
+      text: ["Hosting proposal", "Which host should we use?", "Hosting", "Move the API to Railway.", "None"],
+      paths: [],
+      concepts: ["pay-per-request hosting"],
+      advisory: false,
+      // Title + summary keep the normal lanes; body blocks start at index 2.
+      rawEditTextFrom: 2,
+    });
+  });
+
+  it("tolerates a page with no html", () => {
+    expect(artifactProposal("page", "T", {})?.text).toEqual(["T"]);
+    expect(artifactProposal("page", "T", {})?.rawEditTextFrom).toBe(1);
+  });
+});

@@ -29,7 +29,8 @@ import type { Artifact, Comment } from "@deeppairing/shared";
  *  (minus `reasoning`) — pinned by a parity test so the next artifact type can't
  *  silently miss it. */
 // #570 — an unread debrief is informational; its questions remain agent-turn work.
-export const REVIEWABLE_TYPES = new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
+// #680 — a draft `page` awaits a verdict (mirrors PENDING_DRAFT_TYPES).
+export const REVIEWABLE_TYPES = new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "page"]);
 
 export function isDraftAwaitingReview(a: Artifact): boolean {
   return a.status === "draft" && REVIEWABLE_TYPES.has(a.type);
@@ -51,6 +52,7 @@ export const TURN_PART_BUCKETS: ReadonlyArray<{ types: readonly string[]; noun: 
   { types: ["code_change"], noun: "change" },
   { types: ["changeset"], noun: "changeset" },
   { types: ["plan"], noun: "plan" },
+  { types: ["page"], noun: "page" },
   // P3 — no `explainer` bucket: an explainer is not "your turn" work (see
   // REVIEWABLE_TYPES). The parity test pins flatMap(types) === REVIEWABLE_TYPES,
   // so re-adding it to one without the other fails loudly.

@@ -3227,8 +3227,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path21) {
-      let input = path21;
+    function removeDotSegments(path22) {
+      let input = path22;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3427,8 +3427,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path21, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path21 && path21 !== "/" ? path21 : void 0;
+        const [path22, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path22 && path22 !== "/" ? path22 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6790,12 +6790,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list2, fs19, exportName) {
+    function addFormats(ajv, list2, fs20, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list2)
-        ajv.addFormat(f, fs19[f]);
+        ajv.addFormat(f, fs20[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -7326,10 +7326,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path21) {
-  if (!path21)
+function getElementAtPath(obj2, path22) {
+  if (!path22)
     return obj2;
-  return path21.reduce((acc, key) => acc?.[key], obj2);
+  return path22.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7738,11 +7738,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path21, issues) {
+function prefixIssues(path22, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path21);
+    iss.path.unshift(path22);
     return iss;
   });
 }
@@ -7889,16 +7889,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path21 = []) => {
+  const processError = (error52, path22 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else {
-        const fullpath = [...path21, ...issue2.path];
+        const fullpath = [...path22, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7925,17 +7925,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path21 = []) => {
+  const processError = (error52, path22 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else {
-        const fullpath = [...path21, ...issue2.path];
+        const fullpath = [...path22, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -7967,8 +7967,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path21 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path21) {
+  const path22 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path22) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -20966,13 +20966,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path21 = ref.slice(1).split("/").filter(Boolean);
-  if (path21.length === 0) {
+  const path22 = ref.slice(1).split("/").filter(Boolean);
+  if (path22.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path21[0] === defsKey) {
-    const key = path21[1];
+  if (path22[0] === defsKey) {
+    const key = path22[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -25480,6 +25480,23 @@ var ExplainerContentSchema = external_exports.object({
    */
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
+var PAGE_HTML_MAX_BYTES = 2 * 1024 * 1024;
+var PageContentSchema = external_exports.object({
+  /** The page's title (also the artifact title). `.min(1)` — required core. */
+  title: external_exports.string().min(1),
+  /** One or two sentences on what the page shows and what you want from the
+   *  reviewer. Rendered above the frame. Optional. */
+  summary: external_exports.string().optional(),
+  /** The page itself: self-contained HTML (inline CSS/JS, no network). */
+  html: external_exports.string().min(1),
+  /** Project-relative path of the file the page was read from, when it came
+   *  from `path` rather than inline `html`. Server-set; optional. */
+  sourcePath: external_exports.string().optional(),
+  /** The named pattern this page proposes, if any — same shape as the
+   *  option/code-change concept, so a reject records it on the ledger and the
+   *  gate can match it concept-to-concept. Optional. */
+  concept: DecisionOptionConceptSchema.optional()
+});
 
 // ../shared/dist/schemas/stance-exception.js
 var StanceRefSchema = external_exports.object({
@@ -25590,7 +25607,10 @@ var ArtifactTypeSchema = external_exports.enum([
   // #190 A2 — the read-only comprehension surface: a narrated, ordered
   // walk-through of how something WORKS (code archaeology / onboarding / spike
   // readout). Sections anchored to Evidence, WITHOUT findings' problem-framing.
-  "explainer"
+  "explainer",
+  // #680 — an agent-authored HTML page, reviewed as its own artifact in the
+  // sandboxed frame (approve / request changes / reject, like research/plan).
+  "page"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",
@@ -26686,6 +26706,22 @@ function coerceExplainerContent(raw) {
     out.visuals = c.visuals.map((v2, i) => coerceVisual(v2, `visual_${i}`));
   if (Array.isArray(c.unknowns))
     out.unknowns = strArr(c.unknowns);
+  return out;
+}
+function coercePageContent(raw) {
+  const c = obj(raw);
+  const out = { title: str(c.title), html: str(c.html) };
+  if (typeof c.summary === "string" && c.summary.trim())
+    out.summary = c.summary;
+  if (typeof c.sourcePath === "string" && c.sourcePath.trim())
+    out.sourcePath = c.sourcePath;
+  const concept = obj(c.concept);
+  if (typeof concept.name === "string" && concept.name.trim()) {
+    out.concept = {
+      name: concept.name,
+      ...typeof concept.oneLineExplanation === "string" ? { oneLineExplanation: concept.oneLineExplanation } : {}
+    };
+  }
   return out;
 }
 
@@ -28315,6 +28351,11 @@ var PROSE_FIELD_MAP = {
     { path: "sections[].body", mode: "flavored" },
     { path: "unknowns[]", mode: "flavored" },
     { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
+  ],
+  // #680 — only the summary is house prose; the page HTML is the agent's own
+  // design surface and is never linted.
+  page: [
+    { path: "summary", mode: "flavored" }
   ]
 };
 function resolvePath(node, segments, prefix) {
@@ -29296,8 +29337,8 @@ var AUTONOMY_POLICY_LINE = {
 };
 
 // src/mcp/tools/types.ts
-var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
-var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"];
+var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "page"];
+var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "page", "debrief", "explainer"];
 var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer", "debrief"];
 
 // src/mcp/skeleton-line.ts
@@ -29385,7 +29426,8 @@ var ARTIFACT_TYPE_NOUN = {
   spec: "spec",
   changeset: "changeset",
   debrief: "debrief",
-  explainer: "explainer"
+  explainer: "explainer",
+  page: "page"
 };
 function artifactHumanLabel(artifact) {
   if (!artifact) return "an artifact";
@@ -30501,11 +30543,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs19 = await import("node:fs");
-    const path21 = await import("node:path");
-    const claudeMd = path21.join(process.cwd(), "CLAUDE.md");
-    if (fs19.existsSync(claudeMd)) {
-      const content = fs19.readFileSync(claudeMd, "utf-8");
+    const fs20 = await import("node:fs");
+    const path22 = await import("node:path");
+    const claudeMd = path22.join(process.cwd(), "CLAUDE.md");
+    if (fs20.existsSync(claudeMd)) {
+      const content = fs20.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
           "\n\u{1F4A1} Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
@@ -30777,13 +30819,15 @@ function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
     const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
-    for (const proposal of proposalStrings) {
+    for (let idx = 0; idx < proposalStrings.length; idx++) {
+      const proposal = proposalStrings[idx];
       const p = clean(proposal);
       if (!p) continue;
+      const rawEditText = opts.rawEditText || opts.rawEditTextFrom !== void 0 && idx >= opts.rawEditTextFrom;
       if (containsAsPhrase(p, rejNormalized)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (containsAsPhrase(specificNoun, p) && (!opts.rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
+      if (containsAsPhrase(specificNoun, p) && (!rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
         return { proposal, rejected: rej, via: "surface" };
       }
       if (containsAsPhrase(p, specificNoun)) {
@@ -30797,7 +30841,7 @@ function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
   return null;
 }
 function runPreflight(input) {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, projectRelativePaths = false } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, rawEditTextFrom, projectRelativePaths = false } = input;
   const globOpts = { projectRelativePaths };
   const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
@@ -30868,7 +30912,7 @@ function runPreflight(input) {
     }
   }
   if (rejectedApproaches.length > 0) {
-    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText });
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText, rawEditTextFrom });
     if (!match && proposalConcepts.length > 0) {
       for (const rej of rejectedApproaches) {
         if (!rej.concept) continue;
@@ -31259,7 +31303,8 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     proposalConcepts,
     rejectedApproaches: memory.rejectedApproaches,
     teamPreferences: teamPrefs,
-    globalAdvisoryConcepts
+    globalAdvisoryConcepts,
+    ...opts.rawEditTextFrom !== void 0 ? { rawEditTextFrom: opts.rawEditTextFrom } : {}
   });
   const result = guarded.result;
   if (guarded.coerced.length > 0 || guarded.skipped.length > 0) {
@@ -31412,7 +31457,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path21, v: v2 }) => `- ${path21}: ${v2.message}`);
+  const lines = shown.map(({ path: path22, v: v2 }) => `- ${path22}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function formatProseStyleWarnings(label, text, mode = "strict") {
@@ -31426,7 +31471,7 @@ function formatProseStyleWarnings(label, text, mode = "strict") {
   const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  return styleBlock(result.score, shown.map(({ path: path21, v: v2 }) => `- ${path21}: ${v2.message}`), rest);
+  return styleBlock(result.score, shown.map(({ path: path22, v: v2 }) => `- ${path22}: ${v2.message}`), rest);
 }
 function styleBlock(score, lines, rest) {
   const tail = rest > 0 ? ` (+${rest} more)` : "";
@@ -31825,9 +31870,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path21) {
+function receivedSize(input, path22) {
   let cur = input;
-  for (const seg of path21) {
+  for (const seg of path22) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -31850,8 +31895,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path21) {
-  return path21.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path22) {
+  return path22.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -31877,9 +31922,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path21 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path22 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path21}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path22}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -32408,6 +32453,87 @@ function validatePresentExplainerInput(args) {
   if (truncated) return { ok: false, error: truncated };
   return { ok: false, error: formatValidationError("present_explainer", result.error, EXAMPLE_EXPLAINER, args) };
 }
+var EXAMPLE_PAGE = `{
+  "title": "Session cache: three invalidation strategies",
+  "summary": "The trade-offs side by side. Which one should I build?",
+  "path": "docs/review/cache-options.html"
+}`;
+var PresentPageInputSchema = external_exports.object({
+  title: external_exports.string().min(1).describe("The page's title (e.g. 'Session cache: three invalidation strategies')"),
+  summary: external_exports.string().optional().describe("One or two sentences TO your pair: what the page shows and what you want from them. Rendered above the page."),
+  html: external_exports.string().min(1).optional().describe("The page as inline, self-contained HTML (inline CSS/JS; no network: the frame blocks it). Give `html` OR `path`, not both."),
+  path: external_exports.string().min(1).optional().describe("A UTF-8 HTML file inside the project root (relative or absolute), read once at present time. Give `html` OR `path`, not both."),
+  concept: external_exports.union([external_exports.string().min(1), DecisionOptionConceptSchema]).optional().describe("The named pattern this page proposes, if any (e.g. 'write-through cache purge'). A reject records it, and the gate matches future proposals against it.")
+});
+function pageError(toolName, message, code = "INPUT_VALIDATION_FAILED") {
+  const c = TOOL_ERROR_CODES[code];
+  return {
+    content: [{ type: "text", text: `${c}: ${toolName} refused \u2014 ${message} The artifact was NOT created.` }],
+    isError: true,
+    _meta: { code: c, retryable: TOOL_ERROR_RETRYABLE[c] }
+  };
+}
+function utf8ByteLength(s) {
+  return Buffer.byteLength(s, "utf8");
+}
+function pageTooLargeError(toolName, bytes) {
+  return pageError(
+    toolName,
+    `the page is ${Math.ceil(bytes / 1024)} KB, over the ${PAGE_HTML_MAX_BYTES / (1024 * 1024)} MB cap. Trim inline assets (large data: URIs, embedded fonts) and present it again.`,
+    "PAYLOAD_TOO_LARGE"
+  );
+}
+function validatePresentPageInput(args) {
+  const result = PresentPageInputSchema.safeParse({
+    title: args?.title,
+    summary: args?.summary,
+    html: args?.html,
+    path: args?.path,
+    concept: args?.concept
+  });
+  if (!result.success) {
+    return { ok: false, error: formatValidationError("present_page", result.error, EXAMPLE_PAGE, args) };
+  }
+  const d = result.data;
+  if (d.html === void 0 === (d.path === void 0)) {
+    return {
+      ok: false,
+      error: pageError("present_page", "give exactly one of `html` (inline page) or `path` (an HTML file inside the project).")
+    };
+  }
+  if (d.html !== void 0) {
+    const bytes = utf8ByteLength(d.html);
+    if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", bytes) };
+  }
+  const concept = typeof d.concept === "string" ? { name: d.concept.trim() } : d.concept;
+  return admit("present_page", {
+    title: d.title,
+    ...d.summary !== void 0 && d.summary.trim() ? { summary: d.summary } : {},
+    ...d.html !== void 0 ? { html: d.html } : {},
+    ...d.path !== void 0 ? { path: d.path } : {},
+    ...concept && concept.name ? { concept } : {}
+  });
+}
+function validateRevisePageInput(args) {
+  if (args && args.path !== void 0) {
+    return { ok: false, error: pageError("revise_artifact", "a page revision takes the new page as inline `html`; `path` is read only by present_page.") };
+  }
+  if (args && args.sourcePath !== void 0) {
+    return { ok: false, error: pageError("revise_artifact", "`sourcePath` is set by the server; leave it out of the revised content.") };
+  }
+  const result = PageContentSchema.safeParse({
+    title: args?.title,
+    summary: args?.summary,
+    html: args?.html,
+    concept: args?.concept
+  });
+  if (!result.success) {
+    return { ok: false, error: formatValidationError("revise_artifact", result.error, EXAMPLE_PAGE, args) };
+  }
+  const bytes = utf8ByteLength(result.data.html);
+  if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("revise_artifact", bytes) };
+  return { ok: true, data: result.data };
+}
 function validateLogReasoningInput(args) {
   const result = ReasoningContentSchema.safeParse({
     action: args?.action,
@@ -32483,7 +32609,10 @@ var TOOL_INPUT_SCHEMAS = {
   // schema (it doubles as the artifact title). G1 (#198b) adds the optional
   // servedRequestId linkage (the validator ignores it — it builds its own
   // content object from named fields — so it stays advertisement-only).
-  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY })
+  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
+  // #680 — the HTML-first page. `html` XOR `path` is enforced by the validator
+  // (a JSON-Schema oneOf would be advertised but is poorly supported by clients).
+  present_page: PresentPageInputSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY })
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -33098,7 +33227,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path21 = sanitizePath(file2.path, projectRoot2);
+  const path22 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -33115,7 +33244,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path21)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -33234,9 +33363,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path21 = sanitizePath(e.filePath, projectRoot2);
+    const path22 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path21 ? `<p class="anchor"><code>${esc2(path21 + range)}</code></p>` : "";
+    let anchor = path22 ? `<p class="anchor"><code>${esc2(path22 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -33393,9 +33522,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path21 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path22 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path21)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -33488,6 +33617,11 @@ function explainerBody(a, ctx) {
   });
   return parts.join("");
 }
+function pageBody(a, ctx) {
+  const content = coercePageContent(a.content);
+  const kb = Math.max(1, Math.ceil(Buffer.byteLength(content.html, "utf8") / 1024));
+  return (content.summary ? renderMarkdown(content.summary, 4, ctx.includeCode) : "") + (content.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(content.concept.name)}</strong></p>` : "") + `<p class="pending">An HTML page (${kb} KB)${content.sourcePath ? ` from <code>${escText(content.sourcePath)}</code>` : ""}. It is reviewed in the companion's sandboxed frame and is not embedded in this export.</p>`;
+}
 function reasoningBody(a, includeCode) {
   const content = coerceReasoningContent(a.content);
   const concept = content.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(content.concept.name)}</strong>${content.concept.oneLineExplanation ? ` \u2014 ${renderInline(content.concept.oneLineExplanation)}` : ""}</p>` : "";
@@ -33511,6 +33645,8 @@ function artifactBody(a, ctx, ownComments) {
       return debriefBody(a, ctx);
     case "explainer":
       return explainerBody(a, ctx);
+    case "page":
+      return pageBody(a, ctx);
     case "reasoning":
       return reasoningBody(a, ctx.includeCode);
     default:
@@ -34396,6 +34532,24 @@ function formatExplainerSections(state) {
   }
   return sections;
 }
+function formatPageSections(state) {
+  const sections = [];
+  const pages = state.artifacts.filter((a) => a.type === "page" && a.status !== "superseded");
+  for (const pg of pages) {
+    const content = coercePageContent(pg.content);
+    sections.push(`## Page \u2014 ${content.title || pg.title}
+`);
+    const note = rejectionNote(pg);
+    if (note) sections.push(note);
+    if (content.summary) sections.push(`${content.summary}
+`);
+    if (content.concept?.name) sections.push(`**Pattern**: ${content.concept.name}
+`);
+    sections.push(`_HTML page${content.sourcePath ? ` from \`${content.sourcePath}\`` : ""}; reviewed in the companion, not inlined here._
+`);
+  }
+  return sections;
+}
 function formatSpecSections(state) {
   const sections = [];
   const specs = state.artifacts.filter((a) => a.type === "spec" && a.status !== "superseded");
@@ -34557,6 +34711,7 @@ function formatFull(state) {
   sections.push(...formatChangesetSections(state));
   sections.push(...formatDebriefSections(state));
   sections.push(...formatExplainerSections(state));
+  sections.push(...formatPageSections(state));
   const reasoning = state.artifacts.filter((a) => a.type === "reasoning");
   if (reasoning.length > 0) {
     sections.push("<details><summary>Reasoning Log</summary>\n");
@@ -35138,6 +35293,175 @@ Tell the human this before they send it.
   };
 }
 
+// src/mcp/page-text.ts
+var DROP_ELEMENTS = ["script", "style", "template", "title"];
+var TEXT_ELEMENTS = ["textarea", "xmp"];
+var BLOCK_TAGS = /* @__PURE__ */ new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "br",
+  "caption",
+  "dd",
+  "details",
+  "div",
+  "dl",
+  "dt",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "li",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+  "body",
+  "html",
+  "label",
+  "button",
+  "option",
+  "legend",
+  "fieldset",
+  "head",
+  "noscript",
+  "textarea",
+  "xmp"
+]);
+var PAGE_TEXT_MAX_BLOCKS = 2e3;
+var NAMED_ENTITIES = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  rsquo: "'",
+  lsquo: "'",
+  rdquo: '"',
+  ldquo: '"',
+  middot: "\xB7",
+  times: "\xD7",
+  rarr: "\u2192",
+  larr: "\u2190"
+};
+function decodeEntities(s) {
+  return s.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,8});/gi, (m, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return " ";
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return " ";
+      }
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? m;
+  });
+}
+function opensElement(lower, at, tag) {
+  if (!lower.startsWith(tag, at + 1)) return false;
+  const next = lower.charCodeAt(at + 1 + tag.length);
+  return Number.isNaN(next) || next === 62 || next === 47 || next <= 32;
+}
+function extractPageTextBlocks(html) {
+  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  const lastAt = /* @__PURE__ */ new Map();
+  const memoIndexOf = (hay, needle, from) => {
+    const prev = lastAt.get(needle);
+    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
+    const at = hay.indexOf(needle, from);
+    lastAt.set(needle, at);
+    return at;
+  };
+  const findClose = (tag, from) => memoIndexOf(lower, `</${tag}`, from);
+  const findMarker = (marker, from) => memoIndexOf(html, marker, from);
+  let text = "";
+  let i = 0;
+  const n = html.length;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      text += html.slice(i);
+      break;
+    }
+    text += html.slice(i, lt);
+    if (lower.startsWith("<!--", lt)) {
+      if (lower.startsWith("<!-->", lt)) {
+        i = lt + 5;
+        continue;
+      }
+      if (lower.startsWith("<!--->", lt)) {
+        i = lt + 6;
+        continue;
+      }
+      const a = findMarker("-->", lt + 4);
+      const b = findMarker("--!>", lt + 4);
+      const end = a === -1 ? b === -1 ? -1 : b + 4 : b === -1 || a < b ? a + 3 : b + 4;
+      i = end === -1 ? n : end;
+      continue;
+    }
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) {
+      text += html.slice(lt);
+      break;
+    }
+    if (opensElement(lower, lt, "plaintext")) {
+      text += "\n" + html.slice(gt + 1);
+      break;
+    }
+    const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const literal2 = drop ? void 0 : TEXT_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const raw = drop ?? literal2;
+    if (raw) {
+      const close = findClose(raw, gt + 1);
+      if (close === -1) {
+        text += "\n";
+        i = gt + 1;
+        continue;
+      }
+      if (literal2) text += "\n" + html.slice(gt + 1, close);
+      const closeEnd = html.indexOf(">", close);
+      text += "\n";
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const m = /^<\/?\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
+    if (m && BLOCK_TAGS.has(m[1])) text += "\n";
+    i = gt + 1;
+  }
+  const blocks = [];
+  for (const line of decodeEntities(text).split("\n")) {
+    const t = line.replace(/\s+/g, " ").trim();
+    if (t) blocks.push(t);
+    if (blocks.length >= PAGE_TEXT_MAX_BLOCKS) break;
+  }
+  return blocks;
+}
+
 // src/mcp/artifact-preflight.ts
 var record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 var list = (value) => Array.isArray(value) ? value : [];
@@ -35148,6 +35472,7 @@ function artifactProposal(type, title, value) {
   let text = [];
   let paths = [];
   let concepts = [];
+  let body = [];
   switch (type) {
     case "research":
       text = [title, c.summary, ...field(c.findings, "title"), ...field(c.findings, "recommendation")];
@@ -35180,22 +35505,36 @@ function artifactProposal(type, title, value) {
     case "explainer":
       text = [title, c.overview, ...field(c.sections, "heading")];
       break;
+    case "page":
+      text = [title, c.summary];
+      body = typeof c.html === "string" ? extractPageTextBlocks(c.html) : [];
+      concepts = [record2(c.concept).name];
+      break;
     default:
       return null;
   }
+  const head = strings(text);
+  const bodyText = strings(body);
   return {
-    text: strings(text),
+    text: [...head, ...bodyText],
     paths: strings(paths),
     concepts: strings(concepts),
     // A debrief reports what already happened; it is not a fresh proposal.
     // Recalled rejections still surface as advice, but cannot prevent the
     // historical record from naming the rejected path.
-    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external"
+    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external",
+    // #680 — page BODY text is free prose, not a named proposal: the matcher's
+    // #621 raw-text rule applies from the first body block on.
+    ...type === "page" ? { rawEditTextFrom: head.length } : {}
   };
 }
 function preflightArtifact(ctx, toolName, type, title, content, opts = {}) {
   const proposal = artifactProposal(type, title, content);
-  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { ...opts, advisory: proposal.advisory }) : null;
+  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, {
+    ...opts,
+    advisory: proposal.advisory,
+    ...proposal.rawEditTextFrom !== void 0 ? { rawEditTextFrom: proposal.rawEditTextFrom } : {}
+  }) : null;
 }
 
 // src/mcp/tools/present-findings.ts
@@ -35477,13 +35816,13 @@ async function admitBlockedProposal(ctx, input) {
   const fits = !!resolved && Buffer.byteLength(JSON.stringify(resolved.snapshot)) <= MAX_SNAPSHOT_BYTES;
   const exceptionFields = { callFingerprint: handle.callFingerprint, ...fits ? { snapshot: resolved.snapshot, preconditions: resolved.preconditions } : {} };
   const blockOf = (event) => ({ ...event, ...exceptionFields });
-  const refuse = (event, source, response, line2 = "") => {
+  const refuse2 = (event, source, response, line2 = "") => {
     recordPreflightBlockEvent(ctx.store, ctx.broadcast, blockOf(event), source);
     const hint = source === "session" && ctx.store.runStanceOperation ? STANCE_MESSAGES.blockHint : "";
     return { response: withLine(response, [line2, hint].filter(Boolean).join("\n")) };
   };
   if (pre.source !== "session" || !ctx.store.inspectStanceExceptions || !ctx.store.runStanceOperation) {
-    return refuse(pre.event, pre.source, pre.response);
+    return refuse2(pre.event, pre.source, pre.response);
   }
   let candidates = [];
   let inactiveLine = "";
@@ -35502,9 +35841,9 @@ async function admitBlockedProposal(ctx, input) {
   } catch {
     candidates = [];
   }
-  if (candidates.length === 0 || !resolved) return refuse(pre.event, pre.source, pre.response, inactiveLine);
+  if (candidates.length === 0 || !resolved) return refuse2(pre.event, pre.source, pre.response, inactiveLine);
   const regate = await input.regate(candidates.map((c) => c.stance));
-  if (regate && !regate.ok) return refuse(regate.event, regate.source, regate.response);
+  if (regate && !regate.ok) return refuse2(regate.event, regate.source, regate.response);
   const result = await ctx.store.runStanceOperation(handle.operationId, {
     callFingerprint: handle.callFingerprint,
     admission: {
@@ -35525,7 +35864,7 @@ async function admitBlockedProposal(ctx, input) {
 ${STANCE_MESSAGES.blockHint}`) };
   }
   const line = dep ? STANCE_MESSAGES.dependencyChanged(dep) : result.reason === "client_snapshot_mismatch" || result.reason === "snapshot_mismatch" ? STANCE_MESSAGES.versionMismatch : STANCE_MESSAGES.inactive(String(result.state ?? result.reason ?? ""), result.artifactId, result.ceilingAt);
-  return refuse(pre.event, pre.source, pre.response, line);
+  return refuse2(pre.event, pre.source, pre.response, line);
 }
 
 // src/mcp/tools/present-options.ts
@@ -36300,7 +36639,8 @@ async function assembleCheckFeedback(ctx, args) {
     // address the rejection" posture, not "You may proceed".
     // #190 A2 — `explainer` joins too: a rejected explainer ("this walk-through
     // is wrong / misleading") must get "Do NOT apply", not "You may proceed".
-    ["code_change", "spec", "research", "decision", "changeset", "debrief", "explainer"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
+    // #680 — a rejected `page` likewise gets "Do NOT apply".
+    ["code_change", "spec", "research", "decision", "changeset", "debrief", "explainer", "page"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
   let fullState = null;
@@ -36681,6 +37021,8 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     baseClause = "Wait for spec approval before planning implementation.";
   } else if (pendingArts.some((a) => a.type === "research")) {
     baseClause = "Wait for findings review before proposing solutions.";
+  } else if (pendingArts.some((a) => a.type === "page")) {
+    baseClause = "Wait for the page review before acting on it.";
   }
   if (structuredSuggestions.length > 0) {
     blockingClauses.push(
@@ -38029,6 +38371,9 @@ var SUPERSEDE_VALIDATORS = {
   // #190 A2 — a revised explainer must pass the same strict validator as
   // present_explainer (title + overview + non-empty sections, echo guard).
   explainer: validatePresentExplainerInput,
+  // #680 — a revised page carries the new version as inline html (the strict
+  // stored shape; `path` re-reads are the file-watch slice).
+  page: validateRevisePageInput,
   reasoning: validateLogReasoningInput
 };
 async function handleReviseArtifact(ctx, args) {
@@ -39605,6 +39950,158 @@ async function handlePresentExplainer(ctx, args) {
   };
 }
 
+// src/mcp/tools/present-page.ts
+import fs14 from "node:fs";
+import path15 from "node:path";
+function refuse(message) {
+  const code = TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED;
+  return {
+    ok: false,
+    error: {
+      content: [{ type: "text", text: `${code}: present_page refused \u2014 ${message} The artifact was NOT created.` }],
+      isError: true,
+      _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] }
+    }
+  };
+}
+function isWithin(root, target) {
+  const rel = path15.relative(root, target);
+  return rel === "" || !rel.startsWith("..") && !path15.isAbsolute(rel);
+}
+function readPageSource(projectRoot2, requested) {
+  if (requested.includes("\0")) return refuse("`path` contains a NUL byte.");
+  let rootReal;
+  try {
+    rootReal = fs14.realpathSync(projectRoot2);
+  } catch {
+    return refuse("the project root could not be resolved, so `path` cannot be checked. Pass the page inline as `html`.");
+  }
+  const lexical = path15.resolve(projectRoot2, requested);
+  if (!isWithin(projectRoot2, lexical) && !isWithin(rootReal, lexical)) {
+    return refuse(`\`path\` "${requested}" is outside the project root. Write the page inside the project, or pass it inline as \`html\`.`);
+  }
+  let real;
+  try {
+    real = fs14.realpathSync(lexical);
+  } catch {
+    return refuse(`no file at \`path\` "${requested}" (resolved inside the project root).`);
+  }
+  if (!isWithin(rootReal, real)) {
+    return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
+  }
+  const { O_RDONLY, O_NOFOLLOW: O_NOFOLLOW2, O_NONBLOCK } = fs14.constants;
+  let fd;
+  try {
+    fd = fs14.openSync(real, O_RDONLY | (O_NOFOLLOW2 ?? 0) | (O_NONBLOCK ?? 0));
+  } catch {
+    return refuse(`\`path\` "${requested}" could not be opened.`);
+  }
+  let html;
+  try {
+    let again;
+    try {
+      again = fs14.realpathSync(lexical);
+    } catch {
+      return refuse(`\`path\` "${requested}" changed while it was being read.`);
+    }
+    if (again !== real || !isWithin(rootReal, again)) {
+      return refuse(`\`path\` "${requested}" changed while it was being read.`);
+    }
+    const stat = fs14.fstatSync(fd);
+    if (!stat.isFile()) return refuse(`\`path\` "${requested}" is not a regular file.`);
+    if (stat.size > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", stat.size) };
+    const buf = Buffer.alloc(PAGE_HTML_MAX_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const got = fs14.readSync(fd, buf, total, buf.length - total, total);
+      if (got === 0) break;
+      total += got;
+    }
+    if (total > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", total) };
+    html = buf.subarray(0, total).toString("utf8");
+  } catch {
+    return refuse(`\`path\` "${requested}" could not be read.`);
+  } finally {
+    try {
+      fs14.closeSync(fd);
+    } catch {
+    }
+  }
+  if (!html.trim()) return refuse(`the file at \`path\` "${requested}" is empty.`);
+  const sourcePath = path15.relative(rootReal, real).split(path15.sep).join("/");
+  return { ok: true, html, sourcePath };
+}
+async function presentPage(ctx, args, opts = {}) {
+  const validated = validatePresentPageInput(args);
+  if (!validated.ok) return validated.error;
+  const input = validated.data;
+  let html;
+  let sourcePath;
+  if (input.path !== void 0) {
+    const source = readPageSource(opts.projectRoot ?? resolveProjectRoot().projectRoot, input.path);
+    if (!source.ok) return source.error;
+    html = source.html;
+    sourcePath = source.sourcePath;
+  } else {
+    html = input.html ?? "";
+  }
+  const content = {
+    title: input.title,
+    ...input.summary !== void 0 ? { summary: input.summary } : {},
+    html,
+    ...sourcePath !== void 0 ? { sourcePath } : {},
+    ...input.concept !== void 0 ? { concept: input.concept } : {}
+  };
+  const pre = await preflightArtifact(ctx, "present_page", "page", input.title, content);
+  if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_page", hashPresentArgs({ ...args ?? {}, html }));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
+  const id = `art_${nanoid3(10)}`;
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "page",
+      title: input.title,
+      content,
+      feature: typeof args?.feature === "string" ? args.feature : void 0,
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
+  const secretMatches = artifact.secretWarnings ?? [];
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_page", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label)
+    });
+  }
+  notifyResourcesListChanged(ctx.server);
+  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  await ctx.helpers.autoNameSession(artifact.title);
+  const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
+  const traceSummary = formatPreflightTraceSummary(pre.trace);
+  const nudge = await revisionNudge(ctx.store, "page", input.title, id);
+  const from = sourcePath ? ` from ${sourcePath}` : "";
+  return {
+    content: [{
+      type: "text",
+      text: `Page "${artifact.title}" presented for review (${id})${from}. Your pair reviews it at localhost:${reviewPort}, in a sandboxed frame with no network; scripts run only when they click Run. Call check_feedback for their verdict and comments.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
+    }]
+  };
+}
+function handlePresentPage(ctx, args) {
+  return presentPage(ctx, args);
+}
+
 // src/store/stance-add.ts
 var STANCE_CONCEPT_MIN = 3;
 var STANCE_CONCEPT_MAX = 120;
@@ -39997,22 +40494,22 @@ async function handleRecordStance(ctx, args) {
 }
 
 // src/daemon/status.ts
-import fs14 from "node:fs";
-import path15 from "node:path";
+import fs15 from "node:fs";
+import path16 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path15.resolve(startDir);
+  let dir = path16.resolve(startDir);
   for (; ; ) {
-    const candidate = path15.join(dir, ".deeppairing", "daemon.json");
-    if (fs14.existsSync(candidate)) {
+    const candidate = path16.join(dir, ".deeppairing", "daemon.json");
+    if (fs15.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs14.readFileSync(candidate, "utf-8"));
+        const parsed = JSON.parse(fs15.readFileSync(candidate, "utf-8"));
         const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
         return { dir, info };
       } catch {
         return { dir, info: {} };
       }
     }
-    const parent = path15.dirname(dir);
+    const parent = path16.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -40344,6 +40841,12 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_explainer)
+      },
+      {
+        name: "present_page",
+        annotations: { title: "Present page", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description: "Present an HTML PAGE you wrote for your pair to review: a comparison table, a mock-up, a diagram-heavy proposal, a one-page design: anything that reads best as a page. Give a `title`, then EITHER the page inline as `html` OR a `path` to an HTML file inside the project (read once, up to 2 MB; paths outside the project root, including through symlinks, are refused). Optional `summary` (one or two sentences TO your pair: what the page shows and what you want from them) and `concept` (the named pattern the page proposes, so a reject is remembered against it).\n\nRendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, fonts or images; inline everything, data: URIs are fine). Its scripts run only when your pair clicks Run, so the page must read well without them.\n\nThe rejection gate applies: the page's visible text, title, summary and concept are checked against the approaches your pair has rejected, exactly like the other present_* tools, and a match is refused with their stored reason (REJECTED_APPROACH_BLOCKED). Rework the approach; don't reword the page to slip past it.\n\nWorkflow: it is a reviewable draft like present_plan or present_findings: your pair approves, requests changes or rejects with a reason. Non-blocking: it records and returns immediately; call check_feedback for the verdict and comments. To ship a new version, revise_artifact with mode 'supersede' and the new page as inline `html`. Prefer the structured tools when the review needs per-line, per-option or per-file marks (present_changeset, present_options).",
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_page)
       },
       {
         name: "recall",
@@ -40904,6 +41407,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             return handlePresentDebrief(ctx, args);
           case "present_explainer":
             return handlePresentExplainer(ctx, args);
+          case "present_page":
+            return handlePresentPage(ctx, args);
           case "check_feedback":
             return handleCheckFeedback(ctx, args);
           // III12 — case "request_horizon_check" removed. The workflow
@@ -40963,40 +41468,40 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
 
 // src/daemon/lifecycle.ts
 import { spawn as spawn2, execFileSync } from "node:child_process";
-import fs16 from "node:fs";
+import fs17 from "node:fs";
 import net from "node:net";
-import path17 from "node:path";
+import path18 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/daemon/token.ts
-import fs15 from "node:fs";
+import fs16 from "node:fs";
 import os3 from "node:os";
-import path16 from "node:path";
+import path17 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path16.isAbsolute(xdg)) {
+  if (xdg && path17.isAbsolute(xdg)) {
     try {
-      if (fs15.statSync(xdg).isDirectory()) return path16.join(xdg, "deeppairing");
+      if (fs16.statSync(xdg).isDirectory()) return path17.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path16.join(os3.tmpdir(), "deeppairing");
+  return path17.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path16.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path17.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs15.existsSync(file2)) return null;
-    return JSON.parse(fs15.readFileSync(file2, "utf-8"));
+    if (!fs16.existsSync(file2)) return null;
+    return JSON.parse(fs16.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 
 // src/daemon/lifecycle.ts
-var __thisDir2 = path17.dirname(fileURLToPath3(import.meta.url));
+var __thisDir2 = path18.dirname(fileURLToPath3(import.meta.url));
 var DAEMON_FILE = "daemon.json";
 var MAX_PORT_ATTEMPTS = 10;
 function logStale(msg) {
@@ -41007,13 +41512,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path17.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path18.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs16.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs16.readFileSync(infoPath, "utf-8"));
+    if (!fs17.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs17.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -41097,7 +41602,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs16.unlinkSync(daemonInfoPath(projectRoot2));
+      fs17.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -41161,8 +41666,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path17.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs16.existsSync(logPath)) {
+  const logPath = path18.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs17.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -41204,8 +41709,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path17.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs16.existsSync(daemonScript) ? daemonScript : path17.join(__thisDir2, "daemon.js");
+  const daemonScript = path18.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs17.existsSync(daemonScript) ? daemonScript : path18.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -41297,7 +41802,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs16.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs17.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -41580,11 +42085,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs19 = await import("node:fs");
-      const path21 = await import("node:path");
-      const infoPath = path21.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs19.existsSync(infoPath)) return false;
-      const raw = fs19.readFileSync(infoPath, "utf-8");
+      const fs20 = await import("node:fs");
+      const path22 = await import("node:path");
+      const infoPath = path22.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs20.existsSync(infoPath)) return false;
+      const raw = fs20.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -41638,7 +42143,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path21, init, isRetry = false) {
+  async request(path22, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -41649,12 +42154,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path21}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path22}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path21, init, true);
+        if (recovered) return this.request(path22, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -41669,7 +42174,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path21, init, true);
+        return this.request(path22, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -41680,7 +42185,7 @@ var DaemonClient = class {
       }
       await this.register(this.lastRegisterMeta);
       void this.notifyRecovered();
-      return this.request(path21, init, true);
+      return this.request(path22, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -41701,15 +42206,15 @@ var DaemonClient = class {
       );
     }
   }
-  async post(path21, body) {
-    return this.request(path21, {
+  async post(path22, body) {
+    return this.request(path22, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path21) {
-    return this.request(path21, {});
+  async get(path22) {
+    return this.request(path22, {});
   }
   // --- Session lifecycle ---
   /**
@@ -42130,9 +42635,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path21) {
+  async requestPublic(path22) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path21}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path22}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -42177,12 +42682,12 @@ var DaemonClient = class {
 };
 
 // src/store/project-registry.ts
-import fs17 from "node:fs";
+import fs18 from "node:fs";
 import os4 from "node:os";
-import path18 from "node:path";
+import path19 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path18.join(os4.homedir(), ".deeppairing", "projects.json");
+  return path19.join(os4.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {
@@ -42206,8 +42711,8 @@ function readFile() {
   }
   let raw;
   try {
-    if (!fs17.existsSync(filePath)) return emptyFile();
-    raw = JSON.parse(fs17.readFileSync(filePath, "utf-8"));
+    if (!fs18.existsSync(filePath)) return emptyFile();
+    raw = JSON.parse(fs18.readFileSync(filePath, "utf-8"));
   } catch (err) {
     salvageLog("projects.json", `unreadable/unparseable \u2014 starting from empty (${String(err)})`);
     return emptyFile();
@@ -42231,7 +42736,7 @@ function readFile() {
     }
     projects[key] = {
       projectRoot: v2.projectRoot,
-      name: typeof v2.name === "string" && v2.name ? v2.name : path18.basename(v2.projectRoot),
+      name: typeof v2.name === "string" && v2.name ? v2.name : path19.basename(v2.projectRoot),
       lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
@@ -42242,13 +42747,13 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
   try {
     const filePath = projectRegistryPath();
     const file2 = readFile();
-    const key = path18.resolve(projectRoot2);
+    const key = path19.resolve(projectRoot2);
     file2.projects[key] = {
       projectRoot: key,
-      name: path18.basename(key) || key,
+      name: path19.basename(key) || key,
       lastSeen: now.toISOString()
     };
-    fs17.mkdirSync(path18.dirname(filePath), { recursive: true });
+    fs18.mkdirSync(path19.dirname(filePath), { recursive: true });
     writeJsonAtomic(filePath, file2);
     return true;
   } catch (err) {
@@ -42260,9 +42765,9 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
 
 // src/session-id.ts
 import crypto4 from "node:crypto";
-import path19 from "node:path";
+import path20 from "node:path";
 function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
-  const projectName = path19.basename(projectRoot2);
+  const projectName = path20.basename(projectRoot2);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
   const base = `session_${safeProjectName}_${projectHash}`;
@@ -42274,17 +42779,17 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 }
 
 // src/standalone.ts
-import fs18 from "node:fs";
-import path20 from "node:path";
+import fs19 from "node:fs";
+import path21 from "node:path";
 var { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
-var dpDir = path20.join(projectRoot, ".deeppairing");
-var logFile = path20.join(dpDir, "server.log");
+var dpDir = path21.join(projectRoot, ".deeppairing");
+var logFile = path21.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs18.mkdirSync(path20.dirname(logFile), { recursive: true });
-    fs18.appendFileSync(logFile, line);
+    fs19.mkdirSync(path21.dirname(logFile), { recursive: true });
+    fs19.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -42306,7 +42811,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path20.basename(projectRoot);
+  const projectName = path21.basename(projectRoot);
   const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
   const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
   const sessionId = derived.sessionId;

@@ -44,11 +44,13 @@ export type ToolResult = {
  * "📖 TO READ" line (WAITING_DRAFT_TYPES) is now its ONLY mention — and its
  * comments/questions still flow back normally.
  */
-export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"] as const;
+// #680 — `page` joins: an agent-authored HTML page is a reviewable draft that
+// owes a verdict, like research/plan.
+export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "page"] as const;
 /** Draft types listed in the WAITING block (decisions get their own line).
  *  Deliberately a SUPERSET of PENDING_DRAFT_TYPES on the acknowledge-only types:
  *  an explainer is reported (under "📖 TO READ") without being counted pending. */
-export const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"] as const;
+export const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "page", "debrief", "explainer"] as const;
 /**
  * Informational drafts: optional acknowledgement does not make reading a
  * pending decision. Debriefs retain Request changes / Reject to correct an

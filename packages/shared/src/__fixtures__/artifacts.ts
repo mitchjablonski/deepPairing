@@ -504,3 +504,31 @@ export const lineComment: Comment = {
   acknowledged: false,
   createdAt: "2026-04-02T10:11:00.000Z",
 };
+
+// #680 — an agent-authored HTML PAGE presented for review. Self-contained markup
+// (inline style + an inline script, which the renderer holds until Run).
+export const pageArtifact: Artifact = {
+  id: "art_page_001",
+  sessionId: "sess_1",
+  type: "page",
+  version: 1,
+  parentId: null,
+  title: "Cache invalidation options, side by side",
+  status: "draft",
+  content: {
+    title: "Cache invalidation options, side by side",
+    summary: "Here are the three invalidation strategies we discussed, with the trade-offs in one table. Which one should I build?",
+    html:
+      "<style>table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px}</style>" +
+      "<h1>Cache invalidation</h1>" +
+      "<p>You can pick one of three strategies for the session cache.</p>" +
+      "<table><tr><th>Strategy</th><th>Staleness</th></tr>" +
+      "<tr><td>TTL expiry</td><td>Up to 60s</td></tr>" +
+      "<tr><td>Write-through purge</td><td>None</td></tr></table>" +
+      "<script>document.title = 'cache options';</script>",
+    sourcePath: "docs/cache-options.html",
+  },
+  agentReasoning: null,
+  createdAt: "2026-04-02T12:00:00.000Z",
+  updatedAt: "2026-04-02T12:00:00.000Z",
+};
