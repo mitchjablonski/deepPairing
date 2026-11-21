@@ -83,9 +83,26 @@ describe("extractPageTextBlocks", () => {
     expect(extractPageTextBlocks("<p>İstanbul</p><script>x</script><p>after</p>")).toEqual(["İstanbul", "after"]);
   });
 
+  it("<xmp> content is literal text, so a comment opener inside it opens nothing (review N2)", () => {
+    expect(extractPageTextBlocks("<xmp><!--</xmp><p>Deploy on Railway</p>-->")).toContain("Deploy on Railway");
+  });
+
+  it("everything after <plaintext> is literal text (review N2)", () => {
+    expect(extractPageTextBlocks("<p>a b</p><plaintext><!-- Deploy on Railway -->"))
+      .toEqual(["a b", "<!-- Deploy on Railway -->"]);
+  });
+
   it("caps the number of blocks", () => {
     const html = Array.from({ length: PAGE_TEXT_MAX_BLOCKS + 50 }, (_, i) => `<p>b${i}</p>`).join("");
     expect(extractPageTextBlocks(html)).toHaveLength(PAGE_TEXT_MAX_BLOCKS);
+  });
+
+  it("stays fast on many empty comments with a single trailing --!> (review N1)", () => {
+    const hostile = "<!---->".repeat(300_000) + "<p>tail</p>--!>";
+    const started = Date.now();
+    const blocks = extractPageTextBlocks(hostile);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(blocks).toContain("tail");
   });
 
   it("stays fast on many unterminated tags (linear scan)", () => {

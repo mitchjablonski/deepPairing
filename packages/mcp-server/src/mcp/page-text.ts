@@ -14,7 +14,8 @@
  *    its content is what the reviewer sees.
  *  - A dropped element with no closing tag skips only its opening tag, never
  *    the rest of the page (failing toward gating more text, not less).
- *  - <textarea> is RCDATA: its content is text, never markup or a comment.
+ *  - <textarea> and <xmp> content is literal text, never markup or a
+ *    comment; everything after <plaintext> is literal text to the end.
  *  - Comments follow HTML's rules, including the abrupt empty forms `<!-->`
  *    and `<!--->` and the `--!>` closer.
  *  - Block-level tags become line breaks; every other tag becomes nothing, so
@@ -33,7 +34,7 @@
 /** Elements whose content is dropped (when closed). */
 const DROP_ELEMENTS = ["script", "style", "template", "title"] as const;
 /** RCDATA elements whose content is literal text (no tags, no comments). */
-const TEXT_ELEMENTS = ["textarea"] as const;
+const TEXT_ELEMENTS = ["textarea", "xmp"] as const;
 
 /** Tags that start a new visual block (their text becomes its own string). */
 const BLOCK_TAGS = new Set([
@@ -41,7 +42,7 @@ const BLOCK_TAGS = new Set([
   "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr",
   "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot",
   "th", "thead", "tr", "ul", "body", "html", "label", "button", "option", "legend", "fieldset",
-  "head", "noscript", "textarea",
+  "head", "noscript", "textarea", "xmp",
 ]);
 
 /** Upper bound on blocks handed to the matcher (cost guard for huge pages). */
@@ -79,24 +80,21 @@ export function extractPageTextBlocks(html: string): string[] {
   // ASCII-only lowercasing keeps `lower` index-aligned with `html` (a full
   // toLowerCase can change length, e.g. "İ" → "i̇"); tag names are ASCII.
   const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
-  // Once a closing `</tag` is known to be absent after some point, it is absent
-  // after every later point too: remember that, so many unclosed elements of
-  // one kind stay linear instead of rescanning the rest of the page each time.
-  const neverClosed = new Set<string>();
-  const findClose = (tag: string, from: number): number => {
-    if (neverClosed.has(tag)) return -1;
-    const at = lower.indexOf(`</${tag}`, from);
-    if (at === -1) neverClosed.add(tag);
+  // Memoized forward search. `from` only grows, so the last result for a
+  // needle stays valid while it is still >= `from` (it was the FIRST match at
+  // or after an earlier, smaller `from`), and a miss stays a miss. Each needle
+  // is therefore scanned at most once end to end: amortised linear, even for
+  // 300k `<!---->` with a single `--!>` at the very end.
+  const lastAt = new Map<string, number>();
+  const memoIndexOf = (hay: string, needle: string, from: number): number => {
+    const prev = lastAt.get(needle);
+    if (prev !== undefined && (prev === -1 || prev >= from)) return prev;
+    const at = hay.indexOf(needle, from);
+    lastAt.set(needle, at);
     return at;
   };
-  // Same memo for the comment closers (`-->` / `--!>`).
-  const missingMarkers = new Set<string>();
-  const findMarker = (marker: string, from: number): number => {
-    if (missingMarkers.has(marker)) return -1;
-    const at = html.indexOf(marker, from);
-    if (at === -1) missingMarkers.add(marker);
-    return at;
-  };
+  const findClose = (tag: string, from: number): number => memoIndexOf(lower, `</${tag}`, from);
+  const findMarker = (marker: string, from: number): number => memoIndexOf(html, marker, from);
   let text = "";
   let i = 0;
   const n = html.length;
@@ -122,6 +120,11 @@ export function extractPageTextBlocks(html: string): string[] {
     if (gt === -1) {
       // No closing `>` anywhere after this point: what's left is text.
       text += html.slice(lt);
+      break;
+    }
+    // <plaintext> never ends: everything after its opening tag is literal text.
+    if (opensElement(lower, lt, "plaintext")) {
+      text += "\n" + html.slice(gt + 1);
       break;
     }
     const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));

@@ -88,11 +88,16 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
   if (!isWithin(rootReal, real)) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
   }
-  // Open once and work from the descriptor: the checks above resolved `real`,
-  // and O_NOFOLLOW refuses a symlink swapped in at that path since, so the
-  // file we stat and read is the file we checked (no TOCTOU window).
-  // O_NONBLOCK keeps a FIFO from hanging the open. Both flags are absent on
-  // Windows, where they are simply omitted.
+  // Open once and work from the descriptor. O_NOFOLLOW refuses a symlink
+  // swapped in for the FINAL component since the realpath above, and
+  // O_NONBLOCK keeps a FIFO from hanging the open (both are absent on
+  // Windows, where they are omitted). O_NOFOLLOW does not cover PARENT
+  // directories: one swapped for a symlink between the realpath and the open
+  // could still redirect it. The re-check after the open narrows that window
+  // (the path must still resolve to the same in-root file) but cannot close
+  // it entirely without openat-style APIs Node doesn't expose. Acceptable for
+  // a local tool reading the agent's own project, where the actor able to race
+  // the filesystem already has the same access.
   const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
   let fd: number;
   try {
@@ -102,6 +107,15 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
   }
   let html: string;
   try {
+    let again: string;
+    try {
+      again = fs.realpathSync(lexical);
+    } catch {
+      return refuse(`\`path\` "${requested}" changed while it was being read.`);
+    }
+    if (again !== real || !isWithin(rootReal, again)) {
+      return refuse(`\`path\` "${requested}" changed while it was being read.`);
+    }
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) return refuse(`\`path\` "${requested}" is not a regular file.`);
     if (stat.size > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", stat.size) };

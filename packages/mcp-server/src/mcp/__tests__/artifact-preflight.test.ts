@@ -34,11 +34,13 @@ describe("artifact preflight projection — page (#680)", () => {
       paths: [],
       concepts: ["pay-per-request hosting"],
       advisory: false,
-      rawEditText: true,
+      // Title + summary keep the normal lanes; body blocks start at index 2.
+      rawEditTextFrom: 2,
     });
   });
 
   it("tolerates a page with no html", () => {
     expect(artifactProposal("page", "T", {})?.text).toEqual(["T"]);
+    expect(artifactProposal("page", "T", {})?.rawEditTextFrom).toBe(1);
   });
 });

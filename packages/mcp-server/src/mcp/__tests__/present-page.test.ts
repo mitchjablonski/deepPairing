@@ -212,6 +212,31 @@ describe("present_page — the rejection gate", () => {
     expect(pages()).toHaveLength(0);
   });
 
+  it("a page TITLE keeps the normal reverse lane, like every present_* tool (review)", async () => {
+    store.recordRejectedApproach({ description: "Use Redis for the session cache", reason: "no new services" });
+    const res = await callTool("present_page", { title: "Redis", html: "<p>Nothing else relevant here.</p>" });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("no new services");
+    expect(pages()).toHaveLength(0);
+  });
+
+  it("the same single word as a BODY cell does not match backwards (raw-text rule)", async () => {
+    store.recordRejectedApproach({ description: "Use Redis for the session cache", reason: "no new services" });
+    const res = await callTool("present_page", { title: "Cache backends", html: "<table><tr><td>Redis</td><td>12 ms</td></tr></table>" });
+    expect(res.isError).toBeFalsy();
+    expect(pages()).toHaveLength(1);
+  });
+
+  it("text inside <xmp> and after <plaintext> reaches the gate (review N2)", async () => {
+    store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });
+    const xmp = await callTool("present_page", { title: "Hosting A", html: "<xmp><!--</xmp><p>Deploy on Railway</p>-->" });
+    expect(xmp.isError).toBe(true);
+    const plain = await callTool("present_page", { title: "Hosting B", html: "<plaintext><!-- Deploy on Railway -->" });
+    expect(plain.isError).toBe(true);
+    expect(plain.text).toContain("too expensive for our scale");
+    expect(pages()).toHaveLength(0);
+  });
+
   it("a lone generic cell does not match backwards inside an unrelated stance", async () => {
     store.recordRejectedApproach({ description: "Overview of the auth rewrite", reason: "out of scope" });
     const res = await callTool("present_page", {
