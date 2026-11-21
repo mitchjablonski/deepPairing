@@ -66,8 +66,9 @@ describe("scanSkeletonText", () => {
 
   it("throws on unclosed, mismatched and nested fences", () => {
     expect(() => scanSkeletonText("// SKEL[1] x\n", "a")).toThrow(/never closed/);
-    expect(() => scanSkeletonText("// SKEL[1] x\n// /SKEL[2]\n", "a")).toThrow(/closes SKEL\[1\]/);
-    expect(() => scanSkeletonText("// SKEL[1] x\n// SKEL[2] y\n", "a")).toThrow(/opened inside/);
+    expect(() => scanSkeletonText("// SKEL[1] x\n// /SKEL[2]\n", "a")).toThrow(/closes SKEL\[1\] \(opened line 1\)/);
+    expect(() => scanSkeletonText("// SKEL[1] x\n// SKEL[2] y\n", "a")).toThrow(/opened inside SKEL\[1\] — fences don't nest/);
+    expect(() => scanSkeletonText("// /SKEL[1]\n", "a")).toThrow(/closes nothing/);
   });
 });
 
@@ -223,6 +224,17 @@ describe("planDeclaredFiles + scanSkeletonFences (M3/M4)", () => {
     const { fences, errors } = scanSkeletonFences(root);
     expect(fences.map((f) => f.id).sort()).toEqual(["1", "2"]); // README's SKEL[7] example is ignored
     expect(errors[0]).toMatch(/src\/bad\.ts:1: SKEL\[9\] is never closed/);
+  });
+
+  it("#683: the walk skips skel's binary extensions and skipped dirs, but reads declared files as given", () => {
+    fs.writeFileSync(path.join(root, "src", "logo.png"), "// SKEL[8] not code\n");
+    fs.writeFileSync(path.join(root, "yarn.lock"), "// SKEL[8] not code\n");
+    fs.mkdirSync(path.join(root, "build"));
+    fs.writeFileSync(path.join(root, "build", "out.js"), "// SKEL[8] generated\n");
+    const { fences, errors } = scanSkeletonFences(root);
+    expect(fences.map((f) => f.id).sort()).toEqual(["1", "2"]);
+    expect(errors).toEqual([expect.stringMatching(/src\/bad\.ts:1:/)]);
+    expect(scanSkeletonFences(root, { files: ["README.md"] }).fences.map((f) => f.id)).toEqual(["7"]);
   });
 });
 
