@@ -52,6 +52,8 @@ boundary. Editors other than Claude Code.
   decide. It doesn't check `Bash` or notebook edits against your stances, and
   if it breaks, it lets the edit through. The prompt depends on how Claude Code
   is running: `bypassPermissions` skips it and `dontAsk` refuses instead.
+  If you opt into `DEEPPAIRING_PREFLIGHT_MODE=strict-stop`, a matching edit is
+  denied rather than asked about ([preflight modes](docs/preflight-modes.md)).
 - **The plugin's hooks ask about more than stances.** They also ask before
   writes to migrations, CI config, infrastructure and secret files (`.env`) that
   no approved, recent work covers, and before an agent edit to deepPairing's own
