@@ -114,7 +114,11 @@ export const LEGACY_GRAMMAR = {
 };
 
 /** markers-cost.test.mjs "long whitespace titles … finish in a bounded child". */
-export const LONG_WHITESPACE_SPACES = 800_000;
+// skel runs 800_000 in a child process with a timeout. In-process, a cubic
+// regression on that input would hang the run, so this uses a size where the
+// old cubic grammar takes well over 2s (2,000 spaces already did) yet still
+// finishes, letting the 2s assertion fail cleanly. The linear parser is instant.
+export const LONG_WHITESPACE_SPACES = 4_000;
 
 export const ESCAPE_CASES: EscapeCase[] = [
   // skel.test.mjs "bodyEscapesFence catches the Python dedent and a bracket left open"
