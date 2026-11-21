@@ -218,6 +218,9 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
           {...(next.artifactId ? {} : { tabIndex: 0, role: "group", "aria-label": copy.why ? `${copyLineText(next.title, copy)} · Why ${copy.why}` : copyLineText(next.title, copy) })}
           className={`basis-0 grow min-w-[min(15rem,100%)] text-2xs text-text-primary focus:whitespace-normal focus:break-words focus:max-h-16 focus:overflow-y-auto outline-none focus-visible:ring-1 focus-visible:ring-accent-amber rounded ${leadExpanded ? EXPANDED_LEAD : "truncate"}`}
         >
+          {next.artifactId && (
+            <><span className="font-medium">{next.artifactId === visibleSelectedArtifactId ? "In view" : "Next"}</span>{" · "}</>
+          )}
           {copy.lane && <><span className="font-semibold tracking-wide text-accent-amber">{copy.lane}</span>{" "}</>}
           {next.artifactId ? (
             // Mouse convenience: the lead CHIP is the keyboard stop for the
