@@ -231,7 +231,7 @@ export function reachForItem(
   if (replay) return "replay";
   if (tabOffline) return "disconnected";
   const ownerId = artifactOf(item, artifacts)?.sessionId;
-  const ownerLive = ownerId ? activeSessions.find((s) => s.sessionId === ownerId)?.live : undefined;
-  const agentGone = ownerLive === undefined ? noAgentLive(activeSessions) : !ownerLive;
+  const owner = ownerId ? activeSessions.find((s) => s.sessionId === ownerId) : undefined;
+  const agentGone = owner ? owner.live === false : noAgentLive(activeSessions);
   return agentGone ? "gone" : "live";
 }
