@@ -1,6 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
-import { SKELETON_VISUAL_PREFIX, isSkeletonApprovedVisualId, liveVisualIdFor, type PlanVisual, type SkeletonCodeSnapshot, type SkeletonFenceView } from "@deeppairing/shared";
+import { isSkeletonApprovedVisualId, liveVisualIdFor, type PlanVisual, type SkeletonCodeSnapshot, type SkeletonFenceView } from "@deeppairing/shared";
 import { isSkeletonVisualId, skeletonVisualId, stripSkeletonVisuals } from "./skeleton-line.js";
 import { planDeclaredFiles, scanSkeletonFences, scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
 import { resolveProjectRoot } from "../project-root.js";
