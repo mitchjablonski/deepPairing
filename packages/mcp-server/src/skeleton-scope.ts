@@ -89,12 +89,31 @@ function parseReshape(raw: unknown): SkeletonReshape | undefined {
   return { fromId: r.fromId, files: strs(r.files), restoreApproved: r.restoreApproved === true, restoreSkelIds: strs(r.restoreSkelIds) };
 }
 
+// Fence grammar ported from skeleton-skills lib/markers.mjs @ 0b0954be (#683).
+// The vendored cases in cli/__tests__/fixtures/skel-fence-grammar.ts pin it.
 const COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
 const ID = String.raw`([A-Za-z0-9][\w.-]*)`;
-const OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]\s*(.*?)\s*(?:\*\/\}?|-->)?\s*$`);
-const CLOSE_RE = new RegExp(String.raw`^\s*${COMMENT}\s*\/SKEL\[${ID}\]\s*(?:\*\/\}?|-->)?\s*$`);
+const OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]`);
+const CLOSE_RE = new RegExp(String.raw`^\s*${COMMENT}\s*\/SKEL\[${ID}\](?:\s*(?:\*\/\}?|-->))?\s*$`);
 
-/** Parse one file's fences. Throws on malformed nesting (callers decide). */
+/**
+ * An opening marker line → [id, title], else null. Title trimming is kept out
+ * of the regex: overlapping whitespace/title quantifiers take cubic time on
+ * spaces followed by more title text. A title holding a line or paragraph
+ * separator (U+2028/2029) or a stray CR is not a marker.
+ */
+function openMarker(line: string): [id: string, title: string] | null {
+  const m = OPEN_RE.exec(line);
+  if (!m) return null;
+  let title = line.slice(m[0].length).trim();
+  if (title.endsWith("*/}")) title = title.slice(0, -3).trimEnd();
+  else if (title.endsWith("*/") || title.endsWith("-->")) title = title.slice(0, title.endsWith("-->") ? -3 : -2).trimEnd();
+  if (/[\r\n\u2028\u2029]/.test(title)) return null;
+  return [m[1]!, title];
+}
+
+/** Parse one file's fences. Throws on malformed nesting (callers decide). A
+ *  fence whose body still holds SKEL_TODO is `todo`, otherwise `filled`. */
 export function scanSkeletonText(text: string, file: string): SkeletonFence[] {
   const lines = text.split("\n");
   const fences: SkeletonFence[] = [];
@@ -104,26 +123,42 @@ export function scanSkeletonText(text: string, file: string): SkeletonFence[] {
     const lineNo = i + 1;
     const close = CLOSE_RE.exec(line);
     if (close) {
-      if (!open || open.id !== close[1]) throw new Error(`${file}:${lineNo}: /SKEL[${close[1]}] closes ${open ? `SKEL[${open.id}]` : "nothing"}`);
+      if (!open) throw new Error(`${file}:${lineNo}: /SKEL[${close[1]}] closes nothing`);
+      if (open.id !== close[1]) throw new Error(`${file}:${lineNo}: /SKEL[${close[1]}] closes SKEL[${open.id}] (opened line ${open.openLine})`);
       const body = lines.slice(open.openLine, lineNo - 1).join("\n");
       fences.push({ ...open, file, closeLine: lineNo, status: body.includes(SKEL_TODO) ? "todo" : "filled" });
       open = null;
       continue;
     }
-    const m = OPEN_RE.exec(line);
+    const m = openMarker(line);
     if (m) {
-      if (open) throw new Error(`${file}:${lineNo}: SKEL[${m[1]}] opened inside SKEL[${open.id}]`);
-      open = { id: m[1]!, title: m[2] ?? "", openLine: lineNo };
+      if (open) throw new Error(`${file}:${lineNo}: SKEL[${m[0]}] opened inside SKEL[${open.id}] — fences don't nest`);
+      open = { id: m[0], title: m[1], openLine: lineNo };
     }
   }
   if (open) throw new Error(`${file}:${open.openLine}: SKEL[${open.id}] is never closed`);
   return fences;
 }
 
-const SKIP_DIRS = new Set(["node_modules", ".git", ".deeppairing", "dist", "build", "out", ".next", ".turbo", "coverage", "__pycache__", ".venv", "venv", "target"]);
+/**
+ * Candidate-file policy (#683). skeleton-skills finds candidates with
+ * `git grep` (honouring .gitignore, skipping binaries); deepPairing does not
+ * depend on git, and its tool path reads ONLY a plan's declared files, so
+ * .gitignore never decides which fences a plan sees. The no-declared-files
+ * fallback walk shares skel's skipped dirs and binary extensions, and keeps
+ * two deliberate differences: it skips every dot-dir (skel skips only the
+ * listed ones) and prose files (skel relies on skipping `.claude/` instead).
+ */
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", ".skeleton", ".claude", ".deeppairing", "dist", "build", "out",
+  ".next", ".turbo", "coverage", "__pycache__", ".venv", "venv", "target",
+]);
 
 /** Prose files show the marker syntax in examples; they never hold real fences. */
 const PROSE_FILE = /\.(md|mdx|markdown|rst|txt)$/i;
+
+/** skel's binary extensions (lib/markers.mjs): never read by the walk. */
+const BINARY_FILE = /\.(png|jpe?g|gif|webp|ico|bmp|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|7z|rar|jar|war|class|so|dylib|dll|exe|bin|o|a|wasm|woff2?|ttf|otf|eot|mp[34]|m4a|wav|ogg|flac|mov|avi|mkv|webm|sqlite|db|lock)$/i;
 
 function scanFile(root: string, abs: string, fences: SkeletonFence[], errors: string[]): void {
   let text: string;
@@ -183,7 +218,7 @@ export function scanSkeletonFences(
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) walk(abs);
         continue;
       }
-      if (!e.isFile() || PROSE_FILE.test(e.name)) continue;
+      if (!e.isFile() || PROSE_FILE.test(e.name) || BINARY_FILE.test(e.name)) continue;
       seen++;
       scanFile(root, abs, fences, errors);
     }
@@ -597,41 +632,87 @@ function preservesOutside(original: string, next: string, fences: SkeletonFence[
 const signature = (fences: SkeletonFence[]): string => fences.map((f) => `${f.id}\u0000${f.title}`).join("\u0001");
 
 const HASH_COMMENT_EXT = /\.(py|pyi|rb|sh|bash|zsh|ya?ml|toml|r|pl|ex|exs|nim|cr|coffee)$/i;
+const SHELL_EXT = /\.(sh|bash|zsh)$/i;
+const PY_EXT = /\.pyi?$/i;
+const RUST_EXT = /\.rs$/i;
+const C_FAMILY_EXT = /\.(c|h|cc|cpp|cxx|hpp|hh|m|mm)$/i;
+const PROSE_EXT = /\.(md|mdx|markdown|txt|rst|html?|xml|svg)$/i;
+const JSX_EXT = /\.(jsx|tsx)$/i;
+const TRIPLE = ['"""', "'''"];
 
 /**
- * Does a filled body escape the scope it was fenced in? Language-agnostic
- * heuristics, so a miss falls back to "ask" only in the direction of MORE
- * prompting:
- *   - brackets — a running ()[]{} depth (strings and line comments skipped)
- *     that dips below zero closed the enclosing function/block; one that
- *     doesn't end at zero left something open for the code after the fence.
+ * Does a filled body escape the block it was fenced in? Language-aware
+ * heuristics, not a parser (ported from skeleton-skills lib/gate.mjs @
+ * 0b0954be, #683), so a miss falls back to "ask" only in the direction of
+ * MORE prompting:
+ *   - brackets — a running ()[]{} depth (strings and comments skipped) that
+ *     dips below zero closed the enclosing block; one that doesn't end at
+ *     zero left something open for the code after the fence.
  *   - indentation — a non-blank body line indented less than the opening
  *     marker left the enclosing block (the Python shape of the same escape).
+ * Shell bodies get only the indentation check (`case` patterns end in a bare
+ * `)`); prose gets neither. Python triple-quoted strings, Rust lifetimes, C
+ * preprocessor lines, regex literals, JSX apostrophes and block comments are
+ * skipped.
  */
 export function bodyEscapesFence(body: string, markerLine: string, file: string): string | null {
   const indentOf = (l: string) => (/^[ \t]*/.exec(l)?.[0] ?? "").replace(/\t/g, "    ").length;
   const markerIndent = indentOf(markerLine);
   const hash = HASH_COMMENT_EXT.test(file);
+  const prose = PROSE_EXT.test(file);
+  const brackets = !SHELL_EXT.test(file) && !prose;
+  const jsx = JSX_EXT.test(file);
+  const py = PY_EXT.test(file);
+  const rust = RUST_EXT.test(file);
+  const cfam = C_FAMILY_EXT.test(file);
+  let prev = ""; // last non-space char outside strings/comments, to spot regex literals
   let depth = 0;
-  let quote: string | null = null;
-  const lines = body.split("\n");
-  for (const line of lines) {
-    if (line.trim() && !quote && indentOf(line) < markerIndent) return "a line is indented outside the fence's block";
+  let quote: string | null = null; // a quote char, or a Python triple quote
+  let block = false; // inside /* */
+  for (const line of body.split("\n")) {
+    const preprocessor = cfam && /^\s*#/.test(line);
+    const spanning = quote === "`" || (quote !== null && quote.length === 3);
+    if (line.trim() && !spanning && !preprocessor && !prose && indentOf(line) < markerIndent) {
+      return "a line is indented outside the fence's block";
+    }
+    if (preprocessor) continue;
     for (let i = 0; i < line.length; i++) {
       const c = line[i]!;
-      if (quote) {
-        if (c === "\\") i++;
-        else if (c === quote) quote = null;
+      if (block) {
+        if (c === "*" && line[i + 1] === "/") { block = false; i++; }
         continue;
       }
-      if (c === '"' || c === "'" || c === "`") quote = c;
-      else if ((c === "/" && line[i + 1] === "/") || (hash && c === "#")) break;
-      else if (c === "(" || c === "[" || c === "{") depth++;
+      if (quote) {
+        // A closed string or template is an operand: a `/` after it divides.
+        if (quote.length === 3) {
+          if (line.startsWith(quote, i)) { quote = null; i += 2; prev = c; }
+          continue;
+        }
+        if (c === "\\") i++;
+        else if (c === quote) { quote = null; prev = c; }
+        continue;
+      }
+      const triple = py ? TRIPLE.find((t) => line.startsWith(t, i)) : undefined;
+      if (triple) { quote = triple; i += 2; continue; }
+      if (rust && c === "'" && !/^'(\\.|[^'\\])'/.test(line.slice(i))) continue; // a lifetime, not a char
+      if (jsx && c === "'" && /[A-Za-z]/.test(line[i - 1] ?? "")) continue; // an apostrophe in JSX text
+      // A regex literal: `/` where an operand can't end (after ( , = : [ ! & | ? { ; or return).
+      if (!hash && c === "/" && line[i + 1] !== "/" && line[i + 1] !== "*" && (prev === "" || /[(,=:[!&|?{;]/.test(prev) || /\breturn\s*$/.test(line.slice(0, i)))) {
+        const m = /^\/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\n[])+\/[a-z]*/.exec(line.slice(i));
+        if (m) { i += m[0].length - 1; prev = "/"; continue; }
+      }
+      if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
+      if (hash ? c === "#" : c === "/" && line[i + 1] === "/") break;
+      // Only at a token boundary: `/\/*/` is a regex, not a comment.
+      if (!hash && c === "/" && line[i + 1] === "*" && (i === 0 || /[\s;,(){}=]/.test(line[i - 1]!))) { block = true; i++; continue; }
+      if (c.trim()) prev = c;
+      if (!brackets) continue;
+      if (c === "(" || c === "[" || c === "{") depth++;
       else if (c === ")" || c === "]" || c === "}") {
         if (--depth < 0) return "it closes the block the fence sits in";
       }
     }
-    if (quote && quote !== "`") quote = null; // ' and " don't span lines
+    if (quote === '"' || quote === "'") quote = null; // these don't span lines
   }
   return depth === 0 ? null : "it leaves a bracket open past the fence";
 }
