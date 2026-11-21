@@ -59,8 +59,8 @@ function seed(artifacts: Art[]): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify(artifacts));
 }
-function stop(): { stderr: string; status: number | null; reason: string; state: Record<string, unknown> } {
-  const res = spawnSync("node", [script], { input: "", encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: "" } });
+function stop(input = ""): { stderr: string; status: number | null; reason: string; state: Record<string, unknown> } {
+  const res = spawnSync("node", [script], { input, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: "" } });
   const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "hooks-state.json"), "utf-8"));
   return { stderr: res.stderr, status: res.status, reason: String(state.fires.at(-1)?.reason ?? ""), state };
 }
@@ -113,7 +113,6 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
   });
 
   it("drift comes before the debrief nag, which returns on the next Stop", () => {
-    const code = (id: string) => ({ id, type: "code_change", status: "approved", createdAt: recent() });
     seed([approvedPlan(), code("c1"), code("c2")]);
     write(`// header\n${SRC}`);
     expect(stop().stderr).toContain("skeleton exterior drift");
@@ -139,6 +138,102 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     expect(res.stderr).not.toContain(token);
     expect(res.stderr).not.toContain("SECRET-SHAPED-LINE");
     expect(JSON.stringify(res.state)).not.toContain(token);
+  });
+
+  const code = (id: string) => ({ id, type: "code_change", status: "approved", createdAt: recent() });
+  const DEBRIEF_NAG = "deepPairing: code was presented but no present_debrief yet — end the run with one so your pair gets the walk-through\n";
+
+  it("null entries and a non-array statusHistory never silence the debrief nag", () => {
+    seed([null as unknown as Art, approvedPlan({ statusHistory: {} }), 42 as unknown as Art, code("c1"), code("c2")]);
+    write(`// header\n${SRC}`);
+    const res = stop();
+    expect(res.status).toBe(0);
+    expect(res.reason).not.toMatch(/^error/);
+    // statusHistory {} → no approvedAt; updatedAt is recent, so it is still checked.
+    expect(res.stderr).toContain("skeleton exterior drift");
+    const again = stop();
+    expect(again.stderr).toBe(DEBRIEF_NAG);
+    // A superseded plan whose statusHistory is malformed is simply not a baseline.
+    seed([null as unknown as Art, approvedPlan({ status: "superseded", statusHistory: "x" }), code("c1"), code("c2")]);
+    expect(stop().stderr).toBe(DEBRIEF_NAG);
+  });
+
+  it("several approved plans: every un-nudged one is checked, one nudge lists the drifting ones", () => {
+    fs.writeFileSync(path.join(root, "b.ts"), SRC.replace(/SKEL\[1\]/g, "SKEL[2]"));
+    const planA = approvedPlan({ id: "planA", title: "Plan A", updatedAt: recent(50_000) });
+    const stepsB = [{ description: "b", reasoning: "r", skelId: "2", files: ["b.ts"] }];
+    const planB = approvedPlan({
+      id: "planB",
+      title: "Plan B",
+      updatedAt: recent(1_000),
+      content: { steps: stepsB, visuals: buildSkeletonSnapshot({ steps: stepsB, root, recordExterior: true }).visuals },
+    });
+    seed([planA, planB]);
+    write(`// header\n${SRC}`); // A drifts; B (newer) does not
+    const res = stop();
+    expect(res.stderr).toContain("skeleton exterior drift since approval: a.ts line 1");
+    expect(res.stderr).not.toContain("b.ts");
+    expect(res.state.skeletonDriftNudged).toEqual([expect.stringMatching(/^planA@v1@/)]);
+    // Both drift: one line naming both plans; A is not repeated.
+    fs.writeFileSync(path.join(root, "b.ts"), `// header\n${SRC.replace(/SKEL\[1\]/g, "SKEL[2]")}`);
+    const both = stop();
+    expect(both.stderr).toContain("skeleton exterior drift since approval: b.ts line 1");
+    seed([{ ...planA, version: 2 }, { ...planB, version: 2 }]);
+    const two = stop();
+    expect(two.stderr).toContain('"Plan A": a.ts line 1 | "Plan B": b.ts line 1');
+    expect((two.state.skeletonDriftNudged as string[]).filter((k) => k.includes("@v2@"))).toHaveLength(2);
+  });
+
+  it("a corrupt hooks-state.json gets one salvage copy per Stop, not two", () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    fs.writeFileSync(path.join(root, ".deeppairing", "hooks-state.json"), "{not json");
+    const res = stop();
+    expect(res.stderr).toContain("skeleton exterior drift");
+    const backups = fs.readdirSync(path.join(root, ".deeppairing")).filter((f) => f.startsWith("hooks-state.json.corrupt-"));
+    expect(backups).toHaveLength(1);
+  });
+
+  it("a stale approval (no activity for over 8 h) is not nudged", () => {
+    const old = recent(9 * 60 * 60 * 1000);
+    seed([approvedPlan({ updatedAt: old, statusHistory: [{ status: "approved", at: old }] })]);
+    write(`// header\n${SRC}`);
+    expect(stop().stderr).toBe("");
+  });
+
+  it("a session_id naming a missing session is quiet, exit 0", () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    const res = stop(JSON.stringify({ session_id: "no-such-session" }));
+    expect(res.status).toBe(0);
+    expect(res.stderr).toBe("");
+  });
+
+  it("a non-array skeletonDriftNudged is treated as empty and repaired", () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    fs.writeFileSync(path.join(root, ".deeppairing", "hooks-state.json"), JSON.stringify({ version: 1, skeletonDriftNudged: { x: 1 } }));
+    const res = stop();
+    expect(res.stderr).toContain("skeleton exterior drift");
+    expect(Array.isArray(res.state.skeletonDriftNudged)).toBe(true);
+    expect(stop().stderr).toBe("");
+  });
+
+  it("a path-traversal visual id never reads outside the project and stays quiet", () => {
+    const outside = path.join(path.dirname(root), "dp-outside-secret.ts");
+    fs.writeFileSync(outside, "OUTSIDE-CONTENT\n");
+    try {
+      const rel = `../${path.basename(outside)}`;
+      const visual = { id: `skelcode:${rel}`, kind: "annotated_code", code: "x\n// SKEL[1] a\n// /SKEL[1]", skeleton: { fences: [], takenAt: recent() } };
+      const evil = { id: "skelcode:../../etc/passwd", kind: "annotated_code", code: "root", skeleton: { fences: [], takenAt: recent() } };
+      seed([approvedPlan({ content: { steps: STEPS, visuals: [visual, evil] } })]);
+      const res = stop();
+      expect(res.status).toBe(0);
+      expect(res.stderr).toBe("");
+      expect(JSON.stringify(res.state)).not.toContain("OUTSIDE-CONTENT");
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
   });
 
   it("a deleted declared file is named", () => {

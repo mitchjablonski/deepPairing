@@ -29,7 +29,7 @@ const CLOSED_FOR_PROGRESS = new Set(["superseded", "rejected", "retracted", "obs
 /** Mirror of shared's isLivePlanVersion. */
 export function isLivePlanVersion(art: { id: string; type: string; status: string }, artifacts: ReadonlyArray<{ parentId?: string | null }>): boolean {
   if (art.type !== "plan" || CLOSED_FOR_PROGRESS.has(art.status)) return false;
-  return !artifacts.some((a) => a.parentId === art.id);
+  return !artifacts.some((a) => !!a && typeof a === "object" && a.parentId === art.id);
 }
 
 /** The live side of one declared file. */
@@ -405,10 +405,12 @@ type PlanLike = { id: string; type: string; status: string; parentId?: string | 
  * are restored, so it is still the skeleton being filled.
  */
 export function isSkeletonDriftBaseline(art: PlanLike, artifacts: ReadonlyArray<PlanLike>): boolean {
-  if (art.type !== "plan") return false;
+  if (!art || typeof art !== "object" || art.type !== "plan") return false;
+  // Defensive: artifacts.json is read raw by the Stop hook.
+  artifacts = artifacts.filter((a) => !!a && typeof a === "object");
   if (art.status === "approved") return isLivePlanVersion(art, artifacts);
   if (art.status !== "superseded") return false;
-  const history = (art.statusHistory ?? []).map((h) => h?.status);
+  const history = (Array.isArray(art.statusHistory) ? art.statusHistory : []).map((h) => (h && typeof h === "object" ? h.status : undefined));
   const beforeSupersede = history.slice(0, history.lastIndexOf("superseded")).filter((s) => s !== "superseded").at(-1);
   if (beforeSupersede !== "approved") return false;
   const descendants: PlanLike[] = [];

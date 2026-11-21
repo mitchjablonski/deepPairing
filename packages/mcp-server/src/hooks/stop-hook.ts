@@ -27,10 +27,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { sessionOwesDebrief } from "../debrief-gate.js";
 import { deriveSessionId } from "../session-id.js";
-import { appendHookFire, hookErrorMessage, hookStatePath, readHookState, resolveHookProjectRoot } from "./hook-state.js";
+import { appendHookFire, hookErrorMessage, hookStatePath, resolveHookProjectRoot } from "./hook-state.js";
 import { exteriorDriftParts, isSkeletonDriftBaseline, isSkeletonApprovedVisualId } from "../mcp/skeleton-drift.js";
 import { checkSkeletonExteriorDrift } from "../mcp/skeleton-read.js";
-import { readSkeletonScopeFile } from "../skeleton-scope.js";
+import { SKELETON_SCOPE_MAX_AGE_MS, readSkeletonScopeFile } from "../skeleton-scope.js";
 import { resolveHookRoots } from "../git-worktree.js";
 
 const HOOK_NAME = "stop";
@@ -57,22 +57,58 @@ type StopArtifact = {
 const DRIFT_NUDGED_KEY = "skeletonDriftNudged";
 const DRIFT_NUDGED_CAP = 50;
 
-/** One nudge per approval: artifact id + version + when it was approved. */
-function driftNudgeKey(a: StopArtifact): string {
-  const approvedAt = [...(a.statusHistory ?? [])].reverse().find((h) => h?.status === "approved")?.at ?? "";
-  return `${a.id}@v${a.version ?? 0}@${approvedAt}`;
+/** #686 P2c — an approval older than this (and no plan activity since) is
+ *  not nudged: the same 8 h window after which a skeleton scope stops
+ *  fencing edits (SKELETON_SCOPE_MAX_AGE_MS). The 30-min draft guard is too
+ *  short for a skeleton fill, which routinely spans hours. */
+const DRIFT_MAX_AGE_MS = SKELETON_SCOPE_MAX_AGE_MS;
+
+const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+
+/** When the plan was last approved ("" when unknown). */
+function approvedAtOf(a: StopArtifact): string {
+  const history = Array.isArray(a.statusHistory) ? a.statusHistory : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
+    if (isObj(h) && h.status === "approved" && typeof h.at === "string") return h.at;
+  }
+  return "";
 }
 
-/** The session's approved skeleton drift baseline (most recently updated), if any. */
-function driftBaseline(artifacts: StopArtifact[]): StopArtifact | null {
-  const plans = artifacts.filter((a) =>
-    a && typeof a.id === "string" && a.type === "plan" && typeof a.status === "string" &&
-    isSkeletonDriftBaseline(a as { id: string; type: string; status: string }, artifacts as Array<{ id: string; type: string; status: string }>) &&
-    Array.isArray((a.content as { visuals?: unknown } | null)?.visuals) &&
-    ((a.content as { visuals: Array<{ id?: unknown }> }).visuals).some((v) => isSkeletonApprovedVisualId(v?.id)));
-  plans.sort((x, y) => String(y.updatedAt ?? "").localeCompare(String(x.updatedAt ?? "")));
-  return plans[0] ?? null;
+/** One nudge per approval: artifact id + version + when it was approved. */
+function driftNudgeKey(a: StopArtifact): string {
+  return `${a.id}@v${typeof a.version === "number" ? a.version : 0}@${approvedAtOf(a)}`;
 }
+
+/** Every approved skeleton drift baseline in a session that is recent enough:
+ *  approved, or touched by progress, within DRIFT_MAX_AGE_MS. */
+function driftBaselines(raw: unknown[], now: number): StopArtifact[] {
+  const artifacts = raw.filter(isObj) as StopArtifact[];
+  return artifacts.filter((a) => {
+    if (typeof a.id !== "string" || a.type !== "plan" || typeof a.status !== "string") return false;
+    const visuals = isObj(a.content) && Array.isArray(a.content.visuals) ? (a.content.visuals as unknown[]) : [];
+    if (!visuals.some((v) => isObj(v) && isSkeletonApprovedVisualId(v.id))) return false;
+    const stamps = [approvedAtOf(a), typeof a.updatedAt === "string" ? a.updatedAt : ""]
+      .map((t) => (t ? new Date(t).getTime() : NaN))
+      .filter((t) => Number.isFinite(t));
+    if (stamps.length === 0 || now - Math.max(...stamps) > DRIFT_MAX_AGE_MS) return false;
+    return isSkeletonDriftBaseline(a as { id: string; type: string; status: string }, artifacts as Array<{ id: string; type: string; status: string }>);
+  });
+}
+
+/** The nudge keys already sent, read WITHOUT readHookState's salvage copy
+ *  (a corrupt file is backed up once, by the locked write at exit). */
+function peekNudged(statePath: string): unknown[] {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    const list = isObj(parsed) ? parsed[DRIFT_NUDGED_KEY] : undefined;
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+const oneLine = (t: unknown): string => String(t ?? "").replace(/[\r\n\u2028\u2029]+/g, " ").slice(0, 60);
 
 /** Runs the hook and exits the process. Never returns, never throws. */
 export function runStopHook(stdin: string = "", now: number = Date.now()): never {
@@ -115,8 +151,8 @@ export function runStopHook(stdin: string = "", now: number = Date.now()): never
     // work, no debrief). Only surfaced if NO blocking draft fired: blocking
     // takes priority, it's a harder obligation.
     let owesDebriefSession: string | null = null;
-    // #686 P2c — the first session with an approved skeleton baseline.
-    let driftCandidate: StopArtifact | null = null;
+    // #686 P2c — every approved skeleton baseline in the scanned sessions.
+    const driftCandidates: StopArtifact[] = [];
     for (const id of scopedSessionId === undefined ? fs.readdirSync(sessionsDir) : [scopedSessionId]) {
       const af = path.join(sessionsDir, id, "artifacts.json");
       if (!fs.existsSync(af)) continue;
@@ -128,6 +164,11 @@ export function runStopHook(stdin: string = "", now: number = Date.now()): never
       }
       if (!Array.isArray(arr)) continue;
       const artifacts = arr as StopArtifact[];
+      try {
+        driftCandidates.push(...driftBaselines(arr, now));
+      } catch {
+        /* a malformed plan never silences the other checks */
+      }
       const blocking = artifacts.some((x) => {
         if (x?.status !== "draft") return false;
         if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;
@@ -142,7 +183,6 @@ export function runStopHook(stdin: string = "", now: number = Date.now()): never
       // #195 F1 + J2a (#210) — ceremony scales with task size; the shared
       // predicate owns the rules. Age-guard the code artifacts like the
       // blocking check so an ancient session isn't nagged forever.
-      if (driftCandidate === null) driftCandidate = driftBaseline(artifacts);
       if (owesDebriefSession === null) {
         const owes = sessionOwesDebrief(artifacts, (x) => {
           const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;
@@ -156,27 +196,35 @@ export function runStopHook(stdin: string = "", now: number = Date.now()): never
     // no longer matches what the pair approved, which the agent should fix
     // (or propose) before wrapping up — and since it fires at most once per
     // approval, the debrief nag simply returns on the next Stop.
-    if (driftCandidate) {
-      const key = driftNudgeKey(driftCandidate);
+    try {
       const statePath = hookStatePath(projectRoot);
-      const nudged = readHookState(statePath)[DRIFT_NUDGED_KEY];
-      const seen = Array.isArray(nudged) && nudged.includes(key);
-      if (!seen) {
-        const scope = readSkeletonScopeFile(projectRoot, String(driftCandidate.id));
+      const nudged = peekNudged(statePath);
+      const fired: Array<{ key: string; title: string; parts: string[] }> = [];
+      const seenKeys = new Set<string>();
+      for (const plan of driftCandidates) {
+        const key = driftNudgeKey(plan);
+        if (nudged.includes(key) || seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        const scope = readSkeletonScopeFile(projectRoot, String(plan.id));
         const root = scope?.workspaceRoot || resolveHookRoots().workspaceRoot;
-        const drift = checkSkeletonExteriorDrift(driftCandidate.content, { root });
-        const parts = exteriorDriftParts(drift);
-        if (parts.length > 0) {
-          process.stderr.write(
-            `deepPairing: skeleton exterior drift since approval: ${parts.join("; ")} — changes outside the fences are skeleton changes; propose them and revise_artifact the plan\n`,
-          );
-          exit(0, "skeleton drift " + key, (state) => {
-            const list = Array.isArray(state[DRIFT_NUDGED_KEY]) ? (state[DRIFT_NUDGED_KEY] as unknown[]) : [];
-            if (!list.includes(key)) list.push(key);
-            state[DRIFT_NUDGED_KEY] = list.slice(-DRIFT_NUDGED_CAP);
-          });
-        }
+        const parts = exteriorDriftParts(checkSkeletonExteriorDrift(plan.content, { root }));
+        if (parts.length > 0) fired.push({ key, title: oneLine((plan as { title?: unknown }).title), parts });
       }
+      if (fired.length > 0) {
+        const what = fired.length === 1
+          ? fired[0]!.parts.join("; ")
+          : fired.map((f) => `"${f.title || "untitled plan"}": ${f.parts.join("; ")}`).join(" | ");
+        process.stderr.write(
+          `deepPairing: skeleton exterior drift since approval: ${what} — changes outside the fences are skeleton changes; propose them and revise_artifact the plan\n`,
+        );
+        exit(0, "skeleton drift " + fired.map((f) => f.key).join(", "), (state) => {
+          const list = Array.isArray(state[DRIFT_NUDGED_KEY]) ? (state[DRIFT_NUDGED_KEY] as unknown[]) : [];
+          for (const f of fired) if (!list.includes(f.key)) list.push(f.key);
+          state[DRIFT_NUDGED_KEY] = list.slice(-DRIFT_NUDGED_CAP);
+        });
+      }
+    } catch {
+      /* drift is best effort: fall through to the debrief nag */
     }
     if (owesDebriefSession !== null) {
       process.stderr.write(
