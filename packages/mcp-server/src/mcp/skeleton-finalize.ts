@@ -3,6 +3,8 @@ import path from "node:path";
 import { isLivePlanVersion, type Artifact } from "@deeppairing/shared";
 import { planDeclaredFiles, scanSkeletonFences } from "../skeleton-scope.js";
 import { resolveProjectRoot } from "../project-root.js";
+import { checkSkeletonExteriorDrift } from "./skeleton-snapshot.js";
+import { formatExteriorDrift } from "./skeleton-drift.js";
 
 /**
  * Skeleton plans, parity PR 4 — the finalize check. When every step of a
@@ -105,7 +107,9 @@ export function finalizeCheckNote(artifacts: Artifact[], root?: string): string 
       const pr = resolveProjectRoot();
       return pr.worktree?.workspaceRoot ?? pr.projectRoot;
     })();
-    return formatLeftovers(current.title, skeletonLeftovers(r, current.content));
+    // #686 P1b (warn mode) — and the exterior still matches the approved one.
+    return formatLeftovers(current.title, skeletonLeftovers(r, current.content)) +
+      formatExteriorDrift(checkSkeletonExteriorDrift(current.content, { root: r }));
   } catch {
     return "";
   }

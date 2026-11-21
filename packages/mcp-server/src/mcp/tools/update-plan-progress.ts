@@ -2,7 +2,8 @@ import { resolveProjectRoot } from "../../project-root.js";
 import { planDeclaredFiles, readSkeletonScopeFile, readSkeletonScopes, resolveSkeletonScopes, selectSkeletonScope, planOnDisk, refreshReshapeRestores, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
 import { isLivePlanVersion } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
-import { resnapshotSkeleton } from "../skeleton-snapshot.js";
+import { checkSkeletonExteriorDrift, resnapshotSkeleton } from "../skeleton-snapshot.js";
+import { formatExteriorDrift } from "../skeleton-drift.js";
 import { allSkeletonStepsDone, formatLeftovers, skeletonLeftovers } from "../skeleton-finalize.js";
 import { skeletonProgressMismatches } from "../skeleton-line.js";
 import type { ToolContext, ToolResult } from "./types.js";
@@ -191,6 +192,11 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   const reshapeNote = isSkeleton && artifact.status === "draft" && artifact.parentId
     ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused. Until your pair approves it, the preflight hook asks before any edit to this plan's files."
     : "";
+  // #686 P1b (warn mode) — the approved plan's exterior (its fenced files
+  // minus the fence bodies) must match what was reviewed. Never refused.
+  const driftNote = isSkeleton && resnap && artifact.status === "approved"
+    ? formatExteriorDrift(checkSkeletonExteriorDrift(artifact.content))
+    : "";
   // Parity PR 4 — the finalize check once the last skeleton step is done.
   let finalizeNote = "";
   if (isSkeleton && artifact.status === "approved" && allSkeletonStepsDone(artifact.content) && updates.some((u) => u.status === "done" || u.status === "skipped")) {
@@ -202,7 +208,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${completionNote}${reshapeNote}${finalizeNote}`,
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${completionNote}${reshapeNote}${driftNote}${finalizeNote}`,
     }],
   };
 }

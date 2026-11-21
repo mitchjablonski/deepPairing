@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isSkeletonApprovedVisualId, liveVisualIdFor, type PlanVisual, type SkeletonCodeSnapshot, type SkeletonFenceView } from "@deeppairing/shared";
+import { SKELETON_VISUAL_PREFIX, isSkeletonApprovedVisualId, liveVisualIdFor, type PlanVisual, type SkeletonCodeSnapshot, type SkeletonFenceView } from "@deeppairing/shared";
 import { isSkeletonVisualId, skeletonVisualId, stripSkeletonVisuals } from "./skeleton-line.js";
 import { planDeclaredFiles, scanSkeletonFences, scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
 import { ruleForRelPath } from "../guardrail-rules.js";
 import { resolveProjectRoot } from "../project-root.js";
 import { scanForSecrets } from "../secret-scan.js";
+import { skeletonExteriorDrift, type LiveSkeletonFile, type SkeletonExteriorDrift } from "./skeleton-drift.js";
 
 export {
   SKELETON_VISUAL_PREFIX,
@@ -453,4 +454,46 @@ function nextReadStamp(): number {
   const now = Date.now();
   lastStamp = now > lastStamp ? now : lastStamp + 0.001;
   return lastStamp;
+}
+
+/**
+ * #686 P1b (warn mode) — exterior drift for an approved skeleton plan: read
+ * each file the APPROVED `skelcode:` snapshot holds (same confinement and
+ * denylist as the snapshot itself; content never leaves this function, only
+ * line numbers do) and compare its exterior with the approved one. "Not on
+ * disk" is a deleted file; any other read failure is "not checked". Never
+ * throws — a fault reports no drift.
+ */
+export function checkSkeletonExteriorDrift(
+  content: unknown,
+  opts: { root?: string; limits?: SkeletonSnapshotLimits } = {},
+): SkeletonExteriorDrift {
+  const empty: SkeletonExteriorDrift = { changed: [], deleted: [], notChecked: [] };
+  try {
+    const visuals = (Array.isArray((content as { visuals?: unknown } | null)?.visuals)
+      ? ((content as { visuals: PlanVisual[] }).visuals)
+      : []).filter((v) => v && typeof v === "object" && v.kind === "annotated_code" && isSkeletonApprovedVisualId(v.id) && v.skeleton);
+    if (visuals.length === 0) return empty;
+    const root = path.resolve(opts.root ?? (() => {
+      const r = resolveProjectRoot();
+      return r.worktree?.workspaceRoot ?? r.projectRoot;
+    })());
+    const limits = opts.limits ?? SKELETON_SNAPSHOT_LIMITS;
+    const live: Record<string, LiveSkeletonFile> = {};
+    for (const v of visuals) {
+      const file = typeof v.filePath === "string" && v.filePath ? v.filePath : v.id.slice(SKELETON_VISUAL_PREFIX.length);
+      // Withheld or truncated approvals are never compared: don't read them.
+      if (v.skeleton?.withheld || v.skeleton?.truncated || typeof v.code !== "string") continue;
+      const rel = normalizeSkeletonPath(root, file);
+      if (!rel) {
+        live[file] = { unchecked: "outside the project" };
+        continue;
+      }
+      const read = readConfined(root, rel, limits);
+      live[file] = read.ok ? { text: read.text } : read.reason === "not on disk" ? { missing: true } : { unchecked: read.reason };
+    }
+    return skeletonExteriorDrift(visuals, live);
+  } catch {
+    return empty;
+  }
 }
