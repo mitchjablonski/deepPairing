@@ -51,6 +51,7 @@ const DecisionGeneralComments = lazy(() => import("./decision/DecisionGeneralCom
 // when the artifact's prose is clean, so most cards pay nothing for it.
 const ClarityChip = lazy(() => import("./ClarityChip").then((m) => ({ default: m.ClarityChip })));
 import { CommentThread } from "./CommentThread";
+import { isPageListedComment } from "../lib/htmlAnchorDisplay";
 import { useChainComments } from "../hooks/useChainComments";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { FirstRunWalkthrough } from "./WalkthroughCards";
@@ -424,7 +425,11 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       // OpenQuestionSection; without this arm they showed twice (section +
       // this bottom thread). `== null` (not falsy!) — questionIndex 0 is a
       // valid target on the first question.
-      c.target.questionIndex == null,
+      c.target.questionIndex == null &&
+      // #680 slice 2 — comments the page renderer lists in its numbered "On
+      // the page" list (with pins) are not repeated here. Anything it does NOT
+      // show (an anchor on a non-page artifact, a malformed one) stays here.
+      !isPageListedComment(artifact.type, c),
   );
 
   return (

@@ -20,6 +20,7 @@ import { SpeechIcon } from "./icons/ArtifactIcons";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 import { useUnsavedText } from "../lib/unsavedText";
+import { htmlAnchorKindLabel } from "../lib/htmlAnchorDisplay";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -125,6 +126,20 @@ function CommentBubble({ comment, fromVersion, roomy, questionOpen }: { comment:
               {comment.target.filePath}:{comment.target.lineStart}
               {comment.target.lineEnd && comment.target.lineEnd !== comment.target.lineStart
                 ? `-${comment.target.lineEnd}` : ""}
+            </span>
+          )}
+          {/* #680 slice 2 — a comment pointed at a spot on a page names the
+              kind and the quoted text (or the locator when there's no text). */}
+          {comment.target.htmlAnchor && (
+            <span
+              data-testid="comment-html-anchor"
+              className="text-2xs text-accent-blue/70 truncate min-w-0"
+              title={comment.target.htmlAnchor.locator}
+            >
+              {htmlAnchorKindLabel(comment.target.htmlAnchor.kind)}
+              {comment.target.htmlAnchor.quote.trim()
+                ? ` · “${comment.target.htmlAnchor.quote.trim().slice(0, 80)}”`
+                : ` · ${comment.target.htmlAnchor.locator.slice(0, 80)}`}
             </span>
           )}
           {/* #160 — the daemon's comment-create scan flagged a secret shape in

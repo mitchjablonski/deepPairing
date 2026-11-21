@@ -16,7 +16,7 @@
  * mean the client has drifted from the contract and we want to know.
  */
 import { z } from "zod";
-import { CommentSuggestionSchema, SuggestionCounterSchema } from "./comment.js";
+import { CommentSuggestionSchema, HtmlAnchorSchema, SuggestionCounterSchema } from "./comment.js";
 import { RequestIntentSchema, RequestScopeSchema, RequestSourceSchema } from "./request.js";
 
 // G1 (#198b) — POST /api/requests. The human INITIATES a request to the agent
@@ -43,7 +43,24 @@ export const CommentBodySchema = z.object({
   /** Optional target metadata: line/finding/evidence/step/sectionId,
    *  shape varies by the artifact's renderer. Validated as a record so we
    *  don't have to enumerate every renderer's anchor strategy here. */
-  target: z.record(z.string(), z.unknown()).optional(),
+  target: z
+    .record(z.string(), z.unknown())
+    // #680 slice 2 — the one anchor field built by untrusted code (the
+    // annotator inside the page's sandboxed frame) is checked strictly here:
+    // a malformed or over-length `htmlAnchor` is a 400, never stored.
+    .superRefine((t, ctx) => {
+      if (t.htmlAnchor === undefined) return;
+      const r = HtmlAnchorSchema.safeParse(t.htmlAnchor);
+      if (!r.success) {
+        const first = r.error.issues[0];
+        ctx.addIssue({
+          code: "custom",
+          path: ["htmlAnchor", ...(first?.path ?? []).map((p) => (typeof p === "symbol" ? String(p) : p))],
+          message: `invalid htmlAnchor: ${first?.message ?? "malformed"}`,
+        });
+      }
+    })
+    .optional(),
   intent: z.enum(["comment", "question", "suggestion"]).optional(),
   parentCommentId: z.string().nullable().optional(),
   // #172 — a first-class suggested edit (intent === "suggestion"). Optional so
