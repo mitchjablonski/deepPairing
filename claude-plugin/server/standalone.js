@@ -30819,13 +30819,15 @@ function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
     const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
-    for (const proposal of proposalStrings) {
+    for (let idx = 0; idx < proposalStrings.length; idx++) {
+      const proposal = proposalStrings[idx];
       const p = clean(proposal);
       if (!p) continue;
+      const rawEditText = opts.rawEditText || opts.rawEditTextFrom !== void 0 && idx >= opts.rawEditTextFrom;
       if (containsAsPhrase(p, rejNormalized)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (containsAsPhrase(specificNoun, p) && (!opts.rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
+      if (containsAsPhrase(specificNoun, p) && (!rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
         return { proposal, rejected: rej, via: "surface" };
       }
       if (containsAsPhrase(p, specificNoun)) {
@@ -30839,7 +30841,7 @@ function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
   return null;
 }
 function runPreflight(input) {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, projectRelativePaths = false } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, rawEditTextFrom, projectRelativePaths = false } = input;
   const globOpts = { projectRelativePaths };
   const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
@@ -30910,7 +30912,7 @@ function runPreflight(input) {
     }
   }
   if (rejectedApproaches.length > 0) {
-    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText });
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText, rawEditTextFrom });
     if (!match && proposalConcepts.length > 0) {
       for (const rej of rejectedApproaches) {
         if (!rej.concept) continue;
@@ -31301,7 +31303,8 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     proposalConcepts,
     rejectedApproaches: memory.rejectedApproaches,
     teamPreferences: teamPrefs,
-    globalAdvisoryConcepts
+    globalAdvisoryConcepts,
+    ...opts.rawEditTextFrom !== void 0 ? { rawEditTextFrom: opts.rawEditTextFrom } : {}
   });
   const result = guarded.result;
   if (guarded.coerced.length > 0 || guarded.skipped.length > 0) {
@@ -35291,7 +35294,8 @@ Tell the human this before they send it.
 }
 
 // src/mcp/page-text.ts
-var DROP_ELEMENTS = ["script", "style", "template", "noscript", "head", "title"];
+var DROP_ELEMENTS = ["script", "style", "template", "title"];
+var TEXT_ELEMENTS = ["textarea", "xmp"];
 var BLOCK_TAGS = /* @__PURE__ */ new Set([
   "address",
   "article",
@@ -35338,7 +35342,11 @@ var BLOCK_TAGS = /* @__PURE__ */ new Set([
   "button",
   "option",
   "legend",
-  "fieldset"
+  "fieldset",
+  "head",
+  "noscript",
+  "textarea",
+  "xmp"
 ]);
 var PAGE_TEXT_MAX_BLOCKS = 2e3;
 var NAMED_ENTITIES = {
@@ -35381,6 +35389,16 @@ function opensElement(lower, at, tag) {
 }
 function extractPageTextBlocks(html) {
   const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  const lastAt = /* @__PURE__ */ new Map();
+  const memoIndexOf = (hay, needle, from) => {
+    const prev = lastAt.get(needle);
+    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
+    const at = hay.indexOf(needle, from);
+    lastAt.set(needle, at);
+    return at;
+  };
+  const findClose = (tag, from) => memoIndexOf(lower, `</${tag}`, from);
+  const findMarker = (marker, from) => memoIndexOf(html, marker, from);
   let text = "";
   let i = 0;
   const n = html.length;
@@ -35392,18 +35410,18 @@ function extractPageTextBlocks(html) {
     }
     text += html.slice(i, lt);
     if (lower.startsWith("<!--", lt)) {
-      const end = html.indexOf("-->", lt + 4);
-      i = end === -1 ? n : end + 3;
-      text += " ";
-      continue;
-    }
-    const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
-    if (drop) {
-      const close = lower.indexOf(`</${drop}`, lt + 1);
-      if (close === -1) break;
-      const gt2 = html.indexOf(">", close);
-      i = gt2 === -1 ? n : gt2 + 1;
-      text += "\n";
+      if (lower.startsWith("<!-->", lt)) {
+        i = lt + 5;
+        continue;
+      }
+      if (lower.startsWith("<!--->", lt)) {
+        i = lt + 6;
+        continue;
+      }
+      const a = findMarker("-->", lt + 4);
+      const b = findMarker("--!>", lt + 4);
+      const end = a === -1 ? b === -1 ? -1 : b + 4 : b === -1 || a < b ? a + 3 : b + 4;
+      i = end === -1 ? n : end;
       continue;
     }
     const gt = html.indexOf(">", lt + 1);
@@ -35411,8 +35429,28 @@ function extractPageTextBlocks(html) {
       text += html.slice(lt);
       break;
     }
+    if (opensElement(lower, lt, "plaintext")) {
+      text += "\n" + html.slice(gt + 1);
+      break;
+    }
+    const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const literal2 = drop ? void 0 : TEXT_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const raw = drop ?? literal2;
+    if (raw) {
+      const close = findClose(raw, gt + 1);
+      if (close === -1) {
+        text += "\n";
+        i = gt + 1;
+        continue;
+      }
+      if (literal2) text += "\n" + html.slice(gt + 1, close);
+      const closeEnd = html.indexOf(">", close);
+      text += "\n";
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
     const m = /^<\/?\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
-    text += m && BLOCK_TAGS.has(m[1]) ? "\n" : " ";
+    if (m && BLOCK_TAGS.has(m[1])) text += "\n";
     i = gt + 1;
   }
   const blocks = [];
@@ -35434,6 +35472,7 @@ function artifactProposal(type, title, value) {
   let text = [];
   let paths = [];
   let concepts = [];
+  let body = [];
   switch (type) {
     case "research":
       text = [title, c.summary, ...field(c.findings, "title"), ...field(c.findings, "recommendation")];
@@ -35467,29 +35506,35 @@ function artifactProposal(type, title, value) {
       text = [title, c.overview, ...field(c.sections, "heading")];
       break;
     case "page":
-      text = [
-        title,
-        c.summary,
-        ...(typeof c.html === "string" ? extractPageTextBlocks(c.html) : []).filter((b) => meaningfulTokens(b).length >= 2)
-      ];
+      text = [title, c.summary];
+      body = typeof c.html === "string" ? extractPageTextBlocks(c.html) : [];
       concepts = [record2(c.concept).name];
       break;
     default:
       return null;
   }
+  const head = strings(text);
+  const bodyText = strings(body);
   return {
-    text: strings(text),
+    text: [...head, ...bodyText],
     paths: strings(paths),
     concepts: strings(concepts),
     // A debrief reports what already happened; it is not a fresh proposal.
     // Recalled rejections still surface as advice, but cannot prevent the
     // historical record from naming the rejected path.
-    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external"
+    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external",
+    // #680 — page BODY text is free prose, not a named proposal: the matcher's
+    // #621 raw-text rule applies from the first body block on.
+    ...type === "page" ? { rawEditTextFrom: head.length } : {}
   };
 }
 function preflightArtifact(ctx, toolName, type, title, content, opts = {}) {
   const proposal = artifactProposal(type, title, content);
-  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { ...opts, advisory: proposal.advisory }) : null;
+  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, {
+    ...opts,
+    advisory: proposal.advisory,
+    ...proposal.rawEditTextFrom !== void 0 ? { rawEditTextFrom: proposal.rawEditTextFrom } : {}
+  }) : null;
 }
 
 // src/mcp/tools/present-findings.ts
@@ -39944,22 +39989,44 @@ function readPageSource(projectRoot2, requested) {
   if (!isWithin(rootReal, real)) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
   }
-  let stat;
+  const { O_RDONLY, O_NOFOLLOW: O_NOFOLLOW2, O_NONBLOCK } = fs14.constants;
+  let fd;
   try {
-    stat = fs14.statSync(real);
+    fd = fs14.openSync(real, O_RDONLY | (O_NOFOLLOW2 ?? 0) | (O_NONBLOCK ?? 0));
   } catch {
-    return refuse(`\`path\` "${requested}" could not be read.`);
+    return refuse(`\`path\` "${requested}" could not be opened.`);
   }
-  if (!stat.isFile()) return refuse(`\`path\` "${requested}" is not a regular file.`);
-  if (stat.size > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", stat.size) };
   let html;
   try {
-    html = fs14.readFileSync(real, "utf8");
+    let again;
+    try {
+      again = fs14.realpathSync(lexical);
+    } catch {
+      return refuse(`\`path\` "${requested}" changed while it was being read.`);
+    }
+    if (again !== real || !isWithin(rootReal, again)) {
+      return refuse(`\`path\` "${requested}" changed while it was being read.`);
+    }
+    const stat = fs14.fstatSync(fd);
+    if (!stat.isFile()) return refuse(`\`path\` "${requested}" is not a regular file.`);
+    if (stat.size > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", stat.size) };
+    const buf = Buffer.alloc(PAGE_HTML_MAX_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const got = fs14.readSync(fd, buf, total, buf.length - total, total);
+      if (got === 0) break;
+      total += got;
+    }
+    if (total > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", total) };
+    html = buf.subarray(0, total).toString("utf8");
   } catch {
     return refuse(`\`path\` "${requested}" could not be read.`);
+  } finally {
+    try {
+      fs14.closeSync(fd);
+    } catch {
+    }
   }
-  const bytes = utf8ByteLength(html);
-  if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", bytes) };
   if (!html.trim()) return refuse(`the file at \`path\` "${requested}" is empty.`);
   const sourcePath = path15.relative(rootReal, real).split(path15.sep).join("/");
   return { ok: true, html, sourcePath };

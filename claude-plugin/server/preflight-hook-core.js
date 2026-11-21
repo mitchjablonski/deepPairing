@@ -180,13 +180,15 @@ function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
     const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
-    for (const proposal of proposalStrings) {
+    for (let idx = 0; idx < proposalStrings.length; idx++) {
+      const proposal = proposalStrings[idx];
       const p = clean(proposal);
       if (!p) continue;
+      const rawEditText = opts.rawEditText || opts.rawEditTextFrom !== void 0 && idx >= opts.rawEditTextFrom;
       if (containsAsPhrase(p, rejNormalized)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (containsAsPhrase(specificNoun, p) && (!opts.rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
+      if (containsAsPhrase(specificNoun, p) && (!rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
         return { proposal, rejected: rej, via: "surface" };
       }
       if (containsAsPhrase(p, specificNoun)) {
@@ -200,7 +202,7 @@ function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
   return null;
 }
 function runPreflight(input) {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, projectRelativePaths = false } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, rawEditTextFrom, projectRelativePaths = false } = input;
   const globOpts = { projectRelativePaths };
   const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
@@ -271,7 +273,7 @@ function runPreflight(input) {
     }
   }
   if (rejectedApproaches.length > 0) {
-    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText });
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText, rawEditTextFrom });
     if (!match && proposalConcepts.length > 0) {
       for (const rej of rejectedApproaches) {
         if (!rej.concept) continue;
