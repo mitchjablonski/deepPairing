@@ -135,6 +135,55 @@ function describeRegionRef(region: CommentRegion): string {
   return "";
 }
 
+type CommentHtmlAnchor = Comment["target"]["htmlAnchor"];
+
+/** Clip a delivered anchor string for the PROSE line only (the structured
+ *  mirror carries the full, already-capped value). */
+function clipProse(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+/**
+ * #680 slice 2 — a comment pointed at a spot inside a `page` artifact's HTML
+ * names that spot TEXTUALLY so the agent can find it in the HTML it authored:
+ * the kind, the quoted text, the table headers (cell), the Mermaid node id, the
+ * link target, and the CSS locator. e.g.
+ * ` — on page cell "Up to 60s" (row "TTL expiry", column "Staleness") at \`tr:nth-of-type(2) > td:nth-of-type(2)\``.
+ */
+export function describeHtmlAnchor(a: CommentHtmlAnchor): string {
+  if (!a) return "";
+  let out = ` — on page ${a.kind}`;
+  const quote = a.quote.trim();
+  if (quote) out += ` "${clipProse(quote, 120)}"`;
+  const headers: string[] = [];
+  if (a.table?.row) headers.push(`row "${clipProse(a.table.row, 60)}"`);
+  if (a.table?.col) headers.push(`column "${clipProse(a.table.col, 60)}"`);
+  if (headers.length) out += ` (${headers.join(", ")})`;
+  if (a.nodeId) out += ` (node ${a.nodeId})`;
+  if (a.href) out += ` (href ${clipProse(a.href, 120)})`;
+  out += ` at \`${a.locator}\``;
+  return out;
+}
+
+/** #680 slice 2 — the structured mirror of a page anchor: every field the agent
+ *  needs to place the comment, spread only when present. */
+function structuredHtmlAnchor(a: CommentHtmlAnchor): Record<string, unknown> {
+  if (!a) return {};
+  return {
+    htmlAnchor: {
+      kind: a.kind,
+      locator: a.locator,
+      quote: a.quote,
+      ...(a.prefix ? { prefix: a.prefix } : {}),
+      ...(a.suffix ? { suffix: a.suffix } : {}),
+      ...(a.table && (a.table.row || a.table.col) ? { table: { ...(a.table.row ? { row: a.table.row } : {}), ...(a.table.col ? { col: a.table.col } : {}) } } : {}),
+      ...(a.nodeId ? { nodeId: a.nodeId } : {}),
+      ...(a.href ? { href: a.href } : {}),
+      ...(a.version != null ? { version: a.version } : {}),
+    },
+  };
+}
+
 /**
  * #174 — a decision GRAIN comment (from the "Discuss" workbench) anchors to a
  * PART of an option (optionId + a `pro:N`/`con:N`/`summary` sectionId) or to the
@@ -299,6 +348,9 @@ function commonTargetFields(c: Comment, removedLine: string | undefined): Record
     // carries optionId + visualId + rect + nearNodes so the anchor survives a
     // re-render (#163). See structuredRegionFields.
     ...structuredRegionFields(c.target),
+    // #680 slice 2 — a page anchor (element / text / cell / diagram node /
+    // link). Spread only when present so every other payload is unchanged.
+    ...structuredHtmlAnchor(c.target.htmlAnchor),
   };
 }
 
@@ -475,6 +527,8 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
   // fallback. A region carrying neither is skipped (nothing to say).
   const regionRef = describeRegionRef(c.target.region);
   if (regionRef) loc += ` — on region ${regionRef}`;
+  // #680 slice 2 — a page comment names the exact spot it points at.
+  loc += describeHtmlAnchor(c.target.htmlAnchor);
 
   // #187 — a FOLLOW-UP comment (posted to an already-approved artifact via the
   // late lane; the store stamps `followUp` authoritatively) is delivered

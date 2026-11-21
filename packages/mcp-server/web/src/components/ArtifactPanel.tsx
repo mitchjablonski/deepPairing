@@ -424,7 +424,10 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       // OpenQuestionSection; without this arm they showed twice (section +
       // this bottom thread). `== null` (not falsy!) — questionIndex 0 is a
       // valid target on the first question.
-      c.target.questionIndex == null,
+      c.target.questionIndex == null &&
+      // #680 slice 2 — comments pointed at a spot on a page render in the
+      // page's own numbered "On the page" list (with their pins), not here.
+      c.target.htmlAnchor == null,
   );
 
   return (

@@ -527,7 +527,14 @@ Words to the agent:
   reviewable draft: approve, request changes, or reject with a reason. The
   rejection gate reads the page's visible text, title, summary and concept
   like any other present_* call; a match is refused with the stored reason,
-  so rework the approach rather than rewording the page. New version:
+  so rework the approach rather than rewording the page. Your pair can point
+  at the page itself: click an element, select text, or click a table cell,
+  diagram node or link. Those comments come back from `check_feedback` with an
+  `htmlAnchor`: its `kind`, a CSS `locator`, the quoted text (with
+  `prefix`/`suffix`), the row and column header names for a cell, the Mermaid
+  `nodeId`, or the link `href`. Use them to find the exact spot in the HTML you
+  wrote. Give key elements stable `id`s so the locators survive a revision.
+  Links on the page never navigate. New version:
   `revise_artifact` (supersede) with the new inline `html`. Reach for the
   structured tools when the review needs per-file, per-option or per-line marks.
 - **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —

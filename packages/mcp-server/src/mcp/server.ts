@@ -71,6 +71,24 @@ import { matchesGlob as _matchesGlob } from "./preflight-validator.js";
 import { TOOL_INPUT_SCHEMAS, toMcpInputSchema, formatHandlerError } from "./validate-tool-input.js";
 export const matchesGlob = _matchesGlob;
 
+/** #680 slice 2 — check_feedback's structured mirror of a page comment's anchor
+ *  (see describeHtmlAnchor in check-feedback-delivery.ts). */
+const HTML_ANCHOR_OUTPUT_SCHEMA = {
+  type: "object" as const,
+  description: "Page artifacts — where on the page this comment points: kind (element|text|cell|diagram-node|link), CSS locator, quoted text (+ prefix/suffix), table header names for a cell, Mermaid nodeId, link href, and the page version it was made on. Find the spot in the HTML you authored.",
+  properties: {
+    kind: { type: "string", enum: ["element", "text", "cell", "diagram-node", "link"] },
+    locator: { type: "string" },
+    quote: { type: "string" },
+    prefix: { type: "string" },
+    suffix: { type: "string" },
+    table: { type: "object", properties: { row: { type: "string" }, col: { type: "string" } } },
+    nodeId: { type: "string" },
+    href: { type: "string" },
+    version: { type: "number" },
+  },
+};
+
 type BroadcastFn = (event: any) => void;
 
 /**
@@ -257,6 +275,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                   // #140 — region-anchored diagram comment: the node labels it
                   // covers (textual; ids/rect are deliberately omitted).
                   region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
+                  // #680 slice 2 — see comments.items.htmlAnchor.
+                  htmlAnchor: HTML_ANCHOR_OUTPUT_SCHEMA,
                 },
               },
             },
@@ -277,6 +297,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                   anchors: { type: "array", items: { type: "object", properties: { filePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" } } } },
                   // #140 — see questions.items.region.
                   region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
+                  // #680 slice 2 — the spot on a page artifact this comment points at.
+                  htmlAnchor: HTML_ANCHOR_OUTPUT_SCHEMA,
                 },
               },
             },

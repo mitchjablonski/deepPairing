@@ -1,0 +1,568 @@
+/**
+ * #680 slice 2 — the ANNOTATOR: a self-contained script injected FIRST into a
+ * `page` artifact's sandboxed frame, before any agent markup.
+ *
+ * It lets the human point at the page instead of describing it:
+ *  - hover → a dashed outline on the element under the pointer;
+ *  - click → an `element` anchor;
+ *  - mouseup with a non-empty selection → a `text` anchor (quote + prefix/suffix);
+ *  - a click inside a `td`/`th` → a `cell` anchor with its row and column header text;
+ *  - a click on a Mermaid node (`g.node`, `flowchart-*` ids) → a `diagram-node` anchor;
+ *  - a click on a link → `preventDefault` (a page link NEVER navigates, so the
+ *    frame can't leave the no-network document) and a `link` anchor.
+ *
+ * Each anchor is posted to `parent` as `{dp:"anchor", anchor}`. The target
+ * origin is "*" because the frame's own origin is opaque and it cannot know the
+ * parent's; the parent authenticates the message by `event.source` (the frame's
+ * contentWindow) and re-validates the anchor with the shared Zod schema.
+ *
+ * The parent sends anchors back down as `{dp:"pins", anchors}`; the annotator
+ * re-finds each (locator first, then the quote with prefix/suffix) and draws a
+ * numbered outline pin, then reports which were found (`{dp:"pins-status",
+ * found}`) so the parent can say "not found in this version". Pins are built
+ * ONLY with DOM APIs and `textContent` — nothing the parent sends is ever parsed
+ * as HTML. `{dp:"focus", index}` scrolls to a pin; `{dp:"mode", annotate}`
+ * switches between annotating clicks and letting them through to the page (after
+ * Run). Messages are accepted only from `parent`.
+ *
+ * Written as plain JS inside `String.raw` (so no `${` or backticks below) and
+ * split into a CORE (pure helpers: locator building, quote extraction,
+ * re-finding) and a MAIN (event wiring), so jsdom tests can evaluate the exact
+ * shipped source and call the helpers directly. Must never contain a closing
+ * script tag: it is inlined into the frame document.
+ */
+
+/** Function body; parameters `(document, window)`; returns the helper object. */
+export const ANNOTATOR_CORE_SOURCE = String.raw`
+"use strict";
+var LIMITS = { locator: 512, quote: 280, affix: 32, header: 200, nodeId: 200, href: 512 };
+var SKIP = "script,style,noscript,template,[data-dp-annotator]";
+var STABLE_DATA = ["data-testid", "data-test", "data-id", "data-key", "data-name"];
+var NODE_SEL = "g.node, g[id^='flowchart-'], g[id*='-flowchart-']";
+var LINK_SEL = "a[href], area[href]";
+
+function norm(s) { return String(s == null ? "" : s).replace(/\s+/g, " ").trim(); }
+function clip(s, n) { s = String(s == null ? "" : s); return s.length > n ? s.slice(0, n) : s; }
+function isWs(ch) { return ch === " " || ch === "\n" || ch === "\t" || ch === "\r" || ch === "\f"; }
+function isEl(n) { return !!n && n.nodeType === 1; }
+function elementOf(n) { return !n ? null : n.nodeType === 1 ? n : n.parentElement; }
+
+function cssEscape(v) {
+  if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(v);
+  var s = String(v), out = "";
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i), code = s.charCodeAt(i);
+    if (code === 0) { out += String.fromCharCode(65533); continue; }
+    if ((code >= 1 && code <= 31) || code === 127 ||
+        (i === 0 && code >= 48 && code <= 57) ||
+        (i === 1 && code >= 48 && code <= 57 && s.charCodeAt(0) === 45)) {
+      out += "\\" + code.toString(16) + " "; continue;
+    }
+    if (i === 0 && s.length === 1 && code === 45) { out += "\\-"; continue; }
+    if (code >= 128 || code === 45 || code === 95 || (code >= 48 && code <= 57) ||
+        (code >= 65 && code <= 90) || (code >= 97 && code <= 122)) { out += ch; continue; }
+    out += "\\" + ch;
+  }
+  return out;
+}
+function attrEscape(v) { return String(v).replace(/\\/g, "\\\\").replace(/"/g, "\\\""); }
+function unique(sel) { try { return document.querySelectorAll(sel).length === 1; } catch (e) { return false; } }
+function safeQuery(sel) { try { return document.querySelector(sel); } catch (e) { return null; } }
+function nthOfType(el) {
+  var i = 1, s = el.previousElementSibling;
+  while (s) { if (s.localName === el.localName) i++; s = s.previousElementSibling; }
+  return i;
+}
+
+/** A CSS path: #id when unique, else a unique stable data-* attribute, else
+ *  tag:nth-of-type steps up to body. Capped by dropping leading steps. */
+function buildLocator(el) {
+  if (!isEl(el)) return "body";
+  var segs = [], node = el;
+  while (isEl(node)) {
+    if (node === document.documentElement) { segs.unshift("html"); break; }
+    if (node === document.body) { segs.unshift("body"); break; }
+    if (node.id) {
+      var idSel = "#" + cssEscape(node.id);
+      if (unique(idSel)) { segs.unshift(idSel); break; }
+    }
+    var dataSel = null;
+    for (var i = 0; i < STABLE_DATA.length; i++) {
+      var v = node.getAttribute(STABLE_DATA[i]);
+      if (v) {
+        var ds = cssEscape(node.localName) + "[" + STABLE_DATA[i] + "=\"" + attrEscape(v) + "\"]";
+        if (unique(ds)) { dataSel = ds; break; }
+      }
+    }
+    if (dataSel) { segs.unshift(dataSel); break; }
+    segs.unshift(cssEscape(node.localName) + ":nth-of-type(" + nthOfType(node) + ")");
+    node = node.parentElement;
+  }
+  var out = segs.join(" > ");
+  while (out.length > LIMITS.locator && segs.length > 1) { segs.shift(); out = segs.join(" > "); }
+  return clip(out || "body", LIMITS.locator);
+}
+
+/** Whitespace-normalized visible text of a subtree (script/style/our own
+ *  elements skipped), with the text nodes it came from so a normalized offset
+ *  maps back to a DOM position. */
+function textIndex(root) {
+  var parts = [], text = "", lastSpace = true;
+  if (!root) return { text: text, parts: parts };
+  var walker = document.createTreeWalker(root, 4, null);
+  var n;
+  while ((n = walker.nextNode())) {
+    var p = n.parentNode;
+    if (p && p.closest && p.closest(SKIP)) continue;
+    var raw = n.nodeValue || "";
+    var part = { node: n, start: text.length, lead: lastSpace, end: 0 };
+    for (var i = 0; i < raw.length; i++) {
+      var ch = raw.charAt(i);
+      if (isWs(ch)) { if (!lastSpace) { text += " "; lastSpace = true; } }
+      else { text += ch; lastSpace = false; }
+    }
+    part.end = text.length;
+    parts.push(part);
+  }
+  return { text: text, parts: parts };
+}
+function normOffset(part, rawOff) {
+  var raw = part.node.nodeValue || "", idx = part.start, ls = part.lead;
+  for (var i = 0; i < rawOff && i < raw.length; i++) {
+    if (isWs(raw.charAt(i))) { if (!ls) { idx++; ls = true; } } else { idx++; ls = false; }
+  }
+  return idx;
+}
+function rawStart(part, nIdx) {
+  var raw = part.node.nodeValue || "", idx = part.start, ls = part.lead;
+  for (var i = 0; i < raw.length; i++) {
+    if (idx >= nIdx && !isWs(raw.charAt(i))) return i;
+    if (isWs(raw.charAt(i))) { if (!ls) { idx++; ls = true; } } else { idx++; ls = false; }
+  }
+  return raw.length;
+}
+function rawEnd(part, nEnd) {
+  var raw = part.node.nodeValue || "", idx = part.start, ls = part.lead;
+  for (var i = 0; i < raw.length; i++) {
+    if (isWs(raw.charAt(i))) { if (!ls) { idx++; ls = true; } } else { idx++; ls = false; }
+    if (idx >= nEnd) return i + 1;
+  }
+  return raw.length;
+}
+function pointIndex(index, container, offset) {
+  if (container && container.nodeType === 3) {
+    for (var i = 0; i < index.parts.length; i++) {
+      if (index.parts[i].node === container) return normOffset(index.parts[i], offset);
+    }
+  }
+  var r = document.createRange();
+  try { r.setStart(container, offset); } catch (e) { return index.text.length; }
+  r.collapse(true);
+  for (var j = 0; j < index.parts.length; j++) {
+    try { if (r.comparePoint(index.parts[j].node, 0) >= 0) return index.parts[j].start; } catch (e2) { /* skip */ }
+  }
+  return index.text.length;
+}
+function rangeFor(index, s, e) {
+  var startPart = null, endPart = null;
+  for (var i = 0; i < index.parts.length; i++) {
+    var pt = index.parts[i];
+    if (!startPart && pt.end > s) startPart = pt;
+    if (pt.start < e && pt.end >= e) { endPart = pt; break; }
+  }
+  if (!startPart || !endPart) return null;
+  var r = document.createRange();
+  try {
+    r.setStart(startPart.node, rawStart(startPart, s));
+    r.setEnd(endPart.node, rawEnd(endPart, e));
+  } catch (err) { return null; }
+  return r;
+}
+
+/** Best occurrence of the quote in normalized text: prefix match scores 2,
+ *  suffix match 1; ties keep the first. -1 when absent. */
+function findQuote(text, quote, prefix, suffix) {
+  var q = norm(quote);
+  if (!q) return -1;
+  var p = norm(prefix), sx = norm(suffix);
+  var best = -1, bestScore = -1, from = 0, guard = 0, i;
+  while ((i = text.indexOf(q, from)) !== -1 && guard++ < 2000) {
+    var score = 0;
+    if (p && norm(text.slice(Math.max(0, i - p.length - 2), i)).slice(-p.length) === p) score += 2;
+    if (sx && norm(text.slice(i + q.length, i + q.length + sx.length + 2)).slice(0, sx.length) === sx) score += 1;
+    if (score > bestScore) { best = i; bestScore = score; if (score === 3) break; }
+    from = i + 1;
+  }
+  return best;
+}
+
+function elementText(el) {
+  var t = norm(textIndex(el).text);
+  if (!t && el && el.getAttribute) {
+    t = norm(el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("value") || "");
+  }
+  return t;
+}
+
+function elementAnchor(el) {
+  return { kind: "element", locator: buildLocator(el), quote: clip(elementText(el), LIMITS.quote) };
+}
+function linkAnchor(link) {
+  var a = { kind: "link", locator: buildLocator(link), quote: clip(elementText(link), LIMITS.quote) };
+  var href = link.getAttribute("href");
+  if (href) a.href = clip(href, LIMITS.href);
+  return a;
+}
+function mermaidNodeId(g) {
+  var d = g.getAttribute && g.getAttribute("data-id");
+  if (d) return clip(d, LIMITS.nodeId);
+  var id = g.id || "";
+  var m = /(?:^|-)flowchart-(.+)-\d+$/.exec(id);
+  return clip(m ? m[1] : id, LIMITS.nodeId);
+}
+function nodeAnchor(g) {
+  var a = { kind: "diagram-node", locator: buildLocator(g), quote: clip(elementText(g), LIMITS.quote) };
+  var id = mermaidNodeId(g);
+  if (id) a.nodeId = id;
+  return a;
+}
+function isCell(n) { return isEl(n) && (n.localName === "td" || n.localName === "th"); }
+function spanOf(c) { var n = parseInt(c.getAttribute("colspan") || "1", 10); return n > 0 ? n : 1; }
+function cellsOf(row) {
+  var out = [];
+  for (var c = row.firstElementChild; c; c = c.nextElementSibling) if (isCell(c)) out.push(c);
+  return out;
+}
+function rowsOf(table) {
+  var all = table.querySelectorAll("tr"), out = [];
+  for (var i = 0; i < all.length; i++) if (all[i].closest("table") === table) out.push(all[i]);
+  return out;
+}
+function colIndex(cell) {
+  var i = 0, s = cell.previousElementSibling;
+  while (s) { if (isCell(s)) i += spanOf(s); s = s.previousElementSibling; }
+  return i;
+}
+function cellAt(row, col) {
+  var cells = cellsOf(row), i = 0;
+  for (var k = 0; k < cells.length; k++) {
+    var span = spanOf(cells[k]);
+    if (col >= i && col < i + span) return cells[k];
+    i += span;
+  }
+  return null;
+}
+function headerRow(table) {
+  var rows = rowsOf(table), i;
+  for (i = 0; i < rows.length; i++) {
+    var p = rows[i].parentElement;
+    if (p && p.localName === "thead") return rows[i];
+  }
+  for (i = 0; i < rows.length; i++) {
+    var cells = cellsOf(rows[i]);
+    if (!cells.length) continue;
+    for (var j = 0; j < cells.length; j++) if (cells[j].localName !== "th") return null;
+    return rows[i];
+  }
+  return null;
+}
+function cellAnchor(cell) {
+  var a = { kind: "cell", locator: buildLocator(cell), quote: clip(elementText(cell), LIMITS.quote) };
+  var row = cell.parentElement, table = cell.closest("table"), t = {};
+  if (table && row && row.localName === "tr") {
+    var hr = headerRow(table);
+    if (hr && hr !== row) {
+      var hc = cellAt(hr, colIndex(cell));
+      var ht = hc ? elementText(hc) : "";
+      if (ht) t.col = clip(ht, LIMITS.header);
+    } else if (hr === row) {
+      var own = elementText(cell);
+      if (own) t.col = clip(own, LIMITS.header);
+    }
+    if (hr !== row) {
+      var rh = null;
+      for (var c = row.firstElementChild; c; c = c.nextElementSibling) { if (isEl(c) && c.localName === "th") { rh = c; break; } }
+      if (!rh) rh = cellAt(row, 0);
+      var rt = rh ? elementText(rh) : "";
+      if (rt) t.row = clip(rt, LIMITS.header);
+    }
+  }
+  if (t.row || t.col) a.table = t;
+  return a;
+}
+function textAnchor(range) {
+  var body = document.body || document.documentElement;
+  var index = textIndex(body);
+  var s = pointIndex(index, range.startContainer, range.startOffset);
+  var e = pointIndex(index, range.endContainer, range.endOffset);
+  var quote = e > s ? norm(index.text.slice(s, e)) : "";
+  if (!quote) quote = norm(range.toString());
+  if (!quote) return null;
+  var common = elementOf(range.commonAncestorContainer) || body;
+  var a = { kind: "text", locator: buildLocator(common), quote: clip(quote, LIMITS.quote) };
+  var prefix = norm(index.text.slice(Math.max(0, s - LIMITS.affix), s));
+  var suffix = norm(index.text.slice(e, e + LIMITS.affix));
+  if (prefix) a.prefix = clip(prefix, LIMITS.affix);
+  if (suffix) a.suffix = clip(suffix, LIMITS.affix);
+  return a;
+}
+/** What a click on this target points at: link, then Mermaid node, then table
+ *  cell, else the element itself. */
+function anchorForTarget(t) {
+  var el = elementOf(t);
+  if (!el || !el.closest) return null;
+  var link = el.closest(LINK_SEL);
+  if (link) return linkAnchor(link);
+  var node = el.closest(NODE_SEL);
+  if (node) return nodeAnchor(node);
+  var cell = el.closest("td, th");
+  if (cell) return cellAnchor(cell);
+  return elementAnchor(el);
+}
+
+function textMatches(el, quote) {
+  var q = norm(quote);
+  if (!q) return true;
+  return elementText(el).indexOf(q.slice(0, 60)) !== -1;
+}
+/** Re-find an anchor in the current document: the locator first (checked
+ *  against the quote), then kind-specific ids (Mermaid node id, link href),
+ *  then the quote with its prefix/suffix. Returns {el, range} or null. */
+function findAnchor(a) {
+  if (!a || typeof a !== "object") return null;
+  var kind = String(a.kind || "");
+  var quote = typeof a.quote === "string" ? a.quote : "";
+  var prefix = typeof a.prefix === "string" ? a.prefix : "";
+  var suffix = typeof a.suffix === "string" ? a.suffix : "";
+  var body = document.body || document.documentElement;
+  var el = typeof a.locator === "string" && a.locator ? safeQuery(a.locator) : null;
+  if (kind === "text") {
+    var scopes = el ? [el, body] : [body];
+    for (var i = 0; i < scopes.length; i++) {
+      var idx = textIndex(scopes[i]);
+      var at = findQuote(idx.text, quote, prefix, suffix);
+      if (at >= 0) {
+        var r = rangeFor(idx, at, at + norm(quote).length);
+        if (r) return { el: elementOf(r.commonAncestorContainer) || scopes[i], range: r };
+      }
+    }
+    return null;
+  }
+  if (el && textMatches(el, quote)) return { el: el, range: null };
+  var j;
+  if (kind === "diagram-node" && typeof a.nodeId === "string" && a.nodeId) {
+    var nodes = document.querySelectorAll(NODE_SEL);
+    for (j = 0; j < nodes.length; j++) if (mermaidNodeId(nodes[j]) === a.nodeId) return { el: nodes[j], range: null };
+  }
+  if (kind === "link" && typeof a.href === "string" && a.href) {
+    var links = document.querySelectorAll(LINK_SEL);
+    for (j = 0; j < links.length; j++) {
+      if (links[j].getAttribute("href") === a.href && textMatches(links[j], quote)) return { el: links[j], range: null };
+    }
+  }
+  if (norm(quote)) {
+    var bi = textIndex(body);
+    var pos = findQuote(bi.text, quote, prefix, suffix);
+    if (pos >= 0) {
+      var rr = rangeFor(bi, pos, pos + norm(quote).length);
+      var host = rr ? elementOf(rr.commonAncestorContainer) : null;
+      var want = kind === "cell" ? "td, th" : kind === "link" ? LINK_SEL : kind === "diagram-node" ? NODE_SEL : null;
+      if (host && want && host.closest) host = host.closest(want) || host;
+      if (host) return { el: host, range: null };
+    }
+  }
+  return null;
+}
+
+return {
+  LIMITS: LIMITS,
+  norm: norm,
+  clip: clip,
+  cssEscape: cssEscape,
+  buildLocator: buildLocator,
+  textIndex: textIndex,
+  findQuote: findQuote,
+  findAnchor: findAnchor,
+  textAnchor: textAnchor,
+  anchorForTarget: anchorForTarget,
+  elementAnchor: elementAnchor,
+  linkAnchor: linkAnchor,
+  nodeAnchor: nodeAnchor,
+  cellAnchor: cellAnchor,
+  mermaidNodeId: mermaidNodeId
+};
+`;
+
+/** Function body; parameters `(document, window, parent, core)`; installs the
+ *  listeners and returns an uninstall function. */
+export const ANNOTATOR_MAIN_SOURCE = String.raw`
+"use strict";
+var annotate = true, suppressClick = false, hoverBox = null, layer = null;
+var current = [], hits = [];
+function own(el) { return !!(el && el.closest && el.closest("[data-dp-annotator]")); }
+function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
+function important(el, styles) {
+  for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) el.style.setProperty(k, styles[k], "important");
+}
+function mk(tag) { var el = document.createElement(tag); el.setAttribute("data-dp-annotator", ""); return el; }
+function ensureLayer() {
+  if (layer && layer.isConnected) return layer;
+  layer = mk("dp-annotator-layer");
+  important(layer, { position: "absolute", left: "0", top: "0", width: "0", height: "0", margin: "0", padding: "0",
+    border: "0", "pointer-events": "none", "z-index": "2147483647", display: "block", overflow: "visible" });
+  (document.documentElement || document.body).appendChild(layer);
+  return layer;
+}
+function rectOf(hit) {
+  var r = null;
+  if (hit.range && typeof hit.range.getBoundingClientRect === "function") {
+    try { r = hit.range.getBoundingClientRect(); } catch (e) { r = null; }
+  }
+  if ((!r || (!r.width && !r.height)) && hit.el && hit.el.getBoundingClientRect) r = hit.el.getBoundingClientRect();
+  return r;
+}
+function place(box, r) {
+  var sx = window.scrollX || window.pageXOffset || 0, sy = window.scrollY || window.pageYOffset || 0;
+  important(box, { left: (r.left + sx - 2) + "px", top: (r.top + sy - 2) + "px",
+    width: (r.width + 4) + "px", height: (r.height + 4) + "px" });
+}
+function targetEl(e) {
+  var t = e.target;
+  if (t && t.nodeType !== 1) t = t.parentElement;
+  return t && t.nodeType === 1 ? t : null;
+}
+function hideHover() { if (hoverBox) important(hoverBox, { display: "none" }); }
+function onMove(e) {
+  var t = targetEl(e);
+  if (!annotate || !t || own(t) || t === document.documentElement || t === document.body) { hideHover(); return; }
+  if (!hoverBox || !hoverBox.isConnected) {
+    hoverBox = mk("dp-annotator-hover");
+    important(hoverBox, { position: "absolute", "box-sizing": "border-box", outline: "2px dashed #3b82f6",
+      background: "rgba(59,130,246,0.06)", "pointer-events": "none", margin: "0", padding: "0" });
+    ensureLayer().appendChild(hoverBox);
+  }
+  important(hoverBox, { display: "block" });
+  place(hoverBox, t.getBoundingClientRect());
+}
+function drawPins() {
+  var l = ensureLayer();
+  var olds = l.querySelectorAll("dp-annotator-pin");
+  for (var i = 0; i < olds.length; i++) olds[i].remove();
+  var found = [];
+  hits = [];
+  for (var j = 0; j < current.length; j++) {
+    var hit = null;
+    try { hit = core.findAnchor(current[j]); } catch (e) { hit = null; }
+    found.push(!!hit);
+    hits.push(hit);
+    if (!hit) continue;
+    var r = rectOf(hit);
+    if (!r) continue;
+    var pin = mk("dp-annotator-pin");
+    pin.setAttribute("data-dp-pin", String(j));
+    important(pin, { position: "absolute", display: "block", "box-sizing": "border-box", outline: "2px solid #f59e0b",
+      background: "transparent", "pointer-events": "none", margin: "0", padding: "0" });
+    place(pin, r);
+    var badge = mk("dp-annotator-badge");
+    badge.textContent = String(j + 1);
+    important(badge, { position: "absolute", left: "-10px", top: "-10px", display: "block", "box-sizing": "border-box",
+      "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: "#f59e0b",
+      color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center" });
+    pin.appendChild(badge);
+    l.appendChild(pin);
+  }
+  return found;
+}
+function focusPin(index) {
+  if (typeof index !== "number" || index < 0 || index >= hits.length) return;
+  var i = Math.floor(index);
+  var hit = hits[i];
+  if (hit && hit.el && hit.el.scrollIntoView) hit.el.scrollIntoView({ block: "center", behavior: "smooth" });
+  var pin = layer ? layer.querySelector("dp-annotator-pin[data-dp-pin=\"" + i + "\"]") : null;
+  if (pin) {
+    important(pin, { outline: "3px solid #ef4444" });
+    setTimeout(function () { important(pin, { outline: "2px solid #f59e0b" }); }, 1600);
+  }
+}
+function onMessage(e) {
+  if (e.source !== parent) return;
+  var d = e.data;
+  if (!d || typeof d !== "object") return;
+  if (d.dp === "pins") {
+    current = Array.isArray(d.anchors) ? d.anchors.slice(0, 500) : [];
+    post({ dp: "pins-status", found: drawPins() });
+  } else if (d.dp === "focus") {
+    focusPin(d.index);
+  } else if (d.dp === "mode") {
+    annotate = d.annotate !== false;
+    if (!annotate) hideHover();
+  }
+}
+function onMouseDown() { suppressClick = false; }
+function onMouseUp(e) {
+  if (!annotate) return;
+  var t = targetEl(e);
+  if (t && own(t)) return;
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+  var a = null;
+  try { a = core.textAnchor(sel.getRangeAt(0)); } catch (err) { a = null; }
+  if (a) { suppressClick = true; post({ dp: "anchor", anchor: a }); }
+}
+function onClick(e) {
+  var t = targetEl(e);
+  if (!t || own(t)) return;
+  var link = t.closest ? t.closest("a[href], area[href]") : null;
+  if (link) {
+    // Never navigate: a link on the page is something to point at, not a way
+    // out of the no-network document. Interact mode still lets the page's own
+    // click handlers see the event; only the navigation is cancelled.
+    e.preventDefault();
+    if (!annotate) return;
+    e.stopPropagation();
+    if (suppressClick) { suppressClick = false; return; }
+    post({ dp: "anchor", anchor: core.linkAnchor(link) });
+    return;
+  }
+  if (!annotate) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (suppressClick) { suppressClick = false; return; }
+  var a = null;
+  try { a = core.anchorForTarget(t); } catch (err) { a = null; }
+  if (a) post({ dp: "anchor", anchor: a });
+}
+function onAuxClick(e) {
+  var t = targetEl(e);
+  if (t && t.closest && t.closest("a[href], area[href]")) e.preventDefault();
+}
+function onResize() { if (current.length) drawPins(); }
+function onReady() { post({ dp: "ready" }); }
+window.addEventListener("click", onClick, true);
+window.addEventListener("auxclick", onAuxClick, true);
+window.addEventListener("mousedown", onMouseDown, true);
+window.addEventListener("mouseup", onMouseUp, true);
+window.addEventListener("mousemove", onMove, true);
+window.addEventListener("message", onMessage);
+window.addEventListener("resize", onResize);
+if (document.readyState === "complete") onReady(); else window.addEventListener("load", onReady);
+return function uninstall() {
+  window.removeEventListener("click", onClick, true);
+  window.removeEventListener("auxclick", onAuxClick, true);
+  window.removeEventListener("mousedown", onMouseDown, true);
+  window.removeEventListener("mouseup", onMouseUp, true);
+  window.removeEventListener("mousemove", onMove, true);
+  window.removeEventListener("message", onMessage);
+  window.removeEventListener("resize", onResize);
+  window.removeEventListener("load", onReady);
+  if (layer && layer.parentNode) layer.parentNode.removeChild(layer);
+};
+`;
+
+/** The script inlined first into the frame document. */
+export const ANNOTATOR_SCRIPT =
+  "(function(){try{var core=(function(document,window){" +
+  ANNOTATOR_CORE_SOURCE +
+  "\n})(document,window);(function(document,window,parent,core){" +
+  ANNOTATOR_MAIN_SOURCE +
+  "\n})(document,window,window.parent,core);}catch(e){}})();";
