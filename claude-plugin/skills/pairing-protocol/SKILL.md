@@ -515,6 +515,21 @@ Words to the agent:
     card that turns "I read your document" into a call they make. Do NOT end a
     non-code understanding pass on a read-only explainer walk with no
     call-to-action; the decision is what keeps the understanding alive.
+- **`present_page`** — when the thing to review reads best as a PAGE you
+  designed (a comparison table, a mock-up, a diagram-heavy proposal), write it
+  as self-contained HTML and present it: a `title`, then the page inline as
+  `html` OR a `path` to an HTML file inside the project (up to 2 MB; paths
+  outside the project root, symlinks included, are refused). Add a `summary`
+  written TO your pair (what the page shows, what you want from them) and a
+  `concept` when the page proposes a named pattern. It renders full-width in a
+  sandboxed frame with NO network, so inline every asset; scripts run only
+  when your pair clicks Run, so the page must read without them. It is a
+  reviewable draft: approve, request changes, or reject with a reason. The
+  rejection gate reads the page's visible text, title, summary and concept
+  like any other present_* call; a match is refused with the stored reason,
+  so rework the approach rather than rewording the page. New version:
+  `revise_artifact` (supersede) with the new inline `html`. Reach for the
+  structured tools when the review needs per-file, per-option or per-line marks.
 - **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —
   that cadence got zero engagement. Concept-naming does NOT live here; it lives
   on the surfaces the human actually reads: `finding.concept` (the preferred

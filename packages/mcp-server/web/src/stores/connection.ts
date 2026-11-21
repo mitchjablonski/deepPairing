@@ -582,6 +582,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 code_change: "Code change ready for review",
                 spec: "Spec ready for review",
                 research: "Findings ready for review",
+                page: "Page ready for review",
               }[data.artifact.type as string] ?? "Ready for review";
             notifyDraft(data.artifact.id, `${label}: ${data.artifact.title ?? ""}`, {
               decision: data.artifact.type === "decision",

@@ -35,6 +35,7 @@ import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import { handlePresentChangeset } from "./tools/present-changeset.js";
 import { handlePresentDebrief } from "./tools/present-debrief.js";
 import { handlePresentExplainer } from "./tools/present-explainer.js";
+import { handlePresentPage } from "./tools/present-page.js";
 import { handleRecall } from "./tools/recall.js";
 import { handleRecordStance, RECORD_STANCE_DESCRIPTION } from "./tools/record-stance.js";
 import { handleGetCompanionUrl } from "./tools/get-companion-url.js";
@@ -369,6 +370,16 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_explainer),
+      },
+      {
+        name: "present_page",
+        annotations: { title: "Present page", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description:
+          "Present an HTML PAGE you wrote for your pair to review: a comparison table, a mock-up, a diagram-heavy proposal, a one-page design: anything that reads best as a page. Give a `title`, then EITHER the page inline as `html` OR a `path` to an HTML file inside the project (read once, up to 2 MB; paths outside the project root, including through symlinks, are refused). Optional `summary` (one or two sentences TO your pair: what the page shows and what you want from them) and `concept` (the named pattern the page proposes, so a reject is remembered against it)." +
+          "\n\nRendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, fonts or images; inline everything, data: URIs are fine). Its scripts run only when your pair clicks Run, so the page must read well without them." +
+          "\n\nThe rejection gate applies: the page's visible text, title, summary and concept are checked against the approaches your pair has rejected, exactly like the other present_* tools, and a match is refused with their stored reason (REJECTED_APPROACH_BLOCKED). Rework the approach; don't reword the page to slip past it." +
+          "\n\nWorkflow: it is a reviewable draft like present_plan or present_findings: your pair approves, requests changes or rejects with a reason. Non-blocking: it records and returns immediately; call check_feedback for the verdict and comments. To ship a new version, revise_artifact with mode 'supersede' and the new page as inline `html`. Prefer the structured tools when the review needs per-line, per-option or per-file marks (present_changeset, present_options).",
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_page),
       },
       {
         name: "recall",
@@ -1183,6 +1194,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       case "present_explainer":
         // #190 A2 — read-only narrated walk-through (tools/present-explainer.ts).
         return handlePresentExplainer(ctx, args);
+
+      case "present_page":
+        // #680 — agent-authored HTML page for review (tools/present-page.ts).
+        return handlePresentPage(ctx, args);
 
       case "check_feedback":
         // B3 — extracted to mcp/tools/check-feedback.ts (the last big inline

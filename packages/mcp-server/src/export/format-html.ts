@@ -56,6 +56,7 @@ import {
   coerceChangesetContent,
   coerceDecisionContent,
   coerceCodeChangeContent,
+  coercePageContent,
 } from "@deeppairing/shared";
 import { isNeverApprovedStatus, isNotShippedStatus } from "@deeppairing/shared";
 import { DEFAULT_SCAN_DEPTH } from "../secret-scan.js";
@@ -1439,6 +1440,19 @@ function explainerBody(a: Artifact, ctx: RenderCtx): string {
   return parts.join("");
 }
 
+/** #680 — a page artifact on the shareable export. The agent's HTML is NOT
+ *  inlined: the export has no sandbox frame, and agent markup must never run
+ *  in the export's own origin. Summary, source and size only. */
+function pageBody(a: Artifact, ctx: RenderCtx): string {
+  const content = coercePageContent(a.content);
+  const kb = Math.max(1, Math.ceil(Buffer.byteLength(content.html, "utf8") / 1024));
+  return (
+    (content.summary ? renderMarkdown(content.summary, 4, ctx.includeCode) : "") +
+    (content.concept?.name ? `<p class="concept">Pattern: <strong>${esc(content.concept.name)}</strong></p>` : "") +
+    `<p class="pending">An HTML page (${kb} KB)${content.sourcePath ? ` from <code>${escText(content.sourcePath)}</code>` : ""}. It is reviewed in the companion's sandboxed frame and is not embedded in this export.</p>`
+  );
+}
+
 function reasoningBody(a: Artifact, includeCode: boolean): string {
   const content = coerceReasoningContent(a.content);
   const concept = content.concept?.name
@@ -1462,6 +1476,7 @@ function artifactBody(a: Artifact, ctx: RenderCtx, ownComments: Comment[]): stri
     case "changeset": return changesetBody(a, ctx, ownComments);
     case "debrief": return debriefBody(a, ctx);
     case "explainer": return explainerBody(a, ctx);
+    case "page": return pageBody(a, ctx);
     case "reasoning": return reasoningBody(a, ctx.includeCode);
     default:
       return `<p class="pending">This ${esc(a.type)} has no renderer on the shareable page, so nothing is shown for it here — rather than something invented.</p>`;

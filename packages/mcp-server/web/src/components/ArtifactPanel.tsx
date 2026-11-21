@@ -39,6 +39,8 @@ const DebriefArtifact = lazy(() => import("./artifacts/DebriefArtifact").then((m
 // #190 A2 — the read-only EXPLAINER walk-through. Lazy like the others so its
 // coerceExplainerContent (Zod) stays out of the entry chunk.
 const ExplainerArtifact = lazy(() => import("./artifacts/ExplainerArtifact").then((m) => ({ default: m.ExplainerArtifact })));
+// #680 — the agent-authored HTML PAGE. Lazy like the others (coercePageContent).
+const PageArtifact = lazy(() => import("./artifacts/PageArtifact").then((m) => ({ default: m.PageArtifact })));
 // #180 — the decision-comment thread with carryover markers. LAZY so its Zod
 // coercion (coerceDecisionContent) stays out of the entry chunk; only decision
 // artifacts mount it (every other type keeps the plain CommentThread below).
@@ -167,6 +169,7 @@ const typeLabels: Record<string, string> = {
   reasoning: "Reasoning",
   debrief: "Debriefs",
   explainer: "Explainers",
+  page: "Pages",
 };
 
 function RelatedArtifacts({ ids }: { ids: string[] }) {
@@ -257,7 +260,7 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
 // body (a stale cached tab meeting a newer daemon's future type).
 const KNOWN_ARTIFACT_TYPES = new Set<string>([
   "research", "spec", "plan", "reasoning", "code_change",
-  "changeset", "decision", "debrief", "explainer",
+  "changeset", "decision", "debrief", "explainer", "page",
 ]);
 
 /**
@@ -377,7 +380,8 @@ export const ArtifactPane = forwardRef<HTMLDivElement, { artifact: Artifact; chi
       // (with the sticky chrome marked below): DiagramRegionLayer measures it.
       data-dp-pane=""
       className={`flex-1 h-full min-h-0 min-w-0 overflow-y-auto p-4 space-y-4 scroll-shadow w-full focus:outline-none ${
-        contentWidth === "constrained" ? "max-w-4xl mx-auto" : ""
+        // #680 — a page artifact always opens full-width: it is its own layout.
+        contentWidth === "constrained" && artifact.type !== "page" ? "max-w-4xl mx-auto" : ""
       }`}
     >
       {children}
@@ -503,6 +507,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       {artifact.type === "decision" && <DecisionArtifactView artifact={artifact} />}
       {artifact.type === "debrief" && <DebriefArtifact artifact={artifact} />}
       {artifact.type === "explainer" && <ExplainerArtifact artifact={artifact} />}
+      {artifact.type === "page" && <PageArtifact artifact={artifact} />}
       </Suspense>
 
       {/* General comments.

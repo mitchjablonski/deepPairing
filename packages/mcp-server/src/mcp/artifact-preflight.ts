@@ -1,5 +1,6 @@
 import type { ToolContext } from "./tools/types.js";
 import type { PreflightOpts } from "./tool-helpers.js";
+import { extractPageTextBlocks } from "./page-text.js";
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -16,6 +17,7 @@ export function artifactProposal(type: string, title: string, value: unknown) {
   let text: unknown[] = [];
   let paths: unknown[] = [];
   let concepts: unknown[] = [];
+  let body: unknown[] = [];
   switch (type) {
     case "research":
       text = [title, c.summary, ...field(c.findings, "title"), ...field(c.findings, "recommendation")];
@@ -48,21 +50,43 @@ export function artifactProposal(type: string, title: string, value: unknown) {
     case "explainer":
       text = [title, c.overview, ...field(c.sections, "heading")];
       break;
+    case "page":
+      // #680 — title and summary first (named proposal text, normal lanes),
+      // then the page's VISIBLE text, one string per block (page-text.ts).
+      // Every block is checked forward (a lone `<th>Railway</th>` counts); the
+      // reverse lane is tightened for the BODY only (`rawEditTextFrom` below),
+      // so a lone cell or heading ("None", "Overview") can't match backwards
+      // inside any stance that merely uses that word.
+      text = [title, c.summary];
+      body = typeof c.html === "string" ? extractPageTextBlocks(c.html) : [];
+      concepts = [record(c.concept).name];
+      break;
     default:
       return null;
   }
+  const head = strings(text);
+  const bodyText = strings(body);
   return {
-    text: strings(text),
+    text: [...head, ...bodyText],
     paths: strings(paths),
     concepts: strings(concepts),
     // A debrief reports what already happened; it is not a fresh proposal.
     // Recalled rejections still surface as advice, but cannot prevent the
     // historical record from naming the rejected path.
     advisory: type === "debrief" || (type === "changeset" && c.reviewIntent === "external"),
+    // #680 — page BODY text is free prose, not a named proposal: the matcher's
+    // #621 raw-text rule applies from the first body block on.
+    ...(type === "page" ? { rawEditTextFrom: head.length } : {}),
   };
 }
 
 export function preflightArtifact(ctx: ToolContext, toolName: string, type: string, title: string, content: unknown, opts: Omit<PreflightOpts, "advisory"> = {}) {
   const proposal = artifactProposal(type, title, content);
-  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { ...opts, advisory: proposal.advisory }) : null;
+  return proposal
+    ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, {
+      ...opts,
+      advisory: proposal.advisory,
+      ...(proposal.rawEditTextFrom !== undefined ? { rawEditTextFrom: proposal.rawEditTextFrom } : {}),
+    })
+    : null;
 }

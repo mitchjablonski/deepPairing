@@ -51,7 +51,7 @@ Three processes:
 - **Claude Code** is the LLM client. It speaks the Model Context
   Protocol over stdio.
 - **MCP server wrapper** (`src/standalone.ts`) — one per Claude Code
-  session. Implements the 19 MCP tools (see below). Talks to the
+  session. Implements the 20 MCP tools (see below). Talks to the
   daemon over HTTP for state read/write so multiple sessions share a
   single source of truth.
 - **deepPairing daemon** (`src/daemon/index.ts`) — one per project, bound to
@@ -69,7 +69,7 @@ with it and DaemonClient (`src/daemon/client.ts`) implements `IStore`
 over HTTP so the same code paths work in standalone or daemon mode. The
 companion UI can aggregate across several projects' daemons.
 
-## The MCP tool surface (19 tools)
+## The MCP tool surface (20 tools)
 
 Tools live in `packages/mcp-server/src/mcp/tools/` and are registered
 in `src/mcp/server.ts`. The split:
@@ -88,6 +88,10 @@ in `src/mcp/server.ts`. The split:
 - `present_explainer` — a read-only, narrated walk-through of how
   something WORKS (code archaeology / onboarding / spike readout):
   ordered sections anchored to real Evidence, without problem-framing
+- `present_page` — an agent-authored HTML page (inline `html` or a
+  project-relative `path`, up to 2 MB) reviewed as its own artifact in a
+  sandboxed, no-network frame; the page's visible text goes through the
+  same rejection gate as every other present_* tool
 
 **Polling**:
 - `check_feedback` — long-poll up to 30s, returns new comments,
