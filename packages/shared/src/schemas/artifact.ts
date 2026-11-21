@@ -9,6 +9,7 @@ import {
   ChangesetContentSchema,
   DebriefContentSchema,
   ExplainerContentSchema,
+  PageContentSchema,
 } from "./content-types.js";
 import { ArtifactAdmissionSchema } from "./stance-exception.js";
 
@@ -30,6 +31,9 @@ export const ArtifactTypeSchema = z.enum([
   // walk-through of how something WORKS (code archaeology / onboarding / spike
   // readout). Sections anchored to Evidence, WITHOUT findings' problem-framing.
   "explainer",
+  // #680 — an agent-authored HTML page, reviewed as its own artifact in the
+  // sandboxed frame (approve / request changes / reject, like research/plan).
+  "page",
 ]);
 
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>;
@@ -381,7 +385,8 @@ export function parseArtifactContent(
   | ParseResult<import("./content-types.js").ReasoningContent>
   | ParseResult<import("./content-types.js").ChangesetContent>
   | ParseResult<import("./content-types.js").DebriefContent>
-  | ParseResult<import("./content-types.js").ExplainerContent> {
+  | ParseResult<import("./content-types.js").ExplainerContent>
+  | ParseResult<import("./content-types.js").PageContent> {
   const schema = (() => {
     switch (artifact.type) {
       case "decision":     return DecisionContentSchema;
@@ -393,6 +398,7 @@ export function parseArtifactContent(
       case "changeset":    return ChangesetContentSchema;
       case "debrief":      return DebriefContentSchema;
       case "explainer":    return ExplainerContentSchema;
+      case "page":         return PageContentSchema;
     }
   })();
   const result = schema.safeParse(artifact.content);

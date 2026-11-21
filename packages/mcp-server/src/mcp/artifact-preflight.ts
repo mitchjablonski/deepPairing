@@ -1,5 +1,7 @@
 import type { ToolContext } from "./tools/types.js";
 import type { PreflightOpts } from "./tool-helpers.js";
+import { extractPageTextBlocks } from "./page-text.js";
+import { meaningfulTokens } from "./preflight-validator.js";
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -47,6 +49,18 @@ export function artifactProposal(type: string, title: string, value: unknown) {
       break;
     case "explainer":
       text = [title, c.overview, ...field(c.sections, "heading")];
+      break;
+    case "page":
+      // #680 — the page's VISIBLE text, one string per block (page-text.ts).
+      // Body blocks need 2+ meaningful words: a lone table cell or heading
+      // ("None", "Overview") would otherwise match backwards INSIDE any stance
+      // that happens to use that word. Title, summary and concept always count.
+      text = [
+        title,
+        c.summary,
+        ...(typeof c.html === "string" ? extractPageTextBlocks(c.html) : []).filter((b) => meaningfulTokens(b).length >= 2),
+      ];
+      concepts = [record(c.concept).name];
       break;
     default:
       return null;

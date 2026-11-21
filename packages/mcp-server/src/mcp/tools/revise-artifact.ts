@@ -19,6 +19,7 @@ import {
   validatePresentChangesetInput,
   validatePresentDebriefInput,
   validatePresentExplainerInput,
+  validateRevisePageInput,
   validateLogReasoningInput,
 } from "../validate-tool-input.js";
 
@@ -44,6 +45,9 @@ const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
   // #190 A2 — a revised explainer must pass the same strict validator as
   // present_explainer (title + overview + non-empty sections, echo guard).
   explainer: validatePresentExplainerInput,
+  // #680 — a revised page carries the new version as inline html (the strict
+  // stored shape; `path` re-reads are the file-watch slice).
+  page: validateRevisePageInput,
   reasoning: validateLogReasoningInput,
 };
 

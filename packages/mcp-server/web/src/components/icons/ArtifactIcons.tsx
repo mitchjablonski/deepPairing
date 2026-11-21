@@ -84,6 +84,16 @@ export function BookOpenIcon({ className = "" }: { className?: string }) {
   );
 }
 
+/** #680 — a browser window: the agent-authored HTML page artifact. */
+export function BrowserWindowIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...defaultProps} viewBox="0 0 14 14" className={className}>
+      <rect x="1.5" y="2.5" width="11" height="9" rx="1.2" />
+      <path d="M1.5 5h11M3.3 3.75h.01M4.8 3.75h.01" />
+    </svg>
+  );
+}
+
 /**
  * Q4 (round-12 UX #5) — tofu-proof replacements for the three emoji that carry
  * PRIMARY signals. 🛡 (the pre-flight block hero), 🧭 (walk-me-through / ledger
@@ -133,6 +143,8 @@ export function ArtifactIcon({ type, className = "" }: { type: string; className
     case "debrief": return <ClipboardSummaryIcon className={className} />;
     // #190 A2 — read-only narrated walk-through.
     case "explainer": return <BookOpenIcon className={className} />;
+    // #680 — agent-authored HTML page.
+    case "page": return <BrowserWindowIcon className={className} />;
     default: return <FileTextIcon className={className} />;
   }
 }

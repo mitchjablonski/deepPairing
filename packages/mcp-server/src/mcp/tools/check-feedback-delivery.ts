@@ -38,6 +38,7 @@ const ARTIFACT_TYPE_NOUN: Record<string, string> = {
   changeset: "changeset",
   debrief: "debrief",
   explainer: "explainer",
+  page: "page",
 };
 
 export function artifactHumanLabel(

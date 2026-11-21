@@ -32,6 +32,9 @@ import {
   ChangesetContentSchema,
   DebriefContentSchema,
   ExplainerContentSchema,
+  PageContentSchema,
+  PAGE_HTML_MAX_BYTES,
+  DecisionOptionConceptSchema,
   PlanVisualSchema,
   DecisionOptionBaseSchema,
   MAX_SPEC_ID_LENGTH,
@@ -1181,6 +1184,123 @@ export function validatePresentExplainerInput(args: Record<string, unknown> | nu
   return { ok: false, error: formatValidationError("present_explainer", result.error, EXAMPLE_EXPLAINER, args) };
 }
 
+// ---------------------------------------------------------------------------
+// #680 — present_page. The agent hands over a page as inline `html` OR as a
+// project-relative `path` (read by the handler, never here — validators stay
+// pure). `concept` accepts a bare name for ergonomics and is normalized to the
+// shared `{ name, oneLineExplanation? }` shape so the ledger and the gate read
+// it exactly like a code_change / option concept.
+// ---------------------------------------------------------------------------
+
+const EXAMPLE_PAGE = `{
+  "title": "Session cache: three invalidation strategies",
+  "summary": "The trade-offs side by side. Which one should I build?",
+  "path": "docs/review/cache-options.html"
+}`;
+
+export const PresentPageInputSchema = z.object({
+  title: z.string().min(1).describe("The page's title (e.g. 'Session cache: three invalidation strategies')"),
+  summary: z.string().optional()
+    .describe("One or two sentences TO your pair: what the page shows and what you want from them. Rendered above the page."),
+  html: z.string().min(1).optional()
+    .describe("The page as inline, self-contained HTML (inline CSS/JS; no network: the frame blocks it). Give `html` OR `path`, not both."),
+  path: z.string().min(1).optional()
+    .describe("A UTF-8 HTML file inside the project root (relative or absolute), read once at present time. Give `html` OR `path`, not both."),
+  concept: z.union([z.string().min(1), DecisionOptionConceptSchema]).optional()
+    .describe("The named pattern this page proposes, if any (e.g. 'write-through cache purge'). A reject records it, and the gate matches future proposals against it."),
+});
+
+export type PresentPageInput = {
+  title: string;
+  summary?: string;
+  html?: string;
+  path?: string;
+  concept?: { name: string; oneLineExplanation?: string };
+};
+
+function pageError(toolName: string, message: string, code: "INPUT_VALIDATION_FAILED" | "PAYLOAD_TOO_LARGE" = "INPUT_VALIDATION_FAILED"): ToolErrorResponse {
+  const c = TOOL_ERROR_CODES[code];
+  return {
+    content: [{ type: "text", text: `${c}: ${toolName} refused — ${message} The artifact was NOT created.` }],
+    isError: true as const,
+    _meta: { code: c, retryable: TOOL_ERROR_RETRYABLE[c] },
+  };
+}
+
+/** UTF-8 byte length without allocating a Buffer copy of a large page. */
+export function utf8ByteLength(s: string): number {
+  return Buffer.byteLength(s, "utf8");
+}
+
+/** The html-size refusal, shared by present_page and its revise path. */
+export function pageTooLargeError(toolName: string, bytes: number): ToolErrorResponse {
+  return pageError(
+    toolName,
+    `the page is ${Math.ceil(bytes / 1024)} KB, over the ${PAGE_HTML_MAX_BYTES / (1024 * 1024)} MB cap. Trim inline assets (large data: URIs, embedded fonts) and present it again.`,
+    "PAYLOAD_TOO_LARGE",
+  );
+}
+
+/** Shape check for present_page. Exactly one of `html` / `path`. */
+export function validatePresentPageInput(args: Record<string, unknown> | null | undefined): ValidationResult<PresentPageInput> {
+  const result = PresentPageInputSchema.safeParse({
+    title: args?.title,
+    summary: args?.summary,
+    html: args?.html,
+    path: args?.path,
+    concept: args?.concept,
+  });
+  if (!result.success) {
+    return { ok: false, error: formatValidationError("present_page", result.error, EXAMPLE_PAGE, args) };
+  }
+  const d = result.data;
+  if ((d.html === undefined) === (d.path === undefined)) {
+    return {
+      ok: false,
+      error: pageError("present_page", "give exactly one of `html` (inline page) or `path` (an HTML file inside the project)."),
+    };
+  }
+  if (d.html !== undefined) {
+    const bytes = utf8ByteLength(d.html);
+    if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", bytes) };
+  }
+  const concept = typeof d.concept === "string" ? { name: d.concept.trim() } : d.concept;
+  return admit("present_page", {
+    title: d.title,
+    ...(d.summary !== undefined && d.summary.trim() ? { summary: d.summary } : {}),
+    ...(d.html !== undefined ? { html: d.html } : {}),
+    ...(d.path !== undefined ? { path: d.path } : {}),
+    ...(concept && concept.name ? { concept } : {}),
+  });
+}
+
+/**
+ * revise_artifact on a page. revise persists the content it was handed, so the
+ * strict stored shape is required here: inline `html` (the new version), an
+ * object `concept`, and no server-set `sourcePath`. Re-reading a file on save
+ * is the file-watch slice (#680 slice 3); `path` is refused with that pointer.
+ */
+export function validateRevisePageInput(args: Record<string, unknown> | null | undefined): ValidationResult<z.infer<typeof PageContentSchema>> {
+  if (args && args.path !== undefined) {
+    return { ok: false, error: pageError("revise_artifact", "a page revision takes the new page as inline `html`; `path` is read only by present_page.") };
+  }
+  if (args && args.sourcePath !== undefined) {
+    return { ok: false, error: pageError("revise_artifact", "`sourcePath` is set by the server; leave it out of the revised content.") };
+  }
+  const result = PageContentSchema.safeParse({
+    title: args?.title,
+    summary: args?.summary,
+    html: args?.html,
+    concept: args?.concept,
+  });
+  if (!result.success) {
+    return { ok: false, error: formatValidationError("revise_artifact", result.error, EXAMPLE_PAGE, args) };
+  }
+  const bytes = utf8ByteLength(result.data.html);
+  if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("revise_artifact", bytes) };
+  return { ok: true, data: result.data };
+}
+
 export function validateLogReasoningInput(args: any): ValidationResult<z.infer<typeof ReasoningContentSchema>> {
   const result = ReasoningContentSchema.safeParse({
     action: args?.action,
@@ -1313,6 +1433,9 @@ export const TOOL_INPUT_SCHEMAS = {
   // servedRequestId linkage (the validator ignores it — it builds its own
   // content object from named fields — so it stays advertisement-only).
   present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
+  // #680 — the HTML-first page. `html` XOR `path` is enforced by the validator
+  // (a JSON-Schema oneOf would be advertised but is poorly supported by clients).
+  present_page: PresentPageInputSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
 } satisfies Record<string, z.ZodType>;
 
 /** JSON-Schema form of a tool input for ListTools (typed for the SDK's

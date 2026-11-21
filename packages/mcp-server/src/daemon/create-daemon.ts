@@ -592,7 +592,8 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // PENDING_DRAFT_TYPES + lib/pending.ts's REVIEWABLE_TYPES.
   // #570 — informational debriefs, like explainers, do not await a verdict.
   // A parity test pins this set to the server/web pending classifiers.
-  const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
+  // #680 — a draft `page` awaits a verdict too.
+  const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "page"]);
   function computeDaemonPendingCount(): number {
     let n = 0;
     for (const store of sessions.values()) {

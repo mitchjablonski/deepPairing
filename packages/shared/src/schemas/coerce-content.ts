@@ -30,6 +30,7 @@ import type {
   DebriefDeferred,
   ExplainerContent,
   ExplainerSection,
+  PageContent,
 } from "./content-types.js";
 import { SKELETON_VISUAL_PREFIX } from "./content-types.js";
 
@@ -719,6 +720,25 @@ export function coerceExplainerContent(raw: unknown): ExplainerContent {
   return out;
 }
 
+// --- page (#680) -------------------------------------------------------------
+
+export function coercePageContent(raw: unknown): PageContent {
+  const c = obj(raw);
+  // Lenient like the other coercers: a partial page still renders (an empty
+  // `html` shows the frame's "nothing to render" state), never crashes.
+  const out: PageContent = { title: str(c.title), html: str(c.html) };
+  if (typeof c.summary === "string" && c.summary.trim()) out.summary = c.summary;
+  if (typeof c.sourcePath === "string" && c.sourcePath.trim()) out.sourcePath = c.sourcePath;
+  const concept = obj(c.concept);
+  if (typeof concept.name === "string" && concept.name.trim()) {
+    out.concept = {
+      name: concept.name,
+      ...(typeof concept.oneLineExplanation === "string" ? { oneLineExplanation: concept.oneLineExplanation } : {}),
+    };
+  }
+  return out;
+}
+
 // --- dispatcher ---------------------------------------------------------------
 
 /** Coerce by artifact type. Returns null for types with no structured content
@@ -735,6 +755,7 @@ export function coerceArtifactContent(
   | ChangesetContent
   | DebriefContent
   | ExplainerContent
+  | PageContent
   | null {
   switch (artifact.type) {
     case "research": return coerceResearchContent(artifact.content);
@@ -746,6 +767,7 @@ export function coerceArtifactContent(
     case "changeset": return coerceChangesetContent(artifact.content);
     case "debrief": return coerceDebriefContent(artifact.content);
     case "explainer": return coerceExplainerContent(artifact.content);
+    case "page": return coercePageContent(artifact.content);
     default: return null;
   }
 }

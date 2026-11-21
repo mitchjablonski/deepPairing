@@ -21,3 +21,23 @@ describe("artifact preflight projection", () => {
     expect(artifactProposal("changeset", "Local", { files: [] })?.advisory).toBe(false);
   });
 });
+
+describe("artifact preflight projection — page (#680)", () => {
+  it("projects title, summary, visible text blocks and the concept; drops scripts and one-word blocks", () => {
+    const p = artifactProposal("page", "Hosting proposal", {
+      summary: "Which host should we use?",
+      html: "<h1>Hosting</h1><script>const x = 'Railway';</script><p>Move the API to Railway.</p><td>None</td>",
+      concept: { name: "pay-per-request hosting" },
+    });
+    expect(p).toEqual({
+      text: ["Hosting proposal", "Which host should we use?", "Move the API to Railway."],
+      paths: [],
+      concepts: ["pay-per-request hosting"],
+      advisory: false,
+    });
+  });
+
+  it("tolerates a page with no html", () => {
+    expect(artifactProposal("page", "T", {})?.text).toEqual(["T"]);
+  });
+});

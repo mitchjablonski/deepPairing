@@ -588,7 +588,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       // address the rejection" posture, not "You may proceed".
       // #190 A2 — `explainer` joins too: a rejected explainer ("this walk-through
       // is wrong / misleading") must get "Do NOT apply", not "You may proceed".
-      ["code_change", "spec", "research", "decision", "changeset", "debrief", "explainer"].includes(a.type) &&
+      // #680 — a rejected `page` likewise gets "Do NOT apply".
+      ["code_change", "spec", "research", "decision", "changeset", "debrief", "explainer", "page"].includes(a.type) &&
       !ctx.state.reportedRejectedVerdicts.has(a.id),
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
@@ -1349,6 +1350,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     baseClause = "Wait for spec approval before planning implementation.";
   } else if (pendingArts.some((a) => a.type === "research")) {
     baseClause = "Wait for findings review before proposing solutions.";
+  } else if (pendingArts.some((a) => a.type === "page")) {
+    baseClause = "Wait for the page review before acting on it.";
   }
   // Q3 review (LOW 7) — there was an `explainer` branch here. It has been dead
   // since P3 pulled `explainer` out of PENDING_DRAFT_TYPES: `pendingArts` filters

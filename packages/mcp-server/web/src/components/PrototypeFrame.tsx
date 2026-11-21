@@ -21,6 +21,16 @@ import { useState } from "react";
  */
 const MAX_HTML_BYTES = 512 * 1024;
 
+/** Human-readable cap for the too-large notice (KB below 1 MB, else MB). */
+function formatCap(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB` : `${Math.round(bytes / 1024)} KB`;
+}
+
+/** Does the page carry anything a script-less frame would hold back? */
+function hasScripts(html: string): boolean {
+  return /<script\b|\son[a-z]+\s*=|javascript:/i.test(html);
+}
+
 const CSP = [
   "default-src 'none'",
   "img-src data: blob:",
@@ -44,14 +54,40 @@ function wrapHtml(html: string): string {
   );
 }
 
-export function PrototypeFrame({ html, staticPreview = false }: { html: string; staticPreview?: boolean }) {
+export interface PrototypeFrameProps {
+  html: string;
+  staticPreview?: boolean;
+  /** Size cap in bytes. Defaults to 512 KB (prototype visuals); the #680 page
+   *  artifact passes PAGE_HTML_MAX_BYTES (2 MB). */
+  maxBytes?: number;
+  /** #680 — render the page BEFORE Run in a script-less frame (`sandbox=""`:
+   *  opaque origin, no scripts at all), so markup and CSS are readable at once.
+   *  Run then remounts the frame with `allow-scripts`. Without it (prototype
+   *  visuals) nothing renders until Run, as before. */
+  staticFirst?: boolean;
+  /** Noun used in the copy ("prototype" / "page"). */
+  noun?: string;
+  /** Classes for the live iframe (height). */
+  frameClassName?: string;
+}
+
+export function PrototypeFrame({
+  html,
+  staticPreview = false,
+  maxBytes = MAX_HTML_BYTES,
+  staticFirst = false,
+  noun = "prototype",
+  frameClassName = "w-full h-[420px] rounded border border-border-default bg-white",
+}: PrototypeFrameProps) {
   const [running, setRunning] = useState(false);
   const [showSource, setShowSource] = useState(false);
 
-  const tooBig = new Blob([html]).size > MAX_HTML_BYTES;
+  const size = new Blob([html]).size;
+  const tooBig = size > maxBytes;
+  const scripted = staticFirst && hasScripts(html);
 
   if (!html.trim()) {
-    return <div className="text-2xs text-text-muted">No prototype HTML provided.</div>;
+    return <div className="text-2xs text-text-muted">No {noun} HTML provided.</div>;
   }
 
   return (
@@ -63,7 +99,7 @@ export function PrototypeFrame({ html, staticPreview = false }: { html: string; 
 
       {tooBig ? (
         <div className="text-2xs text-accent-amber rounded border border-dashed border-border-default p-3 text-center">
-          Prototype is too large to render safely ({Math.round(new Blob([html]).size / 1024)} KB &gt; 512 KB cap).
+          {noun === "prototype" ? "Prototype" : `This ${noun}`} is too large to render safely ({Math.round(size / 1024)} KB &gt; {formatCap(maxBytes)} cap).
         </div>
       ) : staticPreview ? (
         // Static preview (e.g. revision diff): don't offer to run it here (it
@@ -78,9 +114,30 @@ export function PrototypeFrame({ html, staticPreview = false }: { html: string; 
           // No `allow-same-origin` — opaque origin, no parent/cookie/storage access.
           sandbox="allow-scripts"
           srcDoc={wrapHtml(html)}
-          title="Sandboxed prototype"
-          className="w-full h-[420px] rounded border border-border-default bg-white"
+          title={`Sandboxed ${noun}`}
+          className={frameClassName}
         />
+      ) : staticFirst ? (
+        // #680 — the page is readable before Run: an EMPTY sandbox token list
+        // means no scripts, no forms, no popups, opaque origin. Agent scripts
+        // stay inert until the human opts in below.
+        <div className="space-y-1.5">
+          <iframe
+            sandbox=""
+            srcDoc={wrapHtml(html)}
+            title={`Sandboxed ${noun} (scripts paused)`}
+            className={frameClassName}
+          />
+          {scripted && (
+            <button
+              onClick={() => setRunning(true)}
+              className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-2 text-center
+                         text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
+            >
+              ▶ Run {noun} scripts (sandboxed)
+            </button>
+          )}
+        </div>
       ) : (
         <button
           onClick={() => setRunning(true)}

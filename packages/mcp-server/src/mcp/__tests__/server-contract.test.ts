@@ -33,12 +33,13 @@ describe("MCP Tool Handlers — protocol contract", () => {
   });
 
   describe("C1 — ToolAnnotations on every tool", () => {
-    it("all 19 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
+    it("all 20 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
       const list = await client.listTools();
       // #163 — get_companion_url added → 13 → 14. #171 — present_changeset → 15.
       // #190 — present_debrief → 16. #190 A2 — present_explainer → 17.
       // #198 G1 — withdraw_artifact → 18. #620 — record_stance → 19.
-      expect(list.tools).toHaveLength(19);
+      // #680 — present_page → 20.
+      expect(list.tools).toHaveLength(20);
       for (const t of list.tools) {
         expect(t.annotations, `${t.name} missing annotations`).toBeDefined();
         expect(typeof (t.annotations as any).openWorldHint).toBe("boolean");
@@ -51,6 +52,9 @@ describe("MCP Tool Handlers — protocol contract", () => {
       // #190 — present_debrief is a write tool (creates a draft artifact).
       expect(byName.present_debrief.openWorldHint).toBe(false);
       expect(byName.present_debrief.readOnlyHint).toBe(false);
+      // #680 — present_page is a write tool (creates a draft artifact).
+      expect(byName.present_page.openWorldHint).toBe(false);
+      expect(byName.present_page.readOnlyHint).toBe(false);
       // The one tool that leaves the machine.
       expect(byName.post_pr_review.openWorldHint).toBe(true);
       expect(list.tools.filter((t) => (t.annotations as any).openWorldHint).map((t) => t.name)).toEqual(["post_pr_review"]);

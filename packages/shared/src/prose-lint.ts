@@ -1242,6 +1242,10 @@ export const PROSE_FIELD_MAP: Readonly<Record<string, readonly ProseFieldSpec[]>
     { path: "sections[].body", mode: "flavored" },
     { path: "unknowns[]", mode: "flavored" },
     { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
+  ],  // #680 — only the summary is house prose; the page HTML is the agent's own
+  // design surface and is never linted.
+  page: [
+    { path: "summary", mode: "flavored" },
   ],
 };
 
