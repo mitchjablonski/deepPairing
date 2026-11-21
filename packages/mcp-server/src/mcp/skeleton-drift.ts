@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { SKELETON_VISUAL_PREFIX, isLivePlanVersion, isSkeletonApprovedVisualId, type PlanVisual, type SkeletonExteriorDigest } from "@deeppairing/shared";
+import type { PlanVisual, SkeletonExteriorDigest } from "@deeppairing/shared";
 import { scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
 
 /**
@@ -19,6 +19,18 @@ import { scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
  * Comparison ignores line endings (CRLF / CR), a leading BOM, one trailing
  * newline and trailing whitespace on each line.
  */
+
+// #686 P2c — NODE BUILT-INS ONLY: the bundled Stop hook reaches this module,
+// and @deeppairing/shared (zod) can't be inlined there. These three mirror
+// shared's skeleton.ts exactly; skeleton-drift-core-parity.test.ts pins them.
+export const SKELETON_VISUAL_PREFIX = "skelcode:";
+export const isSkeletonApprovedVisualId = (id: unknown): boolean => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX);
+const CLOSED_FOR_PROGRESS = new Set(["superseded", "rejected", "retracted", "obsolete"]);
+/** Mirror of shared's isLivePlanVersion. */
+export function isLivePlanVersion(art: { id: string; type: string; status: string }, artifacts: ReadonlyArray<{ parentId?: string | null }>): boolean {
+  if (art.type !== "plan" || CLOSED_FOR_PROGRESS.has(art.status)) return false;
+  return !artifacts.some((a) => a.parentId === art.id);
+}
 
 /** The live side of one declared file. */
 export type LiveSkeletonFile =
@@ -359,8 +371,19 @@ export function formatNotChecked(drift: SkeletonExteriorDrift): string {
  *  alongside real drift, so an unreadable file doesn't nag on every call. */
 export function formatExteriorDrift(drift: SkeletonExteriorDrift): string {
   if (drift.changed.length === 0 && drift.deleted.length === 0) return "";
+  const parts = exteriorDriftParts(drift);
+  const unchecked = drift.notChecked.length > 0 ? ` Not checked: ${drift.notChecked.map((n) => `${n.file} (${n.reason})`).join(", ")}.` : "";
+  return (
+    `\n⚠ Exterior drift since approval: ${parts.join("; ")}. ` +
+    `Changes outside the SKEL fences are skeleton changes: propose them and revise_artifact the plan (reason "Skeleton change: …"), or restore the approved structure.${unchecked}`
+  );
+}
+
+/** One short phrase per drifted file: paths, line numbers and reasons only —
+ *  never file content. */
+export function exteriorDriftParts(drift: SkeletonExteriorDrift): string[] {
   const renamedTo = new Map((drift.renamed ?? []).map((r) => [r.from, r.to]));
-  const parts = [
+  const parts: string[] = [
     ...drift.changed.map((c) => {
       if (c.lines.length === 0) return `${c.file} (${c.note ?? "changed"})`;
       if (c.note) return `${c.file} (${c.note})`;
@@ -370,11 +393,7 @@ export function formatExteriorDrift(drift: SkeletonExteriorDrift): string {
     }),
     ...drift.deleted.map((f) => (renamedTo.has(f) ? `${f} (deleted; its fences are now in ${renamedTo.get(f)} — renamed?)` : `${f} (deleted)`)),
   ];
-  const unchecked = drift.notChecked.length > 0 ? ` Not checked: ${drift.notChecked.map((n) => `${n.file} (${n.reason})`).join(", ")}.` : "";
-  return (
-    `\n⚠ Exterior drift since approval: ${parts.join("; ")}. ` +
-    `Changes outside the SKEL fences are skeleton changes: propose them and revise_artifact the plan (reason "Skeleton change: …"), or restore the approved structure.${unchecked}`
-  );
+  return parts;
 }
 
 type PlanLike = { id: string; type: string; status: string; parentId?: string | null; statusHistory?: Array<{ status?: string }> };
