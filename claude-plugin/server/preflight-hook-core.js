@@ -1063,8 +1063,17 @@ function parseReshape(raw) {
 }
 var COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
 var ID = String.raw`([A-Za-z0-9][\w.-]*)`;
-var OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]\s*(.*?)\s*(?:\*\/\}?|-->)?\s*$`);
-var CLOSE_RE = new RegExp(String.raw`^\s*${COMMENT}\s*\/SKEL\[${ID}\]\s*(?:\*\/\}?|-->)?\s*$`);
+var OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]`);
+var CLOSE_RE = new RegExp(String.raw`^\s*${COMMENT}\s*\/SKEL\[${ID}\](?:\s*(?:\*\/\}?|-->))?\s*$`);
+function openMarker(line) {
+  const m = OPEN_RE.exec(line);
+  if (!m) return null;
+  let title = line.slice(m[0].length).trim();
+  if (title.endsWith("*/}")) title = title.slice(0, -3).trimEnd();
+  else if (title.endsWith("*/") || title.endsWith("-->")) title = title.slice(0, title.endsWith("-->") ? -3 : -2).trimEnd();
+  if (/[\r\n\u2028\u2029]/.test(title)) return null;
+  return [m[1], title];
+}
 function scanSkeletonText(text, file) {
   const lines = text.split("\n");
   const fences = [];
@@ -1074,16 +1083,17 @@ function scanSkeletonText(text, file) {
     const lineNo = i + 1;
     const close = CLOSE_RE.exec(line);
     if (close) {
-      if (!open || open.id !== close[1]) throw new Error(`${file}:${lineNo}: /SKEL[${close[1]}] closes ${open ? `SKEL[${open.id}]` : "nothing"}`);
+      if (!open) throw new Error(`${file}:${lineNo}: /SKEL[${close[1]}] closes nothing`);
+      if (open.id !== close[1]) throw new Error(`${file}:${lineNo}: /SKEL[${close[1]}] closes SKEL[${open.id}] (opened line ${open.openLine})`);
       const body = lines.slice(open.openLine, lineNo - 1).join("\n");
       fences.push({ ...open, file, closeLine: lineNo, status: body.includes(SKEL_TODO) ? "todo" : "filled" });
       open = null;
       continue;
     }
-    const m = OPEN_RE.exec(line);
+    const m = openMarker(line);
     if (m) {
-      if (open) throw new Error(`${file}:${lineNo}: SKEL[${m[1]}] opened inside SKEL[${open.id}]`);
-      open = { id: m[1], title: m[2] ?? "", openLine: lineNo };
+      if (open) throw new Error(`${file}:${lineNo}: SKEL[${m[0]}] opened inside SKEL[${open.id}] \u2014 fences don't nest`);
+      open = { id: m[0], title: m[1], openLine: lineNo };
     }
   }
   if (open) throw new Error(`${file}:${open.openLine}: SKEL[${open.id}] is never closed`);
@@ -1294,30 +1304,93 @@ function preservesOutside(original, next, fences) {
 }
 var signature = (fences) => fences.map((f) => `${f.id}\0${f.title}`).join("");
 var HASH_COMMENT_EXT = /\.(py|pyi|rb|sh|bash|zsh|ya?ml|toml|r|pl|ex|exs|nim|cr|coffee)$/i;
+var SHELL_EXT = /\.(sh|bash|zsh)$/i;
+var PY_EXT = /\.pyi?$/i;
+var RUST_EXT = /\.rs$/i;
+var C_FAMILY_EXT = /\.(c|h|cc|cpp|cxx|hpp|hh|m|mm)$/i;
+var PROSE_EXT = /\.(md|mdx|markdown|txt|rst|html?|xml|svg)$/i;
+var JSX_EXT = /\.(jsx|tsx)$/i;
+var TRIPLE = ['"""', "'''"];
 function bodyEscapesFence(body, markerLine, file) {
   const indentOf = (l) => (/^[ \t]*/.exec(l)?.[0] ?? "").replace(/\t/g, "    ").length;
   const markerIndent = indentOf(markerLine);
   const hash = HASH_COMMENT_EXT.test(file);
+  const prose = PROSE_EXT.test(file);
+  const brackets = !SHELL_EXT.test(file) && !prose;
+  const jsx = JSX_EXT.test(file);
+  const py = PY_EXT.test(file);
+  const rust = RUST_EXT.test(file);
+  const cfam = C_FAMILY_EXT.test(file);
+  let prev = "";
   let depth = 0;
   let quote = null;
-  const lines = body.split("\n");
-  for (const line of lines) {
-    if (line.trim() && !quote && indentOf(line) < markerIndent) return "a line is indented outside the fence's block";
+  let block = false;
+  for (const line of body.split("\n")) {
+    const preprocessor = cfam && /^\s*#/.test(line);
+    const spanning = quote === "`" || quote !== null && quote.length === 3;
+    if (line.trim() && !spanning && !preprocessor && !prose && indentOf(line) < markerIndent) {
+      return "a line is indented outside the fence's block";
+    }
+    if (preprocessor) continue;
     for (let i = 0; i < line.length; i++) {
       const c = line[i];
-      if (quote) {
-        if (c === "\\") i++;
-        else if (c === quote) quote = null;
+      if (block) {
+        if (c === "*" && line[i + 1] === "/") {
+          block = false;
+          i++;
+        }
         continue;
       }
-      if (c === '"' || c === "'" || c === "`") quote = c;
-      else if (c === "/" && line[i + 1] === "/" || hash && c === "#") break;
-      else if (c === "(" || c === "[" || c === "{") depth++;
+      if (quote) {
+        if (quote.length === 3) {
+          if (line.startsWith(quote, i)) {
+            quote = null;
+            i += 2;
+            prev = c;
+          }
+          continue;
+        }
+        if (c === "\\") i++;
+        else if (c === quote) {
+          quote = null;
+          prev = c;
+        }
+        continue;
+      }
+      const triple = py ? TRIPLE.find((t) => line.startsWith(t, i)) : void 0;
+      if (triple) {
+        quote = triple;
+        i += 2;
+        continue;
+      }
+      if (rust && c === "'" && !/^'(\\.|[^'\\])'/.test(line.slice(i))) continue;
+      if (jsx && c === "'" && /[A-Za-z]/.test(line[i - 1] ?? "")) continue;
+      if (!hash && c === "/" && line[i + 1] !== "/" && line[i + 1] !== "*" && (prev === "" || /[(,=:[!&|?{;]/.test(prev) || /\breturn\s*$/.test(line.slice(0, i)))) {
+        const m = /^\/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\n[])+\/[a-z]*/.exec(line.slice(i));
+        if (m) {
+          i += m[0].length - 1;
+          prev = "/";
+          continue;
+        }
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+        continue;
+      }
+      if (hash ? c === "#" : c === "/" && line[i + 1] === "/") break;
+      if (!hash && c === "/" && line[i + 1] === "*" && (i === 0 || /[\s;,(){}=]/.test(line[i - 1]))) {
+        block = true;
+        i++;
+        continue;
+      }
+      if (c.trim()) prev = c;
+      if (!brackets) continue;
+      if (c === "(" || c === "[" || c === "{") depth++;
       else if (c === ")" || c === "]" || c === "}") {
         if (--depth < 0) return "it closes the block the fence sits in";
       }
     }
-    if (quote && quote !== "`") quote = null;
+    if (quote === '"' || quote === "'") quote = null;
   }
   return depth === 0 ? null : "it leaves a bracket open past the fence";
 }
