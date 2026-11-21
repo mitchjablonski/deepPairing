@@ -256,6 +256,42 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
     expect(within(bar).getByText(bannerAfter!)).toBeInTheDocument();
   });
 
+  it.each([
+    {
+      state: "exited",
+      ownerLive: false,
+      ifIgnored: "Claude has exited — this waits for the session to resume",
+      after: "Saved — Claude acts on your verdict when the session resumes",
+    },
+    {
+      state: "live",
+      ownerLive: true,
+      ifIgnored: "Approval required before this work proceeds",
+      after: "Approve → Claude executes 1 step",
+    },
+  ])("both lead surfaces describe the $state owner even when the other session differs", ({ ownerLive, ifIgnored, after }) => {
+    seed(
+      finding,
+      art({
+        id: "plan", type: "plan", sessionId: "s2", title: "Rate limiting plan",
+        content: { steps: [{ description: "Run a dry run", reasoning: "Check recovery" }] },
+      }),
+    );
+    useConnectionStore.setState({
+      activeSessions: [
+        { sessionId: "s1", title: "Sibling review", project: "", artifactCount: 1, live: !ownerLive },
+        { sessionId: "s2", title: "Rate limiting", project: "", artifactCount: 1, live: ownerLive },
+      ],
+    });
+    const { unmount } = render(<PendingBanner />);
+    const bannerCopy = screen.getByTestId("pending-next").getAttribute("data-next-copy");
+    expect(screen.getByTestId("pending-if-ignored")).toHaveTextContent(ifIgnored);
+    expect(screen.getByTestId("pending-after")).toHaveTextContent(after);
+    unmount();
+    render(<NextUpBar />);
+    expect(screen.getByTestId("next-up-bar")).toHaveAttribute("data-next-copy", bannerCopy);
+  });
+
   it("reach governs the copy: exited / replay never promise the build", () => {
     seed(finding, brief);
     useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false }] } as any);
