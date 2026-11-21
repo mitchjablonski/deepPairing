@@ -37042,8 +37042,17 @@ function parseReshape(raw) {
 }
 var COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
 var ID = String.raw`([A-Za-z0-9][\w.-]*)`;
-var OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]\s*(.*?)\s*(?:\*\/\}?|-->)?\s*$`);
-var CLOSE_RE = new RegExp(String.raw`^\s*${COMMENT}\s*\/SKEL\[${ID}\]\s*(?:\*\/\}?|-->)?\s*$`);
+var OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]`);
+var CLOSE_RE = new RegExp(String.raw`^\s*${COMMENT}\s*\/SKEL\[${ID}\](?:\s*(?:\*\/\}?|-->))?\s*$`);
+function openMarker(line) {
+  const m = OPEN_RE.exec(line);
+  if (!m) return null;
+  let title = line.slice(m[0].length).trim();
+  if (title.endsWith("*/}")) title = title.slice(0, -3).trimEnd();
+  else if (title.endsWith("*/") || title.endsWith("-->")) title = title.slice(0, title.endsWith("-->") ? -3 : -2).trimEnd();
+  if (/[\r\n\u2028\u2029]/.test(title)) return null;
+  return [m[1], title];
+}
 function scanSkeletonText(text, file2) {
   const lines = text.split("\n");
   const fences = [];
@@ -37053,23 +37062,41 @@ function scanSkeletonText(text, file2) {
     const lineNo = i + 1;
     const close = CLOSE_RE.exec(line);
     if (close) {
-      if (!open || open.id !== close[1]) throw new Error(`${file2}:${lineNo}: /SKEL[${close[1]}] closes ${open ? `SKEL[${open.id}]` : "nothing"}`);
+      if (!open) throw new Error(`${file2}:${lineNo}: /SKEL[${close[1]}] closes nothing`);
+      if (open.id !== close[1]) throw new Error(`${file2}:${lineNo}: /SKEL[${close[1]}] closes SKEL[${open.id}] (opened line ${open.openLine})`);
       const body = lines.slice(open.openLine, lineNo - 1).join("\n");
       fences.push({ ...open, file: file2, closeLine: lineNo, status: body.includes(SKEL_TODO) ? "todo" : "filled" });
       open = null;
       continue;
     }
-    const m = OPEN_RE.exec(line);
+    const m = openMarker(line);
     if (m) {
-      if (open) throw new Error(`${file2}:${lineNo}: SKEL[${m[1]}] opened inside SKEL[${open.id}]`);
-      open = { id: m[1], title: m[2] ?? "", openLine: lineNo };
+      if (open) throw new Error(`${file2}:${lineNo}: SKEL[${m[0]}] opened inside SKEL[${open.id}] \u2014 fences don't nest`);
+      open = { id: m[0], title: m[1], openLine: lineNo };
     }
   }
   if (open) throw new Error(`${file2}:${open.openLine}: SKEL[${open.id}] is never closed`);
   return fences;
 }
-var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", ".deeppairing", "dist", "build", "out", ".next", ".turbo", "coverage", "__pycache__", ".venv", "venv", "target"]);
+var SKIP_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  ".skeleton",
+  ".claude",
+  ".deeppairing",
+  "dist",
+  "build",
+  "out",
+  ".next",
+  ".turbo",
+  "coverage",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "target"
+]);
 var PROSE_FILE = /\.(md|mdx|markdown|rst|txt)$/i;
+var BINARY_FILE = /\.(png|jpe?g|gif|webp|ico|bmp|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|7z|rar|jar|war|class|so|dylib|dll|exe|bin|o|a|wasm|woff2?|ttf|otf|eot|mp[34]|m4a|wav|ogg|flac|mov|avi|mkv|webm|sqlite|db|lock)$/i;
 function scanFile(root, abs, fences, errors) {
   let text;
   try {
@@ -37116,7 +37143,7 @@ function scanSkeletonFences(root, opts = {}) {
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) walk(abs);
         continue;
       }
-      if (!e.isFile() || PROSE_FILE.test(e.name)) continue;
+      if (!e.isFile() || PROSE_FILE.test(e.name) || BINARY_FILE.test(e.name)) continue;
       seen++;
       scanFile(root, abs, fences, errors);
     }
