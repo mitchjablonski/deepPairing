@@ -126,7 +126,7 @@ describe("skeletonExteriorDrift", () => {
     expect(d.changed).toEqual([{ file: "w.ts", lines: [], more: 0, note: "changed — withheld from the approved snapshot, so no line numbers" }]);
   });
 
-  it("a digest-only file with its markers stripped is not checked; filled with markers kept, it stays quiet", () => {
+  it("a digest-only file: full strip is not checked, a partial strip or renamed id is changed, filled with markers kept is quiet", () => {
     const digest = skeletonExteriorDigest(SRC, "w.ts");
     expect(digest.fenceIds).toEqual(["1", "2"]);
     const visuals = [approved(undefined, { withheld: "possible secret detected", exterior: digest }, "w.ts")];
@@ -136,9 +136,14 @@ describe("skeletonExteriorDrift", () => {
     const d = skeletonExteriorDrift(visuals, { "w.ts": { text: stripped } });
     expect(d.changed).toEqual([]);
     expect(d.notChecked).toEqual([{ file: "w.ts", reason: "markers stripped; withheld from the approved snapshot, so only a digest was kept" }]);
-    // Partly stripped counts too.
+    // Some markers remain but the fence set moved: changed, not "not checked".
     const partial = filled.replace("  // SKEL[1] drop duplicates\n", "").replace("  // /SKEL[1]\n", "");
-    expect(skeletonExteriorDrift(visuals, { "w.ts": { text: partial } }).notChecked).toHaveLength(1);
+    const renamedId = filled.replace(/SKEL\[2\]/g, "SKEL[9]");
+    for (const text of [partial, renamedId]) {
+      const r = skeletonExteriorDrift(visuals, { "w.ts": { text } });
+      expect(r.notChecked).toEqual([]);
+      expect(r.changed).toEqual([{ file: "w.ts", lines: [], more: 0, note: "fence set differs from approval — withheld from the approved snapshot, so no line numbers" }]);
+    }
   });
 
   it("files past the snapshot cap get a digest at present time and are checked by it", () => {

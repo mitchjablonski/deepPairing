@@ -134,6 +134,21 @@ describe("exterior drift — finalize notes", () => {
     expect(cs.text).not.toContain("Skeleton markers remain");
   });
 
+  it("names not-checked files at finalize even without drift, but not in progress replies", async () => {
+    const token = ["gh", "p_", "Q".repeat(36)].join("");
+    write(`const k = "${token}";\n${SRC}`);
+    const id = await presentPlan();
+    await progress(id, 0, "in_progress");
+    write(`const k = "${token}";\n${FILLED}`);
+    const done = await progress(id, 0, "done");
+    expect(done.text).not.toContain("Exterior drift");
+    write(`const k = "${token}";\n${FINAL}`);
+    const cs = await changeset();
+    expect(cs.text).not.toContain("Exterior drift since approval");
+    expect(cs.text).toContain("Exterior drift not checked for: a.ts (markers stripped; withheld from the approved snapshot, so only a digest was kept)");
+    expect(cs.text).not.toContain(token);
+  });
+
   it("drift is reported alongside leftover markers", async () => {
     const id = await presentPlan();
     await progress(id, 0, "in_progress");

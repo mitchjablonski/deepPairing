@@ -331,9 +331,14 @@ export function skeletonExteriorDrift(
       continue;
     }
     const liveIds = new Set(liveDigest.fenceIds ?? []);
-    const stripped = a.fenceIds && a.fenceIds.length > 0 ? a.fenceIds.some((id) => !liveIds.has(id)) : liveIds.size === 0;
-    if (stripped) {
+    if (liveIds.size === 0) {
+      // Every marker gone: the finalize state.
       result.notChecked.push({ file, reason: `markers stripped; ${a.codeless}, so only a digest was kept` });
+      continue;
+    }
+    if (a.fenceIds && a.fenceIds.length > 0 && (a.fenceIds.some((id) => !liveIds.has(id)) || liveIds.size !== new Set(a.fenceIds).size)) {
+      // Some markers remain but the fence set moved: a fence renamed, added or deleted mid-fill.
+      result.changed.push({ file, lines: [], more: 0, note: `fence set differs from approval — ${a.codeless}, so no line numbers` });
       continue;
     }
     if (liveDigest.sha256 !== a.digest!.sha256) {
@@ -341,6 +346,13 @@ export function skeletonExteriorDrift(
     }
   }
   return result;
+}
+
+/** Finalize only: one compact line naming the not-checked files, shown even
+ *  without drift (the review is the last chance to look at them). */
+export function formatNotChecked(drift: SkeletonExteriorDrift): string {
+  if (drift.notChecked.length === 0) return "";
+  return `\nExterior drift not checked for: ${drift.notChecked.map((n) => `${n.file} (${n.reason})`).join(", ")} — review these by hand.`;
 }
 
 /** One reply line ("" when nothing drifted). Not-checked files are named only

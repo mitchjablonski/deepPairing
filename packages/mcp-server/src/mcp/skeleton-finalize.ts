@@ -4,7 +4,7 @@ import { isLivePlanVersion, type Artifact } from "@deeppairing/shared";
 import { planDeclaredFiles, scanSkeletonFences } from "../skeleton-scope.js";
 import { resolveProjectRoot } from "../project-root.js";
 import { checkSkeletonExteriorDrift } from "./skeleton-snapshot.js";
-import { formatExteriorDrift, isSkeletonDriftBaseline } from "./skeleton-drift.js";
+import { formatExteriorDrift, formatNotChecked, isSkeletonDriftBaseline, type SkeletonExteriorDrift } from "./skeleton-drift.js";
 
 /**
  * Skeleton plans, parity PR 4 — the finalize check. When every step of a
@@ -113,7 +113,7 @@ export function finalizeCheckNote(artifacts: Artifact[], root?: string): string 
         const pr = resolveProjectRoot();
         return pr.worktree?.workspaceRoot ?? pr.projectRoot;
       })();
-      return formatExteriorDrift(checkSkeletonExteriorDrift(restored!.content, { root: r }));
+      return finalizeDriftNote(checkSkeletonExteriorDrift(restored!.content, { root: r }));
     }
     const r = root ?? (() => {
       const pr = resolveProjectRoot();
@@ -121,8 +121,14 @@ export function finalizeCheckNote(artifacts: Artifact[], root?: string): string 
     })();
     // #686 P1b (warn mode) — and the exterior still matches the approved one.
     return formatLeftovers(current.title, skeletonLeftovers(r, current.content)) +
-      formatExteriorDrift(checkSkeletonExteriorDrift(current.content, { root: r }));
+      finalizeDriftNote(checkSkeletonExteriorDrift(current.content, { root: r }));
   } catch {
     return "";
   }
+}
+
+/** Drift, plus — at finalize, even without drift — the not-checked files. */
+function finalizeDriftNote(drift: SkeletonExteriorDrift): string {
+  const line = formatExteriorDrift(drift);
+  return line || formatNotChecked(drift);
 }
