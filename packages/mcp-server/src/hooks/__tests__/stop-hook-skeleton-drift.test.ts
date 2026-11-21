@@ -184,6 +184,25 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     expect((two.state.skeletonDriftNudged as string[]).filter((k) => k.includes("@v2@"))).toHaveLength(2);
   });
 
+  it("five drifting plans: three named, then +2 more plans, all recorded, line under ~400 chars", () => {
+    const plans: Art[] = [];
+    for (let i = 1; i <= 5; i++) {
+      const file = `f${i}.ts`;
+      fs.writeFileSync(path.join(root, file), SRC.replace(/SKEL\[1\]/g, `SKEL[${i}]`));
+      const steps = [{ description: "s", reasoning: "r", skelId: String(i), files: [file] }];
+      plans.push(approvedPlan({ id: `plan${i}`, title: `Plan number ${i} with a fairly long descriptive title`, updatedAt: recent(i * 1000),
+        content: { steps, visuals: buildSkeletonSnapshot({ steps, root, recordExterior: true }).visuals } }));
+    }
+    seed(plans);
+    for (let i = 1; i <= 5; i++) fs.writeFileSync(path.join(root, `f${i}.ts`), `// header\n${SRC.replace(/SKEL\[1\]/g, `SKEL[${i}]`)}`);
+    const res = stop();
+    expect(res.stderr).toContain("+2 more plans");
+    expect(res.stderr.match(/"Plan number/g)).toHaveLength(3);
+    expect(res.stderr.length).toBeLessThan(400);
+    expect(res.stderr.endsWith("revise_artifact the plan\n")).toBe(true);
+    expect(res.state.skeletonDriftNudged).toHaveLength(5);
+  });
+
   it("a corrupt hooks-state.json gets one salvage copy per Stop, not two", () => {
     seed([approvedPlan()]);
     write(`// header\n${SRC}`);

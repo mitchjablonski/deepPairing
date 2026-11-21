@@ -56,6 +56,11 @@ type StopArtifact = {
 /** #686 P2c — hooks-state field: drift nudges already sent (dedupe keys). */
 const DRIFT_NUDGED_KEY = "skeletonDriftNudged";
 const DRIFT_NUDGED_CAP = 50;
+/** The nudge line's bounds: plans named, files per plan, and the drift
+ *  phrase's length (the fixed text around it adds ~110 characters). */
+const MAX_NUDGE_PLANS = 3;
+const MAX_NUDGE_FILES = 3;
+const MAX_NUDGE_WHAT_CHARS = 280;
 
 /** #686 P2c — an approval older than this (and no plan activity since) is
  *  not nudged: the same 8 h window after which a skeleton scope stops
@@ -211,9 +216,14 @@ export function runStopHook(stdin: string = "", now: number = Date.now()): never
         if (parts.length > 0) fired.push({ key, title: oneLine((plan as { title?: unknown }).title), parts });
       }
       if (fired.length > 0) {
-        const what = fired.length === 1
-          ? fired[0]!.parts.join("; ")
-          : fired.map((f) => `"${f.title || "untitled plan"}": ${f.parts.join("; ")}`).join(" | ");
+        // Bounded: at most 3 plans and 3 files per plan, the whole line capped.
+        const filesOf = (parts: string[]) =>
+          parts.slice(0, MAX_NUDGE_FILES).join("; ") + (parts.length > MAX_NUDGE_FILES ? `; +${parts.length - MAX_NUDGE_FILES} more files` : "");
+        let what = fired.length === 1
+          ? filesOf(fired[0]!.parts)
+          : fired.slice(0, MAX_NUDGE_PLANS).map((f) => `"${f.title || "untitled plan"}": ${filesOf(f.parts)}`).join(" | ") +
+            (fired.length > MAX_NUDGE_PLANS ? ` | +${fired.length - MAX_NUDGE_PLANS} more plans` : "");
+        if (what.length > MAX_NUDGE_WHAT_CHARS) what = `${what.slice(0, MAX_NUDGE_WHAT_CHARS - 1)}…`;
         process.stderr.write(
           `deepPairing: skeleton exterior drift since approval: ${what} — changes outside the fences are skeleton changes; propose them and revise_artifact the plan\n`,
         );
