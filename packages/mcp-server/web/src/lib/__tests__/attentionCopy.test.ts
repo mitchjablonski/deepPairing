@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Artifact } from "@deeppairing/shared";
 import { computeAttention, type AttentionItem } from "../attention";
-import { afterFor, attentionHolds, briefRiskClass, copyFor, copyLineText, ifIgnoredFor, reachFrom, whyFor, type AgentReach } from "../attentionCopy";
+import { afterFor, attentionHolds, briefRiskClass, copyFor, copyLineText, ifIgnoredFor, reachForItem, whyFor, type AgentReach } from "../attentionCopy";
 
 /**
  * #430 slice 1 — the ONE copy module both needs-you surfaces read
@@ -130,11 +130,23 @@ describe("copyFor / copyLineText — the line both surfaces show", () => {
     expect(briefRiskClass(art("spec", { content: { objective: "o", requirements: [], context: "Risk class: escalated" } }))).toBeNull();
   });
 
-  it("reachFrom: replay > offline > exited > live", () => {
-    expect(reachFrom({ replay: true, tabOffline: true, agentGone: true })).toBe("replay");
-    expect(reachFrom({ replay: false, tabOffline: true, agentGone: true })).toBe("disconnected");
-    expect(reachFrom({ replay: false, tabOffline: false, agentGone: true })).toBe("gone");
-    expect(reachFrom({ replay: false, tabOffline: false, agentGone: false })).toBe("live");
+  it("uses replay and offline before the known artifact owner's liveness", () => {
+    const plan = art("plan");
+    const item = itemFor(plan);
+    const activeSessions = [{ sessionId: "s1", live: false }, { sessionId: "s2", live: true }];
+    expect(reachForItem(item, [plan], { replay: true, tabOffline: true, activeSessions })).toBe("replay");
+    expect(reachForItem(item, [plan], { replay: false, tabOffline: true, activeSessions })).toBe("disconnected");
+    expect(reachForItem(item, [plan], { replay: false, tabOffline: false, activeSessions })).toBe("gone");
+  });
+
+  it("falls back to project liveness when the owner is missing or liveness is unknown", () => {
+    const plan = art("plan");
+    const item = itemFor(plan);
+    const reach = (activeSessions: Array<{ sessionId: string; live?: boolean }>) =>
+      reachForItem(item, [plan], { replay: false, tabOffline: false, activeSessions });
+    expect(reach([{ sessionId: "s2", live: false }])).toBe("gone");
+    expect(reach([{ sessionId: "s2", live: true }])).toBe("live");
+    expect(reach([{ sessionId: "s1" }, { sessionId: "s2", live: false }])).toBe("live");
   });
 });
 

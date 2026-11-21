@@ -5,8 +5,7 @@ import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computePending, isPendingBannerVisible } from "../lib/pending";
 import { computeAttention, orderedPendingArtifacts } from "../lib/attention";
-import { attentionHolds, copyFor, copyLineText, reachFrom } from "../lib/attentionCopy";
-import { noAgentLive } from "../lib/liveness";
+import { attentionHolds, copyFor, copyLineText, reachForItem } from "../lib/attentionCopy";
 import { useTabOffline } from "../lib/connectionGrace";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { useOfflineReason } from "../hooks/useOfflineReason";
@@ -80,8 +79,9 @@ export function PendingBanner({ visibleSelectedArtifactId }: { visibleSelectedAr
     : scopedVisibleArtifacts(drafts, agentFilter, { active: replayActive, cursor: replayCursor }).find((draft) => !!draft.id);
   const next = keepGlobalLead ? attention.next
     : attention.lanes.decide.find((item) => item.artifactId === scopedLead?.id) ?? null;
-  const reach = reachFrom({ replay: replayActive, tabOffline, agentGone: noAgentLive(activeSessions) });
-  const copy = next ? copyFor(next, artifacts, reach, blocks) : null;
+  const copy = next ? copyFor(next, artifacts, reachForItem(next, artifacts, {
+    replay: replayActive, tabOffline, activeSessions,
+  }), blocks) : null;
   const lead = next ? drafts.find((d) => d.id === next.artifactId) : undefined;
   // A lead outside the cap still needs its keyboard chip. Keep every other
   // draft in canonical order, and leave the chip order alone when it fits.
