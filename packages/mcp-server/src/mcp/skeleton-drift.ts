@@ -1,5 +1,6 @@
-import { SKELETON_VISUAL_PREFIX, isSkeletonApprovedVisualId, type PlanVisual } from "@deeppairing/shared";
-import { scanSkeletonText } from "../skeleton-scope.js";
+import { createHash } from "node:crypto";
+import { SKELETON_VISUAL_PREFIX, isLivePlanVersion, isSkeletonApprovedVisualId, type PlanVisual, type SkeletonExteriorDigest } from "@deeppairing/shared";
+import { scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
 
 /**
  * #686 P1b (warn mode) — exterior drift for approved skeleton plans. The
@@ -9,9 +10,14 @@ import { scanSkeletonText } from "../skeleton-scope.js";
  * skeleton change the human has not reviewed.
  *
  * The approved exterior comes from the `skelcode:<path>` snapshot visuals
- * (never rewritten after the plan is presented); the live side is the file
- * as it reads now. PURE — no node:fs; the reader lives in skeleton-snapshot.ts.
- * Warn only: nothing here refuses anything.
+ * (never rewritten after the plan is presented). A file whose code the
+ * snapshot does not hold (withheld, truncated, or past the snapshot cap) is
+ * compared by its content-free exterior digest instead — changed or not, no
+ * line numbers. The live side is the file as it reads now. No node:fs here;
+ * the reader lives in skeleton-snapshot.ts. Warn only: nothing refuses.
+ *
+ * Comparison ignores line endings (CRLF / CR), a leading BOM, one trailing
+ * newline and trailing whitespace on each line.
  */
 
 /** The live side of one declared file. */
@@ -24,9 +30,11 @@ export interface ExteriorDriftChange {
   file: string;
   /** First few changed exterior lines, 1-based LIVE line numbers. */
   lines: number[];
-  /** Changed lines beyond those listed. */
+  /** Changed lines beyond those listed (capped when `approximate`). */
   more: number;
-  /** Set when line numbers can't be given (e.g. markers no longer parse). */
+  /** The file was too large for a real diff: positional, so approximate. */
+  approximate?: boolean;
+  /** Set when line numbers can't be given or need context. */
   note?: string;
 }
 
@@ -34,11 +42,23 @@ export interface SkeletonExteriorDrift {
   changed: ExteriorDriftChange[];
   /** Present in the approved snapshot, missing on disk now. */
   deleted: string[];
-  /** Withheld, truncated or unreadable: never reported as drift. */
+  /** Unreadable, or approved before digests existed: never reported as drift. */
   notChecked: Array<{ file: string; reason: string }>;
+  /** A deleted file's fences now found in another file of the same directory. */
+  renamed?: Array<{ from: string; to: string }>;
+}
+
+/** One approved file to compare: its code (line diff) and/or its digest. */
+interface ApprovedFile {
+  file: string;
+  code?: string;
+  digest?: SkeletonExteriorDigest;
+  /** Why the code isn't there (withheld / truncated / snapshot cap). */
+  codeless?: string;
 }
 
 const MAX_LINES_LISTED = 5;
+const MAX_APPROX_MORE = 20;
 /** LCS table cap (cells); beyond it a cheaper positional diff is used. */
 const MAX_LCS_CELLS = 4_000_000;
 
@@ -48,75 +68,77 @@ interface ExteriorLine {
   line: number;
 }
 
-const normalize = (text: string): string => text.replace(/\r\n/g, "\n").replace(/\n$/, "");
+/** Line endings, BOM and one trailing newline — what "same text" ignores. */
+export const normalizeSkeletonText = (text: string): string =>
+  text.replace(/^﻿/, "").replace(/\r\n?/g, "\n").replace(/\n$/, "");
+/** Per-line comparison key: trailing whitespace never counts. */
+const key = (line: string): string => line.trimEnd();
 
-/** The exterior of one file's text: marker lines and every line outside a
- *  fence, with line numbers. Throws when the markers don't parse. */
-export function skeletonExterior(text: string, file: string): ExteriorLine[] {
-  const norm = normalize(text);
-  const lines = norm.split("\n");
-  const fences = scanSkeletonText(norm, file);
-  const inBody = new Uint8Array(lines.length + 2);
-  for (const f of fences) for (let n = f.openLine + 1; n < f.closeLine; n++) inBody[n] = 1;
-  const out: ExteriorLine[] = [];
-  lines.forEach((t, i) => {
-    if (!inBody[i + 1]) out.push({ text: t, line: i + 1 });
-  });
+/** Exterior of normalized text: keep marker lines of fences in `keep`, drop
+ *  bodies of every fence, and drop marker lines of the other (stripped)
+ *  fences, leaving a `null` gap where each stripped fence was. */
+function exteriorWithGaps(lines: string[], fences: SkeletonFence[], keep: (f: SkeletonFence) => boolean): Array<ExteriorLine | null> {
+  const out: Array<ExteriorLine | null> = [];
+  let n = 1;
+  for (const f of fences) {
+    for (; n < f.openLine; n++) out.push({ text: key(lines[n - 1]!), line: n });
+    if (keep(f)) {
+      out.push({ text: key(lines[f.openLine - 1]!), line: f.openLine });
+      out.push({ text: key(lines[f.closeLine - 1]!), line: f.closeLine });
+    } else {
+      out.push(null);
+    }
+    n = f.closeLine + 1;
+  }
+  for (; n <= lines.length; n++) out.push({ text: key(lines[n - 1]!), line: n });
   return out;
 }
 
-/** The approved exterior split at the fences, marker lines dropped: chunk 0
- *  precedes the first fence, the last follows the last fence. */
-function exteriorChunks(text: string, file: string): ExteriorLine[][] {
-  const lines = normalize(text).split("\n");
-  const fences = scanSkeletonText(normalize(text), file);
-  const chunks: ExteriorLine[][] = [];
-  let start = 1;
-  for (const f of fences) {
-    chunks.push(lines.slice(start - 1, f.openLine - 1).map((t, i) => ({ text: t, line: start + i })));
-    start = f.closeLine + 1;
-  }
-  chunks.push(lines.slice(start - 1).map((t, i) => ({ text: t, line: start + i })));
-  return chunks;
+/** The exterior of one file's text (marker lines + every line outside a
+ *  fence), with line numbers. Throws when the markers don't parse. */
+export function skeletonExterior(text: string, file: string): ExteriorLine[] {
+  const norm = normalizeSkeletonText(text);
+  return exteriorWithGaps(norm.split("\n"), scanSkeletonText(norm, file), () => true) as ExteriorLine[];
+}
+
+/** Content-free record of a file's exterior (stored at present time). */
+export function skeletonExteriorDigest(text: string, file: string): SkeletonExteriorDigest {
+  const ext = skeletonExterior(text, file);
+  return { sha256: createHash("sha256").update(ext.map((l) => l.text).join("\n")).digest("hex"), lines: ext.length };
 }
 
 /**
- * Finalize: the markers are stripped, so the fills can't be told from the
- * exterior by marker. Each approved exterior chunk must still appear, in
- * order and contiguous: the first at the top, the last at the bottom, with
- * anything (a fill) between them. Returns the live line of the first misfit,
- * or [] when every chunk is found. A line added right next to a former fence
- * reads as part of that fill — the known blind spot of this mode.
+ * Chunk matching, for files whose markers were (partly) stripped: each
+ * approved chunk between stripped fences must still appear, in order and
+ * contiguous — the first at the top, the last at the bottom — with anything
+ * (a fill) in the gaps. Returns the live line of the first misfit, or []. A
+ * line added right next to a stripped fence reads as part of its fill.
  */
-function strippedChangedLines(chunks: ExteriorLine[][], live: string[]): number[] {
+function chunkMisfit(chunks: ExteriorLine[][], live: ExteriorLine[]): number[] {
   const matchesAt = (chunk: ExteriorLine[], at: number): number => {
     let k = 0;
-    while (k < chunk.length && at + k < live.length && live[at + k] === chunk[k]!.text) k++;
+    while (k < chunk.length && at + k < live.length && live[at + k]!.text === chunk[k]!.text) k++;
     return k;
   };
-  const lineAt = (i: number): number => Math.min(Math.max(i, 0), Math.max(live.length - 1, 0)) + 1;
+  const lineAt = (i: number): number => live[Math.min(Math.max(i, 0), live.length - 1)]?.line ?? 1;
   const last = chunks.length - 1;
-  // Top and bottom are anchored.
   const top = chunks[0]!;
   const topLen = matchesAt(top, 0);
   if (topLen < top.length) return [lineAt(topLen)];
+  if (last === 0) return live.length > top.length ? [lineAt(top.length)] : [];
   const bottom = chunks[last]!;
   const bottomStart = live.length - bottom.length;
   let pos = top.length;
-  if (last > 0) {
-    if (bottomStart < pos) return [lineAt(live.length - 1)];
-    for (let k = bottom.length - 1; k >= 0; k--) {
-      if (live[bottomStart + k] !== bottom[k]!.text) return [lineAt(bottomStart + k)];
-    }
+  if (bottomStart < pos) return [lineAt(live.length - 1)];
+  for (let k = bottom.length - 1; k >= 0; k--) {
+    if (live[bottomStart + k]!.text !== bottom[k]!.text) return [lineAt(bottomStart + k)];
   }
-  // Middle chunks: the first contiguous occurrence at or after the last one.
-  const end = last > 0 ? bottomStart : live.length;
   for (let c = 1; c < last; c++) {
     const chunk = chunks[c]!;
     if (chunk.length === 0) continue;
     let found = -1;
     let best = { at: pos, len: -1 };
-    for (let at = pos; at + chunk.length <= end; at++) {
+    for (let at = pos; at + chunk.length <= bottomStart; at++) {
       const len = matchesAt(chunk, at);
       if (len === chunk.length) {
         found = at;
@@ -132,25 +154,24 @@ function strippedChangedLines(chunks: ExteriorLine[][], live: string[]): number[
 
 /** Live line numbers of exterior lines that differ (inserted or changed); a
  *  pure removal is reported at the live line where the removed lines were. */
-function changedLines(a: ExteriorLine[], b: ExteriorLine[]): number[] {
+function changedLines(a: ExteriorLine[], b: ExteriorLine[]): { lines: number[]; approximate: boolean } {
   let pre = 0;
   while (pre < a.length && pre < b.length && a[pre]!.text === b[pre]!.text) pre++;
   let suf = 0;
   while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf]!.text === b[b.length - 1 - suf]!.text) suf++;
   const am = a.slice(pre, a.length - suf);
   const bm = b.slice(pre, b.length - suf);
-  if (am.length === 0 && bm.length === 0) return [];
+  const exact = (lines: number[]) => ({ lines, approximate: false });
+  if (am.length === 0 && bm.length === 0) return exact([]);
   const removalAt = (bi: number): number => b[bi]?.line ?? b[b.length - 1]?.line ?? 1;
-  if (bm.length === 0) return [removalAt(pre)];
-  if (am.length === 0) return bm.map((l) => l.line);
+  if (bm.length === 0) return exact([removalAt(pre)]);
+  if (am.length === 0) return exact(bm.map((l) => l.line));
   const out = new Set<number>();
   if (am.length * bm.length > MAX_LCS_CELLS) {
     for (let i = 0; i < bm.length; i++) if (am[i]?.text !== bm[i]!.text) out.add(bm[i]!.line);
     if (out.size === 0) out.add(removalAt(pre + bm.length));
-    return [...out].sort((x, y) => x - y);
+    return { lines: [...out].sort((x, y) => x - y), approximate: true };
   }
-  // LCS over the middle; live lines outside it changed, and an approved line
-  // outside it marks a removal at the current live position.
   const n = am.length;
   const m = bm.length;
   const dp: Uint32Array[] = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
@@ -184,30 +205,84 @@ function changedLines(a: ExteriorLine[], b: ExteriorLine[]): number[] {
     }
   }
   closeRun();
-  return [...out].sort((x, y) => x - y);
+  return exact([...out].sort((x, y) => x - y));
+}
+
+/** Compare one file's approved code with its live text. */
+function compareCode(file: string, code: string, liveText: string): ExteriorDriftChange | null | "unparsable-approved" {
+  const aNorm = normalizeSkeletonText(code);
+  const aLines = aNorm.split("\n");
+  let aFences: SkeletonFence[];
+  try {
+    aFences = scanSkeletonText(aNorm, file);
+  } catch {
+    return "unparsable-approved";
+  }
+  const bNorm = normalizeSkeletonText(liveText);
+  let bFences: SkeletonFence[];
+  try {
+    bFences = scanSkeletonText(bNorm, file);
+  } catch (err) {
+    const why = err instanceof Error ? err.message.replace(`${file}:`, "line ") : String(err);
+    return { file, lines: [], more: 0, note: `SKEL markers no longer parse (${why})` };
+  }
+  const bLines = bNorm.split("\n");
+  const liveIds = new Set(bFences.map((f) => f.id));
+  const stripped = aFences.filter((f) => !liveIds.has(f.id));
+  const liveExt = exteriorWithGaps(bLines, bFences, () => true) as ExteriorLine[];
+  if (stripped.length === 0) {
+    const approvedExt = exteriorWithGaps(aLines, aFences, () => true) as ExteriorLine[];
+    const { lines, approximate } = changedLines(approvedExt, liveExt);
+    if (lines.length === 0) return null;
+    const more = Math.max(0, lines.length - MAX_LINES_LISTED);
+    return { file, lines: lines.slice(0, MAX_LINES_LISTED), more: approximate ? Math.min(more, MAX_APPROX_MORE) : more, ...(approximate ? { approximate } : {}) };
+  }
+  // Some (or all) markers stripped: each stripped fence becomes a gap.
+  const withGaps = exteriorWithGaps(aLines, aFences, (f) => liveIds.has(f.id));
+  const chunks: ExteriorLine[][] = [[]];
+  for (const l of withGaps) {
+    if (l === null) chunks.push([]);
+    else chunks[chunks.length - 1]!.push(l);
+  }
+  const misfit = chunkMisfit(chunks, liveExt);
+  if (misfit.length === 0) return null;
+  const which = stripped.length === aFences.length ? "markers stripped" : `markers of ${stripped.map((f) => `SKEL[${f.id}]`).join(", ")} stripped`;
+  return { file, lines: misfit, more: 0, note: `${which}; the approved structure no longer matches near line ${misfit[0]}` };
+}
+
+/** The approved files a plan's visuals record, code and digest. */
+export function approvedSkeletonFiles(approvedVisuals: readonly PlanVisual[] | undefined): ApprovedFile[] {
+  const out: ApprovedFile[] = [];
+  for (const v of approvedVisuals ?? []) {
+    if (!v || v.kind !== "annotated_code" || !isSkeletonApprovedVisualId(v.id) || !v.skeleton) continue;
+    const file = typeof v.filePath === "string" && v.filePath ? v.filePath : v.id.slice(SKELETON_VISUAL_PREFIX.length);
+    const digest = v.skeleton.exterior;
+    if (v.skeleton.withheld || typeof v.code !== "string") out.push({ file, ...(digest ? { digest } : {}), codeless: "withheld from the approved snapshot" });
+    else if (v.skeleton.truncated) out.push({ file, ...(digest ? { digest } : {}), codeless: "the approved snapshot is truncated" });
+    else out.push({ file, code: v.code, ...(digest ? { digest } : {}) });
+    for (const o of v.skeleton.omitted ?? []) {
+      if (!out.some((f) => f.file === o.path)) out.push({ file: o.path, digest: o.exterior, codeless: "past the snapshot cap" });
+    }
+  }
+  return out;
 }
 
 /**
  * Compare each approved fenced file's exterior with its live exterior.
  * `approvedVisuals` is a plan's visuals (only `skelcode:` annotated_code
- * snapshots are used); `live` maps each such file's path to what it reads now.
- * A withheld or truncated snapshot, or a live file that can't be read, is
- * `notChecked` — never drift. Line endings alone never count.
+ * snapshots are used); `live` maps each approved file's path to what it reads
+ * now. A file without approved code is compared by digest (no line numbers);
+ * one with neither, or unreadable now, is `notChecked` — never drift.
  */
 export function skeletonExteriorDrift(
   approvedVisuals: readonly PlanVisual[] | undefined,
   live: Readonly<Record<string, LiveSkeletonFile | undefined>>,
 ): SkeletonExteriorDrift {
   const result: SkeletonExteriorDrift = { changed: [], deleted: [], notChecked: [] };
-  for (const v of approvedVisuals ?? []) {
-    if (!v || v.kind !== "annotated_code" || !isSkeletonApprovedVisualId(v.id) || !v.skeleton) continue;
-    const file = typeof v.filePath === "string" && v.filePath ? v.filePath : v.id.slice(SKELETON_VISUAL_PREFIX.length);
-    if (v.skeleton.withheld || typeof v.code !== "string") {
-      result.notChecked.push({ file, reason: "withheld from the approved snapshot" });
-      continue;
-    }
-    if (v.skeleton.truncated) {
-      result.notChecked.push({ file, reason: "the approved snapshot is truncated" });
+  for (const a of approvedSkeletonFiles(approvedVisuals)) {
+    const { file } = a;
+    if (a.code === undefined && !a.digest) {
+      result.notChecked.push({ file, reason: a.codeless ?? "no approved record" });
       continue;
     }
     const now = live[file];
@@ -223,50 +298,74 @@ export function skeletonExteriorDrift(
       result.notChecked.push({ file, reason: now.unchecked });
       continue;
     }
-    let approvedExt: ExteriorLine[];
+    if (a.code !== undefined) {
+      const c = compareCode(file, a.code, now.text);
+      if (c === "unparsable-approved") result.notChecked.push({ file, reason: "the approved snapshot's markers don't parse" });
+      else if (c) result.changed.push(c);
+      continue;
+    }
+    // Digest only: changed or not, no lines (the content was never stored).
+    let liveDigest: SkeletonExteriorDigest | null = null;
     try {
-      approvedExt = skeletonExterior(v.code, file);
+      liveDigest = skeletonExteriorDigest(now.text, file);
     } catch {
-      result.notChecked.push({ file, reason: "the approved snapshot's markers don't parse" });
+      result.changed.push({ file, lines: [], more: 0, note: "SKEL markers no longer parse" });
       continue;
     }
-    let liveExt: ExteriorLine[];
-    try {
-      if (scanSkeletonText(normalize(now.text), file).length === 0) {
-        // Every marker stripped (the finalize state): chunk matching.
-        const lines = strippedChangedLines(exteriorChunks(v.code, file), normalize(now.text).split("\n"));
-        if (lines.length > 0) result.changed.push({ file, lines, more: 0, note: `markers stripped; the approved structure no longer matches near line ${lines[0]}` });
-        continue;
-      }
-      liveExt = skeletonExterior(now.text, file);
-    } catch (err) {
-      const why = err instanceof Error ? err.message.replace(`${file}:`, "line ") : String(err);
-      result.changed.push({ file, lines: [], more: 0, note: `SKEL markers no longer parse (${why})` });
-      continue;
-    }
-    const lines = changedLines(approvedExt, liveExt);
-    if (lines.length > 0) {
-      result.changed.push({ file, lines: lines.slice(0, MAX_LINES_LISTED), more: Math.max(0, lines.length - MAX_LINES_LISTED) });
+    if (liveDigest.sha256 !== a.digest!.sha256) {
+      result.changed.push({ file, lines: [], more: 0, note: `changed — ${a.codeless}, so no line numbers` });
     }
   }
   return result;
 }
 
 /** One reply line ("" when nothing drifted). Not-checked files are named only
- *  alongside real drift, so a withheld file doesn't nag on every call. */
+ *  alongside real drift, so an unreadable file doesn't nag on every call. */
 export function formatExteriorDrift(drift: SkeletonExteriorDrift): string {
   if (drift.changed.length === 0 && drift.deleted.length === 0) return "";
+  const renamedTo = new Map((drift.renamed ?? []).map((r) => [r.from, r.to]));
   const parts = [
-    ...drift.changed.map((c) =>
-      c.note
-        ? `${c.file} (${c.note})`
-        : `${c.file} line${c.lines.length + c.more === 1 ? "" : "s"} ${c.lines.join(", ")}${c.more > 0 ? ` (+${c.more} more)` : ""}`,
-    ),
-    ...drift.deleted.map((f) => `${f} (deleted)`),
+    ...drift.changed.map((c) => {
+      if (c.lines.length === 0) return `${c.file} (${c.note ?? "changed"})`;
+      if (c.note) return `${c.file} (${c.note})`;
+      const plural = c.lines.length + c.more === 1 ? "" : "s";
+      const more = c.more > 0 ? ` (+${c.more}${c.approximate && c.more >= MAX_APPROX_MORE ? "+" : ""} more)` : "";
+      return `${c.file} line${plural} ${c.lines.join(", ")}${more}${c.approximate ? " (approximate: file too large for an exact diff)" : ""}`;
+    }),
+    ...drift.deleted.map((f) => (renamedTo.has(f) ? `${f} (deleted; its fences are now in ${renamedTo.get(f)} — renamed?)` : `${f} (deleted)`)),
   ];
   const unchecked = drift.notChecked.length > 0 ? ` Not checked: ${drift.notChecked.map((n) => `${n.file} (${n.reason})`).join(", ")}.` : "";
   return (
     `\n⚠ Exterior drift since approval: ${parts.join("; ")}. ` +
     `Changes outside the SKEL fences are skeleton changes: propose them and revise_artifact the plan (reason "Skeleton change: …"), or restore the approved structure.${unchecked}`
   );
+}
+
+type PlanLike = { id: string; type: string; status: string; parentId?: string | null; statusHistory?: Array<{ status?: string }> };
+
+/**
+ * Is this plan version the approved baseline to check for drift? Either it is
+ * the live, approved version, or (#611) it was approved, then superseded, and
+ * every newer version in its lineage was rejected or retracted — its fences
+ * are restored, so it is still the skeleton being filled.
+ */
+export function isSkeletonDriftBaseline(art: PlanLike, artifacts: ReadonlyArray<PlanLike>): boolean {
+  if (art.type !== "plan") return false;
+  if (art.status === "approved") return isLivePlanVersion(art, artifacts);
+  if (art.status !== "superseded") return false;
+  const history = (art.statusHistory ?? []).map((h) => h?.status);
+  const beforeSupersede = history.slice(0, history.lastIndexOf("superseded")).filter((s) => s !== "superseded").at(-1);
+  if (beforeSupersede !== "approved") return false;
+  const descendants: PlanLike[] = [];
+  const queue = [art.id];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    for (const a of artifacts) {
+      if (a.parentId === id && !descendants.includes(a)) {
+        descendants.push(a);
+        queue.push(a.id);
+      }
+    }
+  }
+  return descendants.length > 0 && descendants.every((d) => d.status === "rejected" || d.status === "retracted");
 }

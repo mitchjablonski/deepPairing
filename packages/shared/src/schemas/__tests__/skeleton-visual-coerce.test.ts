@@ -29,6 +29,13 @@ describe("skeleton snapshot on a visual", () => {
     expect((tracked.visuals?.[0] as any).skeleton).toEqual({ fences: [], tracked: true });
   });
 
+  it("#686 P1b: keeps a well-formed exterior digest and omitted list, drops malformed ones", () => {
+    const sha = "a".repeat(64);
+    const skeleton = { fences: [], exterior: { sha256: sha, lines: 9 }, omitted: [{ path: "b.ts", exterior: { sha256: sha, lines: 3 } }, { path: "c.ts", exterior: { sha256: "nope", lines: 1 } }] };
+    const out = coercePlanContent({ steps: [], estimatedChanges: 1, visuals: [{ ...visual, skeleton }] });
+    expect((out.visuals?.[0] as any).skeleton).toEqual({ fences: [], exterior: { sha256: sha, lines: 9 }, omitted: [{ path: "b.ts", exterior: { sha256: sha, lines: 3 } }] });
+  });
+
   it("degrades a malformed snapshot to safe fences instead of passing garbage to the renderer", () => {
     const out = coercePlanContent({
       steps: [],

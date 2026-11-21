@@ -272,6 +272,12 @@ export type SkeletonFenceView = z.infer<typeof SkeletonFenceViewSchema>;
  * input schemas stay unchanged and a supplied value is stripped); it rides only
  * on stored content, through the coercer, to the renderer.
  */
+/** #686 P1b — a content-free record of a fenced file's EXTERIOR (the file
+ *  minus its fence bodies): SHA-256 of the normalized exterior lines and
+ *  their count. Lets drift be detected for files whose code isn't stored. */
+export const SkeletonExteriorDigestSchema = z.object({ sha256: z.string(), lines: z.number() });
+export type SkeletonExteriorDigest = z.infer<typeof SkeletonExteriorDigestSchema>;
+
 export const SkeletonCodeSnapshotSchema = z.object({
   fences: z.array(SkeletonFenceViewSchema),
   /** An unfenced skeleton file (a file_map "create" entry with no fences). */
@@ -290,6 +296,11 @@ export const SkeletonCodeSnapshotSchema = z.object({
   /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
    *  the newest read, so concurrent progress calls can't regress the view. */
   readAt: z.number().optional(),
+  /** #686 P1b — this file's exterior digest at snapshot time. */
+  exterior: SkeletonExteriorDigestSchema.optional(),
+  /** #686 P1b — fenced files past the snapshot cap (no visual of their own):
+   *  path and exterior digest only, never content. */
+  omitted: z.array(z.object({ path: z.string(), exterior: SkeletonExteriorDigestSchema })).optional(),
 });
 
 export type SkeletonCodeSnapshot = z.infer<typeof SkeletonCodeSnapshotSchema>;

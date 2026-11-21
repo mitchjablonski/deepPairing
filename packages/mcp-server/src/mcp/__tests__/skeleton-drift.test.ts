@@ -2,9 +2,13 @@
  * #686 P1b (warn mode) — exterior drift: the approved fenced file minus its
  * fence bodies, compared with the live file minus its fence bodies.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PlanVisual } from "@deeppairing/shared";
-import { formatExteriorDrift, skeletonExteriorDrift } from "../skeleton-drift.js";
+import { formatExteriorDrift, isSkeletonDriftBaseline, skeletonExteriorDigest, skeletonExteriorDrift } from "../skeleton-drift.js";
+import { buildSkeletonSnapshot, checkSkeletonExteriorDrift, SKELETON_SNAPSHOT_LIMITS } from "../skeleton-snapshot.js";
 
 const SRC = `import { canvas } from "./canvas";
 
@@ -82,6 +86,93 @@ describe("skeletonExteriorDrift", () => {
   it("CRLF-only differences are not drift, on either side", () => {
     expect(drift(`${SRC.replace(/\n/g, "\r\n")}\r\n`).changed).toEqual([]);
     expect(drift(SRC, SRC.replace(/\n/g, "\r\n")).changed).toEqual([]);
+  });
+
+  it("CRLF approved code stored the way the snapshot stores it (trailing \\r left) is not drift", () => {
+    const crlf = `${SRC.replace(/\n/g, "\r\n")}\r\n`;
+    const stored = crlf.replace(/\n$/, ""); // buildSkeletonSnapshot's own trim
+    expect(stored.endsWith("\r")).toBe(true);
+    expect(drift(crlf, stored).changed).toEqual([]);
+    expect(drift(`${SRC}\n`, stored).changed).toEqual([]);
+  });
+
+  it("a leading BOM and trailing whitespace on a line are not drift", () => {
+    expect(drift(`\uFEFF${SRC.replace("export function wire(): void {", "export function wire(): void {   ")}`).changed).toEqual([]);
+  });
+
+  it("partly stripped markers: the stripped fence's former body is not drift, an exterior edit is", () => {
+    const partial = SRC.replace("  // SKEL[1] drop duplicates\n", "").replace("  // /SKEL[1]\n", "").replace('throw new Error("SKEL_TODO");', "const a = 1;\n  return [a];");
+    expect(drift(partial).changed).toEqual([]);
+    const d = drift(partial.replace("export function wire(): void {", "export function wire(x: number): void {"));
+    expect(d.changed).toHaveLength(1);
+    expect(d.changed[0]!.note).toContain("markers of SKEL[1] stripped");
+  });
+
+  it("the diff cap falls back to an approximate, capped line list", () => {
+    const big = (tag: string) => Array.from({ length: 2100 }, (_, i) => `const ${tag}${i} = ${i};`).join("\n");
+    const code = `${big("a")}\n// SKEL[1] x\nthrow new Error("SKEL_TODO");\n// /SKEL[1]`;
+    const d = drift(code.replace(big("a"), big("b")), code);
+    expect(d.changed[0]!.approximate).toBe(true);
+    expect(d.changed[0]!.more).toBe(20);
+    expect(formatExteriorDrift(d)).toContain("(+20+ more) (approximate");
+  });
+
+  it("a withheld or truncated file with an approved exterior digest is compared by digest (no lines)", () => {
+    const digest = skeletonExteriorDigest(SRC, "w.ts");
+    const visuals = [approved(undefined, { withheld: "possible secret detected", exterior: digest }, "w.ts"), approved(SRC, { truncated: { shownLines: 3, totalLines: 13 }, exterior: digest }, "t.ts")];
+    const filled = SRC.replace('throw new Error("SKEL_TODO");', "return [];");
+    expect(skeletonExteriorDrift(visuals, { "w.ts": { text: filled }, "t.ts": { text: `${filled}\r\n` } }).changed).toEqual([]);
+    const d = skeletonExteriorDrift(visuals, { "w.ts": { text: `// hdr\n${SRC}` }, "t.ts": { text: SRC } });
+    expect(d.changed).toEqual([{ file: "w.ts", lines: [], more: 0, note: "changed — withheld from the approved snapshot, so no line numbers" }]);
+  });
+
+  it("files past the snapshot cap get a digest at present time and are checked by it", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-skeldrift-cap-")));
+    try {
+      const other = SRC.replace(/SKEL\[1\]/g, "SKEL[3]").replace(/SKEL\[2\]/g, "SKEL[4]");
+      fs.writeFileSync(path.join(root, "a.ts"), SRC);
+      fs.writeFileSync(path.join(root, "b.ts"), other);
+      const steps = ["1", "3"].map((skelId, i) => ({ description: "s", skelId, files: [i ? "b.ts" : "a.ts"] }));
+      const snap = buildSkeletonSnapshot({ steps, root, limits: { ...SKELETON_SNAPSHOT_LIMITS, maxFiles: 1 } });
+      expect(snap.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
+      const omitted = snap.visuals[0]!.skeleton!.omitted!;
+      expect(omitted.map((o) => o.path)).toEqual(["b.ts"]);
+      expect(JSON.stringify(omitted)).not.toContain("smooth"); // no content
+      const content = { steps, visuals: snap.visuals };
+      expect(checkSkeletonExteriorDrift(content, { root }).changed).toEqual([]);
+      fs.writeFileSync(path.join(root, "b.ts"), other.replace("raw: number[]", "raw: readonly number[]"));
+      const d = checkSkeletonExteriorDrift(content, { root });
+      expect(d.changed).toEqual([{ file: "b.ts", lines: [], more: 0, note: "changed — past the snapshot cap, so no line numbers" }]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a deleted file whose fences moved to a sibling is flagged as a possible rename", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-skeldrift-mv-")));
+    try {
+      fs.mkdirSync(path.join(root, "src"));
+      fs.writeFileSync(path.join(root, "src", "a.ts"), SRC);
+      const steps = [{ description: "s", skelId: "1", files: ["src/a.ts"] }];
+      const content = { steps, visuals: buildSkeletonSnapshot({ steps, root }).visuals };
+      fs.renameSync(path.join(root, "src", "a.ts"), path.join(root, "src", "b.ts"));
+      const d = checkSkeletonExteriorDrift(content, { root });
+      expect(d.deleted).toEqual(["src/a.ts"]);
+      expect(d.renamed).toEqual([{ from: "src/a.ts", to: "src/b.ts" }]);
+      expect(formatExteriorDrift(d)).toContain("src/a.ts (deleted; its fences are now in src/b.ts — renamed?)");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("isSkeletonDriftBaseline: live approved, or approved-then-superseded with every newer version rejected", () => {
+    const v1 = { id: "v1", type: "plan", status: "superseded", statusHistory: [{ status: "draft" }, { status: "approved" }, { status: "superseded" }] };
+    const v2 = { id: "v2", type: "plan", status: "rejected", parentId: "v1" };
+    expect(isSkeletonDriftBaseline(v1, [v1, v2])).toBe(true);
+    expect(isSkeletonDriftBaseline(v1, [v1, { ...v2, status: "draft" }])).toBe(false);
+    expect(isSkeletonDriftBaseline({ ...v1, statusHistory: [{ status: "draft" }, { status: "superseded" }] }, [v1, v2])).toBe(false);
+    expect(isSkeletonDriftBaseline({ id: "x", type: "plan", status: "approved" }, [])).toBe(true);
+    expect(isSkeletonDriftBaseline(v2, [v1, v2])).toBe(false);
   });
 
   it("a deleted declared file is reported as deleted", () => {

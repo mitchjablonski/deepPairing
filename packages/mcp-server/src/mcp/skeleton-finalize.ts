@@ -4,7 +4,7 @@ import { isLivePlanVersion, type Artifact } from "@deeppairing/shared";
 import { planDeclaredFiles, scanSkeletonFences } from "../skeleton-scope.js";
 import { resolveProjectRoot } from "../project-root.js";
 import { checkSkeletonExteriorDrift } from "./skeleton-snapshot.js";
-import { formatExteriorDrift } from "./skeleton-drift.js";
+import { formatExteriorDrift, isSkeletonDriftBaseline } from "./skeleton-drift.js";
 
 /**
  * Skeleton plans, parity PR 4 — the finalize check. When every step of a
@@ -102,7 +102,19 @@ export function finalizeCheckNote(artifacts: Artifact[], root?: string): string 
     const current = artifacts
       .filter((a) => a.type === "plan" && a.status === "approved" && isLivePlanVersion(a, artifacts) && allSkeletonStepsDone(a.content))
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0];
-    if (!current) return "";
+    // #686 P1b — a version restored after a rejected reshape (#611) is
+    // checked for drift too (the marker check keeps its live-only rule).
+    const restored = current ? undefined : artifacts
+      .filter((a) => a.type === "plan" && a.status === "superseded" && allSkeletonStepsDone(a.content) && isSkeletonDriftBaseline(a, artifacts))
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0];
+    if (!current && !restored) return "";
+    if (!current) {
+      const r = root ?? (() => {
+        const pr = resolveProjectRoot();
+        return pr.worktree?.workspaceRoot ?? pr.projectRoot;
+      })();
+      return formatExteriorDrift(checkSkeletonExteriorDrift(restored!.content, { root: r }));
+    }
     const r = root ?? (() => {
       const pr = resolveProjectRoot();
       return pr.worktree?.workspaceRoot ?? pr.projectRoot;

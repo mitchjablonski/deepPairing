@@ -6,7 +6,8 @@ import { planDeclaredFiles, scanSkeletonFences, scanSkeletonText, type SkeletonF
 import { ruleForRelPath } from "../guardrail-rules.js";
 import { resolveProjectRoot } from "../project-root.js";
 import { scanForSecrets } from "../secret-scan.js";
-import { skeletonExteriorDrift, type LiveSkeletonFile, type SkeletonExteriorDrift } from "./skeleton-drift.js";
+import { approvedSkeletonFiles, skeletonExteriorDigest, skeletonExteriorDrift, type LiveSkeletonFile, type SkeletonExteriorDrift } from "./skeleton-drift.js";
+import type { SkeletonExteriorDigest } from "@deeppairing/shared";
 
 export {
   SKELETON_VISUAL_PREFIX,
@@ -64,6 +65,12 @@ export const SKELETON_SNAPSHOT_LIMITS: SkeletonSnapshotLimits = {
 
 /** The path-only list of unfenced skeleton files. */
 export const UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
+
+/** #686 P1b — at most this many past-the-cap files get an exterior digest. */
+const MAX_OMITTED_DIGESTS = 64;
+
+/** #686 P1b — directory entries looked at for a deleted file's rename. */
+const MAX_RENAME_ENTRIES = 200;
 
 /** Below this much remaining budget a file is omitted rather than shown as a stub. */
 const MIN_USEFUL_BYTES = 512;
@@ -265,6 +272,15 @@ export function buildSkeletonSnapshot(args: {
 
   const visuals: PlanVisual[] = [];
   const omitted: string[] = [];
+  /** #686 P1b — content-free exterior digests of the files past the cap. */
+  const omittedDigests: Array<{ path: string; exterior: SkeletonExteriorDigest }> = [];
+  const digestOf = (text: string, rel: string): SkeletonExteriorDigest | undefined => {
+    try {
+      return skeletonExteriorDigest(text, rel);
+    } catch {
+      return undefined;
+    }
+  };
   const withheld: string[] = [];
   let used = 0;
   for (const rel of fenced) {
@@ -272,6 +288,13 @@ export function buildSkeletonSnapshot(args: {
     // L3 — once the count or byte budget is spent, nothing else is opened.
     if (visuals.length >= limits.maxFiles || remaining < Math.min(MIN_USEFUL_BYTES, limits.maxTotalBytes)) {
       omitted.push(rel);
+      // #686 P1b — read (same confinement, nothing stored but a digest) so
+      // drift on a file the card can't show is still caught. Bounded.
+      if (omittedDigests.length < MAX_OMITTED_DIGESTS) {
+        const r = readConfined(root, rel, limits);
+        const d = r.ok ? digestOf(r.text, rel) : undefined;
+        if (d) omittedDigests.push({ path: rel, exterior: d });
+      }
       continue;
     }
     const read = readConfined(root, rel, limits);
@@ -309,6 +332,10 @@ export function buildSkeletonSnapshot(args: {
           fences: fences.map((f) => ({ id: f.id, openLine: f.openLine, closeLine: f.closeLine, status: f.status })),
           withheld: `possible secret detected (${what})`,
           takenAt: new Date().toISOString(),
+          ...(() => {
+            const d = digestOf(read.text, rel);
+            return d ? { exterior: d } : {};
+          })(),
         },
       });
       continue;
@@ -317,10 +344,12 @@ export function buildSkeletonSnapshot(args: {
     const cut = truncateToBytes(read.text, Math.min(limits.maxFileBytes, remaining));
     const code = cut ? cut.code : read.text.replace(/\n$/, "");
     used += Buffer.byteLength(code, "utf-8");
+    const exterior = digestOf(read.text, rel);
     const skeleton: SkeletonCodeSnapshot = {
       fences: fenceViews(fences, cut ? cut.shownLines : null),
       ...(cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {}),
       takenAt: new Date().toISOString(),
+      ...(exterior ? { exterior } : {}),
     };
     const n = skeleton.fences.length;
     const captionParts = [
@@ -342,6 +371,7 @@ export function buildSkeletonSnapshot(args: {
   if (omitted.length > 0 && visuals.length > 0) {
     const last = visuals[visuals.length - 1]!;
     last.caption = `${last.caption ?? ""} Not shown (snapshot cap): ${omitted.join(", ")}.`.trim();
+    if (omittedDigests.length > 0 && last.skeleton) last.skeleton = { ...last.skeleton, omitted: omittedDigests };
   }
   if (unfenced.length > 0) {
     visuals.push({
@@ -480,19 +510,53 @@ export function checkSkeletonExteriorDrift(
     })());
     const limits = opts.limits ?? SKELETON_SNAPSHOT_LIMITS;
     const live: Record<string, LiveSkeletonFile> = {};
-    for (const v of visuals) {
-      const file = typeof v.filePath === "string" && v.filePath ? v.filePath : v.id.slice(SKELETON_VISUAL_PREFIX.length);
-      // Withheld or truncated approvals are never compared: don't read them.
-      if (v.skeleton?.withheld || v.skeleton?.truncated || typeof v.code !== "string") continue;
-      const rel = normalizeSkeletonPath(root, file);
+    const approved = approvedSkeletonFiles(visuals);
+    for (const a of approved) {
+      if (a.code === undefined && !a.digest) continue; // nothing to compare against: not read
+      const rel = normalizeSkeletonPath(root, a.file);
       if (!rel) {
-        live[file] = { unchecked: "outside the project" };
+        live[a.file] = { unchecked: "outside the project" };
         continue;
       }
       const read = readConfined(root, rel, limits);
-      live[file] = read.ok ? { text: read.text } : read.reason === "not on disk" ? { missing: true } : { unchecked: read.reason };
+      live[a.file] = read.ok ? { text: read.text } : read.reason === "not on disk" ? { missing: true } : { unchecked: read.reason };
     }
-    return skeletonExteriorDrift(visuals, live);
+    const drift = skeletonExteriorDrift(visuals, live);
+    // Cheap rename check: a deleted file's fence ids, now in a file of the
+    // same directory that the approved set doesn't name.
+    if (drift.deleted.length > 0) {
+      const known = new Set(approved.map((a) => a.file));
+      const renamed: Array<{ from: string; to: string }> = [];
+      for (const from of drift.deleted) {
+        const ids = new Set((visuals.find((v) => (v.filePath ?? v.id.slice(SKELETON_VISUAL_PREFIX.length)) === from)?.skeleton?.fences ?? []).map((f) => f.id));
+        if (ids.size === 0) continue;
+        const dir = path.posix.dirname(from);
+        let names: string[];
+        try {
+          names = fs.readdirSync(path.resolve(root, dir)).slice(0, MAX_RENAME_ENTRIES);
+        } catch {
+          continue;
+        }
+        for (const name of names) {
+          const rel = dir === "." ? name : `${dir}/${name}`;
+          if (known.has(rel)) continue;
+          const read = readConfined(root, rel, limits);
+          if (!read.ok || !read.text.includes("SKEL[")) continue;
+          let fences: SkeletonFence[];
+          try {
+            fences = scanSkeletonText(read.text, rel);
+          } catch {
+            continue;
+          }
+          if (fences.some((f) => ids.has(f.id))) {
+            renamed.push({ from, to: rel });
+            break;
+          }
+        }
+      }
+      if (renamed.length > 0) drift.renamed = renamed;
+    }
+    return drift;
   } catch {
     return empty;
   }

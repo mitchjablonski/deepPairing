@@ -92,6 +92,23 @@ describe("exterior drift — update_plan_progress", () => {
   });
 });
 
+describe("exterior drift — a version restored after a rejected reshape (#611)", () => {
+  it("v1 keeps being checked: progress on v1 and present_changeset both warn", async () => {
+    const id = await presentPlan();
+    await progress(id, 0, "in_progress");
+    await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "Skeleton change: x", content: { steps: STEPS, estimatedChanges: 1 } });
+    const v2 = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+    store.updateArtifactStatus(v2.id, "rejected", "ui_reject_button");
+    expect(store.getArtifacts().find((a) => a.id === id)!.status).toBe("superseded");
+    write(`${FILLED}export const extra = 1;\n`);
+    const res = await progress(id, 0, "done");
+    expect(res.text).toContain("Exterior drift since approval: a.ts line 7.");
+    write(`${FINAL}export const extra = 1;\n`);
+    const cs = await changeset();
+    expect(cs.text).toContain("Exterior drift since approval: a.ts (markers stripped");
+  });
+});
+
 describe("exterior drift — finalize notes", () => {
   it("present_changeset and present_debrief warn on drift once the markers are stripped", async () => {
     const id = await presentPlan();

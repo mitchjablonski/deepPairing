@@ -3,7 +3,7 @@ import { planDeclaredFiles, readSkeletonScopeFile, readSkeletonScopes, resolveSk
 import { isLivePlanVersion } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { checkSkeletonExteriorDrift, resnapshotSkeleton } from "../skeleton-snapshot.js";
-import { formatExteriorDrift } from "../skeleton-drift.js";
+import { formatExteriorDrift, isSkeletonDriftBaseline } from "../skeleton-drift.js";
 import { allSkeletonStepsDone, formatLeftovers, skeletonLeftovers } from "../skeleton-finalize.js";
 import { skeletonProgressMismatches } from "../skeleton-line.js";
 import type { ToolContext, ToolResult } from "./types.js";
@@ -194,7 +194,8 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
     : "";
   // #686 P1b (warn mode) — the approved plan's exterior (its fenced files
   // minus the fence bodies) must match what was reviewed. Never refused.
-  const driftNote = isSkeleton && resnap && artifact.status === "approved"
+  // Also a version restored after a rejected reshape (#611).
+  const driftNote = isSkeleton && isSkeletonDriftBaseline(artifact, await store.getArtifacts())
     ? formatExteriorDrift(checkSkeletonExteriorDrift(artifact.content))
     : "";
   // Parity PR 4 — the finalize check once the last skeleton step is done.
