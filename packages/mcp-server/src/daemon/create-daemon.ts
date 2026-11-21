@@ -501,7 +501,16 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   // Mount internal daemon routes (for MCP wrappers).
   // II1 — pass authToken so every /api/internal/* requires Authorization.
-  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot, daemonAuthToken, activeSessions, stanceExceptions);
+  const daemonRoutes = createDaemonRoutes(
+    sessions, sessionMeta, createSession, broadcast, log, projectRoot, daemonAuthToken, activeSessions, stanceExceptions,
+    () => {
+      // A CLI can attach just before an already-armed timer fires. Give the
+      // returned link a fresh normal idle interval without a wrapper lease.
+      if (shutdownTimer) clearTimeout(shutdownTimer);
+      shutdownTimer = null;
+      checkAutoShutdown();
+    },
+  );
   app.route("/", daemonRoutes);
 
   // Mount public web UI routes (for browser)
