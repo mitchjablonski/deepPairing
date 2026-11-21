@@ -187,6 +187,27 @@ for (const row of MATRIX) {
           await openFirstRow(evidence);
           await evidence.measure("detail-open");
           await evidence.capture("detail-open");
+          if (row.scenario.id === "E4-three-sessions-filter" && row.mode === "OFF") {
+            const sidebar = page.getByRole("navigation", { name: "Artifacts", exact: true });
+            const banner = page.getByTestId("pending-banner");
+            const lead = page.getByTestId("pending-next");
+            await evidence.activate(page.getByRole("button", { name: "Show all", exact: true }));
+            await evidence.activate(sidebar.locator('[data-artifact-item="alpha_audit"]'));
+            await evidence.check("default lead identifies a different next review", async () => {
+              await expect(page.locator('[data-dp-pane][data-artifact-id="alpha_audit"]:not([inert])')).toBeVisible();
+              await detailReady(evidence);
+              await expect(lead.getByText("Next", { exact: true })).toBeVisible();
+              await expect(lead.getByRole("button", { name: "Auth refactor plan", exact: true })).toBeVisible();
+              await expect(banner.getByText("5 items waiting for you", { exact: true })).toBeVisible();
+            });
+            await evidence.activate(banner.locator("[data-pending-chip]").getByRole("button", { name: "Auth refactor plan", exact: true }));
+            await evidence.check("opening the pending chip puts the same plan in view without changing the count", async () => {
+              await expect(page.locator('[data-dp-pane][data-artifact-id="alpha_plan"]:not([inert])')).toBeVisible();
+              await detailReady(evidence);
+              await expect(lead.getByText("In view", { exact: true })).toBeVisible();
+              await expect(banner.getByText("5 items waiting for you", { exact: true })).toBeVisible();
+            });
+          }
         }
       } catch (error) {
         failure = error;
