@@ -53,6 +53,8 @@ interface ApprovedFile {
   file: string;
   code?: string;
   digest?: SkeletonExteriorDigest;
+  /** Approved fence ids, when known (digest-only files: to spot stripping). */
+  fenceIds?: string[];
   /** Why the code isn't there (withheld / truncated / snapshot cap). */
   codeless?: string;
 }
@@ -103,8 +105,14 @@ export function skeletonExterior(text: string, file: string): ExteriorLine[] {
 
 /** Content-free record of a file's exterior (stored at present time). */
 export function skeletonExteriorDigest(text: string, file: string): SkeletonExteriorDigest {
-  const ext = skeletonExterior(text, file);
-  return { sha256: createHash("sha256").update(ext.map((l) => l.text).join("\n")).digest("hex"), lines: ext.length };
+  const norm = normalizeSkeletonText(text);
+  const fences = scanSkeletonText(norm, file);
+  const ext = exteriorWithGaps(norm.split("\n"), fences, () => true) as ExteriorLine[];
+  return {
+    sha256: createHash("sha256").update(ext.map((l) => l.text).join("\n")).digest("hex"),
+    lines: ext.length,
+    fenceIds: [...new Set(fences.map((f) => f.id))],
+  };
 }
 
 /**
@@ -227,6 +235,10 @@ function compareCode(file: string, code: string, liveText: string): ExteriorDrif
     return { file, lines: [], more: 0, note: `SKEL markers no longer parse (${why})` };
   }
   const bLines = bNorm.split("\n");
+  // Stripping is judged by fence id. Known limit: when one id fences two
+  // regions and only one pair of markers is stripped, the id still reads as
+  // present, so the stripped region's old body shows as drift (over-warns;
+  // never under-warns).
   const liveIds = new Set(bFences.map((f) => f.id));
   const stripped = aFences.filter((f) => !liveIds.has(f.id));
   const liveExt = exteriorWithGaps(bLines, bFences, () => true) as ExteriorLine[];
@@ -257,11 +269,15 @@ export function approvedSkeletonFiles(approvedVisuals: readonly PlanVisual[] | u
     if (!v || v.kind !== "annotated_code" || !isSkeletonApprovedVisualId(v.id) || !v.skeleton) continue;
     const file = typeof v.filePath === "string" && v.filePath ? v.filePath : v.id.slice(SKELETON_VISUAL_PREFIX.length);
     const digest = v.skeleton.exterior;
-    if (v.skeleton.withheld || typeof v.code !== "string") out.push({ file, ...(digest ? { digest } : {}), codeless: "withheld from the approved snapshot" });
-    else if (v.skeleton.truncated) out.push({ file, ...(digest ? { digest } : {}), codeless: "the approved snapshot is truncated" });
+    const fenceIds = digest?.fenceIds ?? v.skeleton.fences.map((f) => f.id);
+    if (v.skeleton.withheld || typeof v.code !== "string") out.push({ file, ...(digest ? { digest } : {}), fenceIds, codeless: "withheld from the approved snapshot" });
+    else if (v.skeleton.truncated) out.push({ file, ...(digest ? { digest } : {}), fenceIds, codeless: "the approved snapshot is truncated" });
     else out.push({ file, code: v.code, ...(digest ? { digest } : {}) });
     for (const o of v.skeleton.omitted ?? []) {
-      if (!out.some((f) => f.file === o.path)) out.push({ file: o.path, digest: o.exterior, codeless: "past the snapshot cap" });
+      if (out.some((f) => f.file === o.path)) continue;
+      out.push(o.exterior
+        ? { file: o.path, digest: o.exterior, ...(o.exterior.fenceIds ? { fenceIds: o.exterior.fenceIds } : {}), codeless: "past the snapshot cap" }
+        : { file: o.path, codeless: "past the snapshot cap and its digest budget" });
     }
   }
   return out;
@@ -305,11 +321,19 @@ export function skeletonExteriorDrift(
       continue;
     }
     // Digest only: changed or not, no lines (the content was never stored).
+    // The digest includes the marker lines, so once any approved fence's
+    // markers are stripped (finalize) it can no longer be compared.
     let liveDigest: SkeletonExteriorDigest | null = null;
     try {
       liveDigest = skeletonExteriorDigest(now.text, file);
     } catch {
       result.changed.push({ file, lines: [], more: 0, note: "SKEL markers no longer parse" });
+      continue;
+    }
+    const liveIds = new Set(liveDigest.fenceIds ?? []);
+    const stripped = a.fenceIds && a.fenceIds.length > 0 ? a.fenceIds.some((id) => !liveIds.has(id)) : liveIds.size === 0;
+    if (stripped) {
+      result.notChecked.push({ file, reason: `markers stripped; ${a.codeless}, so only a digest was kept` });
       continue;
     }
     if (liveDigest.sha256 !== a.digest!.sha256) {

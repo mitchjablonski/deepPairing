@@ -275,7 +275,13 @@ export type SkeletonFenceView = z.infer<typeof SkeletonFenceViewSchema>;
 /** #686 P1b — a content-free record of a fenced file's EXTERIOR (the file
  *  minus its fence bodies): SHA-256 of the normalized exterior lines and
  *  their count. Lets drift be detected for files whose code isn't stored. */
-export const SkeletonExteriorDigestSchema = z.object({ sha256: z.string(), lines: z.number() });
+export const SkeletonExteriorDigestSchema = z.object({
+  sha256: z.string(),
+  lines: z.number().int().nonnegative(),
+  /** The file's fence ids at snapshot time (ids only), so a later check can
+   *  tell stripped markers from a changed exterior. */
+  fenceIds: z.array(z.string()).optional(),
+});
 export type SkeletonExteriorDigest = z.infer<typeof SkeletonExteriorDigestSchema>;
 
 export const SkeletonCodeSnapshotSchema = z.object({
@@ -299,8 +305,9 @@ export const SkeletonCodeSnapshotSchema = z.object({
   /** #686 P1b — this file's exterior digest at snapshot time. */
   exterior: SkeletonExteriorDigestSchema.optional(),
   /** #686 P1b — fenced files past the snapshot cap (no visual of their own):
-   *  path and exterior digest only, never content. */
-  omitted: z.array(z.object({ path: z.string(), exterior: SkeletonExteriorDigestSchema })).optional(),
+   *  path and exterior digest only, never content. No digest = past the
+   *  digest budget too (listed so it reads as "not checked"). */
+  omitted: z.array(z.object({ path: z.string(), exterior: SkeletonExteriorDigestSchema.optional() })).optional(),
 });
 
 export type SkeletonCodeSnapshot = z.infer<typeof SkeletonCodeSnapshotSchema>;

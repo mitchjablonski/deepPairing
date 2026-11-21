@@ -126,6 +126,21 @@ describe("skeletonExteriorDrift", () => {
     expect(d.changed).toEqual([{ file: "w.ts", lines: [], more: 0, note: "changed — withheld from the approved snapshot, so no line numbers" }]);
   });
 
+  it("a digest-only file with its markers stripped is not checked; filled with markers kept, it stays quiet", () => {
+    const digest = skeletonExteriorDigest(SRC, "w.ts");
+    expect(digest.fenceIds).toEqual(["1", "2"]);
+    const visuals = [approved(undefined, { withheld: "possible secret detected", exterior: digest }, "w.ts")];
+    const filled = SRC.replace(/throw new Error\("SKEL_TODO"\);/g, "return 1;");
+    expect(skeletonExteriorDrift(visuals, { "w.ts": { text: filled } })).toEqual({ changed: [], deleted: [], notChecked: [] });
+    const stripped = filled.split("\n").filter((l) => !l.includes("SKEL[")).join("\n");
+    const d = skeletonExteriorDrift(visuals, { "w.ts": { text: stripped } });
+    expect(d.changed).toEqual([]);
+    expect(d.notChecked).toEqual([{ file: "w.ts", reason: "markers stripped; withheld from the approved snapshot, so only a digest was kept" }]);
+    // Partly stripped counts too.
+    const partial = filled.replace("  // SKEL[1] drop duplicates\n", "").replace("  // /SKEL[1]\n", "");
+    expect(skeletonExteriorDrift(visuals, { "w.ts": { text: partial } }).notChecked).toHaveLength(1);
+  });
+
   it("files past the snapshot cap get a digest at present time and are checked by it", () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-skeldrift-cap-")));
     try {
@@ -133,7 +148,12 @@ describe("skeletonExteriorDrift", () => {
       fs.writeFileSync(path.join(root, "a.ts"), SRC);
       fs.writeFileSync(path.join(root, "b.ts"), other);
       const steps = ["1", "3"].map((skelId, i) => ({ description: "s", skelId, files: [i ? "b.ts" : "a.ts"] }));
-      const snap = buildSkeletonSnapshot({ steps, root, limits: { ...SKELETON_SNAPSHOT_LIMITS, maxFiles: 1 } });
+      const limits = { ...SKELETON_SNAPSHOT_LIMITS, maxFiles: 1 };
+      // The progress re-read records no digests.
+      const plain = buildSkeletonSnapshot({ steps, root, limits });
+      expect(plain.visuals[0]!.skeleton!.exterior).toBeUndefined();
+      expect(plain.visuals[0]!.skeleton!.omitted).toBeUndefined();
+      const snap = buildSkeletonSnapshot({ steps, root, limits, recordExterior: true });
       expect(snap.visuals.map((v) => v.id)).toEqual(["skelcode:a.ts"]);
       const omitted = snap.visuals[0]!.skeleton!.omitted!;
       expect(omitted.map((o) => o.path)).toEqual(["b.ts"]);
@@ -155,6 +175,8 @@ describe("skeletonExteriorDrift", () => {
       fs.writeFileSync(path.join(root, "src", "a.ts"), SRC);
       const steps = [{ description: "s", skelId: "1", files: ["src/a.ts"] }];
       const content = { steps, visuals: buildSkeletonSnapshot({ steps, root }).visuals };
+      // A sibling holding only one of the two fence ids is not a rename.
+      fs.writeFileSync(path.join(root, "src", "c.ts"), "// SKEL[1] drop duplicates\nx\n// /SKEL[1]\n");
       fs.renameSync(path.join(root, "src", "a.ts"), path.join(root, "src", "b.ts"));
       const d = checkSkeletonExteriorDrift(content, { root });
       expect(d.deleted).toEqual(["src/a.ts"]);

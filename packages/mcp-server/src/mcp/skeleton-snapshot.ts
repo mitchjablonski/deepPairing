@@ -68,6 +68,11 @@ export const UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
 
 /** #686 P1b — at most this many past-the-cap files get an exterior digest. */
 const MAX_OMITTED_DIGESTS = 64;
+/** #686 P1b — total bytes read for past-the-cap digests at one present. */
+const MAX_OMITTED_BYTES = 8 * 1024 * 1024;
+/** #686 P1b — rename hint: per-file and per-call read caps. */
+const MAX_RENAME_FILE_BYTES = 256 * 1024;
+const MAX_RENAME_TOTAL_BYTES = 2 * 1024 * 1024;
 
 /** #686 P1b — directory entries looked at for a deleted file's rename. */
 const MAX_RENAME_ENTRIES = 200;
@@ -231,6 +236,9 @@ export function buildSkeletonSnapshot(args: {
   visuals?: unknown;
   root: string;
   limits?: SkeletonSnapshotLimits;
+  /** #686 P1b — record content-free exterior digests (present / revise only;
+   *  the progress re-read never needs them). */
+  recordExterior?: boolean;
 }): SkeletonSnapshotResult {
   const limits = args.limits ?? SKELETON_SNAPSHOT_LIMITS;
   const steps = Array.isArray(args.steps) ? (args.steps as Array<{ skelId?: unknown }>) : [];
@@ -273,8 +281,10 @@ export function buildSkeletonSnapshot(args: {
   const visuals: PlanVisual[] = [];
   const omitted: string[] = [];
   /** #686 P1b — content-free exterior digests of the files past the cap. */
-  const omittedDigests: Array<{ path: string; exterior: SkeletonExteriorDigest }> = [];
+  const omittedDigests: Array<{ path: string; exterior?: SkeletonExteriorDigest }> = [];
+  let omittedBytes = 0;
   const digestOf = (text: string, rel: string): SkeletonExteriorDigest | undefined => {
+    if (!args.recordExterior) return undefined;
     try {
       return skeletonExteriorDigest(text, rel);
     } catch {
@@ -290,10 +300,18 @@ export function buildSkeletonSnapshot(args: {
       omitted.push(rel);
       // #686 P1b — read (same confinement, nothing stored but a digest) so
       // drift on a file the card can't show is still caught. Bounded.
-      if (omittedDigests.length < MAX_OMITTED_DIGESTS) {
-        const r = readConfined(root, rel, limits);
-        const d = r.ok ? digestOf(r.text, rel) : undefined;
-        if (d) omittedDigests.push({ path: rel, exterior: d });
+      // Past the count or byte budget the file is still listed (no digest),
+      // so the drift check names it "not checked" rather than forgetting it.
+      if (args.recordExterior) {
+        let d: SkeletonExteriorDigest | undefined;
+        if (omittedDigests.length < MAX_OMITTED_DIGESTS && omittedBytes < MAX_OMITTED_BYTES) {
+          const r = readConfined(root, rel, limits);
+          if (r.ok) {
+            omittedBytes += Buffer.byteLength(r.text, "utf-8");
+            d = digestOf(r.text, rel);
+          }
+        }
+        omittedDigests.push({ path: rel, ...(d ? { exterior: d } : {}) });
       }
       continue;
     }
@@ -417,7 +435,7 @@ export function attachSkeletonSnapshot<T extends Record<string, unknown>>(
         const r = resolveProjectRoot();
         return r.worktree?.workspaceRoot ?? r.projectRoot;
       })();
-      snap = buildSkeletonSnapshot({ steps, visuals: kept, root, ...(opts.limits ? { limits: opts.limits } : {}) });
+      snap = buildSkeletonSnapshot({ steps, visuals: kept, root, recordExterior: true, ...(opts.limits ? { limits: opts.limits } : {}) });
     }
     const nextVisuals = [...kept, ...snap.visuals];
     const next: Record<string, unknown> = { ...content };
@@ -522,14 +540,18 @@ export function checkSkeletonExteriorDrift(
       live[a.file] = read.ok ? { text: read.text } : read.reason === "not on disk" ? { missing: true } : { unchecked: read.reason };
     }
     const drift = skeletonExteriorDrift(visuals, live);
-    // Cheap rename check: a deleted file's fence ids, now in a file of the
-    // same directory that the approved set doesn't name.
+    // Rename hint: a deleted file's FULL fence-id set (and its titles, where
+    // the snapshot kept them) now in one file of the same directory that the
+    // approved set doesn't name. Sizes are stat'ed first; reads are capped
+    // per file and per call.
     if (drift.deleted.length > 0) {
       const known = new Set(approved.map((a) => a.file));
       const renamed: Array<{ from: string; to: string }> = [];
+      let budget = MAX_RENAME_TOTAL_BYTES;
       for (const from of drift.deleted) {
-        const ids = new Set((visuals.find((v) => (v.filePath ?? v.id.slice(SKELETON_VISUAL_PREFIX.length)) === from)?.skeleton?.fences ?? []).map((f) => f.id));
-        if (ids.size === 0) continue;
+        const fences0 = visuals.find((v) => (v.filePath ?? v.id.slice(SKELETON_VISUAL_PREFIX.length)) === from)?.skeleton?.fences ?? [];
+        if (fences0.length === 0) continue;
+        const want = new Map(fences0.map((f) => [f.id, f.title]));
         const dir = path.posix.dirname(from);
         let names: string[];
         try {
@@ -538,8 +560,19 @@ export function checkSkeletonExteriorDrift(
           continue;
         }
         for (const name of names) {
+          if (budget <= 0) break;
           const rel = dir === "." ? name : `${dir}/${name}`;
           if (known.has(rel)) continue;
+          let size: number;
+          try {
+            const st = fs.statSync(path.resolve(root, rel));
+            if (!st.isFile()) continue;
+            size = st.size;
+          } catch {
+            continue;
+          }
+          if (size > MAX_RENAME_FILE_BYTES || size > budget) continue;
+          budget -= size;
           const read = readConfined(root, rel, limits);
           if (!read.ok || !read.text.includes("SKEL[")) continue;
           let fences: SkeletonFence[];
@@ -548,7 +581,13 @@ export function checkSkeletonExteriorDrift(
           } catch {
             continue;
           }
-          if (fences.some((f) => ids.has(f.id))) {
+          const ids = new Set(fences.map((f) => f.id));
+          const sameIds = ids.size === want.size && [...want.keys()].every((id) => ids.has(id));
+          const sameTitles = fences.every((f) => {
+            const t = want.get(f.id);
+            return t === undefined || t === f.title;
+          });
+          if (sameIds && sameTitles) {
             renamed.push({ from, to: rel });
             break;
           }
