@@ -1,6 +1,7 @@
 import type { Artifact } from "@deeppairing/shared";
 import type { PreflightBlockRecord } from "../stores/preflightBlocks";
 import { isDelegateBriefArtifact, type AttentionItem } from "./attention";
+import { noAgentLive } from "./liveness";
 
 /**
  * #430 slice 1 — THE ONE COPY MODULE for "what needs you". Both needs-you
@@ -217,7 +218,20 @@ export function copyLineText(title: string, c: ItemCopy): string {
   return [c.lane ? `${c.lane} ${title}` : title, ...c.tags, c.ifIgnored, c.after].filter(Boolean).join(" · ");
 }
 
-/** Reach from the signals both surfaces already read. */
-export function reachFrom(s: { replay: boolean; tabOffline: boolean; agentGone: boolean }): AgentReach {
-  return s.replay ? "replay" : s.tabOffline ? "disconnected" : s.agentGone ? "gone" : "live";
+/** Use the artifact owner's reach when the session catalog knows it. */
+export function reachForItem(
+  item: AttentionItem,
+  artifacts: Artifact[],
+  { replay, tabOffline, activeSessions }: {
+    replay: boolean;
+    tabOffline: boolean;
+    activeSessions: Array<{ sessionId: string; live?: boolean }>;
+  },
+): AgentReach {
+  if (replay) return "replay";
+  if (tabOffline) return "disconnected";
+  const ownerId = artifactOf(item, artifacts)?.sessionId;
+  const ownerLive = ownerId ? activeSessions.find((s) => s.sessionId === ownerId)?.live : undefined;
+  const agentGone = ownerLive === undefined ? noAgentLive(activeSessions) : !ownerLive;
+  return agentGone ? "gone" : "live";
 }
