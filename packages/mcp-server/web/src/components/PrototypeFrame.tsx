@@ -56,7 +56,25 @@ function makeNonce(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function wrapHtml(html: string, opts: { headScript?: string; nonce?: string } = {}): string {
+/** Attribute-value escaping for the wrapper's own `<html>`/`<body>` tags. */
+function escapeAttr(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+/** Only these names are ever written onto the wrapper (the sanitiser already
+ *  filtered the values; this is the second gate on the names). */
+const WRAPPER_ATTR_NAMES = new Set(["class", "dir", "lang", "style"]);
+function attrString(attrs: Record<string, string> | undefined): string {
+  if (!attrs) return "";
+  return Object.entries(attrs)
+    .filter(([k]) => WRAPPER_ATTR_NAMES.has(k))
+    .map(([k, v]) => ` ${k}="${escapeAttr(v)}"`)
+    .join("");
+}
+
+export function wrapHtml(
+  html: string,
+  opts: { headScript?: string; nonce?: string; htmlAttrs?: Record<string, string>; bodyAttrs?: Record<string, string> } = {},
+): string {
   // Wrap the agent payload in a document we control so OUR CSP meta is first in
   // <head> and governs the whole document (it combines with anything the agent
   // included — most restrictive wins). The sandbox attribute is the primary
@@ -68,11 +86,11 @@ export function wrapHtml(html: string, opts: { headScript?: string; nonce?: stri
     ? `<script${opts.nonce ? ` nonce="${opts.nonce}"` : ""}>${opts.headScript}</script>`
     : "";
   return (
-    `<!doctype html><html><head><meta charset="utf-8">` +
+    `<!doctype html><html${attrString(opts.htmlAttrs)}><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     head +
     `<style>html,body{margin:0;padding:10px;font-family:system-ui,-apple-system,sans-serif;color:#111;background:#fff}</style>` +
-    `</head><body>${html}</body></html>`
+    `</head><body${attrString(opts.bodyAttrs)}>${html}</body></html>`
   );
 }
 
@@ -81,7 +99,9 @@ export function wrapHtml(html: string, opts: { headScript?: string; nonce?: stri
  *  component, which prototype visuals also use, carries neither by default. */
 export interface FrameAnnotation {
   script: string;
-  sanitize: (html: string) => string;
+  /** Returns the cleaned markup plus the page's safe `<html>`/`<body>`
+   *  presentation attributes, which go on our wrapper elements. */
+  sanitize: (html: string) => { html: string; htmlAttrs?: Record<string, string>; bodyAttrs?: Record<string, string> };
 }
 
 export interface PrototypeFrameProps {
@@ -139,7 +159,13 @@ export function PrototypeFrame({
   const staticDoc = useMemo(() => {
     if (!staticFirst || tooBig) return "";
     if (!annotation) return wrapHtml(html);
-    return wrapHtml(annotation.sanitize(html), { headScript: annotation.script, nonce: makeNonce() });
+    const clean = annotation.sanitize(html);
+    return wrapHtml(clean.html, {
+      headScript: annotation.script,
+      nonce: makeNonce(),
+      htmlAttrs: clean.htmlAttrs,
+      bodyAttrs: clean.bodyAttrs,
+    });
   }, [html, staticFirst, tooBig, annotation]);
   const runDoc = useMemo(
     () => (running ? wrapHtml(html, annotating && annotation ? { headScript: annotation.script } : {}) : ""),

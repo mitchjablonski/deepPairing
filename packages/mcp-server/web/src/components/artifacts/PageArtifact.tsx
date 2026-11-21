@@ -12,16 +12,25 @@ import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
 import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage } from "../../lib/pageAnchorMessages";
-import { htmlAnchorKindLabel, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
+import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
+
+/** True while the reviewer is typing in a control of the companion itself
+ *  (not the page frame): a frame message must never move focus out of it. */
+function parentControlFocused(frame: HTMLIFrameElement | null): boolean {
+  const el = typeof document !== "undefined" ? document.activeElement : null;
+  if (!el || el === frame || el === document.body) return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === "textarea" || tag === "input" || tag === "select" || (el as HTMLElement).isContentEditable === true;
+}
 
 /** The root comments that point at a spot on the page, oldest first: their
  *  order is the pin numbering. */
 export function anchoredPageComments(comments: Comment[]): Comment[] {
   return comments
-    .filter((c) => c.parentCommentId == null && !!c.target.htmlAnchor)
+    .filter((c) => isPageListedComment("page", c))
     .slice()
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
@@ -100,16 +109,22 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const sendPins = useCallback(() => postToFrame({ dp: "pins", anchors }), [postToFrame, anchors]);
   const sendMode = useCallback(() => postToFrame({ dp: "mode", annotate: !running || annotate }), [postToFrame, running, annotate]);
 
-  // Keep the latest senders in refs so the one message listener never goes stale.
+  // Keep the latest senders and the EFFECTIVE pointing mode in refs so the one
+  // message listener never goes stale.
   const sendersRef = useRef({ sendPins, sendMode });
   sendersRef.current = { sendPins, sendMode };
+  const pointingRef = useRef(true);
+  pointingRef.current = !running || annotate;
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
       const frame = iframeRef.current?.contentWindow;
       const anchor = acceptAnchorMessage(event, frame);
       if (anchor) {
-        if (readOnly) return;
+        // Pointing is off (clicks belong to the page), the artifact is
+        // read-only, or the reviewer is typing in a companion control: drop it.
+        // An anchor only ever opens the composer; submitting stays explicit.
+        if (readOnly || !pointingRef.current || parentControlFocused(iframeRef.current)) return;
         setDraft({ ...anchor, version: artifact.version });
         setOpenNonce((n) => n + 1);
         return;

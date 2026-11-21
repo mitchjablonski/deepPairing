@@ -245,4 +245,69 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     await userEvent.click(screen.getByTestId("page-annotation"));
     expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", index: 0 }, "*");
   });
+
+  it("drops anchors while pointing is off (after Run), and accepts them again when it is back on", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    const win = fakeFrameWindow();
+    await userEvent.click(screen.getByRole("button", { name: /pointing: on/i }));
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false }, "*");
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /pointing: off/i }));
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(screen.getByTestId("page-anchor-composer")).toBeInTheDocument();
+  });
+
+  it("never steals focus from a companion control the reviewer is typing in", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    const respond = screen.getByPlaceholderText(/respond to the agent/i);
+    await userEvent.click(respond);
+    await userEvent.type(respond, "half a thought");
+    expect(document.activeElement).toBe(respond);
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(respond);
+    expect(useArtifactStore.getState().comments[pageArtifact.id] ?? []).toHaveLength(0);
+  });
+
+  it("a retracted page still lists its anchored comments but opens no composer", () => {
+    const retracted: Artifact = { ...pageArtifact, id: "art_page_retracted", status: "retracted" };
+    useArtifactStore.getState().addArtifact(retracted);
+    useArtifactStore.getState().addComment({
+      id: "cmt_hist",
+      sessionId: "sess_1",
+      target: { artifactId: retracted.id, htmlAnchor: { kind: "element", locator: "h1", quote: "Cache invalidation" } },
+      parentCommentId: null,
+      author: "human",
+      content: "historical note",
+      acknowledged: false,
+      createdAt: new Date().toISOString(),
+    });
+    render(<PageArtifact artifact={retracted} />);
+    expect(within(screen.getByTestId("page-annotations")).getByText(/historical note/)).toBeInTheDocument();
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+  });
+});
+
+describe("PageArtifact — document attributes before Run (#680 slice 2)", () => {
+  it("keeps the body class a page stylesheet depends on, and RTL direction, on the wrapper", () => {
+    const styled: Artifact = {
+      ...pageArtifact,
+      id: "art_page_styled",
+      content: {
+        title: "Styled",
+        html: "<html dir=\"rtl\" lang=\"ar\"><head><style>body.theme-dark h1{color:white}</style></head><body class=\"theme-dark\" onload=\"x()\"><h1>عنوان</h1></body></html>",
+      },
+    };
+    render(<PageArtifact artifact={styled} />);
+    const srcdoc = frame()!.getAttribute("srcdoc") ?? "";
+    expect(srcdoc).toContain('<html dir="rtl" lang="ar">');
+    expect(srcdoc).toContain('<body class="theme-dark">');
+    expect(srcdoc).toContain("body.theme-dark h1");
+    expect(srcdoc).not.toContain("x()");
+  });
 });

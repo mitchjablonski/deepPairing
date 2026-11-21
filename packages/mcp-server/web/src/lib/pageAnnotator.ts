@@ -179,21 +179,33 @@ function rangeFor(index, s, e) {
   return r;
 }
 
-/** Best occurrence of the quote in normalized text: prefix match scores 2,
- *  suffix match 1; ties keep the first. -1 when absent. */
-function findQuote(text, quote, prefix, suffix) {
-  var q = norm(quote);
-  if (!q) return -1;
+/** Every occurrence of the quote in normalized text, each scored on its
+ *  saved context: +2 when the text before it ends with the prefix, +2 when the
+ *  text after it starts with the suffix. */
+function quoteHits(text, quote, prefix, suffix) {
+  var q = norm(quote), out = [];
+  if (!q) return out;
   var p = norm(prefix), sx = norm(suffix);
-  var best = -1, bestScore = -1, from = 0, guard = 0, i;
+  var from = 0, guard = 0, i;
   while ((i = text.indexOf(q, from)) !== -1 && guard++ < 2000) {
     var score = 0;
     if (p && norm(text.slice(Math.max(0, i - p.length - 2), i)).slice(-p.length) === p) score += 2;
-    if (sx && norm(text.slice(i + q.length, i + q.length + sx.length + 2)).slice(0, sx.length) === sx) score += 1;
-    if (score > bestScore) { best = i; bestScore = score; if (score === 3) break; }
+    if (sx && norm(text.slice(i + q.length, i + q.length + sx.length + 2)).slice(0, sx.length) === sx) score += 2;
+    out.push({ at: i, score: score });
     from = i + 1;
   }
-  return best;
+  return out;
+}
+/** The single best-supported occurrence, or -1 when absent OR tied: a tie
+ *  means the page no longer says which one was meant. */
+function findQuote(text, quote, prefix, suffix) {
+  var hits = quoteHits(text, quote, prefix, suffix);
+  var best = -1, bestScore = -1, tied = false;
+  for (var i = 0; i < hits.length; i++) {
+    if (hits[i].score > bestScore) { best = hits[i].at; bestScore = hits[i].score; tied = false; }
+    else if (hits[i].score === bestScore) tied = true;
+  }
+  return tied ? -1 : best;
 }
 
 function elementText(el) {
@@ -325,9 +337,53 @@ function textMatches(el, quote) {
   if (!q) return true;
   return elementText(el).indexOf(q.slice(0, 60)) !== -1;
 }
-/** Re-find an anchor in the current document: the locator first (checked
- *  against the quote), then kind-specific ids (Mermaid node id, link href),
- *  then the quote with its prefix/suffix. Returns {el, range} or null. */
+/** The normalized page text just before / after an element, for checking a
+ *  saved prefix/suffix against an element candidate. */
+function contextOf(el, bodyIndex) {
+  var r = document.createRange();
+  try { r.selectNodeContents(el); } catch (e) { return { before: "", after: "" }; }
+  var s = pointIndex(bodyIndex, r.startContainer, r.startOffset);
+  var e = pointIndex(bodyIndex, r.endContainer, r.endOffset);
+  return { before: bodyIndex.text.slice(Math.max(0, s - 40), s), after: bodyIndex.text.slice(e, e + 40) };
+}
+function closestOf(el, kind) {
+  var want = kind === "cell" ? "td, th" : kind === "link" ? LINK_SEL : kind === "diagram-node" ? NODE_SEL : null;
+  if (!want) return el;
+  return el && el.closest ? el.closest(want) : null;
+}
+/** Does this element carry the anchor's identity? Required checks: the kind's
+ *  element type, the quote, a cell's saved row/column headers, a node's id, a
+ *  link's href. Returns a support score (>= 0) or -1 when it is not the spot. */
+function support(a, el, bodyIndex, fromLocator) {
+  var kind = String(a.kind || "");
+  if (!isEl(el)) return -1;
+  if (kind === "cell" && !isCell(el)) return -1;
+  if (kind === "link" && !(el.matches && el.matches(LINK_SEL))) return -1;
+  if (kind === "diagram-node" && !(el.matches && el.matches(NODE_SEL))) return -1;
+  var idMatch = kind === "diagram-node" && typeof a.nodeId === "string" && a.nodeId && mermaidNodeId(el) === a.nodeId;
+  // A saved Mermaid node id is identity enough: a revision may relabel the node.
+  if (!idMatch && !textMatches(el, a.quote)) return -1;
+  if (kind === "cell" && a.table && typeof a.table === "object") {
+    var t = cellAnchor(el).table || {};
+    if (typeof a.table.row === "string" && a.table.row && t.row !== a.table.row) return -1;
+    if (typeof a.table.col === "string" && a.table.col && t.col !== a.table.col) return -1;
+  }
+  if (kind === "diagram-node" && typeof a.nodeId === "string" && a.nodeId && mermaidNodeId(el) !== a.nodeId) return -1;
+  if (kind === "link" && typeof a.href === "string" && a.href && el.getAttribute("href") !== a.href) return -1;
+  var score = fromLocator ? 1 : 0;
+  var p = norm(a.prefix), sx = norm(a.suffix);
+  if (p || sx) {
+    var ctx = contextOf(el, bodyIndex);
+    if (p && norm(ctx.before).slice(-p.length) === p) score += 2;
+    if (sx && norm(ctx.after).slice(0, sx.length) === sx) score += 2;
+  }
+  return score;
+}
+/** Re-find an anchor in the current document. Every candidate (the saved
+ *  locator's element, elements carrying the saved node id / href, and each
+ *  place the quote occurs) must pass the identity checks first; the locator
+ *  only adds support. The single best-supported candidate wins; a tie, or no
+ *  candidate, is "not found" rather than a guess. Returns {el, range} or null. */
 function findAnchor(a) {
   if (!a || typeof a !== "object") return null;
   var kind = String(a.kind || "");
@@ -335,43 +391,65 @@ function findAnchor(a) {
   var prefix = typeof a.prefix === "string" ? a.prefix : "";
   var suffix = typeof a.suffix === "string" ? a.suffix : "";
   var body = document.body || document.documentElement;
-  var el = typeof a.locator === "string" && a.locator ? safeQuery(a.locator) : null;
+  var bodyIndex = textIndex(body);
+  var locEl = typeof a.locator === "string" && a.locator ? safeQuery(a.locator) : null;
+  var i, j;
   if (kind === "text") {
-    var scopes = el ? [el, body] : [body];
-    for (var i = 0; i < scopes.length; i++) {
-      var idx = textIndex(scopes[i]);
-      var at = findQuote(idx.text, quote, prefix, suffix);
-      if (at >= 0) {
-        var r = rangeFor(idx, at, at + norm(quote).length);
-        if (r) return { el: elementOf(r.commonAncestorContainer) || scopes[i], range: r };
+    var hits = quoteHits(bodyIndex.text, quote, prefix, suffix);
+    var qlen = norm(quote).length, scored = [];
+    for (i = 0; i < hits.length; i++) {
+      var r = rangeFor(bodyIndex, hits[i].at, hits[i].at + qlen);
+      if (!r) continue;
+      var host = elementOf(r.commonAncestorContainer);
+      var inLoc = !!(locEl && host && (locEl === host || locEl.contains(host)));
+      scored.push({ el: host || body, range: r, score: hits[i].score + (inLoc ? 1 : 0) });
+    }
+    return pickBest(scored);
+  }
+  var cands = [];
+  function add(el, fromLocator) {
+    if (!isEl(el)) return;
+    for (var k = 0; k < cands.length; k++) {
+      var c = cands[k];
+      if (c.el === el || ((c.el.contains(el) || el.contains(c.el)) && elementText(c.el) === elementText(el))) {
+        if (fromLocator) { c.el = el; c.fromLocator = true; }
+        return;
       }
     }
-    return null;
+    cands.push({ el: el, fromLocator: !!fromLocator });
   }
-  if (el && textMatches(el, quote)) return { el: el, range: null };
-  var j;
+  if (locEl) add(locEl, true);
   if (kind === "diagram-node" && typeof a.nodeId === "string" && a.nodeId) {
     var nodes = document.querySelectorAll(NODE_SEL);
-    for (j = 0; j < nodes.length; j++) if (mermaidNodeId(nodes[j]) === a.nodeId) return { el: nodes[j], range: null };
+    for (j = 0; j < nodes.length; j++) if (mermaidNodeId(nodes[j]) === a.nodeId) add(nodes[j], false);
   }
   if (kind === "link" && typeof a.href === "string" && a.href) {
     var links = document.querySelectorAll(LINK_SEL);
-    for (j = 0; j < links.length; j++) {
-      if (links[j].getAttribute("href") === a.href && textMatches(links[j], quote)) return { el: links[j], range: null };
-    }
+    for (j = 0; j < links.length; j++) if (links[j].getAttribute("href") === a.href) add(links[j], false);
   }
   if (norm(quote)) {
-    var bi = textIndex(body);
-    var pos = findQuote(bi.text, quote, prefix, suffix);
-    if (pos >= 0) {
-      var rr = rangeFor(bi, pos, pos + norm(quote).length);
-      var host = rr ? elementOf(rr.commonAncestorContainer) : null;
-      var want = kind === "cell" ? "td, th" : kind === "link" ? LINK_SEL : kind === "diagram-node" ? NODE_SEL : null;
-      if (host && want && host.closest) host = host.closest(want) || host;
-      if (host) return { el: host, range: null };
+    var qh = quoteHits(bodyIndex.text, quote, "", "");
+    var ql = norm(quote).length;
+    for (i = 0; i < qh.length; i++) {
+      var rr = rangeFor(bodyIndex, qh[i].at, qh[i].at + ql);
+      var h = rr ? closestOf(elementOf(rr.commonAncestorContainer), kind) : null;
+      if (h) add(h, false);
     }
   }
-  return null;
+  var out = [];
+  for (i = 0; i < cands.length; i++) {
+    var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator);
+    if (sc >= 0) out.push({ el: cands[i].el, range: null, score: sc });
+  }
+  return pickBest(out);
+}
+function pickBest(list) {
+  var best = null, tied = false;
+  for (var i = 0; i < list.length; i++) {
+    if (!best || list[i].score > best.score) { best = list[i]; tied = false; }
+    else if (list[i].score === best.score) tied = true;
+  }
+  return best && !tied ? { el: best.el, range: best.range } : null;
 }
 
 return {
@@ -398,7 +476,7 @@ return {
 export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
 var annotate = true, suppressClick = false, hoverBox = null, layer = null;
-var current = [], hits = [];
+var current = [], lastFound = null, pending = 0;
 function own(el) { return !!(el && el.closest && el.closest("[data-dp-annotator]")); }
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
 function important(el, styles) {
@@ -444,17 +522,23 @@ function onMove(e) {
   important(hoverBox, { display: "block" });
   place(hoverBox, t.getBoundingClientRect());
 }
+function samePins(a, b) {
+  if (!a || a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+/** Re-resolve every anchor against the CURRENT document and redraw. Nothing
+ *  about a target (element or rectangle) is cached between draws, so a pin
+ *  follows its content after the page changes. */
 function drawPins() {
   var l = ensureLayer();
   var olds = l.querySelectorAll("dp-annotator-pin");
   for (var i = 0; i < olds.length; i++) olds[i].remove();
   var found = [];
-  hits = [];
   for (var j = 0; j < current.length; j++) {
     var hit = null;
     try { hit = core.findAnchor(current[j]); } catch (e) { hit = null; }
     found.push(!!hit);
-    hits.push(hit);
     if (!hit) continue;
     var r = rectOf(hit);
     if (!r) continue;
@@ -473,16 +557,64 @@ function drawPins() {
   }
   return found;
 }
+/** Redraw and tell the parent when which anchors are found has changed. */
+function reconcile(force) {
+  pending = 0;
+  var found = drawPins();
+  if (force || !samePins(lastFound, found)) {
+    lastFound = found;
+    post({ dp: "pins-status", found: found });
+  }
+}
+function schedule() {
+  if (!current.length || pending) return;
+  pending = setTimeout(function () { reconcile(false); }, 120);
+}
 function focusPin(index) {
-  if (typeof index !== "number" || index < 0 || index >= hits.length) return;
+  if (typeof index !== "number" || index < 0 || index >= current.length) return;
   var i = Math.floor(index);
-  var hit = hits[i];
+  // Re-resolve now: the page may have changed since the pins were drawn.
+  var hit = null;
+  try { hit = core.findAnchor(current[i]); } catch (e) { hit = null; }
   if (hit && hit.el && hit.el.scrollIntoView) hit.el.scrollIntoView({ block: "center", behavior: "smooth" });
+  reconcile(false);
   var pin = layer ? layer.querySelector("dp-annotator-pin[data-dp-pin=\"" + i + "\"]") : null;
   if (pin) {
     important(pin, { outline: "3px solid #ef4444" });
     setTimeout(function () { important(pin, { outline: "2px solid #f59e0b" }); }, 1600);
   }
+}
+/** A mutation that only touches our own layer/pins/hover box is ignored, so
+ *  drawing pins never re-triggers a redraw. */
+function ownOnly(list) {
+  for (var i = 0; i < list.length; i++) if (!own(list[i]) && list[i] !== layer) return false;
+  return true;
+}
+function relevant(records) {
+  for (var i = 0; i < records.length; i++) {
+    var m = records[i], t = m.target;
+    var tEl = t && t.nodeType === 1 ? t : t && t.parentElement;
+    if (tEl && (own(tEl) || tEl === layer)) continue;
+    if (m.type === "childList" && ownOnly(m.addedNodes) && ownOnly(m.removedNodes)) continue;
+    return true;
+  }
+  return false;
+}
+var mo = null, ro = null;
+function observe() {
+  try {
+    if (typeof window.MutationObserver === "function") {
+      mo = new window.MutationObserver(function (records) { if (relevant(records)) schedule(); });
+      mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+  } catch (e) { mo = null; }
+  try {
+    if (typeof window.ResizeObserver === "function") {
+      ro = new window.ResizeObserver(function () { schedule(); });
+      ro.observe(document.documentElement);
+      if (document.body) ro.observe(document.body);
+    }
+  } catch (e2) { ro = null; }
 }
 function onMessage(e) {
   if (e.source !== parent) return;
@@ -490,7 +622,7 @@ function onMessage(e) {
   if (!d || typeof d !== "object") return;
   if (d.dp === "pins") {
     current = Array.isArray(d.anchors) ? d.anchors.slice(0, 500) : [];
-    post({ dp: "pins-status", found: drawPins() });
+    reconcile(true);
   } else if (d.dp === "focus") {
     focusPin(d.index);
   } else if (d.dp === "mode") {
@@ -536,8 +668,11 @@ function onAuxClick(e) {
   var t = targetEl(e);
   if (t && t.closest && t.closest("a[href], area[href]")) e.preventDefault();
 }
-function onResize() { if (current.length) drawPins(); }
-function onReady() { post({ dp: "ready" }); }
+function onResize() { schedule(); }
+function onReady() {
+  if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
+  post({ dp: "ready" });
+}
 window.addEventListener("click", onClick, true);
 window.addEventListener("auxclick", onAuxClick, true);
 window.addEventListener("mousedown", onMouseDown, true);
@@ -545,6 +680,7 @@ window.addEventListener("mouseup", onMouseUp, true);
 window.addEventListener("mousemove", onMove, true);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
+observe();
 if (document.readyState === "complete") onReady(); else window.addEventListener("load", onReady);
 return function uninstall() {
   window.removeEventListener("click", onClick, true);
@@ -555,6 +691,9 @@ return function uninstall() {
   window.removeEventListener("message", onMessage);
   window.removeEventListener("resize", onResize);
   window.removeEventListener("load", onReady);
+  if (mo) mo.disconnect();
+  if (ro) ro.disconnect();
+  if (pending) clearTimeout(pending);
   if (layer && layer.parentNode) layer.parentNode.removeChild(layer);
 };
 `;

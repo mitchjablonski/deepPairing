@@ -67,9 +67,42 @@ function scrubAttributes(el: Element): void {
   }
 }
 
+/** The page's own `<html>`/`<body>` presentation attributes that survive onto
+ *  OUR wrapper elements, so class-scoped stylesheets and right-to-left
+ *  direction render the same before Run as after. Names are a fixed allowlist;
+ *  values are escaped by the wrapper. */
+const SAFE_ROOT_ATTRS = ["class", "dir", "lang", "style"] as const;
+
+/** A `style` value with no way to load or run anything. */
+export function isSafeInlineStyle(value: string): boolean {
+  return !/url\s*\(|expression\s*\(|@import|javascript:|behavior\s*:|-moz-binding|\\/i.test(value);
+}
+
+function safeRootAttrs(el: Element | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!el) return out;
+  for (const name of SAFE_ROOT_ATTRS) {
+    const v = el.getAttribute(name);
+    if (v == null || v === "") continue;
+    if (name === "dir" && !/^(ltr|rtl|auto)$/i.test(v.trim())) continue;
+    if (name === "style" && !isSafeInlineStyle(v)) continue;
+    out[name] = v;
+  }
+  return out;
+}
+
+export interface SanitizedPage {
+  /** The cleaned head + body markup. */
+  html: string;
+  /** Safe attributes from the page's `<html>` element. */
+  htmlAttrs: Record<string, string>;
+  /** Safe attributes from the page's `<body>` element. */
+  bodyAttrs: Record<string, string>;
+}
+
 /** Parse, strip, serialise. Never executes the input. */
-export function sanitizePageHtml(html: string): string {
-  if (typeof DOMParser === "undefined") return "";
+export function sanitizePageHtml(html: string): SanitizedPage {
+  if (typeof DOMParser === "undefined") return { html: "", htmlAttrs: {}, bodyAttrs: {} };
   const doc = new DOMParser().parseFromString(html, "text/html");
   // Every element, any namespace (getElementsByTagNameNS("*", "*")), head
   // included. A second pass over script elements by namespace-wildcard lookup
@@ -88,5 +121,9 @@ export function sanitizePageHtml(html: string): string {
     if (target.toLowerCase().includes("href")) el.remove();
   }
   for (const el of Array.from(doc.querySelectorAll("*"))) scrubAttributes(el);
-  return doc.head.innerHTML + doc.body.innerHTML;
+  return {
+    html: doc.head.innerHTML + doc.body.innerHTML,
+    htmlAttrs: safeRootAttrs(doc.documentElement),
+    bodyAttrs: safeRootAttrs(doc.body),
+  };
 }

@@ -75,3 +75,28 @@ describe("#680 slice 2 — the store drops an invalid anchor from any writer", (
     expect(c.content).toBe("spoofed");
   });
 });
+
+describe("#680 slice 2 — page-only invariant", () => {
+  it("strips an htmlAnchor posted on a non-page artifact, keeping the comment", async () => {
+    store.createArtifact({ id: "plan_1", type: "plan", title: "Wire it up", content: { steps: [] } });
+    const res = await post({ artifactId: "plan_1", content: "on a plan", target: { artifactId: "plan_1", htmlAnchor: cellAnchor } });
+    expect(res.status).toBe(200);
+    const [c] = await store.getCommentsForArtifact("plan_1");
+    expect(c!.content).toBe("on a plan");
+    expect(c!.target.htmlAnchor).toBeUndefined();
+  });
+
+  it("strips it from a session-level comment and from an unknown artifact", () => {
+    const s1 = store.addComment({ id: "cmt_sess", artifactId: "__session__", content: "hi", author: "human", target: { artifactId: "__session__", htmlAnchor: cellAnchor } });
+    expect(s1.target.htmlAnchor).toBeUndefined();
+    const s2 = store.addComment({ id: "cmt_unknown", artifactId: "art_nope", content: "hi", author: "agent", target: { artifactId: "art_nope", htmlAnchor: cellAnchor } });
+    expect(s2.target.htmlAnchor).toBeUndefined();
+  });
+
+  it("keeps it on a superseded page version (comments carried by the chain)", () => {
+    store.createArtifact({ id: "page_2", type: "page", title: "Cache options", content: { title: "Cache options", html: "<p>v2</p>" }, parentId: "page_1" });
+    const c = store.addComment({ id: "cmt_v2", artifactId: "page_2", content: "v2 note", author: "human", target: { artifactId: "page_2", htmlAnchor: cellAnchor } });
+    expect(c.target.htmlAnchor).toEqual(cellAnchor);
+  });
+});
+

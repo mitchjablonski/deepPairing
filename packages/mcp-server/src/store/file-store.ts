@@ -95,6 +95,13 @@ export const LEDGER_EXEMPT_REJECT_TYPES: ReadonlySet<ArtifactType> = new Set<Art
   "debrief",
 ]);
 
+/** #680 slice 2 — drop `htmlAnchor` unless the comment is on a `page`. */
+function pageOnlyHtmlAnchor<T extends Record<string, unknown> | undefined>(target: T, artifactType: string | undefined): T {
+  if (!target || !("htmlAnchor" in target) || artifactType === "page") return target;
+  const { htmlAnchor: _dropped, ...rest } = target as Record<string, unknown>;
+  return rest as unknown as T;
+}
+
 /**
  * File-based store for deepPairing artifacts, comments, and decisions.
  * Stores data in .deeppairing/ directory within the project root.
@@ -1287,7 +1294,9 @@ export class FileStore implements IStore {
       // #680 slice 2 — same choke point for a page anchor: a valid htmlAnchor
       // is kept in its parsed (capped, unknown-keys-dropped) form, an invalid
       // one is dropped, never persisted.
-      target: { artifactId: params.artifactId, ...sanitizeHtmlAnchor(sanitizeSkeletonAnchor(params.target)) },
+      // Page-only: an htmlAnchor names a spot inside a `page` artifact's HTML,
+      // so it is stripped from a comment on any other artifact (or the session).
+      target: { artifactId: params.artifactId, ...pageOnlyHtmlAnchor(sanitizeHtmlAnchor(sanitizeSkeletonAnchor(params.target)), targetArtifact?.type) },
       parentCommentId: params.parentCommentId ?? null,
       author: params.author,
       content: params.content,

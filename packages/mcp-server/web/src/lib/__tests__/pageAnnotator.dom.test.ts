@@ -173,12 +173,61 @@ describe("annotator core — re-finding anchors", () => {
     expect(core.findAnchor({ kind: "element", locator: "#gone", quote: "nowhere either" })).toBeNull();
   });
 
-  it("findQuote scores prefix and suffix", () => {
+  it("findQuote scores prefix and suffix, and reports a tie as not found", () => {
     const core = makeCore();
     const text = "a beta x a beta y";
     expect(core.findQuote(text, "beta", "a", "y")).toBe(text.lastIndexOf("beta"));
-    expect(core.findQuote(text, "beta")).toBe(text.indexOf("beta"));
+    expect(core.findQuote(text, "beta", "a")).toBe(-1); // both occurrences equally supported
+    expect(core.findQuote(text, "beta")).toBe(-1);
+    expect(core.findQuote("only one beta here", "beta")).toBe("only one ".length);
     expect(core.findQuote(text, "zeta")).toBe(-1);
+  });
+
+  it("REGRESSION: after a row reorder the old locator resolves to a duplicate cell — the saved row header wins", () => {
+    // v1: the anchored cell was "None" in the "Write-through purge" row (row 2).
+    const v1Anchor = {
+      kind: "cell",
+      locator: "body > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(2) > td:nth-of-type(2)",
+      quote: "None",
+      table: { row: "Write-through purge", col: "Staleness" },
+    };
+    // v2: a new row was inserted above, and it ALSO says "None". The old locator
+    // now points at the wrong row's identical-looking cell.
+    document.body.innerHTML =
+      "<table><thead><tr><th>Strategy</th><th>Staleness</th></tr></thead><tbody>" +
+      "<tr><td>TTL expiry</td><td>Up to 60s</td></tr>" +
+      "<tr><td>Event bus purge</td><td>None</td></tr>" +
+      "<tr><td>Write-through purge</td><td>None</td></tr></tbody></table>";
+    const core = makeCore();
+    const wrong = document.querySelector(v1Anchor.locator)!;
+    expect(wrong.previousElementSibling!.textContent).toBe("Event bus purge");
+    const hit = core.findAnchor(v1Anchor);
+    expect(hit).not.toBeNull();
+    expect(hit!.el.previousElementSibling!.textContent).toBe("Write-through purge");
+  });
+
+  it("reports not found when two candidates are equally supported", () => {
+    document.body.innerHTML = "<table><tr><th>A</th></tr><tr><td>same</td></tr><tr><td>same</td></tr></table>";
+    const core = makeCore();
+    // No usable locator, no row header that tells them apart: a guess would be wrong half the time.
+    expect(core.findAnchor({ kind: "cell", locator: "#gone", quote: "same", table: { col: "A" } })).toBeNull();
+  });
+
+  it("rejects a locator hit whose node id or href disagrees with the saved one", () => {
+    document.body.innerHTML =
+      "<svg><g class=\"node\" id=\"flowchart-Cache-1\"><text>Gate</text></g><g class=\"node\" id=\"flowchart-Auth-2\"><text>Gate</text></g></svg>" +
+      "<a id=\"l1\" href=\"https://a.example\">docs</a><a id=\"l2\" href=\"https://b.example\">docs</a>";
+    const core = makeCore();
+    expect(core.findAnchor({ kind: "diagram-node", locator: "#flowchart-Cache-1", quote: "Gate", nodeId: "Auth" })?.el.id).toBe("flowchart-Auth-2");
+    expect(core.findAnchor({ kind: "link", locator: "#l1", quote: "docs", href: "https://b.example" })?.el.id).toBe("l2");
+  });
+
+  it("a text anchor uses prefix/suffix before the locator", () => {
+    document.body.innerHTML = "<p id=\"a\">one beta two</p><p id=\"b\">three beta four</p>";
+    const core = makeCore();
+    // The saved locator points at #a, but the saved context says #b.
+    const hit = core.findAnchor({ kind: "text", locator: "#a", quote: "beta", prefix: "three", suffix: "four" });
+    expect(hit?.el.id).toBe("b");
   });
 });
 
@@ -254,6 +303,56 @@ describe("annotator main — event wiring", () => {
     expect(pins[0]!.textContent).toBe("1");
     // Nothing the parent sent was parsed as HTML.
     expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("re-resolves after the page changes: a removed target reports not found, without a new pins message", async () => {
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }] }, source: window }),
+    );
+    expect(posted.filter((m) => m?.dp === "pins-status").map((m) => m.found)).toEqual([[true]]);
+    document.getElementById("title")!.remove();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(posted.filter((m) => m?.dp === "pins-status").map((m) => m.found)).toEqual([[true], [false]]);
+    expect(document.querySelectorAll("dp-annotator-pin")).toHaveLength(0);
+  });
+
+  it("reports found states again after a resize", async () => {
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { dp: "pins", anchors: [{ kind: "element", locator: "#gone", quote: "Brand new heading" }] }, source: window }),
+    );
+    expect(posted.filter((m) => m?.dp === "pins-status").map((m) => m.found)).toEqual([[false]]);
+    const h = document.createElement("h2");
+    h.textContent = "Brand new heading";
+    document.body.prepend(h);
+    window.dispatchEvent(new Event("resize"));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(posted.filter((m) => m?.dp === "pins-status").map((m) => m.found).pop()).toEqual([true]);
+  });
+
+  it("focus re-resolves the target instead of using a cached node", () => {
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }] }, source: window }),
+    );
+    // The page re-renders the heading: same content, new node.
+    const old = document.getElementById("title")!;
+    const fresh = document.createElement("h1");
+    fresh.id = "title";
+    fresh.textContent = "Cache invalidation";
+    old.replaceWith(fresh);
+    const spy = vi.fn();
+    (fresh as any).scrollIntoView = spy;
+    (old as any).scrollIntoView = vi.fn();
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "focus", index: 0 }, source: window }));
+    expect(spy).toHaveBeenCalled();
+    expect((old as any).scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("drawing pins does not trigger its own redraw loop", async () => {
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }] }, source: window }),
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    expect(posted.filter((m) => m?.dp === "pins-status")).toHaveLength(1);
   });
 
   it("ignores messages that do not come from the parent", () => {
