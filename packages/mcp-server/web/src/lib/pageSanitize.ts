@@ -22,7 +22,10 @@
  * always an opaque-origin sandbox (never `allow-same-origin`) with no network.
  */
 
-const DROP_SELECTOR = [
+/** Matched by `localName`, lowercased, over every element in every namespace
+ *  (HTML, SVG, MathML), so an SVG `<script>` or an odd-case tag can't slip past
+ *  a namespace- or case-sensitive selector. */
+const DROP_TAGS = new Set([
   "script",
   "noscript",
   "template",
@@ -34,7 +37,7 @@ const DROP_SELECTOR = [
   "applet",
   "portal",
   "base",
-].join(",");
+]);
 
 /** True for a URL that would run script or load an HTML document. Control
  *  characters and whitespace are ignored the way browsers ignore them. */
@@ -68,7 +71,13 @@ function scrubAttributes(el: Element): void {
 export function sanitizePageHtml(html: string): string {
   if (typeof DOMParser === "undefined") return "";
   const doc = new DOMParser().parseFromString(html, "text/html");
-  for (const el of Array.from(doc.querySelectorAll(DROP_SELECTOR))) el.remove();
+  // Every element, any namespace (getElementsByTagNameNS("*", "*")), head
+  // included. A second pass over script elements by namespace-wildcard lookup
+  // is the belt-and-braces check for the one tag that matters most.
+  for (const el of Array.from(doc.getElementsByTagNameNS("*", "*"))) {
+    if (DROP_TAGS.has(el.localName.toLowerCase())) el.remove();
+  }
+  for (const el of Array.from(doc.getElementsByTagNameNS("*", "script"))) el.remove();
   for (const el of Array.from(doc.querySelectorAll("meta"))) {
     if ((el.getAttribute("http-equiv") ?? "").trim().toLowerCase() === "refresh") el.remove();
   }

@@ -21,11 +21,19 @@ describe("sanitizePageHtml", () => {
   it("strips every <script>, including SVG scripts and scripts in head", () => {
     const out = sanitizePageHtml(
       "<head><script>alert(1)</script></head><p>x</p><script src=\"data:text/javascript,alert(2)\"></script>" +
-        "<svg><script>alert(3)</script><circle r=\"2\"/></svg>",
+        "<svg><script>alert(3)</script></svg><svg><SCRIPT>alert(4)</SCRIPT></svg>",
     );
     expect(out).not.toMatch(/<script/i);
     expect(out).not.toContain("alert(");
-    expect(parse(out).querySelector("circle")).not.toBeNull();
+    const doc = parse(out);
+    expect(doc.getElementsByTagNameNS("*", "script")).toHaveLength(0);
+    expect(doc.querySelector("p")?.textContent).toBe("x");
+  });
+
+  it("keeps ordinary SVG markup", () => {
+    const out = sanitizePageHtml("<svg viewBox=\"0 0 10 10\"><g class=\"node\"><circle r=\"2\"></circle><text>A</text></g></svg>");
+    expect(out).toContain("<circle");
+    expect(out).toContain("A");
   });
 
   it("strips every on* attribute", () => {
