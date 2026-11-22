@@ -1,0 +1,51 @@
+name: Generate Stop recovery hooks
+
+on:
+  push:
+    branches: [codex/695-remote-hook-generator]
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Verify source and dependency pins
+        env:
+          SOURCE_SHA: a11c59d270ed5b634f880f329785de01adcbd3f3
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$SOURCE_SHA"
+          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/695-generate-hooks.yml"
+          test "$(node -p 'process.versions.node.split(".")[0]')" = 22
+          test "$(pnpm --version)" = 10.33.0
+          printf '%s\n' "$SOURCE_SHA" > "$RUNNER_TEMP/source-sha.txt"
+      - run: pnpm install --frozen-lockfile
+      - name: Regenerate the embedded hooks
+        run: |
+          set -euo pipefail
+          pnpm --filter @deeppairing/mcp-server gen:hooks
+          test "$(git diff --name-only)" = "packages/mcp-server/src/cli/hook-scripts.generated.ts"
+          cp packages/mcp-server/src/cli/hook-scripts.generated.ts "$RUNNER_TEMP/hook-scripts.generated.ts"
+          cd "$RUNNER_TEMP"
+          sha256sum hook-scripts.generated.ts > hooks.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regenerated-stop-recovery-hooks
+          path: |
+            ${{ runner.temp }}/source-sha.txt
+            ${{ runner.temp }}/hook-scripts.generated.ts
+            ${{ runner.temp }}/hooks.sha256
+          if-no-files-found: error
+          retention-days: 3
