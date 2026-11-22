@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import { PAGE_HTML_MAX_BYTES, type PageContent } from "@deeppairing/shared";
+import { PAGE_HTML_MAX_BYTES, type Artifact, type PageContent } from "@deeppairing/shared";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentPageInput, pageTooLargeError, type ToolErrorResponse } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { resolveProjectRoot } from "../../project-root.js";
 import { TOOL_ERROR_CODES, TOOL_ERROR_RETRYABLE } from "../../error-codes.js";
+import type { CreateArtifactParams } from "../../store/store-interface.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -34,7 +35,21 @@ export interface PresentPageOptions {
   /** The project root a `path` must stay inside. Defaults to the resolved
    *  project root (CLAUDE_PROJECT_DIR → DEEPPAIRING_PROJECT_ROOT → cwd). */
   projectRoot?: string;
+  /** #679 — the daemon's standalone (CLI) path owns the id and the write, so a
+   *  request-ID retry can replay the same artifact instead of creating a twin. */
+  standalone?: StandalonePageWrite;
 }
+
+/** The daemon's standalone persistence path for a page. */
+export interface StandalonePageWrite {
+  artifactId: string;
+  persist(artifact: CreateArtifactParams): { artifact: Artifact } | { replay: ToolResult };
+}
+
+/** The MCP server passes its full ToolContext; the daemon's standalone path has no MCP server. */
+export type PresentPageContext = Pick<ToolContext, "store" | "port" | "broadcast" | "helpers"> & {
+  server?: ToolContext["server"];
+};
 
 type PageSource =
   | { ok: true; html: string; sourcePath: string }
@@ -55,7 +70,20 @@ function refuse(message: string): { ok: false; error: ToolErrorResponse } {
 /** Inside `root` (or equal to it — callers reject the root itself separately)? */
 function isWithin(root: string, target: string): boolean {
   const rel = path.relative(root, target);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  // Segment check, not a string prefix: `..foo.html` is a name inside the root.
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function nativeRealpath(p: string): string {
+  try { return fs.realpathSync.native(p); } catch {
+    try { return fs.realpathSync(p); } catch { return p; }
+  }
+}
+
+/** Inside the root's `.deeppairing/` (the daemon's own state, incl. its bearer token)? */
+function isInDaemonDir(root: string, target: string): boolean {
+  const first = path.relative(root, target).split(path.sep)[0] ?? "";
+  return first.toLowerCase() === ".deeppairing";
 }
 
 /**
@@ -78,6 +106,9 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
   if (!isWithin(projectRoot, lexical) && !isWithin(rootReal, lexical)) {
     return refuse(`\`path\` "${requested}" is outside the project root. Write the page inside the project, or pass it inline as \`html\`.`);
   }
+  if (isInDaemonDir(projectRoot, lexical) || isInDaemonDir(rootReal, lexical)) {
+    return refuse(`\`path\` "${requested}" is inside .deeppairing/, deepPairing's own state directory. Write the page elsewhere in the project.`);
+  }
   let real: string;
   try {
     real = fs.realpathSync(lexical);
@@ -87,6 +118,11 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
   // Symlink check: the RESOLVED target must also be inside the real root.
   if (!isWithin(rootReal, real)) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
+  }
+  // Canonical names for this check (Windows 8.3 short names, trailing dots or
+  // spaces), so `.deeppairing` can't hide behind an alias of itself.
+  if (isInDaemonDir(nativeRealpath(rootReal), nativeRealpath(real))) {
+    return refuse(`\`path\` "${requested}" resolves (through a symlink) into .deeppairing/, deepPairing's own state directory.`);
   }
   // Open once and work from the descriptor. O_NOFOLLOW refuses a symlink
   // swapped in for the FINAL component since the realpath above, and
@@ -142,7 +178,7 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
 
 /** The reusable present-page handler (MCP today, CLI #679 next). */
 export async function presentPage(
-  ctx: ToolContext,
+  ctx: PresentPageContext,
   args: Record<string, unknown> | null | undefined,
   opts: PresentPageOptions = {},
 ): Promise<ToolResult> {
@@ -183,19 +219,26 @@ export async function presentPage(
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
-  const id = `art_${nanoid(10)}`;
+  const id = opts.standalone?.artifactId ?? `art_${nanoid(10)}`;
   let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
   try {
     // #162 parity — the secret scan runs inside createArtifact; a page can
     // inline config samples like any other prose surface.
-    artifact = await ctx.store.createArtifact({
+    const createInput: CreateArtifactParams = {
       id,
       type: "page",
       title: input.title,
       content,
       feature: typeof args?.feature === "string" ? args.feature : undefined,
       presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : undefined,
-    });
+    };
+    if (opts.standalone) {
+      const write = opts.standalone.persist(createInput);
+      if ("replay" in write) return write.replay;
+      artifact = write.artifact;
+    } else {
+      artifact = await ctx.store.createArtifact(createInput);
+    }
   } catch (e) {
     dedup.abort?.();
     throw e;
@@ -213,7 +256,7 @@ export async function presentPage(
     });
   }
   notifyResourcesListChanged(ctx.server);
-  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  if (ctx.server) await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
   const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
 

@@ -1,18 +1,31 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import path from "node:path";
 import { parseArgs } from "node:util";
-import { errorMessage } from "@deeppairing/shared";
+import { errorMessage, isClosedArtifactStatus, PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
 import { z } from "zod";
 import { DaemonClient } from "../daemon/client.js";
 import { ensureDaemon } from "../daemon/lifecycle.js";
 import { ERROR_CODES } from "../error-codes.js";
 import { createStandaloneSessionId, isStandaloneSessionForProject, isStandaloneSessionId } from "../standalone-session-id.js";
+import type { ToolResult } from "../mcp/tools/types.js";
+import { readBoundedPageFile } from "./page-file.js";
 import { readSessionDirectories } from "./session-selection.js";
 
 const SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const PRESENT_OPTIONS_USAGE = "Usage: deeppairing present options --session-id ID --request-id UUID --file options.json";
+const PRESENT_PAGE_USAGE = "Usage: deeppairing present page --session-id ID --request-id UUID (--file page.html | --path page-inside-project.html) --title T [--summary S] [--concept C]";
+const PRESENT_USAGE = `${PRESENT_OPTIONS_USAGE}\n       ${PRESENT_PAGE_USAGE.replace(/^Usage: /, "")}`;
 const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --decision-id ID";
 const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
+
+export type PresentPageReceipt = { sessionId: string; requestId: string } & (
+  | {
+    artifactId: string; companionUrl: string; sourcePath?: string; replayed?: true;
+    status?: string; currentArtifactId?: string; currentVersion?: number; currentStatus?: string; note?: string; isError?: never;
+  }
+  | { isError: true; code: string; reason?: string; message: string }
+);
 
 type PresentOptionsReceipt = { sessionId: string; requestId: string } & (
   | { artifactId: string; decisionId: string; companionUrl: string; replayed?: true; isError?: never }
@@ -71,8 +84,9 @@ export async function standaloneReadDecision(projectRoot: string, args: string[]
   return client.readStandaloneDecision(projectRoot, decisionId, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
 }
 
-export async function standalonePresent(projectRoot: string, args: string[]): Promise<PresentOptionsReceipt> {
-  if (args[0] !== "options") throw new Error(PRESENT_OPTIONS_USAGE);
+export async function standalonePresent(projectRoot: string, args: string[]): Promise<PresentOptionsReceipt | PresentPageReceipt> {
+  if (args[0] === "page") return standalonePresentPage(projectRoot, args.slice(1));
+  if (args[0] !== "options") throw new Error(PRESENT_USAGE);
   const { values } = parseArgs({
     args: args.slice(1),
     options: { "session-id": { type: "string" }, "request-id": { type: "string" }, file: { type: "string" } },
@@ -116,4 +130,118 @@ export async function standalonePresent(projectRoot: string, args: string[]): Pr
   const { artifactId, decisionId, replayed } = result.structuredContent ?? {};
   if (typeof artifactId !== "string" || typeof decisionId !== "string") throw new Error("The daemon did not confirm the options presentation. If retrying, use the same --request-id and options input.");
   return { ...receipt, artifactId, decisionId, companionUrl, ...(replayed === true ? { replayed: true as const } : {}) };
+}
+
+/**
+ * Resolve `--path` against the CLI's cwd and express it relative to the
+ * project root (the daemon accepts only project-relative paths and re-checks
+ * containment itself). Refuses a path that lands outside the root.
+ */
+function projectRelativePath(projectRoot: string, requested: string): string {
+  if (!requested) throw new Error(PRESENT_PAGE_USAGE);
+  const target = path.resolve(process.cwd(), requested);
+  const inside = (root: string) => {
+    const rel = path.relative(root, target);
+    return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel) ? rel : undefined;
+  };
+  let rel = inside(projectRoot);
+  if (rel === undefined) {
+    try { rel = inside(realpathSync(projectRoot)); } catch { /* keep the lexical answer */ }
+  }
+  if (rel === undefined) {
+    throw new Error(`--path ${requested} is outside the project root (${projectRoot}). Use --file to present a page from elsewhere.`);
+  }
+  return rel.split(path.sep).join("/");
+}
+
+/**
+ * #679/#680 — present an HTML page without MCP. `--file` sends the page inline
+ * (any readable file; not watched). `--path` names a file inside the project:
+ * the daemon reads it through presentPage's own contained reader, and the page
+ * is file-backed, so later saves record new versions while it is under review.
+ */
+async function standalonePresentPage(projectRoot: string, args: string[]): Promise<PresentPageReceipt> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      "session-id": { type: "string" }, "request-id": { type: "string" },
+      file: { type: "string" }, path: { type: "string" },
+      title: { type: "string" }, summary: { type: "string" }, concept: { type: "string" },
+    },
+  });
+  const { "session-id": sessionId, "request-id": rawRequestId, file, path: pagePath, title, summary, concept } = values;
+  if (!sessionId || !rawRequestId || !title?.trim() || (file === undefined) === (pagePath === undefined)) {
+    throw new Error(PRESENT_PAGE_USAGE);
+  }
+  requireStandaloneSession(projectRoot, sessionId);
+  const requestId = requestIdSchema.safeParse(rawRequestId);
+  if (!requestId.success) throw new Error(`--request-id must be a UUID. ${PRESENT_OPTIONS_RETRY}`);
+
+  const receipt = { sessionId, requestId: requestId.data };
+  const meta = { title, ...(summary !== undefined ? { summary } : {}), ...(concept !== undefined ? { concept } : {}) };
+  let page: { htmlBase64: string } | { path: string };
+  if (file !== undefined) {
+    const read = readBoundedPageFile(file, PAGE_HTML_MAX_BYTES);
+    if (!read.ok) {
+      return {
+        ...receipt, isError: true, code: ERROR_CODES.body_too_large,
+        message: `The page file is at least ${read.size} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
+      };
+    }
+    if (!read.bytes.toString("utf8").trim()) throw new Error("The page file is empty.");
+    page = { htmlBase64: read.bytes.toString("base64") };
+  } else {
+    page = { path: projectRelativePath(projectRoot, pagePath ?? "") };
+  }
+
+  const { client, companionUrl } = await connectStandaloneSession(projectRoot, sessionId);
+  let result;
+  try {
+    result = await client.presentStandalonePage(projectRoot, requestId.data, { ...meta, ...page }, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
+  } catch (err) {
+    if (err instanceof Error && "status" in err && err.status === 413) {
+      return { ...receipt, isError: true, code: ERROR_CODES.body_too_large, message: errorMessage(err).replace(/^\[deepPairing\] /, "") };
+    }
+    throw new Error(`${errorMessage(err)} If retrying, use the same --request-id and page input.`);
+  }
+  return pageReceiptFromResult(receipt, companionUrl, result);
+}
+
+/**
+ * Map the daemon's present-page tool result to the CLI's JSON receipt
+ * (exported for tests: the CLI layer has no process-level unit harness).
+ */
+export function pageReceiptFromResult(
+  receipt: { sessionId: string; requestId: string },
+  companionUrl: string,
+  result: ToolResult,
+): PresentPageReceipt {
+  if (result.isError) {
+    const { code: structuredCode, reason } = result.structuredContent ?? {};
+    const metaCode = result._meta?.code;
+    const code = typeof structuredCode === "string" ? structuredCode : typeof metaCode === "string" ? metaCode : "present_page_refused";
+    const message = result.content[0]?.text ?? "The daemon refused the page.";
+    return {
+      ...receipt,
+      isError: true,
+      code,
+      ...(typeof reason === "string" ? { reason } : {}),
+      message: code === ERROR_CODES.standalone_operation_conflict ? message : `${message} ${PRESENT_OPTIONS_RETRY}`,
+    };
+  }
+  const { artifactId, sourcePath, replayed, status, currentArtifactId, currentVersion, currentStatus } = result.structuredContent ?? {};
+  if (typeof artifactId !== "string") throw new Error("The daemon did not confirm the page presentation. If retrying, use the same --request-id and page input.");
+  const moved = typeof currentArtifactId === "string" && typeof currentVersion === "number";
+  return {
+    ...receipt, artifactId, companionUrl,
+    ...(typeof sourcePath === "string" ? { sourcePath } : {}),
+    ...(replayed === true ? { replayed: true as const } : {}),
+    ...(typeof status === "string" ? { status } : {}),
+    ...(moved ? { currentArtifactId, currentVersion, ...(typeof currentStatus === "string" ? { currentStatus } : {}) } : {}),
+    ...(replayed === true && moved && currentArtifactId !== artifactId
+      ? { note: `replayed; the page has since moved to v${currentVersion} (${currentArtifactId})` }
+      : replayed === true && typeof status === "string" && isClosedArtifactStatus(status)
+        ? { note: `replayed; the page is ${status}` }
+        : {}),
+  };
 }

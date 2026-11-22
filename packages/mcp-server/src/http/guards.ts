@@ -1,5 +1,6 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
 import { ERROR_CODES } from "../error-codes.js";
 
 /**
@@ -13,6 +14,17 @@ import { ERROR_CODES } from "../error-codes.js";
 export const ARTIFACT_CREATE_MAX_BODY_BYTES = 512 * 1024;
 
 /**
+ * #679 — the standalone `present page` route carries a whole HTML page (up to
+ * PAGE_HTML_MAX_BYTES) base64-encoded, so its measured ceiling is the encoded
+ * page cap plus headroom for the title, summary, concept and envelope. The
+ * route itself refuses a decoded page over PAGE_HTML_MAX_BYTES; this cap bounds
+ * what is buffered before that check runs.
+ */
+export const STANDALONE_PAGE_MAX_BODY_BYTES = 4 * Math.ceil(PAGE_HTML_MAX_BYTES / 3) + 256 * 1024;
+
+const STANDALONE_PAGE_ROUTE = /^\/api\/internal\/sessions\/[^/]+\/present-page$/;
+
+/**
  * Select the exact authenticated routes that accept artifact-sized payloads.
  *
  * The ordinary cap still applies to child and control routes. Match paths
@@ -20,7 +32,7 @@ export const ARTIFACT_CREATE_MAX_BODY_BYTES = 512 * 1024;
  */
 export function isArtifactCreateRoute(method: string, pathname: string): boolean {
   if (method !== "POST") return false;
-  return /^\/api\/internal\/sessions\/[^/]+\/(?:artifacts|present-options)$/.test(pathname);
+  return /^\/api\/internal\/sessions\/[^/]+\/(?:artifacts|present-options|present-page)$/.test(pathname);
 }
 
 /**
@@ -121,6 +133,19 @@ export function applyTopLevelGuards(app: Hono, opts: { maxBodyBytes: number }): 
         413,
       ),
   });
+  const standalonePageLimit = bodyLimit({
+    maxSize: STANDALONE_PAGE_MAX_BODY_BYTES,
+    onError: (c) =>
+      c.json(
+        {
+          error:
+            `Request body exceeds the ${STANDALONE_PAGE_MAX_BODY_BYTES}-byte standalone page cap ` +
+            `(a ${PAGE_HTML_MAX_BYTES}-byte page plus its metadata). Trim the page, and use a new request ID for the changed input.`,
+          code: ERROR_CODES.body_too_large,
+        },
+        413,
+      ),
+  });
   const defaultLimit = bodyLimit({
     maxSize: opts.maxBodyBytes,
     onError: (c) =>
@@ -129,9 +154,10 @@ export function applyTopLevelGuards(app: Hono, opts: { maxBodyBytes: number }): 
         413,
       ),
   });
-  app.use("*", (c, next) =>
-    (isArtifactCreateRoute(c.req.method, c.req.path) ? artifactCreateLimit : defaultLimit)(c, next),
-  );
+  app.use("*", (c, next) => {
+    if (!isArtifactCreateRoute(c.req.method, c.req.path)) return defaultLimit(c, next);
+    return (STANDALONE_PAGE_ROUTE.test(c.req.path) ? standalonePageLimit : artifactCreateLimit)(c, next);
+  });
   app.use("*", async (c, next) => {
     if (!isLoopbackHost(c.req.header("host"))) {
       return c.json(
