@@ -284,6 +284,14 @@ export const ArtifactSchema = z.object({
    * absent → the stored JSON is byte-identical to before.
    */
   briefRef: z.unknown().optional(),
+  /**
+   * #680 slice 3 — on a file-backed `page`: what the daemon's file watch did
+   * (a version recorded from the file, or a save it refused). Shape:
+   * PageFileWatchSchema (page-file-watch.ts). Deliberately `unknown` on read,
+   * like briefRef, so a malformed record never fails the artifact load; read it
+   * with `readFileWatch`. Optional; absent on every other artifact.
+   */
+  fileWatch: z.unknown().optional(),
   content: z.record(z.string(), z.unknown()),
   agentReasoning: z.string().nullable(),
   relatedArtifactIds: z.array(z.string()).optional(),

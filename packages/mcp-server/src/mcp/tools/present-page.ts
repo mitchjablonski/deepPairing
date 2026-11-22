@@ -220,13 +220,17 @@ export async function presentPage(
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "page", input.title, id);
   const from = sourcePath ? ` from ${sourcePath}` : "";
+  // #680 slice 3 — the daemon watches a file-backed page while it is under review.
+  const watchNote = sourcePath
+    ? ` While it is under review, saving ${sourcePath} records a new version automatically (after ~2s of quiet, at most one per 10s); check_feedback tells you when, and which page comments lost their spot.`
+    : "";
   return {
     content: [{
       type: "text",
       text:
         `Page "${artifact.title}" presented for review (${id})${from}. ` +
         `Your pair reviews it at localhost:${reviewPort}, in a sandboxed frame with no network; scripts run only when they click Run. ` +
-        `Call check_feedback for their verdict and comments.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their verdict and comments.${watchNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

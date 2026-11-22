@@ -3,10 +3,11 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES 
 import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage, undeliveredFileWatchRefs } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { formatWorkerStops, workerStopClause, type WorkerStopBatch } from "../../store/worker-stop-notices.js";
+import { collectPageWatchNotices } from "./page-watch-feedback.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
 import { briefEchoOf } from "../brief-ref.js";
@@ -403,6 +404,14 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
   );
 
+  // #680 slice 3 (review P3-A) — the entry gate PEEKS the same claim lane the
+  // delivery uses (no claim taken): a notice held for a live subagent, or
+  // claimed by a concurrent poll, must not make this poll skip its wait and
+  // return empty-handed on every call.
+  const pageWatchAtGate = store.selectFileWatchNotices
+    ? await store.selectFileWatchNotices(allArtsForScope, { peek: true })
+    : undeliveredFileWatchRefs(allArtsForScope);
+
   // #188 — the scope→signal decision lives in the shared scopeHasSignal (see
   // its GH#152 note); here we feed it the PRE-poll snapshot counts.
   // #176 — a pending render failure satisfies EVERY scope (like a human
@@ -413,7 +422,10 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       decisions: resolvedDecs.length,
       decidedPlans: decidedPlans.length,
       decidedAny: decidedAny.length,
-    }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0;
+    }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0
+    // #680 slice 3 — a page version the file watch recorded (or a save it
+    // refused) is news for the agent, so the poll returns it without waiting.
+    || collectPageWatchNotices(allArtsForScope, pageWatchAtGate).prose !== "";
 
   if (!hasImmediate) {
     // Check if there are draft artifacts — if so, wait for human action
@@ -1106,6 +1118,21 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     );
   }
 
+  // #680 slice 3 — the page FILE WATCH: a version recorded automatically from
+  // the page's source file after a save (with the page comments whose text is
+  // gone: orphaned), or a save it refused (rejection memory / unreadable file).
+  // Reported once, then acknowledged (buffered like the other lanes). Read off
+  // the post-wake artifact snapshot: the notices ride on the artifacts.
+  // Review P3-7 — the view's claim lane (when present) picks the notices this
+  // poll may deliver: claimed against a concurrent poll, held back for a live
+  // subagent consumer, exactly like comments.
+  const pageWatchRefs = store.selectFileWatchNotices
+    ? await store.selectFileWatchNotices(postWakeArtifacts)
+    : undeliveredFileWatchRefs(postWakeArtifacts);
+  const pageWatch = collectPageWatchNotices(postWakeArtifacts, pageWatchRefs);
+  if (pageWatch.prose) parts.push(pageWatch.prose);
+  if (pageWatch.refs.length > 0) await store.acknowledgeFileWatchNotices?.(pageWatch.refs);
+
   // #569 pilot task A (#553/#572) — a WORKER SUBAGENT this session's lead
   // spawned was stopped (strict-stop deny) or held (ask) by a stance. Claude
   // Code doesn't relay that to the lead, so say it here: session-scoped (an
@@ -1655,6 +1682,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...(structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {}),
+    // #680 slice 3 — spread ONLY when the page file watch has news.
+    ...(pageWatch.structured.length > 0 ? { pageFileWatch: pageWatch.structured } : {}),
     // #569 pilot task A — spread `workerStops` ONLY when a worker was newly
     // stopped, so the healthy payload's key set stays byte-for-byte.
     ...(workerStops.length > 0

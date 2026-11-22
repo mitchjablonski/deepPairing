@@ -65,6 +65,23 @@ export {
 } from "./schemas/decision.js";
 
 export {
+  PAGE_FILE_WATCH_LIMITS,
+  PageFileWatchOrphanSchema,
+  PageFileWatchRecordedSchema,
+  PageFileWatchRefusedSchema,
+  PageFileWatchSchema,
+  readFileWatch,
+  undeliveredFileWatch,
+  undeliveredFileWatchRefs,
+  fileWatchNoticeKey,
+  type FileWatchNoticeRef,
+  type PageFileWatchOrphan,
+  type PageFileWatchRecorded,
+  type PageFileWatchRefused,
+  type PageFileWatch,
+} from "./schemas/page-file-watch.js";
+
+export {
   ArtifactTypeSchema,
   ArtifactStatusSchema,
   ArtifactStatusHistoryEntrySchema,

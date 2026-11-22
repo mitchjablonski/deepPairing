@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Artifact, Comment, HtmlAnchor } from "@deeppairing/shared";
-import { coercePageContent, PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
+import { coercePageContent, PAGE_HTML_MAX_BYTES, readFileWatch } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { ConceptBadge } from "../ConceptBadge";
 import { PrototypeFrame, type FrameAnnotation } from "../PrototypeFrame";
@@ -83,6 +83,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const lifecycle = reviewLifecycle(artifact.status, replayActive);
   const readOnly = lifecycle === "closed" || lifecycle === "frozen";
 
+  // #680 slice 3 — what the daemon's file watch did with this version.
+  const fileWatch = readFileWatch(artifact.fileWatch);
+  const serverOrphans = useMemo(
+    () => new Set((readFileWatch(artifact.fileWatch).recorded?.orphaned ?? []).map((o) => o.commentId)),
+    [artifact.fileWatch],
+  );
   const comments = useChainComments(artifact.id);
   const anchored = useMemo(() => anchoredPageComments(comments), [comments]);
   const anchors = useMemo(() => anchored.map((c) => c.target.htmlAnchor as HtmlAnchor), [anchored]);
@@ -221,6 +227,28 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
           )}
         </div>
       )}
+      {fileWatch.recorded && (
+        <div className="text-2xs text-text-muted" data-testid="page-file-recorded">
+          Recorded automatically from <code className="font-mono text-text-secondary">{fileWatch.recorded.sourcePath}</code> after
+          a save, replacing v{fileWatch.recorded.fromVersion}.
+          {fileWatch.recorded.orphaned.length + (fileWatch.recorded.orphanedOverflow ?? 0) > 0 && (
+            <> {fileWatch.recorded.orphaned.length + (fileWatch.recorded.orphanedOverflow ?? 0)} earlier comment(s) point at text that is no longer on the page.</>
+          )}
+        </div>
+      )}
+      {fileWatch.refused && !readOnly && (
+        <div
+          className="px-3 py-2 rounded-lg border border-accent-amber/40 bg-accent-amber/10 text-xs text-text-primary"
+          role="status"
+          data-testid="page-file-refused"
+        >
+          A later save to{" "}
+          <code className="font-mono">{fileWatch.refused.sourcePath}</code>
+          {fileWatch.refused.cause === "gate"
+            ? <> was not recorded: {fileWatch.refused.message}. You are still looking at v{artifact.version}.</>
+            : <> could not be recorded: {fileWatch.refused.message}. You are still looking at v{artifact.version}.</>}
+        </div>
+      )}
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-2 text-2xs text-text-muted">
           <span>Click anything on the page, or select text, to comment on that spot.</span>
@@ -287,7 +315,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
           <ol className="space-y-1.5">
             {anchored.map((c, i) => {
               const anchor = c.target.htmlAnchor as HtmlAnchor;
-              const missing = found?.[i] === false;
+              // The frame's live re-find decides once it reports; until then (or
+              // if the frame never loads) the server's file-watch re-anchoring
+              // marks the comments whose text is gone from this version.
+              const missing = found ? found[i] === false : serverOrphans.has(c.id);
               return (
                 <li key={c.id}>
                   <button

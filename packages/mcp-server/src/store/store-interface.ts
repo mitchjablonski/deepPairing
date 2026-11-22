@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, BriefRef, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, BriefRef, FileWatchNoticeRef, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 import type { PostedReviewRecord } from "./posted-reviews.js";
 import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
@@ -81,6 +81,13 @@ export interface CreateArtifactParams {
   parentId?: string | null;
   /** Override the default version of 1; used when superseding. */
   version?: number;
+  /**
+   * #680 slice 3 (review P2-2) — supersede compare-and-swap: refuse (throw
+   * ParentSupersededError / HTTP 409 `parent_superseded`) unless `parentId`
+   * is still open and has no other version. revise_artifact and the page file
+   * watch both set it, so they can never mint two v(N+1) drafts on one parent.
+   */
+  requireUnsupersededParent?: boolean;
   /**
    * #206 (I1) — the RAW feature tag from the present_* tool's `feature` param
    * (e.g. "Milestone 7", "auth-rework"). The store NORMALIZES it through
@@ -456,6 +463,23 @@ export interface IStore {
   getUnacknowledgedStatusChanges(): MaybePromise<Artifact[]>;
   /** V-fix — drain the un-reported flag after check_feedback surfaced them. */
   acknowledgeStatusChanges(ids: string[]): MaybePromise<void>;
+  /**
+   * #680 slice 3 — mark the file-watch notices (an auto-recorded page version,
+   * or a refused save) on these artifacts delivered, after check_feedback
+   * reported them. The notices themselves ride on the artifacts (`fileWatch`),
+   * so no separate read is needed. Optional: stores without a file watch have
+   * nothing to acknowledge.
+   */
+  acknowledgeFileWatchNotices?(refs: FileWatchNoticeRef[]): MaybePromise<void>;
+  /**
+   * #680 slice 3 (review P3-7) — VIEW-ONLY hook, implemented by
+   * feedbackStoreView (never by FileStore/DaemonClient): select, from this
+   * poll's artifact snapshot, the file-watch notices this poll may deliver
+   * (claimed against concurrent polls, held back for live subagent consumers).
+   * `peek` selects without claiming (the entry gate / wake checks).
+   * Absent → check_feedback takes every undelivered notice in the snapshot.
+   */
+  selectFileWatchNotices?(artifacts: Artifact[], opts?: { peek?: boolean }): MaybePromise<FileWatchNoticeRef[]>;
 
   // Comments
   addComment(params: AddCommentParams): MaybePromise<Comment>;

@@ -69,13 +69,13 @@ var require_buffer_util = __commonJS({
     "use strict";
     var { EMPTY_BUFFER } = require_constants();
     var FastBuffer = Buffer[Symbol.species];
-    function concat(list, totalLength) {
-      if (list.length === 0) return EMPTY_BUFFER;
-      if (list.length === 1) return list[0];
+    function concat(list2, totalLength) {
+      if (list2.length === 0) return EMPTY_BUFFER;
+      if (list2.length === 1) return list2[0];
       const target = Buffer.allocUnsafe(totalLength);
       let offset = 0;
-      for (let i = 0; i < list.length; i++) {
-        const buf = list[i];
+      for (let i = 0; i < list2.length; i++) {
+        const buf = list2[i];
         target.set(buf, offset);
         offset += buf.length;
       }
@@ -1870,14 +1870,14 @@ var require_sender = __commonJS({
        * @param {Function} [cb] Callback
        * @private
        */
-      sendFrame(list, cb) {
-        if (list.length === 2) {
+      sendFrame(list2, cb) {
+        if (list2.length === 2) {
           this._socket.cork();
-          this._socket.write(list[0]);
-          this._socket.write(list[1], cb);
+          this._socket.write(list2[0]);
+          this._socket.write(list2[1], cb);
           this._socket.uncork();
         } else {
-          this._socket.write(list[0], cb);
+          this._socket.write(list2[0], cb);
         }
       }
     };
@@ -4361,9 +4361,9 @@ var serve = (options, listeningListener) => {
 };
 
 // src/daemon/index.ts
-import crypto6 from "node:crypto";
-import fs26 from "node:fs";
-import path26 from "node:path";
+import crypto7 from "node:crypto";
+import fs28 from "node:fs";
+import path28 from "node:path";
 
 // src/hooks/stance-allow-ask.ts
 var STANCE_ALLOW_ASK_REASON = "The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.";
@@ -5246,10 +5246,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path27) {
-  if (!path27)
+function getElementAtPath(obj2, path29) {
+  if (!path29)
     return obj2;
-  return path27.reduce((acc, key) => acc?.[key], obj2);
+  return path29.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -5658,11 +5658,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path27, issues) {
+function prefixIssues(path29, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path27);
+    iss.path.unshift(path29);
     return iss;
   });
 }
@@ -5809,16 +5809,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path27 = []) => {
+  const processError = (error52, path29 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path27, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path29, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path27, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path29, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path27, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path29, ...issue2.path]);
       } else {
-        const fullpath = [...path27, ...issue2.path];
+        const fullpath = [...path29, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -5845,17 +5845,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path27 = []) => {
+  const processError = (error52, path29 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path27, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path29, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path27, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path29, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path27, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path29, ...issue2.path]);
       } else {
-        const fullpath = [...path27, ...issue2.path];
+        const fullpath = [...path29, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -5887,8 +5887,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path27 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path27) {
+  const path29 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path29) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -7509,10 +7509,10 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     const shape = def.shape;
     const propValues = {};
     for (const key in shape) {
-      const field = shape[key]._zod;
-      if (field.values) {
+      const field2 = shape[key]._zod;
+      if (field2.values) {
         propValues[key] ?? (propValues[key] = /* @__PURE__ */ new Set());
-        for (const v of field.values)
+        for (const v of field2.values)
           propValues[key].add(v);
       }
     }
@@ -15744,13 +15744,13 @@ function _promise(Class2, innerType) {
 }
 // @__NO_SIDE_EFFECTS__
 function _custom(Class2, fn, _params) {
-  const norm = normalizeParams(_params);
-  norm.abort ?? (norm.abort = true);
+  const norm2 = normalizeParams(_params);
+  norm2.abort ?? (norm2.abort = true);
   const schema = new Class2({
     type: "custom",
     check: "custom",
     fn,
-    ...norm
+    ...norm2
   });
   return schema;
 }
@@ -18580,13 +18580,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path27 = ref.slice(1).split("/").filter(Boolean);
-  if (path27.length === 0) {
+  const path29 = ref.slice(1).split("/").filter(Boolean);
+  if (path29.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path27[0] === defsKey) {
-    const key = path27[1];
+  if (path29[0] === defsKey) {
+    const key = path29[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -19061,6 +19061,8 @@ var EvidenceInputSchema = external_exports.union([external_exports.string(), Evi
 
 // ../shared/dist/schemas/brief-ref.js
 var MAX_SPEC_ID_LENGTH = 64;
+var MAX_BRIEF_REF_IDS = 8;
+var MAX_BRIEF_REF_ARTIFACT_ID_LENGTH = 64;
 var BriefRefSchema = external_exports.object({
   artifactId: external_exports.string(),
   requirementIds: external_exports.array(external_exports.string()).optional(),
@@ -19136,9 +19138,9 @@ function requirementClaimsByteLength(raw2) {
   }
   return json2 === void 0 ? 0 : new TextEncoder().encode(json2).length;
 }
-var RequirementClaimListSchema = external_exports.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list, ctx) => {
+var RequirementClaimListSchema = external_exports.array(RequirementClaimSchema).max(MAX_REQUIREMENT_CLAIMS).superRefine((list2, ctx) => {
   const seen = /* @__PURE__ */ new Map();
-  list.forEach((c, i) => {
+  list2.forEach((c, i) => {
     const first = seen.get(c.requirementId);
     if (first !== void 0) {
       ctx.addIssue({ code: "custom", path: [i, "requirementId"], message: `duplicate requirementId (also claim ${first}); one claim per requirement` });
@@ -19933,6 +19935,14 @@ var ArtifactSchema = external_exports.object({
    * absent → the stored JSON is byte-identical to before.
    */
   briefRef: external_exports.unknown().optional(),
+  /**
+   * #680 slice 3 — on a file-backed `page`: what the daemon's file watch did
+   * (a version recorded from the file, or a save it refused). Shape:
+   * PageFileWatchSchema (page-file-watch.ts). Deliberately `unknown` on read,
+   * like briefRef, so a malformed record never fails the artifact load; read it
+   * with `readFileWatch`. Optional; absent on every other artifact.
+   */
+  fileWatch: external_exports.unknown().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -20376,6 +20386,56 @@ var AgentEventSchema = external_exports.discriminatedUnion("type", [
   CommentUpdatedEventSchema,
   PlanReviewRequestEventSchema
 ]);
+
+// ../shared/dist/schemas/page-file-watch.js
+var PAGE_FILE_WATCH_LIMITS = {
+  orphans: 50,
+  quote: 280,
+  locator: 512,
+  message: 2e3
+};
+var PageFileWatchOrphanSchema = external_exports.object({
+  commentId: external_exports.string(),
+  kind: external_exports.string().max(32),
+  quote: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.quote),
+  locator: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.locator),
+  /** The page version the comment's anchor was made on. */
+  version: external_exports.number().int().positive().optional()
+});
+var PageFileWatchRecordedSchema = external_exports.object({
+  at: external_exports.string(),
+  sourcePath: external_exports.string(),
+  /** The version this one replaced (now `superseded`). */
+  fromArtifactId: external_exports.string(),
+  fromVersion: external_exports.number().int().positive(),
+  /** Page comments whose quoted text is still in the new HTML. */
+  carriedCount: external_exports.number().int().nonnegative(),
+  /** Page comments whose quoted text is gone from the new HTML. */
+  orphaned: external_exports.array(PageFileWatchOrphanSchema).max(PAGE_FILE_WATCH_LIMITS.orphans),
+  /** More orphans than the stored list holds. */
+  orphanedOverflow: external_exports.number().int().nonnegative().optional(),
+  delivered: external_exports.boolean().optional()
+});
+var PageFileWatchRefusedSchema = external_exports.object({
+  at: external_exports.string(),
+  sourcePath: external_exports.string(),
+  cause: external_exports.enum(["gate", "unreadable"]),
+  /** For `gate`: the stored rejection reason, as the gate words it. For
+   *  `unreadable`: why the file could not be read. */
+  message: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.message),
+  /** For `gate`: the matched concept, when the stance names one. */
+  concept: external_exports.string().max(200).optional(),
+  digest: external_exports.string(),
+  delivered: external_exports.boolean().optional()
+});
+var PageFileWatchSchema = external_exports.object({
+  recorded: PageFileWatchRecordedSchema.optional(),
+  refused: PageFileWatchRefusedSchema.optional()
+});
+function readFileWatch(fw) {
+  const parsed = PageFileWatchSchema.safeParse(fw);
+  return parsed.success ? parsed.data : {};
+}
 
 // ../shared/dist/schemas/coerce-content.js
 var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -21951,11 +22011,11 @@ function ensurePreflightHook(projectRoot2, opts = {}) {
   const settingsPath = path2.join(claudeDir, "settings.local.json");
   const scriptPath = path2.join(projectRoot2, PREFLIGHT_SCRIPT_REL_PATH);
   try {
-    const core = resolvePreflightCoreUrl();
+    const core2 = resolvePreflightCoreUrl();
     fs2.mkdirSync(path2.dirname(scriptPath), { recursive: true });
-    fs2.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl(), resolvePreflightDiagnosticsUrl()));
+    fs2.writeFileSync(scriptPath, preflightHookScript(core2.url, resolveGuardrailRulesUrl(), resolvePreflightDiagnosticsUrl()));
     fs2.chmodSync(scriptPath, 493);
-    const inactiveNote = core.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
+    const inactiveNote = core2.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
     const read = readAskSettings(settingsPath);
     if (!read.ok) return { ok: false, message: read.message };
     const settings = read.settings;
@@ -22677,26 +22737,26 @@ var handleParsingNestedValues = (form, key, value) => {
 };
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/utils/url.js
-var splitPath = (path27) => {
-  const paths = path27.split("/");
+var splitPath = (path29) => {
+  const paths = path29.split("/");
   if (paths[0] === "") {
     paths.shift();
   }
   return paths;
 };
 var splitRoutingPath = (routePath) => {
-  const { groups, path: path27 } = extractGroupsFromPath(routePath);
-  const paths = splitPath(path27);
+  const { groups, path: path29 } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path29);
   return replaceGroupMarks(paths, groups);
 };
-var extractGroupsFromPath = (path27) => {
+var extractGroupsFromPath = (path29) => {
   const groups = [];
-  path27 = path27.replace(/\{[^}]+\}/g, (match2, index) => {
+  path29 = path29.replace(/\{[^}]+\}/g, (match2, index) => {
     const mark = `@${index}`;
     groups.push([mark, match2]);
     return mark;
   });
-  return { groups, path: path27 };
+  return { groups, path: path29 };
 };
 var replaceGroupMarks = (paths, groups) => {
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -22753,8 +22813,8 @@ var getPath = (request) => {
       const queryIndex = url2.indexOf("?", i);
       const hashIndex = url2.indexOf("#", i);
       const end = queryIndex === -1 ? hashIndex === -1 ? void 0 : hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
-      const path27 = url2.slice(start, end);
-      return tryDecodeURI(path27.includes("%25") ? path27.replace(/%25/g, "%2525") : path27);
+      const path29 = url2.slice(start, end);
+      return tryDecodeURI(path29.includes("%25") ? path29.replace(/%25/g, "%2525") : path29);
     } else if (charCode === 63 || charCode === 35) {
       break;
     }
@@ -22771,11 +22831,11 @@ var mergePath = (base, sub, ...rest) => {
   }
   return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
 };
-var checkOptionalParameter = (path27) => {
-  if (path27.charCodeAt(path27.length - 1) !== 63 || !path27.includes(":")) {
+var checkOptionalParameter = (path29) => {
+  if (path29.charCodeAt(path29.length - 1) !== 63 || !path29.includes(":")) {
     return null;
   }
-  const segments = path27.split("/");
+  const segments = path29.split("/");
   const results = [];
   let basePath = "";
   segments.forEach((segment) => {
@@ -22916,9 +22976,9 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path27 = "/", matchResult = [[]]) {
+  constructor(request, path29 = "/", matchResult = [[]]) {
     this.raw = request;
-    this.path = path27;
+    this.path = path29;
     this.#matchResult = matchResult;
     this.#validatedData = {};
   }
@@ -23670,8 +23730,8 @@ var Hono = class _Hono {
         return this;
       };
     });
-    this.on = (method, path27, ...handlers) => {
-      for (const p of [path27].flat()) {
+    this.on = (method, path29, ...handlers) => {
+      for (const p of [path29].flat()) {
         this.#path = p;
         for (const m of [method].flat()) {
           handlers.map((handler) => {
@@ -23728,8 +23788,8 @@ var Hono = class _Hono {
    * app.route("/api", app2) // GET /api/user
    * ```
    */
-  route(path27, app) {
-    const subApp = this.basePath(path27);
+  route(path29, app) {
+    const subApp = this.basePath(path29);
     app.routes.map((r) => {
       let handler;
       if (app.errorHandler === errorHandler) {
@@ -23755,9 +23815,9 @@ var Hono = class _Hono {
    * const api = new Hono().basePath('/api')
    * ```
    */
-  basePath(path27) {
+  basePath(path29) {
     const subApp = this.#clone();
-    subApp._basePath = mergePath(this._basePath, path27);
+    subApp._basePath = mergePath(this._basePath, path29);
     return subApp;
   }
   /**
@@ -23831,7 +23891,7 @@ var Hono = class _Hono {
    * })
    * ```
    */
-  mount(path27, applicationHandler, options) {
+  mount(path29, applicationHandler, options) {
     let replaceRequest;
     let optionHandler;
     if (options) {
@@ -23858,7 +23918,7 @@ var Hono = class _Hono {
       return [c.env, executionContext];
     };
     replaceRequest ||= (() => {
-      const mergedPath = mergePath(this._basePath, path27);
+      const mergedPath = mergePath(this._basePath, path29);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
       return (request) => {
         const url2 = new URL(request.url);
@@ -23873,19 +23933,19 @@ var Hono = class _Hono {
       }
       await next();
     };
-    this.#addRoute(METHOD_NAME_ALL, mergePath(path27, "*"), handler);
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path29, "*"), handler);
     return this;
   }
-  #addRoute(method, path27, handler, baseRoutePath) {
+  #addRoute(method, path29, handler, baseRoutePath) {
     method = method.toUpperCase();
-    path27 = mergePath(this._basePath, path27);
+    path29 = mergePath(this._basePath, path29);
     const r = {
       basePath: baseRoutePath !== void 0 ? mergePath(this._basePath, baseRoutePath) : this._basePath,
-      path: path27,
+      path: path29,
       method,
       handler
     };
-    this.router.add(method, path27, [handler, r]);
+    this.router.add(method, path29, [handler, r]);
     this.routes.push(r);
   }
   #handleError(err, c) {
@@ -23898,10 +23958,10 @@ var Hono = class _Hono {
     if (method === "HEAD") {
       return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
     }
-    const path27 = this.getPath(request, { env });
-    const matchResult = this.router.match(method, path27);
+    const path29 = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path29);
     const c = new Context(request, {
-      path: path27,
+      path: path29,
       matchResult,
       env,
       executionCtx,
@@ -24001,15 +24061,15 @@ var Hono = class _Hono {
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
-function match(method, path27) {
+function match(method, path29) {
   const matchers = this.buildAllMatchers();
-  const match2 = ((method2, path28) => {
+  const match2 = ((method2, path210) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
-    const staticMatch = matcher[2][path28];
+    const staticMatch = matcher[2][path210];
     if (staticMatch) {
       return staticMatch;
     }
-    const match3 = path28.match(matcher[0]);
+    const match3 = path210.match(matcher[0]);
     if (!match3) {
       return [[], emptyParam];
     }
@@ -24017,7 +24077,7 @@ function match(method, path27) {
     return [matcher[1][index], match3];
   });
   this.match = match2;
-  return match2(method, path27);
+  return match2(method, path29);
 }
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/node.js
@@ -24132,12 +24192,12 @@ var Node = class _Node {
 var Trie = class {
   #context = { varIndex: 0 };
   #root = new Node();
-  insert(path27, index, pathErrorCheckOnly) {
+  insert(path29, index, pathErrorCheckOnly) {
     const paramAssoc = [];
     const groups = [];
     for (let i = 0; ; ) {
       let replaced = false;
-      path27 = path27.replace(/\{[^}]+\}/g, (m) => {
+      path29 = path29.replace(/\{[^}]+\}/g, (m) => {
         const mark = `@\\${i}`;
         groups[i] = [mark, m];
         i++;
@@ -24148,7 +24208,7 @@ var Trie = class {
         break;
       }
     }
-    const tokens = path27.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    const tokens = path29.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const [mark] = groups[i];
       for (let j = tokens.length - 1; j >= 0; j--) {
@@ -24187,9 +24247,9 @@ var Trie = class {
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/router.js
 var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
 var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
-function buildWildcardRegExp(path27) {
-  return wildcardRegExpCache[path27] ??= new RegExp(
-    path27 === "*" ? "" : `^${path27.replace(
+function buildWildcardRegExp(path29) {
+  return wildcardRegExpCache[path29] ??= new RegExp(
+    path29 === "*" ? "" : `^${path29.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -24211,17 +24271,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path27, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path29, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path27] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path29] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path27, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path29, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path27) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path29) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -24255,12 +24315,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path27) {
+function findMiddleware(middleware, path29) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path27)) {
+    if (buildWildcardRegExp(k).test(path29)) {
       return [...middleware[k]];
     }
   }
@@ -24274,7 +24334,7 @@ var RegExpRouter = class {
     this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
     this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
   }
-  add(method, path27, handler) {
+  add(method, path29, handler) {
     const middleware = this.#middleware;
     const routes = this.#routes;
     if (!middleware || !routes) {
@@ -24289,18 +24349,18 @@ var RegExpRouter = class {
         });
       });
     }
-    if (path27 === "/*") {
-      path27 = "*";
+    if (path29 === "/*") {
+      path29 = "*";
     }
-    const paramCount = (path27.match(/\/:/g) || []).length;
-    if (/\*$/.test(path27)) {
-      const re = buildWildcardRegExp(path27);
+    const paramCount = (path29.match(/\/:/g) || []).length;
+    if (/\*$/.test(path29)) {
+      const re = buildWildcardRegExp(path29);
       if (method === METHOD_NAME_ALL) {
         Object.keys(middleware).forEach((m) => {
-          middleware[m][path27] ||= findMiddleware(middleware[m], path27) || findMiddleware(middleware[METHOD_NAME_ALL], path27) || [];
+          middleware[m][path29] ||= findMiddleware(middleware[m], path29) || findMiddleware(middleware[METHOD_NAME_ALL], path29) || [];
         });
       } else {
-        middleware[method][path27] ||= findMiddleware(middleware[method], path27) || findMiddleware(middleware[METHOD_NAME_ALL], path27) || [];
+        middleware[method][path29] ||= findMiddleware(middleware[method], path29) || findMiddleware(middleware[METHOD_NAME_ALL], path29) || [];
       }
       Object.keys(middleware).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
@@ -24318,15 +24378,15 @@ var RegExpRouter = class {
       });
       return;
     }
-    const paths = checkOptionalParameter(path27) || [path27];
+    const paths = checkOptionalParameter(path29) || [path29];
     for (let i = 0, len = paths.length; i < len; i++) {
-      const path28 = paths[i];
+      const path210 = paths[i];
       Object.keys(routes).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
-          routes[m][path28] ||= [
-            ...findMiddleware(middleware[m], path28) || findMiddleware(middleware[METHOD_NAME_ALL], path28) || []
+          routes[m][path210] ||= [
+            ...findMiddleware(middleware[m], path210) || findMiddleware(middleware[METHOD_NAME_ALL], path210) || []
           ];
-          routes[m][path28].push([handler, paramCount - len + i + 1]);
+          routes[m][path210].push([handler, paramCount - len + i + 1]);
         }
       });
     }
@@ -24345,13 +24405,13 @@ var RegExpRouter = class {
     const routes = [];
     let hasOwnRoute = method === METHOD_NAME_ALL;
     [this.#middleware, this.#routes].forEach((r) => {
-      const ownRoute = r[method] ? Object.keys(r[method]).map((path27) => [path27, r[method][path27]]) : [];
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path29) => [path29, r[method][path29]]) : [];
       if (ownRoute.length !== 0) {
         hasOwnRoute ||= true;
         routes.push(...ownRoute);
       } else if (method !== METHOD_NAME_ALL) {
         routes.push(
-          ...Object.keys(r[METHOD_NAME_ALL]).map((path27) => [path27, r[METHOD_NAME_ALL][path27]])
+          ...Object.keys(r[METHOD_NAME_ALL]).map((path29) => [path29, r[METHOD_NAME_ALL][path29]])
         );
       }
     });
@@ -24371,13 +24431,13 @@ var SmartRouter = class {
   constructor(init) {
     this.#routers = init.routers;
   }
-  add(method, path27, handler) {
+  add(method, path29, handler) {
     if (!this.#routes) {
       throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
     }
-    this.#routes.push([method, path27, handler]);
+    this.#routes.push([method, path29, handler]);
   }
-  match(method, path27) {
+  match(method, path29) {
     if (!this.#routes) {
       throw new Error("Fatal error");
     }
@@ -24392,7 +24452,7 @@ var SmartRouter = class {
         for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
           router.add(...routes[i2]);
         }
-        res = router.match(method, path27);
+        res = router.match(method, path29);
       } catch (e) {
         if (e instanceof UnsupportedPathError) {
           continue;
@@ -24442,10 +24502,10 @@ var Node2 = class _Node2 {
     }
     this.#patterns = [];
   }
-  insert(method, path27, handler) {
+  insert(method, path29, handler) {
     this.#order = ++this.#order;
     let curNode = this;
-    const parts = splitRoutingPath(path27);
+    const parts = splitRoutingPath(path29);
     const possibleKeys = [];
     for (let i = 0, len = parts.length; i < len; i++) {
       const p = parts[i];
@@ -24494,12 +24554,12 @@ var Node2 = class _Node2 {
       }
     }
   }
-  search(method, path27) {
+  search(method, path29) {
     const handlerSets = [];
     this.#params = emptyParams;
     const curNode = this;
     let curNodes = [curNode];
-    const parts = splitPath(path27);
+    const parts = splitPath(path29);
     const curNodesQueue = [];
     const len = parts.length;
     let partOffsets = null;
@@ -24541,13 +24601,13 @@ var Node2 = class _Node2 {
           if (matcher instanceof RegExp) {
             if (partOffsets === null) {
               partOffsets = new Array(len);
-              let offset = path27[0] === "/" ? 1 : 0;
+              let offset = path29[0] === "/" ? 1 : 0;
               for (let p = 0; p < len; p++) {
                 partOffsets[p] = offset;
                 offset += parts[p].length + 1;
               }
             }
-            const restPathString = path27.substring(partOffsets[i]);
+            const restPathString = path29.substring(partOffsets[i]);
             const m = matcher.exec(restPathString);
             if (m) {
               params[name] = m[0];
@@ -24600,18 +24660,18 @@ var TrieRouter = class {
   constructor() {
     this.#node = new Node2();
   }
-  add(method, path27, handler) {
-    const results = checkOptionalParameter(path27);
+  add(method, path29, handler) {
+    const results = checkOptionalParameter(path29);
     if (results) {
       for (let i = 0, len = results.length; i < len; i++) {
         this.#node.insert(method, results[i], handler);
       }
       return;
     }
-    this.#node.insert(method, path27, handler);
+    this.#node.insert(method, path29, handler);
   }
-  match(method, path27) {
-    return this.#node.search(method, path27);
+  match(method, path29) {
+    return this.#node.search(method, path29);
   }
 };
 
@@ -24724,8 +24784,8 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/daemon/create-daemon.ts
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-import fs25 from "node:fs";
-import path25 from "node:path";
+import fs27 from "node:fs";
+import path27 from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes as randomBytes4 } from "node:crypto";
 
@@ -24765,6 +24825,10 @@ var ERROR_CODES = {
   /** #521 — a confidence AUTO-approval reached the daemon after the autonomy level
    *  (or the artifact) no longer permitted it. 409, no state change. */
   auto_approve_not_permitted: "auto_approve_not_permitted",
+  /** #680 slice 3 — a supersede-create lost the race: its parent was already
+   *  replaced (the page file watch or another revise recorded a version). 409,
+   *  nothing created; the body names the successor. */
+  parent_superseded: "parent_superseded",
   /** A review verdict raced a change to the artifact content being reviewed. */
   session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
@@ -24925,9 +24989,9 @@ function isCrossTerminalVerdictFlip(from, to, reason) {
 }
 
 // src/store/decision-resolve-guard.ts
-function classifyStaleResolve(record2, backing, optionId) {
-  const prior = record2.response;
-  const resolution = prior ? { optionId: prior.optionId, ...prior.reasoning ? { reasoning: prior.reasoning } : {}, ...record2.resolvedAt ? { resolvedAt: record2.resolvedAt } : {} } : void 0;
+function classifyStaleResolve(record3, backing, optionId) {
+  const prior = record3.response;
+  const resolution = prior ? { optionId: prior.optionId, ...prior.reasoning ? { reasoning: prior.reasoning } : {}, ...record3.resolvedAt ? { resolvedAt: record3.resolvedAt } : {} } : void 0;
   if (resolution && prior.optionId === optionId) {
     return { kind: "same", ...backing ? { artifactId: backing.id } : {}, resolution };
   }
@@ -25126,12 +25190,12 @@ function ownerState(raw2) {
   }
   const here = self().host;
   if (!here) return { state: "unknown", owner: v, why: "this process cannot determine its own host identity" };
-  for (const field of IDENTITY_FIELDS) {
-    if (typeof v[field] !== "string" || !v[field]) {
-      return { state: "unknown", owner: v, why: `legacy lock body (no ${field}) \u2014 owner unverifiable` };
+  for (const field2 of IDENTITY_FIELDS) {
+    if (typeof v[field2] !== "string" || !v[field2]) {
+      return { state: "unknown", owner: v, why: `legacy lock body (no ${field2}) \u2014 owner unverifiable` };
     }
-    if (v[field] !== here[field]) {
-      return { state: "unknown", owner: v, why: `owned by another ${field === "hostname" ? "host" : field === "platform" ? "OS" : field === "bootId" ? "boot / kernel (e.g. WSL vs Windows, or a VM)" : "pid namespace (e.g. a container)"} \u2014 owner unverifiable` };
+    if (v[field2] !== here[field2]) {
+      return { state: "unknown", owner: v, why: `owned by another ${field2 === "hostname" ? "host" : field2 === "platform" ? "OS" : field2 === "bootId" ? "boot / kernel (e.g. WSL vs Windows, or a VM)" : "pid namespace (e.g. a container)"} \u2014 owner unverifiable` };
     }
   }
   const owner = v;
@@ -26158,9 +26222,9 @@ function isSessionReviewConflictError(error51) {
 function object2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function mergeValue(base, local, disk, field) {
+function mergeValue(base, local, disk, field2) {
   if (JSON.stringify(base) === JSON.stringify(local)) return disk;
-  if (field === "statusHistory" && Array.isArray(local) && Array.isArray(disk)) {
+  if (field2 === "statusHistory" && Array.isArray(local) && Array.isArray(disk)) {
     const prior = Array.isArray(base) ? base : [];
     if (prior.every((entry, i) => JSON.stringify(entry) === JSON.stringify(local[i]))) {
       const history = [...disk];
@@ -26192,15 +26256,15 @@ function mergeValue(base, local, disk, field) {
   return local;
 }
 function mergeSessionRecords(baseline, local, disk, key) {
-  const before = new Map(baseline.map((record2) => [key(record2), record2]));
-  const current = new Map(local.map((record2) => [key(record2), record2]));
-  const merged = new Map(disk.map((record2) => [key(record2), record2]));
+  const before = new Map(baseline.map((record3) => [key(record3), record3]));
+  const current = new Map(local.map((record3) => [key(record3), record3]));
+  const merged = new Map(disk.map((record3) => [key(record3), record3]));
   for (const id of before.keys()) {
     if (!current.has(id)) merged.delete(id);
   }
-  for (const [id, record2] of current) {
-    if (!before.has(id)) merged.set(id, record2);
-    else if (merged.has(id)) merged.set(id, mergeValue(before.get(id), record2, merged.get(id)));
+  for (const [id, record3] of current) {
+    if (!before.has(id)) merged.set(id, record3);
+    else if (merged.has(id)) merged.set(id, mergeValue(before.get(id), record3, merged.get(id)));
   }
   return [...merged.values()];
 }
@@ -26218,10 +26282,10 @@ function changesetReviewChanged(base, candidate) {
 function reviewAuthorityChanged(base, candidate) {
   return reviewVerdictChanged(base, candidate) || changesetReviewChanged(base, candidate);
 }
-function reviewedContent(record2) {
-  const content = record2.content;
+function reviewedContent(record3) {
+  const content = record3.content;
   if (!object2(content)) return content;
-  if (record2.type === "plan" && Array.isArray(content.steps)) {
+  if (record3.type === "plan" && Array.isArray(content.steps)) {
     return {
       ...content,
       steps: content.steps.map((step) => {
@@ -26231,7 +26295,7 @@ function reviewedContent(record2) {
       })
     };
   }
-  if (record2.type === "changeset") {
+  if (record3.type === "changeset") {
     const { reviewState: _reviewState, reviewReasons: _reviewReasons, ...proposal } = content;
     return proposal;
   }
@@ -26239,13 +26303,13 @@ function reviewedContent(record2) {
 }
 function reviewedIdentityChanged(base, candidate) {
   return REVIEWED_IDENTITY_FIELDS.some(
-    (field) => JSON.stringify(field === "content" ? reviewedContent(base) : base[field]) !== JSON.stringify(field === "content" ? reviewedContent(candidate) : candidate[field])
+    (field2) => JSON.stringify(field2 === "content" ? reviewedContent(base) : base[field2]) !== JSON.stringify(field2 === "content" ? reviewedContent(candidate) : candidate[field2])
   );
 }
 function mergeArtifactRecords(baseline, local, disk, key) {
-  const before = new Map(baseline.map((record2) => [key(record2), record2]));
-  const current = new Map(local.map((record2) => [key(record2), record2]));
-  const persisted = new Map(disk.map((record2) => [key(record2), record2]));
+  const before = new Map(baseline.map((record3) => [key(record3), record3]));
+  const current = new Map(local.map((record3) => [key(record3), record3]));
+  const persisted = new Map(disk.map((record3) => [key(record3), record3]));
   for (const [id, baseValue] of before) {
     const localRecord = current.get(id);
     const diskRecord = persisted.get(id);
@@ -27196,6 +27260,373 @@ function aliasCanonical(token) {
 function meaningfulTokens(s) {
   return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken).map(aliasCanonical);
 }
+function tokenCoverage(concept, proposal) {
+  const tokens = meaningfulTokens(concept);
+  if (tokens.length === 0) return 0;
+  const pset = new Set(meaningfulTokens(proposal));
+  const hits = tokens.filter((t) => pset.has(t)).length;
+  return hits / tokens.length;
+}
+var NEAR_MISS_THRESHOLD = 0.5;
+var REVERSE_EDIT_MIN_COVERAGE = 0.5;
+var CONSIDERED_CAP = 20;
+function conceptMatchesProposal(concept, proposal) {
+  const tokens = meaningfulTokens(concept);
+  if (tokens.length === 0) return false;
+  const pset = new Set(meaningfulTokens(proposal));
+  return tokens.every((t) => pset.has(t));
+}
+function containmentBlockAllowed(storedConcept) {
+  return new Set(meaningfulTokens(storedConcept)).size >= 2;
+}
+function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
+  for (const stored of storedConcepts) {
+    if (!stored?.trim()) continue;
+    const storedKey = normalizeConceptKey2(stored);
+    for (const pc of proposalConcepts) {
+      if (!pc?.trim()) continue;
+      if (normalizeConceptKey2(pc) === storedKey) return { proposalConcept: pc, storedConcept: stored };
+      if (containmentBlockAllowed(stored) && conceptMatchesProposal(stored, pc)) {
+        return { proposalConcept: pc, storedConcept: stored };
+      }
+    }
+  }
+  return null;
+}
+function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConcepts) {
+  if (!storedConcept?.trim()) return false;
+  const key = normalizeConceptKey2(storedConcept);
+  if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey2(pc) === key)) return true;
+  if (containmentBlockAllowed(storedConcept)) {
+    const texts = [...proposalStrings, ...proposalConcepts];
+    if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
+  }
+  return false;
+}
+function matchesGlob(pathStr, glob, opts = {}) {
+  const escape = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    if (glob[i] === "*" && glob[i + 1] === "*") {
+      re += ".*";
+      i++;
+    } else if (glob[i] === "*") {
+      re += "[^/]*";
+    } else {
+      re += escape(glob[i]);
+    }
+  }
+  const regex = new RegExp(`^${re}$`);
+  if (regex.test(pathStr)) return true;
+  return !!opts.projectRelativePaths && glob.startsWith("**/") && !pathStr.startsWith("/") && regex.test(`/${pathStr}`);
+}
+function scopeHit(pref, proposalPaths, opts) {
+  return proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g, opts)));
+}
+function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = [], globOpts = {}) {
+  for (const pref of prefs) {
+    if (pref.kind === "prefer") continue;
+    if (pref.scope?.paths?.length) {
+      if (proposalPaths.length === 0) continue;
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
+    }
+    if (pref.kind === "avoid") {
+      if (!containmentBlockAllowed(pref.concept)) continue;
+      for (const proposal of proposalStrings) {
+        if (!proposal.trim()) continue;
+        if (conceptMatchesProposal(pref.concept, proposal)) {
+          return { proposal, pref, via: "avoid" };
+        }
+      }
+    }
+    if (pref.kind === "require") {
+      const forIdx = pref.concept.toLowerCase().indexOf(" for ");
+      if (forIdx === -1) continue;
+      const required2 = pref.concept.slice(0, forIdx).trim();
+      const domain2 = pref.concept.slice(forIdx + 5).trim();
+      if (!required2 || !domain2) continue;
+      for (const proposal of proposalStrings) {
+        if (!proposal.trim()) continue;
+        const mentionsDomain = conceptMatchesProposal(domain2, proposal);
+        if (!mentionsDomain) continue;
+        const hasRequired = conceptMatchesProposal(required2, proposal);
+        if (!hasRequired) {
+          return { proposal, pref, via: "require" };
+        }
+      }
+    }
+  }
+  return null;
+}
+function containsAsPhrase(haystack, needle) {
+  const n = needle.trim();
+  if (n.length < 3) return false;
+  const esc3 = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${esc3}(?:[^a-z0-9]|$)`).test(haystack);
+}
+function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
+  const clean = (s) => s.trim().toLowerCase();
+  for (const rej of rejected) {
+    const rejNormalized = clean(rej.description);
+    if (!rejNormalized) continue;
+    const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
+    for (let idx = 0; idx < proposalStrings.length; idx++) {
+      const proposal = proposalStrings[idx];
+      const p = clean(proposal);
+      if (!p) continue;
+      const rawEditText = opts.rawEditText || opts.rawEditTextFrom !== void 0 && idx >= opts.rawEditTextFrom;
+      if (containsAsPhrase(p, rejNormalized)) {
+        return { proposal, rejected: rej, via: "surface" };
+      }
+      if (containsAsPhrase(specificNoun, p) && (!rawEditText || tokenCoverage(specificNoun, p) >= REVERSE_EDIT_MIN_COVERAGE)) {
+        return { proposal, rejected: rej, via: "surface" };
+      }
+      if (containsAsPhrase(p, specificNoun)) {
+        return { proposal, rejected: rej, via: "surface" };
+      }
+      if (rej.concept && containmentBlockAllowed(rej.concept) && conceptMatchesProposal(rej.concept, proposal)) {
+        return { proposal, rejected: rej, via: "concept" };
+      }
+    }
+  }
+  return null;
+}
+function runPreflight(input) {
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [], rawEditText = false, rawEditTextFrom, projectRelativePaths = false } = input;
+  const globOpts = { projectRelativePaths };
+  const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
+  const considered = [];
+  for (const rej of rejectedApproaches) {
+    if (considered.length >= CONSIDERED_CAP) break;
+    considered.push({
+      source: "session",
+      concept: rej.concept ?? rej.description,
+      reason: rej.reason
+    });
+  }
+  for (const pref of teamPreferences) {
+    if (considered.length >= CONSIDERED_CAP) break;
+    if (pref.kind === "prefer") continue;
+    if (pref.scope?.paths?.length) {
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
+    }
+    considered.push({
+      source: "team",
+      concept: pref.concept,
+      reason: pref.rationale
+    });
+  }
+  const nearMisses = [];
+  for (const rej of rejectedApproaches) {
+    const conceptText = rej.concept ?? rej.description;
+    const cov = Math.max(
+      ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),
+      0
+    );
+    if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
+      nearMisses.push({
+        source: "session",
+        concept: conceptText,
+        reason: rej.reason,
+        why: `Partial token overlap (${Math.round(cov * 100)}%) with a past rejection.`
+      });
+    }
+  }
+  for (const pref of teamPreferences) {
+    if (pref.kind === "prefer") continue;
+    if (pref.scope?.paths?.length) {
+      if (!scopeHit(pref, proposalPaths, globOpts)) continue;
+    }
+    const cov = Math.max(
+      ...coverageTexts.map((p) => tokenCoverage(pref.concept, p)),
+      0
+    );
+    if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
+      nearMisses.push({
+        source: "team",
+        concept: pref.concept,
+        reason: pref.rationale,
+        why: `Partial token overlap (${Math.round(cov * 100)}%) with a team policy.`
+      });
+    }
+  }
+  for (const g of globalAdvisoryConcepts) {
+    if (!g.concept?.trim()) continue;
+    if (isCrossProjectAdvisoryHit(g.concept, proposalStrings, proposalConcepts)) {
+      nearMisses.push({
+        source: "global",
+        concept: g.concept,
+        reason: g.reason,
+        project: g.project,
+        why: g.project ? `You avoided this in "${g.project}" \u2014 still want it here? (cross-project, advisory)` : `You avoided this in another project \u2014 still want it here? (cross-project, advisory)`
+      });
+    }
+  }
+  if (rejectedApproaches.length > 0) {
+    let match2 = findRejectedApproachMatch(proposalStrings, rejectedApproaches, { rawEditText, rawEditTextFrom });
+    if (!match2 && proposalConcepts.length > 0) {
+      for (const rej of rejectedApproaches) {
+        if (!rej.concept) continue;
+        const cc = findConceptToConceptMatch(proposalConcepts, [rej.concept]);
+        if (cc) {
+          match2 = { proposal: cc.proposalConcept, rejected: rej, via: "concept" };
+          break;
+        }
+      }
+    }
+    if (match2) {
+      const reasonLine = match2.rejected.reason ? `
+Prior rejection reason: "${match2.rejected.reason}"` : "";
+      const conceptLine = match2.via === "concept" && match2.rejected.concept ? `
+Matched on underlying concept: "${match2.rejected.concept}". A paraphrased proposal still counts \u2014 the user has rejected this kind of approach.` : "";
+      const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match2.proposal}" which the user previously rejected ("${match2.rejected.description}").${reasonLine}${conceptLine}
+
+Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to allow this proposal once or retire the stance from the companion UI's gate log before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
+      return {
+        blocked: true,
+        block: {
+          source: "session",
+          message,
+          broadcastEvent: {
+            type: "preflight_blocked",
+            toolName,
+            source: "session",
+            match: {
+              proposal: match2.proposal,
+              description: match2.rejected.description,
+              reason: match2.rejected.reason,
+              concept: match2.rejected.concept,
+              via: match2.via,
+              // #470 — with description + concept, the exact stance row an
+              // allowance binds to.
+              rejectedAt: match2.rejected.rejectedAt
+            }
+          }
+        },
+        trace: {
+          decision: "blocked",
+          consideredCount: considered.length,
+          consideredConcepts: considered,
+          nearMisses,
+          block: {
+            source: "session",
+            concept: match2.rejected.concept ?? match2.rejected.description,
+            reason: match2.rejected.reason,
+            via: match2.via
+          }
+        }
+      };
+    }
+  }
+  if (teamPreferences.length > 0) {
+    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths, globOpts);
+    if (!teamMatch && proposalConcepts.length > 0) {
+      for (const pref of teamPreferences) {
+        if (pref.kind !== "avoid") continue;
+        if (pref.scope?.paths?.length) {
+          if (proposalPaths.length === 0) continue;
+          if (!scopeHit(pref, proposalPaths, globOpts)) continue;
+        }
+        const cc = findConceptToConceptMatch(proposalConcepts, [pref.concept]);
+        if (cc) {
+          teamMatch = { proposal: cc.proposalConcept, pref, via: "avoid" };
+          break;
+        }
+      }
+    }
+    if (teamMatch) {
+      const { pref, proposal, via } = teamMatch;
+      const attribution = pref.addedBy ? ` (added by ${pref.addedBy})` : "";
+      const scope = pref.scope?.paths?.length ? `
+Scope: ${pref.scope.paths.join(", ")}` : "";
+      const headline = via === "avoid" ? `your proposal touches "${proposal}" which conflicts with the team's "avoid: ${pref.concept}" policy` : `your proposal addresses "${proposal}" but is missing the team-required "${pref.concept}"`;
+      const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 ${headline}.
+Team rationale: "${pref.rationale}"${attribution}.${scope}
+
+` + (via === "avoid" ? `Do NOT propose this. Revise to use an alternative approach, or call present_findings to make a case for changing the team policy. The artifact was NOT created.` : `Revise your proposal to use the required approach, or call present_findings to surface why this case warrants an exception. The artifact was NOT created.`);
+      return {
+        blocked: true,
+        block: {
+          source: "team",
+          message,
+          broadcastEvent: {
+            type: "preflight_blocked",
+            toolName,
+            source: "team",
+            match: {
+              proposal,
+              description: pref.concept,
+              reason: pref.rationale,
+              concept: pref.concept,
+              via,
+              kind: pref.kind,
+              addedBy: pref.addedBy,
+              scope: pref.scope?.paths
+            }
+          }
+        },
+        trace: {
+          decision: "blocked",
+          consideredCount: considered.length,
+          consideredConcepts: considered,
+          nearMisses,
+          block: {
+            source: "team",
+            concept: pref.concept,
+            reason: pref.rationale,
+            via
+          }
+        }
+      };
+    }
+  }
+  return {
+    blocked: false,
+    trace: {
+      decision: "admitted",
+      consideredCount: considered.length,
+      consideredConcepts: considered,
+      nearMisses
+    }
+  };
+}
+function coerceStanceConcept(concept) {
+  if (concept === void 0 || concept === null || typeof concept === "string") return { concept, changed: false };
+  if (typeof concept === "object" && !Array.isArray(concept)) {
+    const name = concept.name;
+    if (typeof name === "string" && name.trim()) return { concept: name, changed: true };
+  }
+  return { concept: void 0, changed: true };
+}
+function runPreflightGuarded(input, indexOf = (i) => i) {
+  const coerced = [];
+  const skipped = [];
+  let entries = input.rejectedApproaches.map((entry, i) => {
+    const c = coerceStanceConcept(entry.concept);
+    if (!c.changed) return { entry, i };
+    coerced.push(indexOf(i));
+    return { entry: { ...entry, concept: c.concept ?? void 0 }, i };
+  });
+  const run = (list2, team = input.teamPreferences) => runPreflight({ ...input, rejectedApproaches: list2.map((e) => e.entry), teamPreferences: team });
+  let result;
+  try {
+    result = run(entries);
+  } catch (err) {
+    const survivors = entries.filter((e) => {
+      try {
+        runPreflight({ toolName: input.toolName, proposalStrings: input.proposalStrings, proposalPaths: input.proposalPaths, proposalConcepts: input.proposalConcepts, rejectedApproaches: [e.entry], teamPreferences: [] });
+        return true;
+      } catch {
+        skipped.push(indexOf(e.i));
+        return false;
+      }
+    });
+    if (survivors.length === entries.length) throw err;
+    entries = survivors;
+    result = run(entries);
+  }
+  return { result, coerced: coerced.sort((a, b) => a - b), skipped: skipped.sort((a, b) => a - b) };
+}
 
 // src/store/preflight-residual.ts
 var RESIDUAL_CAP = 100;
@@ -27278,11 +27709,11 @@ function parsePrReference(ref) {
 function postedReviewsPath(projectRoot2, sessionId) {
   return path14.join(projectRoot2, ".deeppairing", "sessions", sessionId, "posted-reviews.json");
 }
-function samePrTarget(record2, ref) {
+function samePrTarget(record3, ref) {
   const parsed = parsePrNumber(ref);
-  if (parsed === null || parsed.number !== record2.prNumber) return false;
-  if (parsed.owner && parsed.repo && record2.owner && record2.repo) {
-    return parsed.owner.toLowerCase() === record2.owner.toLowerCase() && parsed.repo.toLowerCase() === record2.repo.toLowerCase();
+  if (parsed === null || parsed.number !== record3.prNumber) return false;
+  if (parsed.owner && parsed.repo && record3.owner && record3.repo) {
+    return parsed.owner.toLowerCase() === record3.owner.toLowerCase() && parsed.repo.toLowerCase() === record3.repo.toLowerCase();
   }
   return true;
 }
@@ -27298,9 +27729,9 @@ function readPostedReviews(projectRoot2, sessionId) {
     return [];
   }
 }
-function appendPostedReview(projectRoot2, sessionId, record2) {
+function appendPostedReview(projectRoot2, sessionId, record3) {
   const all = readPostedReviews(projectRoot2, sessionId);
-  all.push(record2);
+  all.push(record3);
   writeJsonAtomic(postedReviewsPath(projectRoot2, sessionId), all);
   return all;
 }
@@ -27799,6 +28230,21 @@ function pageOnlyHtmlAnchor(target, artifactType) {
   const { htmlAnchor: _dropped, ...rest } = target;
   return rest;
 }
+var ParentSupersededError = class extends Error {
+  constructor(parentId, successorId, successorVersion, successorFromFile) {
+    super(`${parentId} was already replaced${successorId ? ` by ${successorId}${successorVersion ? ` (v${successorVersion})` : ""}` : ""}; nothing was created.`);
+    this.parentId = parentId;
+    this.successorId = successorId;
+    this.successorVersion = successorVersion;
+    this.successorFromFile = successorFromFile;
+    this.name = "ParentSupersededError";
+  }
+  parentId;
+  successorId;
+  successorVersion;
+  successorFromFile;
+  code = "parent_superseded";
+};
 var FileStore = class _FileStore {
   basePath;
   projectHint;
@@ -28250,6 +28696,18 @@ var FileStore = class _FileStore {
   // --- Artifacts ---
   createArtifact(params) {
     this.assertAuthorizationReadable();
+    if (params.requireUnsupersededParent && params.parentId) {
+      const parent = this.artifacts.find((a) => a.id === params.parentId);
+      const child = this.artifacts.filter((a) => a.parentId === params.parentId).pop();
+      if (!parent || child || ["superseded", "retracted", "rejected", "obsolete"].includes(parent.status)) {
+        throw new ParentSupersededError(
+          params.parentId,
+          child?.id,
+          child?.version,
+          child !== void 0 && readFileWatch(child.fileWatch).recorded?.fromArtifactId === params.parentId
+        );
+      }
+    }
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const featureId = normalizeFeatureId(params.feature)?.slug;
     const presentedBy = typeof params.presentedBy === "string" && params.presentedBy.trim() ? params.presentedBy.trim().slice(0, 80) : void 0;
@@ -28840,6 +29298,43 @@ var FileStore = class _FileStore {
       if (ids.includes(a.id)) {
         a.statusChangeUnreported = false;
       }
+    }
+    this.scheduleFlush();
+  }
+  /**
+   * #680 slice 3 — set (or clear, with `undefined`) one of a page artifact's
+   * file-watch notices (see PageFileWatchSchema). Written only by the daemon's
+   * page watch. Unknown ids are a no-op.
+   */
+  setPageFileWatch(artifactId, key, notice) {
+    this.assertAuthorizationReadable();
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art) return;
+    const current = readFileWatch(art.fileWatch);
+    const next = { ...current };
+    if (notice === void 0) delete next[key];
+    else next[key] = structuredClone(notice);
+    if (next.recorded === void 0 && next.refused === void 0) delete art.fileWatch;
+    else art.fileWatch = next;
+    this.scheduleFlush();
+  }
+  /**
+   * #680 slice 3 — check_feedback reported these artifacts' file-watch notices:
+   * mark each undelivered one delivered (mirrors acknowledgeStatusChanges).
+   */
+  acknowledgeFileWatchNotices(refs) {
+    this.assertAuthorizationReadable();
+    for (const r of refs) {
+      const a = this.artifacts.find((x) => x.id === r?.artifactId);
+      if (!a || a.fileWatch === void 0) continue;
+      const fw = readFileWatch(a.fileWatch);
+      if (fw.recorded && !fw.recorded.delivered && r.recordedAt !== void 0 && fw.recorded.at === r.recordedAt) {
+        fw.recorded = { ...fw.recorded, delivered: true };
+      }
+      if (fw.refused && !fw.refused.delivered && r.refusedAt !== void 0 && fw.refused.at === r.refusedAt && fw.refused.digest === r.refusedDigest) {
+        fw.refused = { ...fw.refused, delivered: true };
+      }
+      a.fileWatch = fw;
     }
     this.scheduleFlush();
   }
@@ -29941,8 +30436,8 @@ var FileStore = class _FileStore {
    * outside world, so it must be on disk before the tool returns — a crash
    * between the post and the flush would re-arm a duplicate.
    */
-  recordPostedReview(record2) {
-    this.postedReviews = appendPostedReview(this.projectRoot, this.sessionId, record2);
+  recordPostedReview(record3) {
+    this.postedReviews = appendPostedReview(this.projectRoot, this.sessionId, record3);
   }
   /**
    * R1 (#279) F1 — RE-READ the sidecar, don't trust the cache.
@@ -30149,7 +30644,7 @@ var FileStore = class _FileStore {
             throw new SessionReviewConflictError(local.id);
           }
           if (!base && ["content", "version", "type", "parentId", "status"].some(
-            (field) => JSON.stringify(local[field]) !== JSON.stringify(remote[field])
+            (field2) => JSON.stringify(local[field2]) !== JSON.stringify(remote[field2])
           )) {
             throw new SessionReviewConflictError(local.id);
           }
@@ -30259,10 +30754,10 @@ function truncateOneLiner(raw2, max = ONE_LINER_MAX) {
   const body = lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut;
   return `${body.trimEnd()}\u2026`;
 }
-function contentString(artifact, field) {
+function contentString(artifact, field2) {
   const content = artifact.content;
   if (!content || typeof content !== "object") return "";
-  const v = content[field];
+  const v = content[field2];
   return typeof v === "string" ? v.trim() : "";
 }
 function newestFirst(items) {
@@ -31065,7 +31560,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path27 = sanitizePath(file2.path, projectRoot2);
+  const path29 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -31082,7 +31577,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path27)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path29)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -31201,9 +31696,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path27 = sanitizePath(e.filePath, projectRoot2);
+    const path29 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path27 ? `<p class="anchor"><code>${esc2(path27 + range)}</code></p>` : "";
+    let anchor = path29 ? `<p class="anchor"><code>${esc2(path29 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -31329,10 +31824,10 @@ function planBody(a, ctx) {
 }
 function decisionBody(a, ctx) {
   const content = coerceDecisionContent(a.content);
-  const record2 = ctx.state.decisions.find(
+  const record3 = ctx.state.decisions.find(
     (d) => d.decisionId === content.decisionId || d.artifactId === a.id
   );
-  const chosenId = record2?.response?.optionId;
+  const chosenId = record3?.response?.optionId;
   const parts = [];
   if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
   parts.push(`<div class="options">`);
@@ -31348,10 +31843,10 @@ function decisionBody(a, ctx) {
     );
   }
   parts.push(`</div>`);
-  if (record2?.response) {
+  if (record3?.response) {
     const chosenOption = (content.options ?? []).find((o) => o.id === chosenId);
     parts.push(
-      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${escText(chosenOption?.title ?? chosenId ?? "")}` + (record2.response.reasoning ? ` \u2014 \u201C${renderInline(record2.response.reasoning)}\u201D` : "") + `</div>`
+      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${escText(chosenOption?.title ?? chosenId ?? "")}` + (record3.response.reasoning ? ` \u2014 \u201C${renderInline(record3.response.reasoning)}\u201D` : "") + `</div>`
     );
   } else {
     parts.push(`<p class="pending">No answer recorded for this fork.</p>`);
@@ -31360,9 +31855,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path27 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path29 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path27)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path29)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -31911,9 +32406,9 @@ function renderSessionPage(state, options) {
   for (const c of state.comments ?? []) {
     const id = c.target?.artifactId;
     if (id && artifactIds.has(id)) {
-      const list = commentsByArtifact.get(id) ?? [];
-      list.push(c);
-      commentsByArtifact.set(id, list);
+      const list2 = commentsByArtifact.get(id) ?? [];
+      list2.push(c);
+      commentsByArtifact.set(id, list2);
     } else {
       looseComments.push(c);
     }
@@ -32589,9 +33084,9 @@ function formatReplay(state) {
   });
   const annotationsByEvent = /* @__PURE__ */ new Map();
   for (const ann of state.annotations ?? []) {
-    const list = annotationsByEvent.get(ann.targetEventId) ?? [];
-    list.push(ann);
-    annotationsByEvent.set(ann.targetEventId, list);
+    const list2 = annotationsByEvent.get(ann.targetEventId) ?? [];
+    list2.push(ann);
+    annotationsByEvent.set(ann.targetEventId, list2);
   }
   if (events.length === 0) {
     sections.push("_No events recorded in this session._");
@@ -32686,9 +33181,9 @@ function formatPrComments(state) {
     const evidence = entry.finding.evidence;
     const firstPath = Array.isArray(evidence) && evidence[0] && typeof evidence[0] === "object" ? evidence[0].filePath : void 0;
     const key = firstPath ?? "General";
-    const list = byFile.get(key) ?? [];
-    list.push(entry);
-    byFile.set(key, list);
+    const list2 = byFile.get(key) ?? [];
+    list2.push(entry);
+    byFile.set(key, list2);
   }
   for (const [filePath, entries] of byFile.entries()) {
     sections.push(`### ${filePath}`);
@@ -33362,17 +33857,17 @@ var StanceExceptionRegistry = class {
     return this.enqueue(binding.sessionId, () => {
       const existing = [...this.allowances.values()].find((a) => a.blockId === blockId);
       if (existing) return { status: 200, body: { allowance: this.view(existing), receipt: this.receipt(existing), existing: true } };
-      const refuse = (why, message) => ({ status: 409, body: { error: message, code: ERROR_CODES.stance_exception_not_eligible, reason: why } });
-      if (binding.source !== "session") return refuse("team_rule", "Team rules can't be allowed once \u2014 only your own stances.");
-      if (binding.sessionId.startsWith("demo_")) return refuse("demo_session", "Demo blocks can't be allowed.");
+      const refuse2 = (why, message) => ({ status: 409, body: { error: message, code: ERROR_CODES.stance_exception_not_eligible, reason: why } });
+      if (binding.source !== "session") return refuse2("team_rule", "Team rules can't be allowed once \u2014 only your own stances.");
+      if (binding.sessionId.startsWith("demo_")) return refuse2("demo_session", "Demo blocks can't be allowed.");
       if (!binding.eligible || !binding.snapshot || !binding.preconditions || !binding.effectiveDigest || !binding.callFingerprint || !binding.registrationId || !binding.stance || !binding.toolName) {
-        return refuse(binding.ineligibleReason ?? "not_eligible", "This block can't be allowed once.");
+        return refuse2(binding.ineligibleReason ?? "not_eligible", "This block can't be allowed once.");
       }
-      if (!this.isLive(binding.registrationId)) return refuse("session_ended", "That Claude session has ended, so there is nothing to allow.");
+      if (!this.isLive(binding.registrationId)) return refuse2("session_ended", "That Claude session has ended, so there is nothing to allow.");
       const store = this.deps.getStore(binding.sessionId);
       const stanceRows = store?.getSessionMemory().rejectedApproaches ?? [];
       if (!stanceRows.some((r) => sameStance(r, binding.stance))) {
-        return refuse("stance_retired", "That stance is no longer on file (it was retired or changed).");
+        return refuse2("stance_retired", "That stance is no longer on file (it was retired or changed).");
       }
       const grantedAt = this.now();
       const allowance = {
@@ -33463,9 +33958,9 @@ var StanceExceptionRegistry = class {
   claimAndCreate(sessionId, store, token, operationId, fingerprint, request) {
     const reg = this.resolveToken(token);
     const refused = (reason, extra = {}) => ({ status: "refused", code: ERROR_CODES.stance_exception_claim_refused, reason, ...extra });
-    const list = request.exceptionIds.map((id) => this.allowances.get(id));
-    if (list.length === 0 || list.some((a) => !a)) return refused("unknown_allowance");
-    const allowances = list;
+    const list2 = request.exceptionIds.map((id) => this.allowances.get(id));
+    if (list2.length === 0 || list2.some((a) => !a)) return refused("unknown_allowance");
+    const allowances = list2;
     for (const a of allowances) {
       if (!reg || a.sessionId !== sessionId || a.registrationId !== reg.registrationId) return refused("not_this_registration");
       const st = this.derived(a);
@@ -34663,9 +35158,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(sid) ?? transient;
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const artifacts = await store.getArtifacts();
-    const record2 = await store.getDecision(decisionId);
+    const record3 = await store.getDecision(decisionId);
     const isDecisionArtifact = (a) => !!a && a.type === "decision";
-    const byRecord = record2?.artifactId ? artifacts.find((a) => a.id === record2.artifactId) : void 0;
+    const byRecord = record3?.artifactId ? artifacts.find((a) => a.id === record3.artifactId) : void 0;
     const artifact = (isDecisionArtifact(byRecord) ? byRecord : void 0) ?? artifacts.find(
       (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
     );
@@ -34679,7 +35174,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         404
       );
     }
-    if (record2?.response) {
+    if (record3?.response) {
       return c.json(
         {
           error: "decision_already_resolved",
@@ -35790,7 +36285,7 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
   app.use("/api/active-sessions", gate);
   app.use("/api/live-session/*", gate);
   app.get("/api/active-sessions", (c) => {
-    const list = Array.from(sessions.entries()).map(([id, store]) => {
+    const list2 = Array.from(sessions.entries()).map(([id, store]) => {
       const meta3 = sessionMeta.get(id);
       return {
         sessionId: id,
@@ -35811,7 +36306,7 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
         ...sessionRevisions ? { revision: sessionRevisions.counts.get(id) ?? 0, revisionEpoch: sessionRevisions.epoch } : {}
       };
     });
-    return c.json({ sessions: list });
+    return c.json({ sessions: list2 });
   });
   app.get("/api/live-session/:sessionId", (c) => {
     const store = sessions.get(c.req.param("sessionId"));
@@ -35820,7 +36315,7 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
   });
   return app;
 }
-function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions, stanceExceptions, refreshCompanionLink) {
+function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions, stanceExceptions, refreshCompanionLink, onSessionLifecycle) {
   const log2 = logFn ?? (() => {
   });
   const app = new Hono2();
@@ -35936,6 +36431,10 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const store = installSession(sessionId, body);
     activeSessions?.add(sessionId);
     const registration = stanceExceptions?.register(sessionId, { split: body.splitMode === true });
+    try {
+      onSessionLifecycle?.(sessionId, "registered");
+    } catch {
+    }
     return c.json({
       status: "registered",
       sessionId,
@@ -35959,7 +36458,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const store = sessions.get(sessionId);
     if (store) store.forceFlush();
     const stillLive = stanceExceptions ? stanceExceptions.unregister(sessionId, c.req.header(REGISTRATION_HEADER)) : false;
-    if (!stillLive) activeSessions?.delete(sessionId);
+    if (!stillLive) {
+      activeSessions?.delete(sessionId);
+      try {
+        onSessionLifecycle?.(sessionId, "unregistered");
+      } catch {
+      }
+    }
     return c.json({ status: "unregistered" });
   });
   app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
@@ -35976,7 +36481,22 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, CreateArtifactBody);
     if (!parsed.ok) return parsed.res;
-    const artifact = r.store.createArtifact(parsed.data);
+    let artifact;
+    try {
+      artifact = r.store.createArtifact(parsed.data);
+    } catch (err) {
+      if (err instanceof ParentSupersededError) {
+        return c.json({
+          error: err.message,
+          code: ERROR_CODES.parent_superseded,
+          parentId: err.parentId,
+          ...err.successorId ? { successorId: err.successorId } : {},
+          ...err.successorVersion ? { successorVersion: err.successorVersion } : {},
+          successorFromFile: err.successorFromFile
+        }, 409);
+      }
+      throw err;
+    }
     broadcast(sessionId, { type: "artifact_created", artifact });
     return c.json({ artifact });
   });
@@ -35999,6 +36519,24 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     }
     const { ids } = body;
     r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
+    return c.json({ status: "acknowledged" });
+  });
+  app.post("/api/internal/sessions/:sessionId/artifacts/file-watch/acknowledge", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { refs: FileWatchNoticeRef[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { refs } = body;
+    const str2 = (v) => typeof v === "string" ? v : void 0;
+    const clean = (Array.isArray(refs) ? refs : []).filter((x) => !!x && typeof x === "object" && typeof x.artifactId === "string").map((x) => ({
+      artifactId: x.artifactId,
+      ...str2(x.recordedAt) !== void 0 ? { recordedAt: str2(x.recordedAt) } : {},
+      ...str2(x.refusedAt) !== void 0 ? { refusedAt: str2(x.refusedAt) } : {},
+      ...str2(x.refusedDigest) !== void 0 ? { refusedDigest: str2(x.refusedDigest) } : {}
+    }));
+    r.store.acknowledgeFileWatchNotices(clean);
     return c.json({ status: "acknowledged" });
   });
   app.get("/api/internal/sessions/:sessionId/render-failures", (c) => {
@@ -36612,7 +37150,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     return c.json({ status: "updated" });
   });
   app.get("/api/internal/sessions", (c) => {
-    const list = Array.from(sessions.entries()).map(([id, store]) => {
+    const list2 = Array.from(sessions.entries()).map(([id, store]) => {
       const meta3 = sessionMeta.get(id);
       return {
         sessionId: id,
@@ -36622,7 +37160,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         registeredAt: meta3?.registeredAt
       };
     });
-    return c.json({ sessions: list });
+    return c.json({ sessions: list2 });
   });
   return app;
 }
@@ -37048,6 +37586,1397 @@ async function probeDaemonIdentity(port, timeoutMs = 1500) {
   }
 }
 
+// src/daemon/page-watch.ts
+import fs26 from "node:fs";
+import path26 from "node:path";
+import crypto6 from "node:crypto";
+
+// src/mcp/tools/present-page.ts
+import fs25 from "node:fs";
+import path25 from "node:path";
+
+// src/mcp/page-text.ts
+var DROP_ELEMENTS = ["script", "style", "template", "title"];
+var TEXT_ELEMENTS = ["textarea", "xmp"];
+var BLOCK_TAGS = /* @__PURE__ */ new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "br",
+  "caption",
+  "dd",
+  "details",
+  "div",
+  "dl",
+  "dt",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "li",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+  "body",
+  "html",
+  "label",
+  "button",
+  "option",
+  "legend",
+  "fieldset",
+  "head",
+  "noscript",
+  "textarea",
+  "xmp"
+]);
+var PAGE_TEXT_MAX_BLOCKS = 2e3;
+var NAMED_ENTITIES = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  rsquo: "'",
+  lsquo: "'",
+  rdquo: '"',
+  ldquo: '"',
+  middot: "\xB7",
+  times: "\xD7",
+  rarr: "\u2192",
+  larr: "\u2190"
+};
+function decodeEntities(s) {
+  return s.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,8});/gi, (m, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return " ";
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return " ";
+      }
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? m;
+  });
+}
+function opensElement(lower, at, tag) {
+  if (!lower.startsWith(tag, at + 1)) return false;
+  const next = lower.charCodeAt(at + 1 + tag.length);
+  return Number.isNaN(next) || next === 62 || next === 47 || next <= 32;
+}
+function extractPageTextBlocks(html) {
+  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  const lastAt = /* @__PURE__ */ new Map();
+  const memoIndexOf = (hay, needle, from) => {
+    const prev = lastAt.get(needle);
+    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
+    const at = hay.indexOf(needle, from);
+    lastAt.set(needle, at);
+    return at;
+  };
+  const findClose = (tag, from) => memoIndexOf(lower, `</${tag}`, from);
+  const findMarker = (marker, from) => memoIndexOf(html, marker, from);
+  let text = "";
+  let i = 0;
+  const n = html.length;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      text += html.slice(i);
+      break;
+    }
+    text += html.slice(i, lt);
+    if (lower.startsWith("<!--", lt)) {
+      if (lower.startsWith("<!-->", lt)) {
+        i = lt + 5;
+        continue;
+      }
+      if (lower.startsWith("<!--->", lt)) {
+        i = lt + 6;
+        continue;
+      }
+      const a = findMarker("-->", lt + 4);
+      const b = findMarker("--!>", lt + 4);
+      const end = a === -1 ? b === -1 ? -1 : b + 4 : b === -1 || a < b ? a + 3 : b + 4;
+      i = end === -1 ? n : end;
+      continue;
+    }
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) {
+      text += html.slice(lt);
+      break;
+    }
+    if (opensElement(lower, lt, "plaintext")) {
+      text += "\n" + html.slice(gt + 1);
+      break;
+    }
+    const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const literal2 = drop ? void 0 : TEXT_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const raw2 = drop ?? literal2;
+    if (raw2) {
+      const close = findClose(raw2, gt + 1);
+      if (close === -1) {
+        text += "\n";
+        i = gt + 1;
+        continue;
+      }
+      if (literal2) text += "\n" + html.slice(gt + 1, close);
+      const closeEnd = html.indexOf(">", close);
+      text += "\n";
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const m = /^<\/?\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
+    if (m && BLOCK_TAGS.has(m[1])) text += "\n";
+    i = gt + 1;
+  }
+  const blocks = [];
+  for (const line of decodeEntities(text).split("\n")) {
+    const t = line.replace(/\s+/g, " ").trim();
+    if (t) blocks.push(t);
+    if (blocks.length >= PAGE_TEXT_MAX_BLOCKS) break;
+  }
+  return blocks;
+}
+
+// src/mcp/artifact-preflight.ts
+var record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+var list = (value) => Array.isArray(value) ? value : [];
+var strings = (values) => values.filter((v) => typeof v === "string").map((v) => v.trim()).filter((v) => v.length > 0);
+var field = (values, key) => list(values).map((v) => record2(v)[key]);
+function artifactProposal(type, title, value) {
+  const c = record2(value);
+  let text = [];
+  let paths = [];
+  let concepts = [];
+  let body = [];
+  switch (type) {
+    case "research":
+      text = [title, c.summary, ...field(c.findings, "title"), ...field(c.findings, "recommendation")];
+      paths = list(c.findings).flatMap((f) => field(record2(f).evidence, "filePath"));
+      break;
+    case "decision":
+      text = [c.context, ...field(c.options, "title"), ...field(c.options, "description")];
+      concepts = field(c.options, "concept").map((v) => record2(v).name);
+      break;
+    case "spec":
+      text = [title, c.objective, ...field(c.requirements, "statement"), ...field(c.requirements, "rationale"), ...field(c.tasks, "description")];
+      break;
+    case "plan":
+      paths = list(c.steps).flatMap((s) => list(record2(s).files).map((f) => typeof f === "string" ? f : record2(f).filePath));
+      text = [title, ...field(c.steps, "description"), ...field(c.steps, "reasoning"), ...paths];
+      break;
+    case "code_change":
+      text = [c.filePath, c.reasoning];
+      paths = [c.filePath];
+      concepts = [record2(c.concept).name];
+      break;
+    case "changeset":
+      text = [title, c.summary, ...list(c.risks)];
+      paths = field(c.files, "path");
+      break;
+    case "debrief":
+      text = [title, c.summary, ...field(c.sections, "title"), ...field(c.decisionsMade, "what")];
+      concepts = list(c.sections).flatMap((s) => field(record2(s).concepts, "name"));
+      break;
+    case "explainer":
+      text = [title, c.overview, ...field(c.sections, "heading")];
+      break;
+    case "page":
+      text = [title, c.summary];
+      body = typeof c.html === "string" ? extractPageTextBlocks(c.html) : [];
+      concepts = [record2(c.concept).name];
+      break;
+    default:
+      return null;
+  }
+  const head = strings(text);
+  const bodyText = strings(body);
+  return {
+    text: [...head, ...bodyText],
+    paths: strings(paths),
+    concepts: strings(concepts),
+    // A debrief reports what already happened; it is not a fresh proposal.
+    // Recalled rejections still surface as advice, but cannot prevent the
+    // historical record from naming the rejected path.
+    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external",
+    // #680 — page BODY text is free prose, not a named proposal: the matcher's
+    // #621 raw-text rule applies from the first body block on.
+    ...type === "page" ? { rawEditTextFrom: head.length } : {}
+  };
+}
+
+// src/mcp/validate-tool-input.ts
+function isArrayLevelIssue(i) {
+  if ((i.code === "too_small" || i.code === "too_big") && i.origin === "array") return true;
+  if (i.code === "invalid_type" && i.expected === "array") return true;
+  return false;
+}
+function isTopLevelScalarIssue(i) {
+  if (i.path.length !== 1) return false;
+  if (isArrayLevelIssue(i)) return false;
+  if (i.code === "invalid_type" && (i.expected === "array" || i.expected === "object")) return false;
+  return true;
+}
+function scalarTypeTag(i) {
+  if (i.code === "invalid_type" && i.expected) return i.expected;
+  if (i.code === "invalid_value") return "enum";
+  if ((i.code === "too_small" || i.code === "too_big") && i.origin) return i.origin;
+  return "value";
+}
+function isScalarBoundIssue(i) {
+  return i.code === "too_big" || i.code === "too_small";
+}
+function receivedSize(input, path29) {
+  let cur = input;
+  for (const seg of path29) {
+    if (cur == null || typeof cur !== "object") return void 0;
+    cur = cur[seg];
+  }
+  if (typeof cur === "string" || Array.isArray(cur)) return cur.length;
+  if (typeof cur === "number") return cur;
+  return void 0;
+}
+function scalarIssueClause(i, input) {
+  const field2 = `\`${i.path.join(".") || "(root)"}\``;
+  if (isScalarBoundIssue(i)) {
+    const isString = i.origin === "string";
+    const isArray = i.origin === "array";
+    const unit = isString ? " chars" : isArray ? " items" : "";
+    const size = receivedSize(input, i.path);
+    const got = size !== void 0 ? `, got ${size}` : "";
+    if (i.code === "too_big") {
+      return `${field2}: too long (max ${i.maximum}${unit}${got})`;
+    }
+    return `${field2}: too short (min ${i.minimum}${unit}${got})`;
+  }
+  return `${field2} (${scalarTypeTag(i)})`;
+}
+function collapsePath(path29) {
+  return path29.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+}
+function formatValidationError(toolName, err, example, input) {
+  const raw2 = err.issues;
+  if (raw2.length > 0 && raw2.every(isTopLevelScalarIssue)) {
+    const clauses = raw2.map((i) => scalarIssueClause(i, input)).join(", ");
+    const hasBound = raw2.some(isScalarBoundIssue);
+    const text2 = hasBound ? `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 ${raw2.length === 1 ? "a field is invalid" : "fields are invalid"}: ${clauses}. Fix ${raw2.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.` : `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 ${raw2.length === 1 ? "a required field is" : "required fields are"} missing or the wrong type: ${clauses}. Add/fix ${raw2.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.`;
+    return {
+      content: [{ type: "text", text: text2 }],
+      isError: true,
+      _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
+    };
+  }
+  const cardinality = raw2.filter(isArrayLevelIssue);
+  const rest = raw2.filter((i) => !isArrayLevelIssue(i));
+  const ordered = [...cardinality, ...rest];
+  const groups = /* @__PURE__ */ new Map();
+  for (const i of ordered) {
+    const key = `${collapsePath(i.path)}||${i.message}`;
+    const g = groups.get(key);
+    if (g) g.count++;
+    else groups.set(key, { first: i, count: 1 });
+  }
+  const groupArr = [...groups.values()];
+  const issues = groupArr.slice(0, 5).map((g) => {
+    const path29 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
+    return `  \u2022 ${path29}: ${g.first.message}${suffix}`;
+  });
+  const more = groupArr.length > 5 ? `
+  \u2022 \u2026and ${groupArr.length - 5} more` : "";
+  const text = `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 your input doesn't match the schema:
+` + issues.join("\n") + more + `
+
+Expected shape (EXAMPLE \u2014 replace EVERY value with your real content):
+${example}
+
+Fix the input and call ${toolName} again. The artifact was NOT created.`;
+  return {
+    content: [{ type: "text", text }],
+    isError: true,
+    // IV10 — machine-readable code for future MCP clients. Same string
+    // INPUT_VALIDATION_FAILED that's in the text body, but lifted into
+    // _meta so clients can branch without parsing prose.
+    _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
+  };
+}
+var EXAMPLE_FINDINGS = `{
+  "title": "Auth audit",
+  "summary": "Two issues in auth.ts",
+  "findings": [
+    {
+      "category": "security",
+      "title": "Weak password hash",
+      "detail": "bcrypt rounds=4 is too low",
+      "evidence": [
+        { "filePath": "auth.ts", "lineStart": 23, "lineEnd": 23,
+          "snippet": "const hash = bcrypt.hash(pw, 4);",
+          "explanation": "Code path uses the weak cost factor." },
+        { "locator": { "kind": "quote", "value": "passwords are hashed with 4 rounds" },
+          "snippet": "passwords are hashed with 4 rounds",
+          "explanation": "The security policy doc mandates the weak factor \u2014 anchor a doc/message passage with locator (kind: quote | heading | charRange | url) and NO file:line when it isn't code." }
+      ],
+      "significance": "high",
+      "recommendation": "raise to 12+",
+      "concept": { "name": "password-hash work factor tuning",
+        "oneLineExplanation": "the cost should make brute-force impractical at today's hardware" }
+    }
+  ]
+}`;
+var EXAMPLE_OPTIONS = `{
+  "context": "Which cache layer?",
+  "options": [
+    { "id": "a", "title": "Redis", "description": "...", "pros": ["fast"],
+      "cons": ["another service"], "effort": "medium", "risk": "low",
+      "recommendation": true,
+      "concept": { "name": "external cache service",
+        "oneLineExplanation": "in-process is faster but loses on multi-instance" } },
+    { "id": "b", "title": "In-memory LRU", "description": "...", "pros": ["simple"],
+      "cons": ["per-instance"], "effort": "low", "risk": "medium",
+      "recommendation": false,
+      "concept": { "name": "in-process LRU",
+        "oneLineExplanation": "no network hop; each instance keeps its own copy" } }
+  ]
+}`;
+var EXAMPLE_SPEC = `{
+  "title": "Rate limit auth endpoints",
+  "objective": "Block credential stuffing",
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "statement": "Limit /login to 5 attempts/min per IP",
+      "rationale": "Slows brute-force without harming real users",
+      "acceptanceCriteria": ["6th attempt within 60s returns 429"]
+    }
+  ]
+}`;
+var EXAMPLE_PLAN = `{
+  "title": "Add rate limiting",
+  "estimatedChanges": 3,
+  "steps": [
+    { "description": "Install limiter middleware", "reasoning": "...", "files": ["packages/api/middleware/limit.ts"] }
+  ]
+}`;
+var EXAMPLE_CODE_CHANGE = `{
+  "filePath": "packages/api/auth.ts",
+  "changeType": "modify",
+  "before": "bcrypt.hash(pw, 4)",
+  "after":  "bcrypt.hash(pw, 12)",
+  "reasoning": "Raise cost factor; rounds=4 is brute-forceable in <1 day",
+  "concept": { "name": "password-hash work factor tuning",
+    "oneLineExplanation": "the cost should make brute-force impractical at today's hardware" }
+}`;
+var EXAMPLE_REASONING = `{
+  "action": "extract DI for the cache",
+  "reasoning": "tests need to swap Redis for an in-memory fake",
+  "concept": { "name": "dependency inversion",
+    "oneLineExplanation": "depend on an interface, not a concrete impl" }
+}`;
+var EXAMPLE_CHANGESET = `{
+  "title": "Move session-TTL refresh into middleware",
+  "summary": "Centralize the sliding-window refresh so every route inherits it",
+  "risks": ["touches auth"],
+  "files": [
+    {
+      "path": "auth/middleware.ts",
+      "changeType": "modified",
+      "stats": { "additions": 4, "deletions": 2 },
+      "hunks": [
+        {
+          "header": "@@ -24,4 +24,6 @@",
+          "lines": [
+            { "kind": "ctx", "content": "  const sid = readSessionCookie(req);", "oldLine": 25, "newLine": 25 },
+            { "kind": "del", "content": "  const session = await store.get(sid);", "oldLine": 26 },
+            { "kind": "add", "content": "  const session = await store.getAndTouch(sid);", "newLine": 26 }
+          ]
+        }
+      ]
+    },
+    { "path": "auth/session.ts", "changeType": "modified",
+      "hunks": [ { "lines": [ { "kind": "add", "content": "  expiresAt: number;", "newLine": 12 } ] } ] }
+  ]
+}`;
+var EXAMPLE_DEBRIEF = `{
+  "title": "Debrief \u2014 rate limiting on the auth endpoints",
+  "summary": "We added IP-based rate limiting to /login and /reset so credential-stuffing is throttled without hurting real users. Here is the walk of what changed, the calls I made alone, and what I'd like your eyes on.",
+  "sections": [
+    {
+      "title": "Added a sliding-window limiter middleware",
+      "body": "Requests to the auth routes now pass through a limiter keyed on client IP.",
+      "concepts": [
+        { "name": "sliding-window rate limiting",
+          "oneLineExplanation": "counts requests in a moving time window instead of fixed buckets, so bursts at a boundary can't slip through" }
+      ],
+      "evidence": [
+        { "filePath": "api/middleware/limit.ts", "lineStart": 12, "lineEnd": 14,
+          "snippet": "if (window.count(ip) > MAX) return res.status(429).end();",
+          "explanation": "The choke point every auth route inherits." }
+      ],
+      "changesetRef": "art_xxxxxxxxxx"
+    }
+  ],
+  "decisionsMade": [
+    { "what": "Return 429 with a Retry-After rather than a silent drop.",
+      "why": "A silent drop makes the limit undebuggable for legitimate clients.",
+      "alternative": "Fail open on limiter errors \u2014 rejected as too permissive for auth." }
+  ],
+  "needsYourEyes": [
+    { "what": "The MAX threshold", "why": "Too low locks out real users; worth your call.",
+      "artifactRef": "art_xxxxxxxxxx" }
+  ],
+  "deferred": [
+    { "what": "Distributed limiter state", "why": "In-memory is fine single-instance; revisit when we scale out." }
+  ],
+  "openQuestions": ["Should the limit apply per-account as well as per-IP?"]
+}`;
+var EXAMPLE_EXPLAINER = `{
+  "title": "How session authentication works here",
+  "overview": "You're about to walk the request path for an authenticated route: how the cookie is read, where the session is looked up and its TTL refreshed, and what happens when it has expired. Read top to bottom \u2014 each step points at the exact code.",
+  "sections": [
+    {
+      "heading": "1. The cookie is read at the middleware edge",
+      "body": "Every authenticated route flows through requireSession, which first pulls the session id out of the signed cookie \u2014 no id, straight to 401.",
+      "evidence": [
+        { "filePath": "auth/middleware.ts", "lineStart": 22, "lineEnd": 24,
+          "snippet": "const sid = readSessionCookie(req);\\nif (!sid) return res.status(401).end();",
+          "explanation": "The gate before any lookup." }
+      ]
+    },
+    {
+      "heading": "2. The session is looked up and its TTL refreshed in one step",
+      "body": "store.getAndTouch(sid) fetches the session AND slides its expiry forward, so no route has to remember to refresh."
+    }
+  ],
+  "relatedArtifactIds": ["art_xxxxxxxxxx"],
+  "suggestedQuestions": ["Where does the session get created in the first place?"]
+}`;
+var EX_OPTIONS = JSON.parse(EXAMPLE_OPTIONS);
+var EX_FINDINGS = JSON.parse(EXAMPLE_FINDINGS);
+var EX_SPEC = JSON.parse(EXAMPLE_SPEC);
+var EX_PLAN = JSON.parse(EXAMPLE_PLAN);
+var EX_CODE_CHANGE = JSON.parse(EXAMPLE_CODE_CHANGE);
+var EX_REASONING = JSON.parse(EXAMPLE_REASONING);
+var EX_CHANGESET = JSON.parse(EXAMPLE_CHANGESET);
+var EX_DEBRIEF = JSON.parse(EXAMPLE_DEBRIEF);
+var EX_EXPLAINER = JSON.parse(EXAMPLE_EXPLAINER);
+var PresentOptionsInputSchema = external_exports.object({
+  context: external_exports.string().min(1),
+  // M1.1 — optional short question naming the fork. Trimmed + capped so it
+  // stays a header, not a paragraph (the full background lives in `context`).
+  title: external_exports.string().trim().min(1).max(80).optional().describe("A short question naming the fork, e.g. 'Which storage format for tags?' \u2014 the full background stays in context. Becomes the card header + the decision/session title."),
+  options: external_exports.array(DecisionOptionBaseSchema.extend({
+    id: external_exports.string().min(1).describe("Stable id \u2014 discussion threads anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on an option survives a tune"),
+    title: external_exports.string().min(1),
+    visuals: external_exports.array(PlanVisualSchema.extend({ id: external_exports.string().optional() })).optional()
+  })).min(2).max(4),
+  stakes: external_exports.enum(["low", "medium", "high"]).optional()
+});
+var EXAMPLE_PAGE = `{
+  "title": "Session cache: three invalidation strategies",
+  "summary": "The trade-offs side by side. Which one should I build?",
+  "path": "docs/review/cache-options.html"
+}`;
+var PresentPageInputSchema = external_exports.object({
+  title: external_exports.string().min(1).describe("The page's title (e.g. 'Session cache: three invalidation strategies')"),
+  summary: external_exports.string().optional().describe("One or two sentences TO your pair: what the page shows and what you want from them. Rendered above the page."),
+  html: external_exports.string().min(1).optional().describe("The page as inline, self-contained HTML (inline CSS/JS; no network: the frame blocks it). Give `html` OR `path`, not both."),
+  path: external_exports.string().min(1).optional().describe("A UTF-8 HTML file inside the project root (relative or absolute), read at present time and again on each save while the page is under review. Give `html` OR `path`, not both."),
+  concept: external_exports.union([external_exports.string().min(1), DecisionOptionConceptSchema]).optional().describe("The named pattern this page proposes, if any (e.g. 'write-through cache purge'). A reject records it, and the gate matches future proposals against it.")
+});
+function pageError(toolName, message, code = "INPUT_VALIDATION_FAILED") {
+  const c = TOOL_ERROR_CODES[code];
+  return {
+    content: [{ type: "text", text: `${c}: ${toolName} refused \u2014 ${message} The artifact was NOT created.` }],
+    isError: true,
+    _meta: { code: c, retryable: TOOL_ERROR_RETRYABLE[c] }
+  };
+}
+function utf8ByteLength(s) {
+  return Buffer.byteLength(s, "utf8");
+}
+function pageTooLargeError(toolName, bytes) {
+  return pageError(
+    toolName,
+    `the page is ${Math.ceil(bytes / 1024)} KB, over the ${PAGE_HTML_MAX_BYTES / (1024 * 1024)} MB cap. Trim inline assets (large data: URIs, embedded fonts) and present it again.`,
+    "PAYLOAD_TOO_LARGE"
+  );
+}
+function validateRevisePageInput(args) {
+  if (args && args.path !== void 0) {
+    return { ok: false, error: pageError("revise_artifact", "a page revision takes the new page as inline `html`; `path` is read only by present_page.") };
+  }
+  if (args && args.sourcePath !== void 0) {
+    return { ok: false, error: pageError("revise_artifact", "`sourcePath` is set by the server; leave it out of the revised content.") };
+  }
+  const result = PageContentSchema.safeParse({
+    title: args?.title,
+    summary: args?.summary,
+    html: args?.html,
+    concept: args?.concept
+  });
+  if (!result.success) {
+    return { ok: false, error: formatValidationError("revise_artifact", result.error, EXAMPLE_PAGE, args) };
+  }
+  const bytes = utf8ByteLength(result.data.html);
+  if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("revise_artifact", bytes) };
+  return { ok: true, data: result.data };
+}
+var ARTIFACT_TITLE = external_exports.string().min(1).describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
+var SERVED_REQUEST_ID = external_exports.string().optional().describe("If this artifact serves a human request (from check_feedback's 'Human requests' block), the request id (e.g. 'req_ab12cd34ef') \u2014 links it so the request clears");
+var FEATURE_TAG = external_exports.string().optional().describe("A short, STABLE tag for the feature/milestone this work belongs to (e.g. 'milestone-7', 'auth-rework'). Keep it IDENTICAL across every artifact of the same feature so they group together in the Features view \u2014 match the human's milestone naming if one exists; don't invent a new tag per run.");
+var PRESENTED_BY = external_exports.string().optional().describe("Optional label for WHO is presenting (e.g. 'coordinator', 'builder:auth-fix', 'reviewer'). Subagents: set it, then call check_feedback({presentedBy}) with the same label so you receive (and consume) only the feedback on your own artifacts.");
+var BRIEF_ID = external_exports.string().min(1).max(MAX_SPEC_ID_LENGTH);
+var BRIEF_REF = external_exports.object({
+  artifactId: external_exports.string().min(1).max(MAX_BRIEF_REF_ARTIFACT_ID_LENGTH).describe("The approved brief's EXACT artifact id (a present_spec art_ id; each revision has its own id, so this pins one version)"),
+  requirementIds: external_exports.array(BRIEF_ID).max(MAX_BRIEF_REF_IDS).optional().describe("The brief's requirements[].id values this card deviates from"),
+  edgePathIds: external_exports.array(BRIEF_ID).max(MAX_BRIEF_REF_IDS).optional().describe("The brief's edgePaths[].id values this card concerns")
+}).optional().describe("Exception to a brief: name the governing brief version and the requirement it deviates from. A declared link, not drift detection. A bad or unknown ref is dropped with a warning; the card is still presented. To re-brief, present a new card against the new brief's id.");
+var DEBRIEF_BRIEF_REF = external_exports.object({
+  artifactId: external_exports.string().min(1).max(MAX_BRIEF_REF_ARTIFACT_ID_LENGTH).describe("The brief's EXACT artifact id (a present_spec art_ id; each revision has its own id, so this pins one version)")
+}).strict().optional().describe("The brief this debrief accounts against. Pair it with requirementClaims. A bad or unknown ref is dropped with a warning (noted on the debrief); the debrief is still presented.");
+var TOOL_INPUT_SCHEMAS = {
+  // #206 (I1) — `feature` is advertised on EVERY artifact-creating tool (the
+  // whole point of slice 2: tag at the source so grouping recall stops leaking).
+  // Advertisement-only, like servedRequestId — the per-tool validators build
+  // their content from named fields and ignore it; the HANDLER reads args.feature
+  // and threads it to createArtifact, which normalizes + persists featureId.
+  present_findings: ResearchContentSchema.extend({
+    title: ARTIFACT_TITLE.optional(),
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
+  }),
+  present_options: PresentOptionsInputSchema.extend({
+    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this decision"),
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY,
+    briefRef: BRIEF_REF
+  }),
+  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
+  present_plan: PlanContentSchema.extend({
+    title: ARTIFACT_TITLE,
+    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this plan"),
+    servedRequestId: SERVED_REQUEST_ID,
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
+  }),
+  present_code_change: CodeChangeContentSchema.extend({
+    before: external_exports.string().optional().describe("Code before the change \u2014 omit for created files (server defaults to empty)"),
+    after: external_exports.string().describe("Code after the change \u2014 empty string for deletions"),
+    // D4 review — the handler consumes this (relatedArtifactIds) but the
+    // derived schema stopped advertising it: finding→code-change links died
+    // of undiscoverability.
+    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this change"),
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
+  }),
+  log_reasoning: ReasoningContentSchema,
+  // #171/#175 — multi-file changeset. `reviewState` and `reviewReasons` are
+  // HUMAN-driven (set via the review route), so they're omitted from the
+  // advertised input — the agent never sends them.
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
+  // #190 — the end-of-feature debrief. `summary` is the only required content
+  // field (all others optional-tolerant); title is artifact-level.
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY, briefRef: DEBRIEF_BRIEF_REF }),
+  // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
+  // non-empty `sections[]` are the required core; `title` lives IN the content
+  // schema (it doubles as the artifact title). G1 (#198b) adds the optional
+  // servedRequestId linkage (the validator ignores it — it builds its own
+  // content object from named fields — so it stays advertisement-only).
+  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
+  // #680 — the HTML-first page. `html` XOR `path` is enforced by the validator
+  // (a JSON-Schema oneOf would be advertised but is poorly supported by clients).
+  present_page: PresentPageInputSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY })
+};
+
+// src/mcp/advisory-recall.ts
+function tokenSetKey(s) {
+  const toks = meaningfulTokens(s);
+  return toks.length ? [...toks].sort().join(" ") : "";
+}
+var globalStoreAdvisoryRecall = {
+  conceptsFor(proposal) {
+    const hits = [];
+    try {
+      for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
+        const concept = entry.concept?.trim();
+        if (!concept) continue;
+        const k = tokenSetKey(concept);
+        if (k && proposal.localConceptKeys.has(k)) continue;
+        const nonManual = [...entry.instances].reverse().find((i) => i.project && i.project !== "manual");
+        hits.push({
+          concept,
+          project: nonManual?.project,
+          reason: nonManual?.reason
+        });
+      }
+    } catch {
+    }
+    return hits;
+  }
+};
+function getAdvisoryRecall() {
+  return globalStoreAdvisoryRecall;
+}
+
+// src/mcp/tool-helpers.ts
+var ADVISORY_EXEMPT_TOOLS = /* @__PURE__ */ new Set([
+  "present_explainer",
+  "present_debrief"
+]);
+async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], opts = {}) {
+  const fullMemory = await store.getSessionMemory();
+  const exclude = opts.excludeStances ?? [];
+  const memory = exclude.length === 0 ? fullMemory : {
+    ...fullMemory,
+    rejectedApproaches: fullMemory.rejectedApproaches.filter((r) => !exclude.some((ref) => sameStance(r, ref)))
+  };
+  const teamPrefs = await store.getTeamPreferences?.() ?? [];
+  const localKeys = /* @__PURE__ */ new Set();
+  for (const r of memory.rejectedApproaches) {
+    const k = tokenSetKey(coerceStanceConcept(r.concept).concept ?? r.description);
+    if (k) localKeys.add(k);
+  }
+  for (const a of memory.approvedPatterns) {
+    const k = tokenSetKey(a);
+    if (k) localKeys.add(k);
+  }
+  const globalAdvisoryConcepts = ADVISORY_EXEMPT_TOOLS.has(toolName) ? [] : getAdvisoryRecall().conceptsFor({ localConceptKeys: localKeys });
+  const guarded = runPreflightGuarded({
+    toolName,
+    proposalStrings,
+    proposalPaths,
+    proposalConcepts,
+    rejectedApproaches: memory.rejectedApproaches,
+    teamPreferences: teamPrefs,
+    globalAdvisoryConcepts,
+    ...opts.rawEditTextFrom !== void 0 ? { rawEditTextFrom: opts.rawEditTextFrom } : {}
+  });
+  const result = guarded.result;
+  if (guarded.coerced.length > 0 || guarded.skipped.length > 0) {
+    const bad = (/* @__PURE__ */ new Set([...guarded.coerced, ...guarded.skipped])).size;
+    try {
+      process.stderr.write(`[deepPairing] preferences.json: ${bad} rejected-approach entr${bad === 1 ? "y has" : "ies have"} an unreadable concept; matched on what remained${guarded.skipped.length > 0 ? ` (${guarded.skipped.length} skipped)` : ""}. Check .deeppairing/preferences.json.
+`);
+    } catch {
+    }
+  }
+  if (!result.blocked) {
+    for (const nm of opts.excludeStances?.length ? [] : result.trace.nearMisses) {
+      if (nm.source === "session" || nm.source === "team") {
+        void store.recordMetric?.({ kind: "preflight_near_miss", source: nm.source });
+      }
+    }
+    return { ok: true, trace: result.trace };
+  }
+  if (opts.advisory) {
+    return { ok: true, trace: result.trace, advisory: result.block.message };
+  }
+  const blockEvent = result.block.broadcastEvent;
+  if (!opts.deferRecord) {
+    broadcast(blockEvent);
+    void store.recordPreflightBlock?.(blockEvent);
+    void store.recordMetric?.({ kind: "preflight_block", source: result.block.source });
+  }
+  const blockSummary = formatPreflightTraceSummary(result.trace);
+  return {
+    ok: false,
+    trace: result.trace,
+    event: blockEvent,
+    source: result.block.source,
+    response: {
+      content: [{ type: "text", text: result.block.message + blockSummary }],
+      isError: true,
+      // IV10 — REJECTED_APPROACH_BLOCKED is the headline machine code
+      // the agent (and any downstream tooling) should branch on. The
+      // same string is in result.block.message text — _meta lifts it
+      // so strict clients can read it without prose-parsing. Not
+      // retryable: re-issuing the same call hits the same gate; the
+      // agent has to revise the approach.
+      _meta: { code: "REJECTED_APPROACH_BLOCKED", retryable: false }
+    }
+  };
+}
+async function persistPreflightTrace(store, broadcast, artifact, toolName, partial2) {
+  if (!store.recordPreflightTrace) return;
+  const trace = {
+    version: 1,
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    artifactId: artifact.id,
+    toolName,
+    decision: partial2.decision,
+    consideredCount: partial2.consideredCount,
+    consideredConcepts: partial2.consideredConcepts,
+    nearMisses: partial2.nearMisses,
+    block: partial2.block
+  };
+  await store.recordPreflightTrace(artifact.id, trace);
+  broadcast({ type: "preflight_trace_recorded", artifactId: artifact.id, trace });
+}
+var MAX_NUDGES_SPELLED_OUT = 2;
+function formatPreflightTraceSummary(trace) {
+  if (!trace) return "";
+  const nm = trace.nearMisses ?? [];
+  if (trace.consideredCount === 0 && nm.length === 0) return "";
+  const clauses = [];
+  if (trace.consideredCount > 0) {
+    clauses.push(
+      `considered ${trace.consideredCount} past stance${trace.consideredCount === 1 ? "" : "s"}`
+    );
+  }
+  if (nm.length) {
+    clauses.push(
+      `near-miss${nm.length === 1 ? "" : "es"}: ${nm.map((n) => `"${n.concept}"`).join(", ")}`
+    );
+  }
+  let out = ` Preflight: ${clauses.join("; ")}.`;
+  const globals = nm.filter((n) => n.source === "global");
+  const shown = globals.slice(0, MAX_NUDGES_SPELLED_OUT);
+  const nudges = shown.map((n) => {
+    const where = n.project ? `in "${n.project}"` : "in another project";
+    const because = n.reason ? ` (your reason: "${n.reason}")` : "";
+    return `You avoided "${n.concept}" ${where}${because} \u2014 still want it here?`;
+  });
+  if (nudges.length) {
+    const noLocalStance = trace.block === void 0 && trace.consideredCount === 0;
+    const qualifier = noLocalStance ? "not a block, and you have no local stance on this here" : "not a block";
+    const more = globals.length > shown.length ? ` (and ${globals.length - shown.length} more)` : "";
+    out += ` Cross-project advisory (${qualifier}): ${nudges.join(" ")}${more}`;
+  }
+  return out;
+}
+
+// src/mcp/tools/present-page.ts
+function refuse(message) {
+  const code = TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED;
+  return {
+    ok: false,
+    error: {
+      content: [{ type: "text", text: `${code}: present_page refused \u2014 ${message} The artifact was NOT created.` }],
+      isError: true,
+      _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] }
+    }
+  };
+}
+function isWithin(root, target) {
+  const rel = path25.relative(root, target);
+  return rel === "" || !rel.startsWith("..") && !path25.isAbsolute(rel);
+}
+function readPageSource(projectRoot2, requested) {
+  if (requested.includes("\0")) return refuse("`path` contains a NUL byte.");
+  let rootReal;
+  try {
+    rootReal = fs25.realpathSync(projectRoot2);
+  } catch {
+    return refuse("the project root could not be resolved, so `path` cannot be checked. Pass the page inline as `html`.");
+  }
+  const lexical = path25.resolve(projectRoot2, requested);
+  if (!isWithin(projectRoot2, lexical) && !isWithin(rootReal, lexical)) {
+    return refuse(`\`path\` "${requested}" is outside the project root. Write the page inside the project, or pass it inline as \`html\`.`);
+  }
+  let real;
+  try {
+    real = fs25.realpathSync(lexical);
+  } catch {
+    return refuse(`no file at \`path\` "${requested}" (resolved inside the project root).`);
+  }
+  if (!isWithin(rootReal, real)) {
+    return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
+  }
+  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs25.constants;
+  let fd;
+  try {
+    fd = fs25.openSync(real, O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0));
+  } catch {
+    return refuse(`\`path\` "${requested}" could not be opened.`);
+  }
+  let html;
+  try {
+    let again;
+    try {
+      again = fs25.realpathSync(lexical);
+    } catch {
+      return refuse(`\`path\` "${requested}" changed while it was being read.`);
+    }
+    if (again !== real || !isWithin(rootReal, again)) {
+      return refuse(`\`path\` "${requested}" changed while it was being read.`);
+    }
+    const stat = fs25.fstatSync(fd);
+    if (!stat.isFile()) return refuse(`\`path\` "${requested}" is not a regular file.`);
+    if (stat.size > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", stat.size) };
+    const buf = Buffer.alloc(PAGE_HTML_MAX_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const got = fs25.readSync(fd, buf, total, buf.length - total, total);
+      if (got === 0) break;
+      total += got;
+    }
+    if (total > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", total) };
+    html = buf.subarray(0, total).toString("utf8");
+  } catch {
+    return refuse(`\`path\` "${requested}" could not be read.`);
+  } finally {
+    try {
+      fs25.closeSync(fd);
+    } catch {
+    }
+  }
+  if (!html.trim()) return refuse(`the file at \`path\` "${requested}" is empty.`);
+  const sourcePath = path25.relative(rootReal, real).split(path25.sep).join("/");
+  return { ok: true, html, sourcePath };
+}
+
+// src/mcp/page-anchor-relocate.ts
+var LATIN1_NAMES = "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml".split(" ");
+var NAMED = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  sbquo: "\u201A",
+  ldquo: "\u201C",
+  rdquo: "\u201D",
+  bdquo: "\u201E",
+  bull: "\u2022",
+  prime: "\u2032",
+  Prime: "\u2033",
+  trade: "\u2122",
+  euro: "\u20AC",
+  larr: "\u2190",
+  uarr: "\u2191",
+  rarr: "\u2192",
+  darr: "\u2193",
+  harr: "\u2194",
+  lArr: "\u21D0",
+  rArr: "\u21D2",
+  hArr: "\u21D4",
+  minus: "\u2212",
+  le: "\u2264",
+  ge: "\u2265",
+  ne: "\u2260",
+  asymp: "\u2248",
+  infin: "\u221E",
+  ensp: "\u2002",
+  emsp: "\u2003",
+  thinsp: "\u2009",
+  zwnj: "\u200C",
+  zwj: "\u200D",
+  OElig: "\u0152",
+  oelig: "\u0153",
+  Scaron: "\u0160",
+  scaron: "\u0161",
+  Yuml: "\u0178",
+  fnof: "\u0192",
+  circ: "\u02C6",
+  tilde: "\u02DC",
+  dagger: "\u2020",
+  Dagger: "\u2021",
+  permil: "\u2030",
+  lsaquo: "\u2039",
+  rsaquo: "\u203A",
+  check: "\u2713",
+  hearts: "\u2665",
+  star: "\u2606"
+};
+LATIN1_NAMES.forEach((n, i) => {
+  NAMED[n] = String.fromCharCode(160 + i);
+});
+function decodeHtmlEntities(s) {
+  let unknownEntity = false;
+  const text = s.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{1,31});?/g, (m, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return "\uFFFD";
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return "\uFFFD";
+      }
+    }
+    const hit = NAMED[body] ?? NAMED[body.toLowerCase()];
+    if (hit !== void 0) return hit;
+    if (m.endsWith(";")) unknownEntity = true;
+    return m;
+  });
+  return { text, unknownEntity };
+}
+function core(s) {
+  return s.normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, "");
+}
+function norm(s) {
+  return s.replace(/\s+/g, " ").trim();
+}
+function pageHaystack(html) {
+  const blocks = extractPageTextBlocks(html);
+  const decoded = decodeHtmlEntities(html);
+  const text = decodeHtmlEntities(blocks.join(" "));
+  return {
+    text: core(text.text),
+    raw: core(decoded.text),
+    html: decoded.text,
+    unknownEntity: decoded.unknownEntity || text.unknownEntity,
+    truncated: blocks.length >= PAGE_TEXT_MAX_BLOCKS
+  };
+}
+function present(hay, s) {
+  const c = core(s);
+  if (!c) return null;
+  return hay.text.includes(c) || hay.raw.includes(c);
+}
+function relocateHtmlAnchor(anchor, hay) {
+  const checks = [];
+  const quote = norm(anchor.quote ?? "");
+  checks.push(present(hay, anchor.kind === "text" ? quote : quote.slice(0, 60)));
+  if (anchor.kind === "cell" && anchor.table) {
+    if (anchor.table.row) checks.push(present(hay, anchor.table.row));
+    if (anchor.table.col) checks.push(present(hay, anchor.table.col));
+  }
+  if (anchor.kind === "link" && anchor.href) checks.push(hay.html.includes(anchor.href));
+  if (anchor.kind === "diagram-node" && anchor.nodeId) {
+    if (hay.html.includes(anchor.nodeId)) return "carried";
+  }
+  const known = checks.filter((c) => c !== null);
+  if (known.length === 0) return "unknown";
+  if (known.every(Boolean)) return "carried";
+  if (hay.truncated || hay.unknownEntity) return "unknown";
+  return "orphaned";
+}
+function relocatePageComments(html, comments) {
+  const hay = pageHaystack(html);
+  const out = { carried: [], orphaned: [], orphanedOverflow: 0, unknown: [] };
+  const roots = comments.filter((c) => c.author === "human" && !c.parentCommentId && c.target.htmlAnchor).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const c of roots) {
+    const a = c.target.htmlAnchor;
+    const v = relocateHtmlAnchor(a, hay);
+    if (v === "carried") out.carried.push(c.id);
+    else if (v === "unknown") out.unknown.push(c.id);
+    else if (out.orphaned.length >= PAGE_FILE_WATCH_LIMITS.orphans) out.orphanedOverflow++;
+    else {
+      out.orphaned.push({
+        commentId: c.id,
+        kind: a.kind,
+        quote: a.quote.slice(0, PAGE_FILE_WATCH_LIMITS.quote),
+        locator: a.locator.slice(0, PAGE_FILE_WATCH_LIMITS.locator),
+        ...a.version != null ? { version: a.version } : {}
+      });
+    }
+  }
+  return out;
+}
+
+// src/daemon/page-watch.ts
+var PAGE_WATCH_QUIET_MS = 2e3;
+var PAGE_WATCH_MIN_INTERVAL_MS = 1e4;
+var PAGE_WATCH_POLL_MS = 1e3;
+function statSig(p) {
+  try {
+    const st = fs26.statSync(p);
+    return `${st.mtimeMs}:${st.size}:${st.ino}`;
+  } catch {
+    return "missing";
+  }
+}
+function sha256(s) {
+  return crypto6.createHash("sha256").update(s).digest("hex");
+}
+function readerReason(text) {
+  const m = /refused — ([\s\S]*?)(?: The artifact was NOT created\.)?$/.exec(text);
+  return (m ? m[1] : text).trim().slice(0, 500);
+}
+function conceptName(c) {
+  if (typeof c === "string" && c.trim()) return c.trim().slice(0, 200);
+  if (c && typeof c === "object" && typeof c.name === "string") {
+    const n = c.name.trim();
+    return n ? n.slice(0, 200) : void 0;
+  }
+  return void 0;
+}
+function isWatchable(a) {
+  return a.type === "page" && !isClosedArtifactStatus(a.status) && typeof a.content.sourcePath === "string";
+}
+function sourceOf(a) {
+  return String(a.content.sourcePath ?? "");
+}
+var PageWatcher = class {
+  constructor(deps) {
+    this.deps = deps;
+    let real = deps.projectRoot;
+    try {
+      real = fs26.realpathSync(deps.projectRoot);
+    } catch {
+    }
+    this.rootReal = real;
+    this.quietMs = deps.quietMs ?? PAGE_WATCH_QUIET_MS;
+    this.minIntervalMs = deps.minIntervalMs ?? PAGE_WATCH_MIN_INTERVAL_MS;
+    this.pollMs = deps.pollIntervalMs ?? PAGE_WATCH_POLL_MS;
+  }
+  deps;
+  entries = /* @__PURE__ */ new Map();
+  rootReal;
+  quietMs;
+  minIntervalMs;
+  pollMs;
+  disposed = false;
+  log(msg) {
+    try {
+      this.deps.log?.(`[page-watch] ${msg}`);
+    } catch {
+    }
+  }
+  key(sessionId, artifactId) {
+    return `${sessionId}\0${artifactId}`;
+  }
+  /** The artifact ids currently watched in a session (tests, diagnostics). */
+  watched(sessionId) {
+    return [...this.entries.values()].filter((e) => e.sessionId === sessionId).map((e) => e.artifactId);
+  }
+  /** Resolves once no read/record is in flight for the session's watches. */
+  async idle(sessionId) {
+    for (; ; ) {
+      const busy = [...this.entries.values()].filter((e) => (!sessionId || e.sessionId === sessionId) && e.processing);
+      if (busy.length === 0) return;
+      await Promise.all(busy.map((e) => e.processing));
+    }
+  }
+  /** Reconcile the watched set with the session's live file-backed pages. */
+  sync(sessionId) {
+    if (this.disposed) return;
+    const store = this.deps.getStore(sessionId);
+    if (!store || this.deps.isSessionLive && !this.deps.isSessionLive(sessionId)) {
+      this.stopSession(sessionId);
+      return;
+    }
+    let artifacts;
+    try {
+      artifacts = store.getArtifacts();
+    } catch (err) {
+      this.log(`sync skipped for ${sessionId}: ${String(err?.message ?? err)}`);
+      return;
+    }
+    const byId = new Map(artifacts.map((a) => [a.id, a]));
+    const wanted = artifacts.filter(isWatchable);
+    for (const entry of [...this.entries.values()]) {
+      if (entry.sessionId !== sessionId) continue;
+      const a = byId.get(entry.artifactId);
+      if (a && isWatchable(a) && sourceOf(a) === entry.sourcePath) continue;
+      const next = a?.status === "superseded" ? wanted.find((w) => w.parentId === entry.artifactId && sourceOf(w) === entry.sourcePath && !this.entries.has(this.key(sessionId, w.id))) : void 0;
+      if (next) this.rekey(entry, next.id);
+      else this.stop(entry);
+    }
+    for (const a of wanted) {
+      if (!this.entries.has(this.key(sessionId, a.id))) this.start(sessionId, a);
+    }
+  }
+  stopSession(sessionId) {
+    for (const e of [...this.entries.values()]) if (e.sessionId === sessionId) this.stop(e);
+  }
+  dispose() {
+    this.disposed = true;
+    for (const e of [...this.entries.values()]) this.stop(e);
+  }
+  rekey(entry, artifactId) {
+    if (entry.stopped || this.disposed) return;
+    this.entries.delete(this.key(entry.sessionId, entry.artifactId));
+    entry.artifactId = artifactId;
+    this.entries.set(this.key(entry.sessionId, artifactId), entry);
+  }
+  start(sessionId, a) {
+    const sourcePath = sourceOf(a);
+    if (!sourcePath || path26.isAbsolute(sourcePath) || sourcePath.split(/[\\/]/).includes("..")) return;
+    const absPath = path26.resolve(this.rootReal, sourcePath);
+    const entry = {
+      sessionId,
+      artifactId: a.id,
+      sourcePath,
+      absPath,
+      watcher: null,
+      poll: null,
+      quiet: null,
+      lastSig: statSig(absPath),
+      lastRecordAt: 0,
+      dirty: false,
+      gen: 0,
+      processing: null,
+      stopped: false
+    };
+    this.entries.set(this.key(sessionId, a.id), entry);
+    const dir = path26.dirname(absPath);
+    const base = path26.basename(absPath);
+    try {
+      const watchFn = this.deps.watch ?? ((d, l) => fs26.watch(d, l));
+      const w = watchFn(dir, (_event, filename) => {
+        const name = filename == null ? null : String(filename);
+        if (name === null || name === base) this.onChange(entry);
+      });
+      w.on?.("error", (err) => {
+        this.log(`watcher error for ${sourcePath} (${String(err?.code ?? err)}); the stat poll continues`);
+        try {
+          w.close();
+        } catch {
+        }
+        if (entry.watcher === w) entry.watcher = null;
+      });
+      entry.watcher = w;
+    } catch (err) {
+      this.log(`could not watch ${sourcePath} (${String(err?.code ?? err)}); relying on the stat poll`);
+    }
+    entry.dirty = true;
+    this.arm(entry, this.quietMs);
+    if (this.pollMs > 0) {
+      entry.poll = setInterval(() => {
+        const sig = statSig(entry.absPath);
+        if (sig === entry.lastSig) return;
+        entry.lastSig = sig;
+        this.onChange(entry);
+      }, this.pollMs);
+      entry.poll.unref?.();
+    }
+  }
+  stop(entry) {
+    entry.stopped = true;
+    if (entry.quiet) {
+      clearTimeout(entry.quiet);
+      entry.quiet = null;
+    }
+    if (entry.poll) {
+      clearInterval(entry.poll);
+      entry.poll = null;
+    }
+    try {
+      entry.watcher?.close();
+    } catch {
+    }
+    entry.watcher = null;
+    const k = this.key(entry.sessionId, entry.artifactId);
+    if (this.entries.get(k) === entry) this.entries.delete(k);
+  }
+  onChange(entry) {
+    if (entry.stopped) return;
+    entry.lastSig = statSig(entry.absPath);
+    entry.dirty = true;
+    entry.gen++;
+    if (entry.processing) return;
+    this.arm(entry, this.quietMs);
+  }
+  arm(entry, ms) {
+    if (entry.quiet) clearTimeout(entry.quiet);
+    entry.quiet = setTimeout(() => this.fire(entry), ms);
+    entry.quiet.unref?.();
+  }
+  fire(entry) {
+    entry.quiet = null;
+    if (entry.stopped) return;
+    const wait = entry.lastRecordAt ? entry.lastRecordAt + this.minIntervalMs - Date.now() : 0;
+    if (wait > 0) {
+      this.arm(entry, wait);
+      return;
+    }
+    entry.dirty = false;
+    entry.processing = this.process(entry).catch((err) => this.log(`could not record ${entry.sourcePath}: ${String(err?.message ?? err)}`)).finally(() => {
+      entry.processing = null;
+      if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
+    });
+  }
+  async process(entry) {
+    const store = this.deps.getStore(entry.sessionId);
+    if (!store) return;
+    const startGen = entry.gen;
+    const stale = () => entry.stopped || this.disposed || entry.gen !== startGen;
+    const live = () => {
+      const a = store.getArtifacts().find((x) => x.id === entry.artifactId);
+      return a && isWatchable(a) && sourceOf(a) === entry.sourcePath ? a : void 0;
+    };
+    const cur = live();
+    if (!cur) {
+      this.sync(entry.sessionId);
+      return;
+    }
+    try {
+      fs26.lstatSync(entry.absPath);
+    } catch {
+      return;
+    }
+    const readSig = statSig(entry.absPath);
+    const source = readPageSource(this.rootReal, entry.sourcePath);
+    if (!source.ok) {
+      const message = readerReason(source.error.content[0]?.text ?? "the file could not be read");
+      this.refuse(store, entry, cur, { cause: "unreadable", message, digest: sha256(`unreadable:${message}`) });
+      return;
+    }
+    if (source.sourcePath !== entry.sourcePath) {
+      const message = `${entry.sourcePath} now resolves to a different file (${source.sourcePath}); present that file as its own page if it is meant to be one`;
+      this.refuse(store, entry, cur, { cause: "unreadable", message, digest: sha256(`redirect:${source.sourcePath}`) });
+      return;
+    }
+    const html = source.html;
+    const curContent = cur.content;
+    if (html === curContent.html) return;
+    const v = validateRevisePageInput({ title: cur.title, summary: curContent.summary, html, concept: curContent.concept });
+    if (!v.ok) {
+      const message = readerReason(v.error.content[0]?.text ?? "the new page is not valid");
+      this.refuse(store, entry, cur, { cause: "unreadable", message, digest: sha256(`invalid:${html}`) });
+      return;
+    }
+    const content = { ...v.data, sourcePath: entry.sourcePath };
+    const digest = sha256(`${html}\0${await this.stanceFingerprint(store)}`);
+    if (stale()) return;
+    if (readFileWatch(cur.fileWatch).refused?.digest === digest) return;
+    const proposal = artifactProposal("page", cur.title, content);
+    const bc = (event) => this.deps.broadcast(entry.sessionId, event);
+    const gate = this.deps.gate ?? preflightRejectedApproaches;
+    const pre = await gate(store, bc, "page_watch", proposal.text, proposal.paths, proposal.concepts, {
+      advisory: proposal.advisory,
+      deferRecord: true,
+      ...proposal.rawEditTextFrom !== void 0 ? { rawEditTextFrom: proposal.rawEditTextFrom } : {}
+    });
+    if (stale()) return;
+    const now = live();
+    if (!now || now.id !== cur.id || now.content.html !== curContent.html) {
+      entry.dirty = true;
+      return;
+    }
+    if (this.overtaken(entry, readSig, html)) return;
+    if (!pre.ok) {
+      const match2 = pre.event.match ?? {};
+      const concept = conceptName(match2.concept) ?? (typeof match2.description === "string" ? match2.description.slice(0, 200) : void 0);
+      const reason = typeof match2.reason === "string" && match2.reason.trim() ? match2.reason.trim() : void 0;
+      const message = `the new text matches an approach your pair rejected${concept ? ` ("${concept}")` : ""}${reason ? `: ${reason}` : ""}`.slice(0, 2e3);
+      bc({ ...pre.event, artifactId: cur.id, sourcePath: entry.sourcePath, eligible: false, ineligibleReason: "file_watch" });
+      this.refuse(store, entry, cur, { cause: "gate", message, digest, ...concept ? { concept } : {} });
+      return;
+    }
+    this.record(store, entry, cur, content, pre.trace);
+  }
+  /** Has the file moved on from the snapshot this read saw? A stat change
+   *  alone (an mtime-only touch) is not enough: the content must differ. */
+  overtaken(entry, readSig, html) {
+    const sig = statSig(entry.absPath);
+    if (sig === readSig) return false;
+    const again = readPageSource(this.rootReal, entry.sourcePath);
+    if (again.ok && again.sourcePath === entry.sourcePath && again.html === html) return false;
+    entry.lastSig = sig;
+    entry.dirty = true;
+    entry.gen++;
+    return true;
+  }
+  /** The stances the gate reads, as one hash (session rejections + team rules). */
+  async stanceFingerprint(store) {
+    try {
+      const mem = await store.getSessionMemory();
+      const team = await store.getTeamPreferences?.() ?? [];
+      return sha256(JSON.stringify([mem.rejectedApproaches ?? [], team]));
+    } catch {
+      return "unknown";
+    }
+  }
+  refuse(store, entry, cur, r) {
+    entry.lastRecordAt = Date.now();
+    const prev = readFileWatch(cur.fileWatch).refused;
+    if (prev?.digest === r.digest) return;
+    const notice = { at: (/* @__PURE__ */ new Date()).toISOString(), sourcePath: entry.sourcePath, ...r };
+    store.setPageFileWatch(cur.id, "refused", notice);
+    this.log(`refused a save of ${entry.sourcePath} for ${cur.id} (${r.cause})`);
+    const updated = store.getArtifacts().find((a) => a.id === cur.id);
+    if (updated) this.deps.broadcast(entry.sessionId, { type: "artifact_content_updated", artifact: updated });
+  }
+  record(store, entry, cur, content, trace) {
+    if (entry.stopped || this.disposed) return;
+    const newId = `art_${nanoid3(10)}`;
+    let created;
+    try {
+      created = store.createArtifact({
+        id: newId,
+        // Review P2-2 — the supersede compare-and-swap: a revise_artifact that
+        // already versioned this page wins, and the watch records nothing.
+        requireUnsupersededParent: true,
+        type: "page",
+        title: cur.title,
+        content,
+        agentReasoning: `Recorded automatically from ${entry.sourcePath} after a save.`,
+        parentId: cur.id,
+        version: cur.version + 1,
+        ...cur.relatedArtifactIds ? { relatedArtifactIds: cur.relatedArtifactIds } : {},
+        ...cur.featureId ? { feature: cur.featureId } : {},
+        ...cur.presentedBy ? { presentedBy: cur.presentedBy } : {}
+      });
+    } catch (err) {
+      if (err instanceof ParentSupersededError) {
+        this.log(`skipped ${entry.sourcePath}: ${cur.id} was already replaced${err.successorId ? ` by ${err.successorId}` : ""}`);
+        return;
+      }
+      throw err;
+    }
+    store.updateArtifactStatus(cur.id, "superseded", "agent_supersede");
+    store.addComment({
+      id: `cmt_${nanoid3(10)}`,
+      artifactId: cur.id,
+      content: `Superseded by ${newId}: recorded automatically from ${entry.sourcePath} after a save.`,
+      author: "agent"
+    });
+    const all = store.getArtifacts();
+    const byId = new Map(all.map((a) => [a.id, a]));
+    const chain = /* @__PURE__ */ new Set();
+    for (let a = cur; a && !chain.has(a.id); a = a.parentId ? byId.get(a.parentId) : void 0) chain.add(a.id);
+    const comments = store.getComments().filter((c) => chain.has(c.target.artifactId));
+    const rel = relocatePageComments(String(content.html), comments);
+    const recorded = {
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      sourcePath: entry.sourcePath,
+      fromArtifactId: cur.id,
+      fromVersion: cur.version,
+      carriedCount: rel.carried.length + rel.unknown.length,
+      orphaned: rel.orphaned,
+      ...rel.orphanedOverflow > 0 ? { orphanedOverflow: rel.orphanedOverflow } : {}
+    };
+    store.setPageFileWatch(newId, "recorded", recorded);
+    const prevRefused = readFileWatch(cur.fileWatch).refused;
+    if (prevRefused && !prevRefused.delivered) store.setPageFileWatch(cur.id, "refused", { ...prevRefused, delivered: true });
+    entry.lastRecordAt = Date.now();
+    this.rekey(entry, newId);
+    this.log(`recorded ${newId} (v${cur.version + 1}) from ${entry.sourcePath}; ${rel.orphaned.length + rel.orphanedOverflow} comment(s) orphaned`);
+    const bc = (event) => this.deps.broadcast(entry.sessionId, event);
+    void persistPreflightTrace(store, bc, created, "page_watch", trace).catch(() => void 0);
+    const fresh = store.getArtifacts().find((a) => a.id === newId) ?? created;
+    bc({ type: "artifact_created", artifact: fresh });
+    bc({ type: "artifact_updated", artifactId: cur.id, status: "superseded" });
+    const secrets = fresh.secretWarnings ?? [];
+    if (secrets.length > 0) {
+      bc({ type: "secret_warning", artifactId: newId, patterns: secrets.map((m) => m.pattern), labels: secrets.map((m) => m.label) });
+    }
+  }
+};
+
 // src/daemon/create-daemon.ts
 async function defaultOpenBrowser(url2) {
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
@@ -37084,17 +39013,18 @@ function createDaemon(deps) {
     env = process.env,
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
-    watch = (dir, listener) => fs25.watch(dir, listener),
+    watch = (dir, listener) => fs27.watch(dir, listener),
     heartbeatIntervalMs = 3e4,
     hooksPollIntervalMs = 750,
     stanceExceptionClock,
+    pageWatch: pageWatchOverrides,
     stanceExceptionMonotonic,
     stanceExceptionFault
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
-  const dpDir2 = path25.join(projectRoot2, ".deeppairing");
-  const daemonInfoFile = path25.join(dpDir2, "daemon.json");
+  const dpDir2 = path27.join(projectRoot2, ".deeppairing");
+  const daemonInfoFile = path27.join(dpDir2, "daemon.json");
   const instanceId = randomBytes4(12).toString("hex");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
@@ -37110,6 +39040,28 @@ function createDaemon(deps) {
     log: log2,
     fault: stanceExceptionFault
   });
+  const pageWatcher = new PageWatcher({
+    projectRoot: projectRoot2,
+    getStore: (sessionId) => sessions.get(sessionId),
+    broadcast: (sessionId, event) => broadcast(sessionId, event),
+    isSessionLive: (sessionId) => activeSessions.has(sessionId),
+    log: log2,
+    ...pageWatchOverrides ?? {}
+  });
+  const PAGE_WATCH_SYNC_EVENTS = /* @__PURE__ */ new Set(["artifact_created", "artifact_updated", "artifact_content_updated", "daemon_resumed"]);
+  const pageWatchSyncPending = /* @__PURE__ */ new Set();
+  function schedulePageWatchSync(sessionId) {
+    if (sessionId.startsWith("demo_") || pageWatchSyncPending.has(sessionId)) return;
+    pageWatchSyncPending.add(sessionId);
+    queueMicrotask(() => {
+      pageWatchSyncPending.delete(sessionId);
+      try {
+        pageWatcher.sync(sessionId);
+      } catch (err) {
+        log2(`[page-watch] sync failed: ${errorMessage(err)}`);
+      }
+    });
+  }
   function createSession(sessionId) {
     log2(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot2, sessionId);
@@ -37134,6 +39086,7 @@ function createDaemon(deps) {
   const revisionEpoch = randomBytes4(6).toString("hex");
   function broadcast(sessionId, event) {
     let outgoing = event;
+    if (PAGE_WATCH_SYNC_EVENTS.has(event?.type)) schedulePageWatchSync(sessionId);
     if (REVISION_EVENTS.has(event?.type)) {
       sessionRevisions.set(sessionId, (sessionRevisions.get(sessionId) ?? 0) + 1);
     }
@@ -37259,6 +39212,10 @@ function createDaemon(deps) {
       if (shutdownTimer) clearTimeout(shutdownTimer);
       shutdownTimer = null;
       checkAutoShutdown();
+    },
+    (sessionId, event) => {
+      if (event === "registered") schedulePageWatchSync(sessionId);
+      else pageWatcher.stopSession(sessionId);
     }
   );
   app.route("/", daemonRoutes);
@@ -37395,11 +39352,11 @@ function createDaemon(deps) {
     return c.json({ status: "evicting", pid: process.pid });
   });
   app.get("/api/skill-status", (c) => {
-    const claudeMdPath = path25.join(projectRoot2, "CLAUDE.md");
+    const claudeMdPath = path27.join(projectRoot2, "CLAUDE.md");
     let claudeMdHasMarker = false;
     try {
-      if (fs25.existsSync(claudeMdPath)) {
-        claudeMdHasMarker = fs25.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+      if (fs27.existsSync(claudeMdPath)) {
+        claudeMdHasMarker = fs27.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
       }
     } catch {
     }
@@ -37435,17 +39392,17 @@ function createDaemon(deps) {
       return c.json({ error: "Demo requests must come from the companion UI." }, 403);
     }
     const MAX_DEMO_SESSIONS = 5;
-    const sessionRoot = path25.resolve(dpDir2, "sessions");
-    const diskIds = fs25.existsSync(sessionRoot) ? fs25.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
+    const sessionRoot = path27.resolve(dpDir2, "sessions");
+    const diskIds = fs27.existsSync(sessionRoot) ? fs27.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
     const demoIds = [.../* @__PURE__ */ new Set([...diskIds, ...Array.from(sessions.keys()).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id))])].sort();
     while (demoIds.length >= MAX_DEMO_SESSIONS) {
       const oldest = demoIds.shift();
       demoRuns.get(oldest)?.();
       demoRuns.delete(oldest);
       sessions.get(oldest)?.dispose();
-      const demoDir = path25.resolve(sessionRoot, oldest);
-      if (path25.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
-      fs25.rmSync(demoDir, { recursive: true, force: true });
+      const demoDir = path27.resolve(sessionRoot, oldest);
+      if (path27.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
+      fs27.rmSync(demoDir, { recursive: true, force: true });
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
@@ -37463,10 +39420,10 @@ function createDaemon(deps) {
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
   app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2, { epoch: revisionEpoch, counts: sessionRevisions }));
-  const __thisDir3 = path25.dirname(fileURLToPath4(import.meta.url));
-  const monorepoWebDist = path25.join(__thisDir3, "../../dist/web");
-  const webDistCandidates = [monorepoWebDist, path25.join(__thisDir3, "web")];
-  const webDistPath = webDistCandidates.find((p) => fs25.existsSync(p)) ?? monorepoWebDist;
+  const __thisDir3 = path27.dirname(fileURLToPath4(import.meta.url));
+  const monorepoWebDist = path27.join(__thisDir3, "../../dist/web");
+  const webDistCandidates = [monorepoWebDist, path27.join(__thisDir3, "web")];
+  const webDistPath = webDistCandidates.find((p) => fs27.existsSync(p)) ?? monorepoWebDist;
   mountStaticUi(app, {
     webDistPath,
     authToken: daemonAuthToken2,
@@ -37474,6 +39431,10 @@ function createDaemon(deps) {
     log: log2
   });
   function cleanup() {
+    try {
+      pageWatcher.dispose();
+    } catch {
+    }
     for (const [sessionId, store] of sessions) {
       try {
         store.forceFlush();
@@ -37482,8 +39443,8 @@ function createDaemon(deps) {
       }
     }
     try {
-      const info = JSON.parse(fs25.readFileSync(daemonInfoFile, "utf-8"));
-      if (info?.pid === process.pid && info?.instanceId === instanceId) fs25.unlinkSync(daemonInfoFile);
+      const info = JSON.parse(fs27.readFileSync(daemonInfoFile, "utf-8"));
+      if (info?.pid === process.pid && info?.instanceId === instanceId) fs27.unlinkSync(daemonInfoFile);
     } catch {
     }
     try {
@@ -37507,7 +39468,7 @@ function createDaemon(deps) {
   function writeDaemonInfo(port) {
     const discovery = { pid: process.pid, instanceId, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
     try {
-      fs25.mkdirSync(dpDir2, { recursive: true });
+      fs27.mkdirSync(dpDir2, { recursive: true });
       if (resolveTokenPlacement() === "in-repo") {
         writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken2 });
         return;
@@ -37755,11 +39716,11 @@ function createDaemon(deps) {
         gateFiresSeen.delete(oldest);
       }
     };
-    const hooksStatePath = path25.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const hooksStatePath = path27.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
-        if (!fs25.existsSync(hooksStatePath)) return;
-        const raw2 = JSON.parse(fs25.readFileSync(hooksStatePath, "utf-8"));
+        if (!fs27.existsSync(hooksStatePath)) return;
+        const raw2 = JSON.parse(fs27.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           if (f?.gate && typeof f.id === "string" && !gateFiresSeen.has(f.id)) {
@@ -37809,8 +39770,8 @@ function createDaemon(deps) {
       }
     };
     try {
-      if (fs25.existsSync(hooksStatePath)) {
-        const raw2 = JSON.parse(fs25.readFileSync(hooksStatePath, "utf-8"));
+      if (fs27.existsSync(hooksStatePath)) {
+        const raw2 = JSON.parse(fs27.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           if (f?.gate && typeof f.id === "string") noteGateSeen(f.id);
@@ -37821,10 +39782,10 @@ function createDaemon(deps) {
     } catch {
     }
     try {
-      const hooksDir = path25.dirname(hooksStatePath);
-      fs25.mkdirSync(hooksDir, { recursive: true });
+      const hooksDir = path27.dirname(hooksStatePath);
+      fs27.mkdirSync(hooksDir, { recursive: true });
       const watcher = watch(hooksDir, (_event, filename) => {
-        if (filename === "hooks-state.json" || filename === path25.basename(hooksStatePath)) {
+        if (filename === "hooks-state.json" || filename === path27.basename(hooksStatePath)) {
           broadcastNewFires();
         }
       });
@@ -37836,13 +39797,13 @@ function createDaemon(deps) {
     if (hooksPollIntervalMs > 0 && !hooksPollTimer) {
       let lastStat = "";
       try {
-        const st = fs25.statSync(hooksStatePath);
+        const st = fs27.statSync(hooksStatePath);
         lastStat = `${st.mtimeMs}:${st.size}`;
       } catch {
       }
       hooksPollTimer = setInterval(() => {
         try {
-          const st = fs25.statSync(hooksStatePath);
+          const st = fs27.statSync(hooksStatePath);
           const sig = `${st.mtimeMs}:${st.size}`;
           if (sig === lastStat) return;
           lastStat = sig;
@@ -37894,11 +39855,11 @@ function createDaemon(deps) {
     const pingDecision = decidePing(env);
     if (pingDecision.shouldSend) {
       pingTimer = setTimeout(() => {
-        const claudeMdPath = path25.join(projectRoot2, "CLAUDE.md");
+        const claudeMdPath = path27.join(projectRoot2, "CLAUDE.md");
         let claudeMdHasMarker = false;
         try {
-          if (fs25.existsSync(claudeMdPath)) {
-            claudeMdHasMarker = fs25.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          if (fs27.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs27.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
           }
         } catch {
         }
@@ -37958,6 +39919,7 @@ function createDaemon(deps) {
     } catch {
     }
     hooksWatcher = null;
+    pageWatcher.dispose();
     if (hooksPollTimer) {
       clearInterval(hooksPollTimer);
       hooksPollTimer = null;
@@ -37989,28 +39951,29 @@ function createDaemon(deps) {
     maybeAutoOpenBrowser,
     scheduleInstallHealthPing,
     cleanup,
-    dispose
+    dispose,
+    pageWatcher
   };
 }
 
 // src/daemon/index.ts
 var MAX_PORT_ATTEMPTS = 10;
 var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? canonicalProjectDir(process.cwd()).projectRoot;
-var dpDir = path26.join(projectRoot, ".deeppairing");
-var logFile = path26.join(dpDir, "daemon.log");
+var dpDir = path28.join(projectRoot, ".deeppairing");
+var logFile = path28.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
-var daemonAuthToken = crypto6.randomBytes(32).toString("hex");
+var daemonAuthToken = crypto7.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
   try {
-    const stat = fs26.statSync(logFile);
+    const stat = fs28.statSync(logFile);
     if (stat.size < LOG_MAX_BYTES) return;
     for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
       const dst = `${logFile}.${i}`;
       try {
-        if (fs26.existsSync(src)) fs26.renameSync(src, dst);
+        if (fs28.existsSync(src)) fs28.renameSync(src, dst);
       } catch {
       }
     }
@@ -38021,9 +39984,9 @@ function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [daemon] ${msg}
 `;
   try {
-    fs26.mkdirSync(path26.dirname(logFile), { recursive: true });
+    fs28.mkdirSync(path28.dirname(logFile), { recursive: true });
     maybeRotateLog();
-    fs26.appendFileSync(logFile, line);
+    fs28.appendFileSync(logFile, line);
   } catch {
   }
 }

@@ -391,3 +391,66 @@ describe("PageArtifact — document attributes before Run (#680 slice 2)", () =>
     expect(srcdoc).not.toContain("x()");
   });
 });
+
+describe("PageArtifact — file watch (#680 slice 3)", () => {
+  it("says a version was recorded from the file and marks its orphans until the frame reports", () => {
+    const v2: Artifact = {
+      ...pageArtifact,
+      id: "art_page_v2",
+      version: 2,
+      fileWatch: {
+        recorded: {
+          at: new Date().toISOString(),
+          sourcePath: "docs/cache.html",
+          fromArtifactId: pageArtifact.id,
+          fromVersion: 1,
+          carriedCount: 0,
+          orphaned: [{ commentId: "cmt_gone", kind: "text", quote: "a sentence from v1", locator: "p", version: 1 }],
+        },
+      },
+    };
+    useArtifactStore.getState().addArtifact(v2);
+    useArtifactStore.getState().addComment({
+      id: "cmt_gone",
+      sessionId: "sess_1",
+      target: { artifactId: v2.id, htmlAnchor: { kind: "text", locator: "p", quote: "a sentence from v1", version: 1 } },
+      parentCommentId: null,
+      author: "human",
+      content: "this sentence is wrong",
+      acknowledged: false,
+      createdAt: new Date().toISOString(),
+    });
+    render(<PageArtifact artifact={v2} />);
+    expect(screen.getByTestId("page-file-recorded")).toHaveTextContent(/recorded automatically from docs\/cache\.html/i);
+    expect(screen.getByTestId("page-file-recorded")).toHaveTextContent(/replacing v1/);
+    // The orphan stays listed, marked, before the frame says anything.
+    expect(screen.getByTestId("page-anchor-missing")).toHaveTextContent(/not found in this version/i);
+    expect(within(screen.getByTestId("page-annotations")).getByText(/this sentence is wrong/)).toBeInTheDocument();
+    // The frame's live re-find wins once it reports.
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pins-status", found: [true] });
+    expect(screen.queryByTestId("page-anchor-missing")).not.toBeInTheDocument();
+  });
+
+  it("shows a save the watch refused, with the reason", () => {
+    const refused: Artifact = {
+      ...pageArtifact,
+      id: "art_page_refused",
+      fileWatch: {
+        refused: {
+          at: new Date().toISOString(),
+          sourcePath: "docs/cache.html",
+          cause: "gate",
+          message: "the new text matches an approach your pair rejected (\"Deploy: Railway\"): too expensive",
+          digest: "d",
+        },
+      },
+    };
+    useArtifactStore.getState().addArtifact(refused);
+    render(<PageArtifact artifact={refused} />);
+    const note = screen.getByTestId("page-file-refused");
+    expect(note).toHaveTextContent(/was not recorded/);
+    expect(note).toHaveTextContent(/too expensive/);
+    expect(note).toHaveTextContent(/still looking at v1/);
+  });
+});
