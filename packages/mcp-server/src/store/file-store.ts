@@ -4,8 +4,8 @@ import { retirementFeedback, type RetirementInput, type RetirementOutcome } from
 import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor, sanitizeHtmlAnchor } from "@deeppairing/shared";
+import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, PageFileWatch, PageFileWatchRecorded, PageFileWatchRefused, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor, sanitizeHtmlAnchor, readFileWatch } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -1452,6 +1452,40 @@ export class FileStore implements IStore {
       if (ids.includes(a.id)) {
         (a as { statusChangeUnreported?: boolean }).statusChangeUnreported = false;
       }
+    }
+    this.scheduleFlush();
+  }
+
+  /**
+   * #680 slice 3 — set (or clear, with `undefined`) one of a page artifact's
+   * file-watch notices (see PageFileWatchSchema). Written only by the daemon's
+   * page watch. Unknown ids are a no-op.
+   */
+  setPageFileWatch(artifactId: string, key: "recorded" | "refused", notice: PageFileWatchRecorded | PageFileWatchRefused | undefined): void {
+    this.assertAuthorizationReadable();
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art) return;
+    const current = readFileWatch(art.fileWatch);
+    const next: PageFileWatch = { ...current };
+    if (notice === undefined) delete next[key];
+    else (next as Record<string, unknown>)[key] = structuredClone(notice);
+    if (next.recorded === undefined && next.refused === undefined) delete (art as { fileWatch?: unknown }).fileWatch;
+    else art.fileWatch = next;
+    this.scheduleFlush();
+  }
+
+  /**
+   * #680 slice 3 — check_feedback reported these artifacts' file-watch notices:
+   * mark each undelivered one delivered (mirrors acknowledgeStatusChanges).
+   */
+  acknowledgeFileWatchNotices(ids: string[]): void {
+    this.assertAuthorizationReadable();
+    for (const a of this.artifacts) {
+      if (!ids.includes(a.id) || a.fileWatch === undefined) continue;
+      const fw = readFileWatch(a.fileWatch);
+      if (fw.recorded && !fw.recorded.delivered) fw.recorded = { ...fw.recorded, delivered: true };
+      if (fw.refused && !fw.refused.delivered) fw.refused = { ...fw.refused, delivered: true };
+      a.fileWatch = fw;
     }
     this.scheduleFlush();
   }

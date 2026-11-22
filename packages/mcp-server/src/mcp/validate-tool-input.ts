@@ -1205,7 +1205,7 @@ export const PresentPageInputSchema = z.object({
   html: z.string().min(1).optional()
     .describe("The page as inline, self-contained HTML (inline CSS/JS; no network: the frame blocks it). Give `html` OR `path`, not both."),
   path: z.string().min(1).optional()
-    .describe("A UTF-8 HTML file inside the project root (relative or absolute), read once at present time. Give `html` OR `path`, not both."),
+    .describe("A UTF-8 HTML file inside the project root (relative or absolute), read at present time and again on each save while the page is under review. Give `html` OR `path`, not both."),
   concept: z.union([z.string().min(1), DecisionOptionConceptSchema]).optional()
     .describe("The named pattern this page proposes, if any (e.g. 'write-through cache purge'). A reject records it, and the gate matches future proposals against it."),
 });

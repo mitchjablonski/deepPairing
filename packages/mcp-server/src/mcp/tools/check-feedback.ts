@@ -7,6 +7,7 @@ import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStat
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { formatWorkerStops, workerStopClause, type WorkerStopBatch } from "../../store/worker-stop-notices.js";
+import { collectPageWatchNotices } from "./page-watch-feedback.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
 import { briefEchoOf } from "../brief-ref.js";
@@ -413,7 +414,10 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       decisions: resolvedDecs.length,
       decidedPlans: decidedPlans.length,
       decidedAny: decidedAny.length,
-    }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0;
+    }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0
+    // #680 slice 3 — a page version the file watch recorded (or a save it
+    // refused) is news for the agent, so the poll returns it without waiting.
+    || collectPageWatchNotices(allArtsForScope).ids.length > 0;
 
   if (!hasImmediate) {
     // Check if there are draft artifacts — if so, wait for human action
@@ -1106,6 +1110,17 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     );
   }
 
+  // #680 slice 3 — the page FILE WATCH: a version recorded automatically from
+  // the page's source file after a save (with the page comments whose text is
+  // gone: orphaned), or a save it refused (rejection memory / unreadable file).
+  // Reported once, then acknowledged (buffered like the other lanes). Read off
+  // the post-wake artifact snapshot: the notices ride on the artifacts.
+  const pageWatch = collectPageWatchNotices(postWakeArtifacts);
+  if (pageWatch.ids.length > 0) {
+    parts.push(pageWatch.prose);
+    await store.acknowledgeFileWatchNotices?.(pageWatch.ids);
+  }
+
   // #569 pilot task A (#553/#572) — a WORKER SUBAGENT this session's lead
   // spawned was stopped (strict-stop deny) or held (ask) by a stance. Claude
   // Code doesn't relay that to the lead, so say it here: session-scoped (an
@@ -1655,6 +1670,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...(structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {}),
+    // #680 slice 3 — spread ONLY when the page file watch has news.
+    ...(pageWatch.structured.length > 0 ? { pageFileWatch: pageWatch.structured } : {}),
     // #569 pilot task A — spread `workerStops` ONLY when a worker was newly
     // stopped, so the healthy payload's key set stays byte-for-byte.
     ...(workerStops.length > 0

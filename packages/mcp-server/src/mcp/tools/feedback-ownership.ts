@@ -155,6 +155,8 @@ export class PendingAcks {
   renderFailures: Array<{ artifactId: string; visualId: string }> = [];
   /** #569 pilot task A — worker-stop ids to mark delivered. */
   workerStops: string[] = [];
+  /** #680 slice 3 — page artifacts whose file-watch notices were reported. */
+  fileWatchNotices: string[] = [];
 
   /** Flush every lane; a failing lane does not stop the others. Returns the
    *  errors (an un-flushed lane simply re-delivers next poll). */
@@ -172,6 +174,7 @@ export class PendingAcks {
     if (this.statusChanges.length > 0) await run(() => store.acknowledgeStatusChanges(this.statusChanges));
     if (this.renderFailures.length > 0) await run(() => store.acknowledgeRenderFailures?.(this.renderFailures));
     if (this.workerStops.length > 0) await run(() => store.markWorkerStopsDelivered?.(this.workerStops));
+    if (this.fileWatchNotices.length > 0) await run(() => store.acknowledgeFileWatchNotices?.(this.fileWatchNotices));
     return errors;
   }
 }
@@ -347,6 +350,9 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
     overrides.acknowledgeComments = (ids: string[]) => void pending.comments.push(...ids);
     overrides.acknowledgeDecisions = (ids: string[]) => void pending.decisions.push(...ids);
     overrides.acknowledgeStatusChanges = (ids: string[]) => void pending.statusChanges.push(...ids);
+    if (typeof store.acknowledgeFileWatchNotices === "function") {
+      overrides.acknowledgeFileWatchNotices = (ids: string[]) => void pending.fileWatchNotices.push(...ids);
+    }
     if (typeof store.acknowledgeRenderFailures === "function") {
       overrides.acknowledgeRenderFailures = (refs: Array<{ artifactId: string; visualId: string }>) =>
         void pending.renderFailures.push(...refs);

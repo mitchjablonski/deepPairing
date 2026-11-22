@@ -456,6 +456,14 @@ export interface IStore {
   getUnacknowledgedStatusChanges(): MaybePromise<Artifact[]>;
   /** V-fix — drain the un-reported flag after check_feedback surfaced them. */
   acknowledgeStatusChanges(ids: string[]): MaybePromise<void>;
+  /**
+   * #680 slice 3 — mark the file-watch notices (an auto-recorded page version,
+   * or a refused save) on these artifacts delivered, after check_feedback
+   * reported them. The notices themselves ride on the artifacts (`fileWatch`),
+   * so no separate read is needed. Optional: stores without a file watch have
+   * nothing to acknowledge.
+   */
+  acknowledgeFileWatchNotices?(ids: string[]): MaybePromise<void>;
 
   // Comments
   addComment(params: AddCommentParams): MaybePromise<Comment>;

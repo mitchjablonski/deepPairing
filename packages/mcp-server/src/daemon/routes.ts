@@ -391,6 +391,11 @@ export function createDaemonRoutes(
    */
   stanceExceptions?: StanceExceptionRegistry,
   refreshCompanionLink?: () => void,
+  /**
+   * #680 slice 3 — told when a session's wrapper registers or leaves (and the
+   * session is no longer live), so the page file watch starts or stops with it.
+   */
+  onSessionLifecycle?: (sessionId: string, event: "registered" | "unregistered") => void,
 ) {
   // U0.6 — same diagnostic seam as routes.ts. Wrapper-side mutations log
   // here; we want both UI clicks and agent-driven status updates in one log.
@@ -554,6 +559,7 @@ export function createDaemonRoutes(
     // #470 (§5) — the daemon ISSUES the registration: an id embedding its
     // instance, and a per-registration secret the wrapper echoes on every call.
     const registration = stanceExceptions?.register(sessionId, { split: (body as { splitMode?: unknown }).splitMode === true });
+    try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks registration */ }
     return c.json({
       status: "registered",
       sessionId,
@@ -587,7 +593,10 @@ export function createDaemonRoutes(
     // its registrations is live: a late shutdown from an evicted wrapper, or
     // one of two fallback-mode wrappers leaving, must not mark it inactive.
     const stillLive = stanceExceptions ? stanceExceptions.unregister(sessionId, c.req.header(REGISTRATION_HEADER)) : false;
-    if (!stillLive) activeSessions?.delete(sessionId);
+    if (!stillLive) {
+      activeSessions?.delete(sessionId);
+      try { onSessionLifecycle?.(sessionId, "unregistered"); } catch { /* never blocks unregistration */ }
+    }
     return c.json({ status: "unregistered" });
   });
 
@@ -644,6 +653,20 @@ export function createDaemonRoutes(
     }
     const { ids } = body as { ids?: unknown };
     r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
+    return c.json({ status: "acknowledged" });
+  });
+
+  // #680 slice 3 — file-watch notice acknowledgement (mirrors status-changes
+  // acknowledge above). The notices themselves ride on the artifact records.
+  app.post("/api/internal/sessions/:sessionId/artifacts/file-watch/acknowledge", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { ids } = body as { ids?: unknown };
+    r.store.acknowledgeFileWatchNotices(Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : []);
     return c.json({ status: "acknowledged" });
   });
 

@@ -520,6 +520,12 @@ export class DaemonClient implements IStore {
     await this.post("/artifacts/status-changes/acknowledge", { ids });
   }
 
+  // #680 slice 3 — proxy the file-watch notice acknowledgement (the notices
+  // ride on the artifacts, read through getArtifacts).
+  async acknowledgeFileWatchNotices(ids: string[]): Promise<void> {
+    await this.post("/artifacts/file-watch/acknowledge", { ids });
+  }
+
   // #176 (Option A) — proxy the render-failure DRAIN to the daemon's FileStore.
   // In daemon mode check_feedback runs against THIS client, so without these the
   // agent would never hear about a browser-reported broken diagram. There is no

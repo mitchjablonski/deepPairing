@@ -73,6 +73,7 @@ import { isSessionReviewConflictError } from "../store/session-records.js";
 // Static on purpose — see the note in client.ts (a dynamic import of
 // lifecycle.ts broke the plugin bundle's module initialisation order).
 import { probeDaemonIdentity } from "./lifecycle.js";
+import { PageWatcher } from "./page-watch.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -267,6 +268,28 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     fault: stanceExceptionFault,
   });
 
+  // #680 slice 3 — the file watch behind live file-backed page artifacts. It
+  // re-syncs on every artifact-changing broadcast (below), on registration,
+  // and stops a session's watches when its wrapper leaves.
+  const pageWatcher = new PageWatcher({
+    projectRoot,
+    getStore: (sessionId) => sessions.get(sessionId),
+    broadcast: (sessionId, event) => broadcast(sessionId, event),
+    isSessionLive: (sessionId) => activeSessions.has(sessionId),
+    log,
+  });
+  const PAGE_WATCH_SYNC_EVENTS = new Set<string>(["artifact_created", "artifact_updated", "artifact_content_updated", "daemon_resumed"]);
+  const pageWatchSyncPending = new Set<string>();
+  function schedulePageWatchSync(sessionId: string): void {
+    if (sessionId.startsWith("demo_") || pageWatchSyncPending.has(sessionId)) return;
+    pageWatchSyncPending.add(sessionId);
+    // Deferred: a broadcast fires mid-mutation; sync reads the settled store.
+    queueMicrotask(() => {
+      pageWatchSyncPending.delete(sessionId);
+      try { pageWatcher.sync(sessionId); } catch (err) { log(`[page-watch] sync failed: ${errorMessage(err)}`); }
+    });
+  }
+
   function createSession(sessionId: string): FileStore {
     log(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot, sessionId);
@@ -315,6 +338,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   function broadcast(sessionId: string, event: any): void {
     let outgoing = event;
+    if (PAGE_WATCH_SYNC_EVENTS.has(event?.type)) schedulePageWatchSync(sessionId);
     // #460 — the per-session CHANGE signal /api/active-sessions publishes. A
     // tab bound to session A only receives A's broadcasts, so it learns that a
     // SIBLING changed from this counter in the 10s session poll and re-fetches
@@ -509,6 +533,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       if (shutdownTimer) clearTimeout(shutdownTimer);
       shutdownTimer = null;
       checkAutoShutdown();
+    },
+    (sessionId, event) => {
+      if (event === "registered") schedulePageWatchSync(sessionId);
+      else pageWatcher.stopSession(sessionId);
     },
   );
   app.route("/", daemonRoutes);
@@ -911,6 +939,8 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // --- daemon.json / cleanup ---
 
   function cleanup(): void {
+    // #680 slice 3 — no file-watch record may land after the final flush.
+    try { pageWatcher.dispose(); } catch {}
     // Flush all sessions
     for (const [sessionId, store] of sessions) {
       try {
@@ -1558,6 +1588,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     if (evictTimer) { clearTimeout(evictTimer); evictTimer = null; }
     try { hooksWatcher?.close?.(); } catch {}
     hooksWatcher = null;
+    pageWatcher.dispose();
     if (hooksPollTimer) { clearInterval(hooksPollTimer); hooksPollTimer = null; }
     try { wss.close(); } catch {}
   }
