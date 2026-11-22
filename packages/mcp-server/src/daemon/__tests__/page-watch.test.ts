@@ -472,4 +472,71 @@ describe("page file watch — a save landing during the gate check (Codex review
     expect(readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused).toBeUndefined();
     expect(events.filter((e) => e.type === "preflight_blocked")).toHaveLength(0);
   });
+
+  // Stat-poll-only path (WSL /mnt/c: fs.watch never fires). Save B is already
+  // on disk when A's gate returns, BEFORE the next poll tick could bump gen.
+  const disk = (html: string) => fs.writeFileSync(path.join(root, "docs/page.html"), html);
+
+  it("stat-poll path: B on disk before the next tick — A records nothing, B gets its own quiet period", async () => {
+    watcher.dispose();
+    const held = heldFirstGate();
+    watcher = makeWatcher({ gate: held.gate, pollIntervalMs: 1_000 });
+    const v1 = presentFilePage("docs/page.html", "<p>zero</p>");
+    watcher.sync(SID);
+    disk("<p>save A, seen by the poll</p>"); // no watcher event
+    await vi.advanceTimersByTimeAsync(1_000); // poll tick sees A → quiet timer
+    await vi.advanceTimersByTimeAsync(2_000); // A's quiet ends; A's gate is pending
+    expect(held.pending()).toBe(true);
+    disk("<p>save B, longer than A so the size moves</p>"); // no event, no tick
+    held.release();
+    await watcher.idle();
+    expect(pages()).toHaveLength(1);
+    expect(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).toBeUndefined();
+    await settle(1_900);
+    expect(pages()).toHaveLength(1);
+    await settle(200);
+    expect(pages()).toHaveLength(2);
+    expect((liveTip()!.content as any).html).toBe("<p>save B, longer than A so the size moves</p>");
+    expect(events.filter((e) => e.type === "artifact_created")).toHaveLength(1);
+  });
+
+  it("stat-poll path, refusal variant: no refusal for A, B recorded", async () => {
+    store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });
+    watcher.dispose();
+    const held = heldFirstGate();
+    watcher = makeWatcher({ gate: held.gate, pollIntervalMs: 1_000 });
+    const v1 = presentFilePage("docs/page.html", "<p>Keep the current host.</p>");
+    watcher.sync(SID);
+    disk("<p>We should move the API to Railway for simpler deploys.</p>");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(held.pending()).toBe(true);
+    disk("<p>Stay on the current host for now; revisit hosting next quarter.</p>");
+    held.release();
+    await watcher.idle();
+    expect(readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused).toBeUndefined();
+    expect(events.filter((e) => e.type === "preflight_blocked")).toHaveLength(0);
+    await settle(2_100);
+    expect(pages()).toHaveLength(2);
+    expect((liveTip()!.content as any).html).toBe("<p>Stay on the current host for now; revisit hosting next quarter.</p>");
+    expect(events.filter((e) => e.type === "preflight_blocked")).toHaveLength(0);
+  });
+
+  it("stat-poll path: an mtime-only touch during the gate does not discard A", async () => {
+    watcher.dispose();
+    const held = heldFirstGate();
+    watcher = makeWatcher({ gate: held.gate, pollIntervalMs: 1_000 });
+    presentFilePage("docs/page.html", "<p>zero</p>");
+    watcher.sync(SID);
+    disk("<p>save A</p>");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(held.pending()).toBe(true);
+    const later = new Date(Date.now() + 60_000);
+    fs.utimesSync(path.join(root, "docs/page.html"), later, later); // same bytes, new mtime
+    held.release();
+    await watcher.idle();
+    expect(pages()).toHaveLength(2);
+    expect((liveTip()!.content as any).html).toBe("<p>save A</p>");
+  });
 });
+

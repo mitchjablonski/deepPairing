@@ -351,6 +351,8 @@ export class PageWatcher {
     // dangling symlink counts as present and gets the reader's refusal.
     try { fs.lstatSync(entry.absPath); } catch { return; }
 
+    // The file's identity at read time, for the side-effect boundary below.
+    const readSig = statSig(entry.absPath);
     const source = readPageSource(this.rootReal, entry.sourcePath);
     if (!source.ok) {
       const message = readerReason(source.error.content[0]?.text ?? "the file could not be read");
@@ -403,6 +405,15 @@ export class PageWatcher {
       return;
     }
 
+    // Codex review (stat-poll path) — the side-effect boundary. Where fs.watch
+    // never fires (WSL /mnt/c), a newer save can already be on disk before the
+    // next poll tick bumps `gen`. Re-check the file itself: if its stat moved
+    // and its content is no longer what this read saw, the read is stale. No
+    // side effect, no rate-limit window; mark the entry dirty and bump `gen` so
+    // the completion handler re-arms the quiet timer for the newer save.
+    // Everything from here to the writes is synchronous.
+    if (this.overtaken(entry, readSig, html)) return;
+
     if (!pre.ok) {
       const match = pre.event.match ?? {};
       const concept = conceptName(match.concept) ?? (typeof match.description === "string" ? match.description.slice(0, 200) : undefined);
@@ -416,6 +427,19 @@ export class PageWatcher {
     }
 
     this.record(store, entry, cur, content, pre.trace);
+  }
+
+  /** Has the file moved on from the snapshot this read saw? A stat change
+   *  alone (an mtime-only touch) is not enough: the content must differ. */
+  private overtaken(entry: Entry, readSig: string, html: string): boolean {
+    const sig = statSig(entry.absPath);
+    if (sig === readSig) return false;
+    const again = readPageSource(this.rootReal, entry.sourcePath);
+    if (again.ok && again.sourcePath === entry.sourcePath && again.html === html) return false;
+    entry.lastSig = sig;
+    entry.dirty = true;
+    entry.gen++;
+    return true;
   }
 
   /** The stances the gate reads, as one hash (session rejections + team rules). */
