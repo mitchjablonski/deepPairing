@@ -10,7 +10,7 @@
  * Written in second person to the agent. Claude Code-only features appear in
  * one clearly marked note at the end.
  */
-import { PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
+import { DECISION_NON_ANSWERABLE_STATUSES, PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
 import { cliInvocation } from "../cli-invocation.js";
 import { SERVER_VERSION } from "../version.js";
 
@@ -28,8 +28,8 @@ export const GUIDE_COMMANDS = [
   "read-decision",
 ] as const;
 
-/** Read-decision outcomes the guide teaches, in the order it lists them. */
-export const GUIDE_DECISION_STATES = ["pending", "resolved", "closed", "timed_out"] as const;
+/** The `waitStatus` values `read-decision --wait-ms` returns (decision-feedback.ts). */
+export const GUIDE_WAIT_STATUSES = ["resolved", "closed", "timed_out"] as const;
 
 const OPTIONS_EXAMPLE = {
   title: "Which cache layer?",
@@ -70,7 +70,15 @@ export function renderStandaloneGuide(invocation: string = cliInvocation()): str
 
 You are pairing with a human who reviews your proposals in a browser companion.
 You present a decision or a page, the human decides there, you read the result
-and carry on. Every command prints one JSON object on stdout.
+and carry on.
+
+OUTPUT
+  On success, and on a refusal, a command prints one JSON object on stdout.
+  A refusal also has "isError": true and exits 1. A usage, connection or
+  input error prints plain text ("deepPairing: ...") on stderr, nothing on
+  stdout, and exits 1. So: exit 0 means parse stdout; exit 1 with JSON on
+  stdout is a refusal (see REFUSALS); exit 1 with empty stdout means read
+  stderr and fix the command.
 
 In the commands below, \`deeppairing\` means:
   ${invocation}
@@ -121,20 +129,20 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   rejection memory and is enforced when you next present (see REFUSALS).
 
 4. READ THE DECISION
-  deeppairing read-decision --session-id <sessionId> --decision-id <decisionId> [--wait-ms 30000]
-  Without --wait-ms it answers at once. With it, it waits up to that many
-  milliseconds (1 to 30000) for the human's choice. Reading consumes nothing,
-  so repeat reads are safe.
-  - pending:   no selectedOptionId yet. Read again later, or wait.
-  - resolved:  selectedOptionId and selectedTitle are set, with the human's
-               reasoning when they gave one. Proceed with that option.
-  - closed:    artifactStatus is closed (for example superseded or withdrawn).
-               This card will not get an answer; stop waiting on it.
-  - timed_out: with --wait-ms only, the wait ended with no choice. Run the
-               same command again.
-  With --wait-ms the result carries waitStatus "resolved", "closed" or
-  "timed_out". recordedRejections lists the approaches the human rejected from
-  this card, each with their reason. Don't propose those again.
+  deeppairing read-decision --session-id <sessionId> --decision-id <decisionId> --wait-ms 30000
+  This waits up to 30000 ms (any value from 1 to 30000) for the human's
+  choice. Reading consumes nothing, so repeat reads are safe. Branch on
+  waitStatus:
+  - "resolved":  selectedOptionId and selectedTitle are set, with the human's
+                 reasoning when they gave one. Proceed with that option.
+  - "closed":    the card can no longer be answered. Stop waiting on it.
+  - "timed_out": no choice yet. Run the same command again.
+  recordedRejections lists the approaches the human rejected from this card,
+  each with their reason. Don't propose those again.
+  Without --wait-ms the read answers at once and has no waitStatus: no
+  selectedOptionId means no choice yet, and an artifactStatus of
+  ${DECISION_NON_ANSWERABLE_STATUSES.join(", ")} means the card can no longer
+  be answered.
 
 5. REQUEST IDS
   Every present needs --request-id, a UUID you generate (for example
@@ -176,7 +184,8 @@ export function standaloneGuideJson(invocation: string = cliInvocation()) {
     version: SERVER_VERSION,
     invocation,
     commands: [...GUIDE_COMMANDS],
-    decisionStates: [...GUIDE_DECISION_STATES],
+    waitStatuses: [...GUIDE_WAIT_STATUSES],
+    nonAnswerableStatuses: [...DECISION_NON_ANSWERABLE_STATUSES],
     refusalCode: "rejected_approach_blocked",
     optionsExample: OPTIONS_EXAMPLE,
     guide: renderStandaloneGuide(invocation),

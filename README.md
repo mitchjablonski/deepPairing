@@ -143,7 +143,11 @@ It adds a short marked block telling the agent to run `deeppairing guide` at the
 start of a task: `AGENTS.md` for Codex and OpenCode,
 `.cursor/rules/deeppairing.mdc` for Cursor, `.github/copilot-instructions.md`
 for Copilot. Reruns replace the block in place, an existing file is backed up
-first, and nothing outside the block changes. For agents that load skills,
+first, and nothing outside the block changes. It writes at the root of the Git
+repository you run it in (the worktree root in a linked worktree) and prints the
+absolute path it wrote. From a source checkout the block contains an absolute
+path to your clone, so keep that file out of commits; switch to the npm form
+once the package is published. For agents that load skills,
 [`skills/deeppairing/SKILL.md`](skills/deeppairing/SKILL.md) does the same
 (`npx skills add mitchjablonski/deepPairing --skill deeppairing`).
 

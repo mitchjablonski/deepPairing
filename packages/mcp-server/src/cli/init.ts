@@ -1577,7 +1577,8 @@ ${helpInvocations}
 } else if (cmd === "setup-agent") {
   try {
     const { runSetupAgentCommand } = await import("./setup-agent.js");
-    console.log(runSetupAgentCommand(cwd, args.slice(1), cliInvocation("guide")));
+    // #681 review — resolve from the real cwd (git toplevel), never the env-driven project root.
+    console.log(runSetupAgentCommand(process.cwd(), args.slice(1), cliInvocation("guide")));
   } catch (err) {
     console.error(`deepPairing: ${errorMessage(err)}`);
     process.exitCode = 1;

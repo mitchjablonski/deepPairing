@@ -11,11 +11,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   GUIDE_COMMANDS,
-  GUIDE_DECISION_STATES,
+  GUIDE_WAIT_STATUSES,
   renderStandaloneGuide,
   standaloneGuideJson,
 } from "../standalone-guide.js";
 import { validatePresentOptionsInput } from "../../mcp/validate-tool-input.js";
+import { DECISION_NON_ANSWERABLE_STATUSES } from "@deeppairing/shared";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cliDir = path.resolve(here, "..");
@@ -25,16 +28,30 @@ const standaloneSource = fs.readFileSync(path.join(cliDir, "standalone-session.t
 const INVOCATION = "node /fake/dist/cli/init.js";
 const guide = renderStandaloneGuide(INVOCATION);
 
-// `--wait-ms` lands with #703 (read-decision bounded wait). The guide
-// documents it as available; drop this entry once #703 is on main.
-const FLAGS_PENDING_MERGE = new Set(["--wait-ms"]);
+const cliEntry = path.join(cliDir, "init.ts");
+const tsxBin = path.resolve(cliDir, "..", "..", "node_modules", ".bin", "tsx");
+
+/** Run the real CLI (real argv parsing and dispatch) in an empty temp dir. */
+function runCli(args: string[]) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dp-guide-cli-"));
+  try {
+    const env: NodeJS.ProcessEnv = { ...process.env, DEEPPAIRING_NO_OPEN: "1", BROWSER: "none" };
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.DEEPPAIRING_PROJECT_ROOT;
+    return spawnSync(tsxBin, [cliEntry, ...args], { cwd, env, encoding: "utf8", timeout: 30_000 });
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
 
 describe("deeppairing guide (#681)", () => {
   it("names every standalone command, the request-ID rules and the refusal rule", () => {
     for (const command of GUIDE_COMMANDS.filter((c) => c !== "guide")) {
       expect(guide).toContain(`deeppairing ${command}`);
     }
-    for (const state of GUIDE_DECISION_STATES) expect(guide).toContain(`- ${state}:`);
+    for (const status of GUIDE_WAIT_STATUSES) expect(guide).toContain(`- "${status}":`);
+    expect(guide).toContain(DECISION_NON_ANSWERABLE_STATUSES.join(", "));
+    expect(guide).not.toMatch(/withdrawn|every command prints/i);
     expect(guide).toContain("--wait-ms");
     expect(guide).toContain("rejected_approach_blocked");
     expect(guide).toMatch(/Do NOT retry the same approach/);
@@ -72,7 +89,6 @@ describe("deeppairing guide (#681)", () => {
   it("every flag it teaches is parsed by the standalone commands", () => {
     const flags = new Set(guide.match(/--[a-z][a-z-]+/g));
     for (const flag of flags) {
-      if (FLAGS_PENDING_MERGE.has(flag)) continue;
       const name = flag.slice(2);
       const parsed = standaloneSource.includes(`"${name}": {`) || standaloneSource.includes(` ${name}: {`);
       expect(parsed, `${flag} is parsed in standalone-session.ts`).toBe(true);
@@ -101,4 +117,19 @@ describe("deeppairing guide (#681)", () => {
       expect(stub).not.toContain(protocolDetail);
     }
   });
+
+  it("the real CLI dispatches guide and parses a documented flag", () => {
+    const json = runCli(["guide", "--json"]);
+    expect(json.status).toBe(0);
+    const parsed = JSON.parse(json.stdout);
+    expect(parsed.commands).toEqual([...GUIDE_COMMANDS]);
+    expect(parsed.guide).toContain("deeppairing read-decision");
+
+    // --wait-ms is validated by the real parser before any session or daemon
+    // work, so an out-of-range value proves the flag is wired end to end.
+    const bad = runCli(["read-decision", "--session-id", "s", "--decision-id", "d", "--wait-ms", "0"]);
+    expect(bad.status).toBe(1);
+    expect(bad.stdout).toBe("");
+    expect(bad.stderr).toContain("--wait-ms must be a whole number from 1 to 30000");
+  }, 60_000);
 });
