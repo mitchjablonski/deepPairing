@@ -316,6 +316,10 @@ export class StanceExceptionRegistry {
       return out;
     };
     if (source !== "session") return ineligible("team_rule");
+    // #680 slice 4 — a page rule-out refuses page text (present_page, a page
+    // revise, a file-watch save); none of those can honour an allowance, so
+    // the block says so instead of offering a dead "Allow once".
+    if (match.origin === "page_rule_out") return ineligible("page_rule_out");
     if (sessionId.startsWith("demo_")) return ineligible("demo_session");
     const toolName = typeof event.toolName === "string" ? event.toolName : "";
     if (!Object.hasOwn(EXCEPTION_TOOL_TYPES, toolName)) return ineligible("unsupported_tool");

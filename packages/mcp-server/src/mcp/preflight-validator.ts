@@ -824,8 +824,8 @@ export function runPreflight(input: PreflightInput): PreflightResult {
         ? `REJECTED_APPROACH_BLOCKED: ${toolName} refused — this page's text still contains "${match.rejected.description}", ` +
           `which the user ruled out on a page (in the block "${match.proposal}").${reasonLine}\n\n` +
           `Take that text out of the page and present it again. This stance applies only to pages (present_page, a page revise, ` +
-          `a watched-file save); other tools are not affected. If this is a false positive or conditions have changed, ask the ` +
-          `human to allow this proposal once or retire the stance from the companion UI's gate log before retrying. ` +
+          `a watched-file save); other tools are not affected. A page rule-out can't be allowed once: if it no longer applies, ` +
+          `ask the human to retire it in the companion's Ledger, then present the page again. ` +
           `The artifact was NOT created.`
         :
         `REJECTED_APPROACH_BLOCKED: ${toolName} refused — your proposal contains "${match.proposal}" ` +
@@ -852,6 +852,9 @@ export function runPreflight(input: PreflightInput): PreflightResult {
               // #470 — with description + concept, the exact stance row an
               // allowance binds to.
               rejectedAt: match.rejected.rejectedAt,
+              // #680 slice 4 — a page rule-out block is never allow-once
+              // eligible (the daemon marks it so; see prepareBlockEvent).
+              ...(match.rejected.origin === "page_rule_out" ? { origin: "page_rule_out" as const } : {}),
             },
           },
         },

@@ -57,6 +57,8 @@ export function ineligibleText(reason: string | undefined): string {
     case "hook_deny": return "This edit was stopped before it ran. Nothing was written.";
     // #680 slice 3 — the page file watch refused a save; there is no call to allow.
     case "file_watch": return "This came from a file save, so there's nothing to allow once. The page wasn't updated: edit the file again, or call revise_artifact.";
+    // #680 slice 4 — a page rule-out: change the page, or retire the rule-out.
+    case "page_rule_out": return "This page still contains text you ruled out, so there's nothing to allow once. Ask Claude to take it out of the page, or retire the rule-out in the Ledger.";
     default: return "This block can't be allowed once.";
   }
 }

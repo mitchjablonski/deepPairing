@@ -255,6 +255,39 @@ export function autonomyHintFor(level: AutonomyLevel): string {
       : AUTONOMY_HINT_SUPERVISED;
 }
 
+/** #680 slice 4 — the page rule-out block's own ceiling (characters). */
+export const PAGE_RULE_OUT_HINT_BUDGET_CHARS = 600;
+const PAGE_RULE_OUT_HINT_PHRASE_MAX = 80;
+const PAGE_RULE_OUT_HINT_REASON_MAX = 120;
+
+const clipHint = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/**
+ * #680 slice 4 — page-only guidance for "Rule this out" stances, bounded by
+ * PAGE_RULE_OUT_HINT_BUDGET_CHARS: each entry's phrase and reason are clipped,
+ * and entries that don't fit become a "… N more" line. Empty string when there
+ * are none.
+ */
+export function renderPageRuleOutBlock(rows: Array<{ description: string; reason?: string }>): string {
+  if (rows.length === 0) return "";
+  const header =
+    "\n📄 Ruled out on pages (don't present a page whose text still contains these — present_page, a page revise and a watched-file save will refuse; other tools are not affected):";
+  const lines: string[] = [header];
+  let used = header.length;
+  let shown = 0;
+  for (const r of rows) {
+    const line = `  - "${clipHint(r.description, PAGE_RULE_OUT_HINT_PHRASE_MAX)}"${r.reason ? ` — reason: ${clipHint(r.reason, PAGE_RULE_OUT_HINT_REASON_MAX)}` : ""}`;
+    // Leave room for the "more" trailer whenever entries remain after this one.
+    const trailerRoom = shown + 1 < rows.length ? 60 : 0;
+    if (used + 1 + line.length + trailerRoom > PAGE_RULE_OUT_HINT_BUDGET_CHARS) break;
+    lines.push(line);
+    used += 1 + line.length;
+    shown++;
+  }
+  if (shown < rows.length) lines.push(`  … ${rows.length - shown} more (see the companion's Ledger)`);
+  return lines.join("\n");
+}
+
 export async function buildFirstCallHint(
   store: IStore,
   port: number,
@@ -310,22 +343,17 @@ export async function buildFirstCallHint(
   const memory = await store.getSessionMemory();
   const memoryParts: string[] = [];
   // #680 slice 4 — a page "Rule this out" stance is scoped to page text (the
-  // gate matches it only against a page's body), so it gets its own
-  // page-specific lane instead of the across-every-tool NEVER below. Ordinary
-  // stances keep the existing wording exactly.
+  // gate matches it only against a page's body), so it is NOT listed under the
+  // across-every-tool NEVER below. Ordinary stances keep the existing wording,
+  // priority slot and budget exactly; page rule-outs get their own separately
+  // bounded block (pageRuleOutBlock, appended after the contextual tier) so a
+  // long page reason can never push the ordinary memory out.
   const ordinaryRejections = memory.rejectedApproaches.filter((a) => a.origin !== "page_rule_out");
-  const pageRuleOuts = memory.rejectedApproaches.filter((a) => a.origin === "page_rule_out");
+  const pageRuleOutBlock = renderPageRuleOutBlock(memory.rejectedApproaches.filter((a) => a.origin === "page_rule_out"));
   if (ordinaryRejections.length > 0) {
     memoryParts.push(
       `Rejected approaches (NEVER propose these — present_* tools will refuse):\n${ordinaryRejections
         .map((a) => `  - ${a.description}${a.reason ? ` — reason: ${a.reason}` : ""}`)
-        .join("\n")}`,
-    );
-  }
-  if (pageRuleOuts.length > 0) {
-    memoryParts.push(
-      `Ruled out on pages (don't present a page whose text still contains these — present_page, a page revise and a watched-file save will refuse; other tools are not affected):\n${pageRuleOuts
-        .map((a) => `  - "${a.description}"${a.reason ? ` — reason: ${a.reason}` : ""}`)
         .join("\n")}`,
     );
   }
@@ -942,6 +970,9 @@ export async function buildFirstCallHint(
       droppedContextual++;
     }
   }
+  // #680 slice 4 — page rule-outs: their own bounded block, outside the
+  // contextual budget (it can't displace ordinary memory, nor be displaced).
+  if (pageRuleOutBlock) assembled.push(pageRuleOutBlock);
   const droppedTotal = droppedContextual + droppedPolicy;
   if (droppedTotal > 0) {
     // FF8 — only emit the policy-specific hint when ONLY policy items

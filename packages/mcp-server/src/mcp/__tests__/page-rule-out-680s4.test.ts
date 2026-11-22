@@ -16,7 +16,7 @@ import { getGlobalStore } from "../../store/global-store.js";
 import { findRejectedApproachMatch } from "../preflight-validator.js";
 import { readRejectedApproachEntries } from "../../cli/preflight-hook-core.js";
 import { recordStance, formatRecordStanceOutcome } from "../../store/stance-add.js";
-import { buildFirstCallHint } from "../first-call-hint.js";
+import { buildFirstCallHint, renderPageRuleOutBlock, PAGE_RULE_OUT_HINT_BUDGET_CHARS } from "../first-call-hint.js";
 import { createHttpRoutes } from "../../http/routes.js";
 import { withHash } from "../../http/__tests__/routes.harness.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
@@ -489,6 +489,35 @@ describe("#680 slice 4 — agent-facing copy describes the page scope (mixed mem
     expect(fb.text).toContain('RULED OUT: recorded as a page-only rejected stance ("Up to 60s")');
     expect(fb.text).toContain("A page whose text still contains it");
     expect(fb.text).toContain("Other tools are not affected.");
+  });
+});
+
+describe("#680 slice 4 — the page rule-out hint block has its own bound", () => {
+  it("a long page reason never drops a short ordinary rejection; the page block stays within its bound", async () => {
+    const id = await presentPage(`${PAGE_HTML}<p>Redis Streams queue</p>`);
+    store.recordRejectedApproach({ description: "Kafka topic fanout", reason: "too heavy" });
+    const long = "r".repeat(1900);
+    for (const [quote, locator] of [["Up to 60s", "td"], ["Redis Streams queue", "p"], ["shard the purge queue by tenant id", "p:nth-of-type(2)"]] as const) {
+      expect((await ruleOut(id, { htmlAnchor: { kind: "text", locator, quote }, reason: long })).status).toBe(200);
+    }
+    const hint = await buildFirstCallHint(store, 4000);
+    // Ordinary memory: present, in its old wording, byte-identical.
+    expect(hint).toContain("\n📋 From previous sessions in this project:\nRejected approaches (NEVER propose these — present_* tools will refuse):\n  - Kafka topic fanout — reason: too heavy");
+    // The page block: present, bounded, entries clipped.
+    expect(hint).toContain("\n📄 Ruled out on pages");
+    const block = renderPageRuleOutBlock(store.getSessionMemory().rejectedApproaches.filter((r) => r.origin === "page_rule_out"));
+    expect(hint).toContain(block);
+    expect(block.length).toBeLessThanOrEqual(PAGE_RULE_OUT_HINT_BUDGET_CHARS);
+    expect(block).not.toContain(long);
+    expect(block).toMatch(/— reason: r+…/);
+  });
+
+  it("renderPageRuleOutBlock: many rows stay within the bound with a trailer", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({ description: `phrase number ${i} `.repeat(10), reason: "x".repeat(500) }));
+    const block = renderPageRuleOutBlock(rows);
+    expect(block.length).toBeLessThanOrEqual(PAGE_RULE_OUT_HINT_BUDGET_CHARS);
+    expect(block).toMatch(/… \d+ more \(see the companion's Ledger\)$/);
+    expect(renderPageRuleOutBlock([])).toBe("");
   });
 });
 
