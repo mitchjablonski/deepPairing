@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { errorMessage, isClosedArtifactStatus, PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
@@ -7,6 +7,7 @@ import { DaemonClient } from "../daemon/client.js";
 import { ensureDaemon } from "../daemon/lifecycle.js";
 import { ERROR_CODES } from "../error-codes.js";
 import { createStandaloneSessionId, isStandaloneSessionForProject, isStandaloneSessionId } from "../standalone-session-id.js";
+import { readBoundedPageFile } from "./page-file.js";
 import { readSessionDirectories } from "./session-selection.js";
 
 const SESSION_REQUEST_TIMEOUT_MS = 5_000;
@@ -175,21 +176,24 @@ async function standalonePresentPage(projectRoot: string, args: string[]): Promi
   const requestId = requestIdSchema.safeParse(rawRequestId);
   if (!requestId.success) throw new Error(`--request-id must be a UUID. ${PRESENT_OPTIONS_RETRY}`);
 
+  const receipt = { sessionId, requestId: requestId.data };
   const meta = { title, ...(summary !== undefined ? { summary } : {}), ...(concept !== undefined ? { concept } : {}) };
   let page: { htmlBase64: string } | { path: string };
   if (file !== undefined) {
-    const size = statSync(file).size;
-    if (size > PAGE_HTML_MAX_BYTES) throw new Error(`The page file is ${size} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap.`);
-    const html = readFileSync(file);
-    if (html.length > PAGE_HTML_MAX_BYTES) throw new Error(`The page file is over the ${PAGE_HTML_MAX_BYTES}-byte page cap.`);
-    if (!html.toString("utf8").trim()) throw new Error("The page file is empty.");
-    page = { htmlBase64: html.toString("base64") };
+    const read = readBoundedPageFile(file, PAGE_HTML_MAX_BYTES);
+    if (!read.ok) {
+      return {
+        ...receipt, isError: true, code: ERROR_CODES.body_too_large,
+        message: `The page file is at least ${read.size} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
+      };
+    }
+    if (!read.bytes.toString("utf8").trim()) throw new Error("The page file is empty.");
+    page = { htmlBase64: read.bytes.toString("base64") };
   } else {
     page = { path: projectRelativePath(projectRoot, pagePath ?? "") };
   }
 
   const { client, companionUrl } = await connectStandaloneSession(projectRoot, sessionId);
-  const receipt = { sessionId, requestId: requestId.data };
   let result;
   try {
     result = await client.presentStandalonePage(projectRoot, requestId.data, { ...meta, ...page }, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));

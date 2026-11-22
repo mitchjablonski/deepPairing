@@ -595,6 +595,10 @@ export function createDaemonRoutes(
       }
       const store = sessions.get(sessionId) ?? installSession(sessionId, {});
       const port = refreshCompanionLink();
+      // Re-arm the file watch for this review's live file-backed pages even
+      // when the call below only replays (no artifact event fires then), e.g.
+      // a same-ID retry straight after a daemon restart, without a resume.
+      try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks the present */ }
       const result = await presentStandalonePage(daemonProjectRoot, store, parsed.data.operationId,
         { ...rest, ...(html !== undefined ? { html } : {}) }, port, (event) => broadcast(sessionId, event));
       return c.json(result);

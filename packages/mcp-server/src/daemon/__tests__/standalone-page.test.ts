@@ -257,6 +257,62 @@ describe("authenticated standalone page", () => {
     }
   });
 
+  it("re-arms the watch on a direct same-ID replay after a daemon restart, without a resume", async () => {
+    const f = fixture();
+    try {
+      fs.mkdirSync(path.join(f.root, "docs"));
+      fs.writeFileSync(path.join(f.root, "docs", "cold.html"), "<p>one</p>");
+      const first = f.start();
+      await f.open(first);
+      const op = randomUUID();
+      const input = { title: "Cold page", path: "docs/cold.html" };
+      const artifactId = (await (await f.present(first, op, input)).json()).structuredContent.artifactId as string;
+      await until(() => first.pageWatcher.watched(f.sessionId).length === 1);
+      first.sessions.get(f.sessionId)!.dispose();
+      first.dispose();
+      expect(f.watchers.every((w) => w.closed)).toBe(true);
+
+      const second = f.start();
+      const replay = await (await f.present(second, op, input)).json();
+      expect(replay.structuredContent).toMatchObject({ artifactId, replayed: true, status: "draft" });
+      await until(() => second.pageWatcher.watched(f.sessionId).length === 1);
+      expect(second.pageWatcher.watched(f.sessionId)).toEqual([artifactId]);
+      const live = f.watchers.filter((w) => !w.closed);
+      expect(live).toHaveLength(1);
+
+      fs.writeFileSync(path.join(f.root, "docs", "cold.html"), "<p>two</p>");
+      live[0]!.fire("cold.html");
+      const store = second.sessions.get(f.sessionId)!;
+      await until(() => store.getArtifacts().length === 2);
+      await second.pageWatcher.idle();
+      expect(store.getArtifacts().find((a) => a.parentId === artifactId)).toMatchObject({ version: 2, content: { html: "<p>two</p>" } });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("a wrapper leaving does not stop the watch of a still-loaded standalone review", async () => {
+    const f = fixture();
+    try {
+      fs.mkdirSync(path.join(f.root, "docs"));
+      fs.writeFileSync(path.join(f.root, "docs", "shared.html"), "<p>one</p>");
+      const daemon = f.start();
+      await f.open(daemon);
+      const artifactId = (await (await f.present(daemon, randomUUID(), { title: "Shared", path: "docs/shared.html" })).json())
+        .structuredContent.artifactId as string;
+      await until(() => daemon.pageWatcher.watched(f.sessionId).length === 1);
+
+      expect((await f.request(daemon, "register", {})).status).toBe(200);
+      expect(daemon.activeSessions.has(f.sessionId)).toBe(true);
+      expect((await f.request(daemon, "unregister", {})).status).toBe(200);
+      expect(daemon.activeSessions.has(f.sessionId)).toBe(false);
+      expect(daemon.pageWatcher.watched(f.sessionId)).toEqual([artifactId]);
+      expect(f.watchers.filter((w) => !w.closed)).toHaveLength(1);
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("keeps standalone sessions isolated and refuses unknown or foreign sessions", async () => {
     const f = fixture();
     try {

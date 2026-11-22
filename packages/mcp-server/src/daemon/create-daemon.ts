@@ -548,7 +548,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     },
     (sessionId, event) => {
       if (event === "registered") schedulePageWatchSync(sessionId);
-      else pageWatcher.stopSession(sessionId);
+      // Teardown mirrors eligibility: sync stops the session's watches unless
+      // it is still live without the wrapper (a loaded standalone review).
+      else pageWatcher.sync(sessionId);
     },
   );
   app.route("/", daemonRoutes);
