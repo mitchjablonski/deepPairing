@@ -25808,6 +25808,36 @@ var CodeReferenceSchema = external_exports.object({
   lineEnd: external_exports.number().int().positive(),
   snippet: external_exports.string().optional().describe("The selected code text")
 });
+var HTML_ANCHOR_LIMITS = {
+  locator: 512,
+  quote: 280,
+  affix: 32,
+  header: 200,
+  nodeId: 200,
+  href: 512
+};
+var HtmlAnchorKindSchema = external_exports.enum(["element", "text", "cell", "diagram-node", "link"]);
+var HtmlAnchorSchema = external_exports.object({
+  kind: HtmlAnchorKindSchema,
+  locator: external_exports.string().min(1).max(HTML_ANCHOR_LIMITS.locator),
+  quote: external_exports.string().max(HTML_ANCHOR_LIMITS.quote),
+  prefix: external_exports.string().max(HTML_ANCHOR_LIMITS.affix).optional(),
+  suffix: external_exports.string().max(HTML_ANCHOR_LIMITS.affix).optional(),
+  table: external_exports.object({
+    row: external_exports.string().max(HTML_ANCHOR_LIMITS.header).optional(),
+    col: external_exports.string().max(HTML_ANCHOR_LIMITS.header).optional()
+  }).optional(),
+  nodeId: external_exports.string().max(HTML_ANCHOR_LIMITS.nodeId).optional(),
+  href: external_exports.string().max(HTML_ANCHOR_LIMITS.href).optional(),
+  version: external_exports.number().int().positive().optional()
+}).superRefine((a, ctx) => {
+  if (a.kind === "text" && a.quote.trim().length === 0) {
+    ctx.addIssue({ code: "custom", path: ["quote"], message: "a text anchor needs the selected text as its quote" });
+  }
+  if (a.href !== void 0 && a.kind !== "link") {
+    ctx.addIssue({ code: "custom", path: ["href"], message: "href is only allowed on a link anchor" });
+  }
+});
 var CommentTargetSchema = external_exports.object({
   artifactId: external_exports.string(),
   lineNumber: external_exports.number().int().optional(),
@@ -25880,7 +25910,11 @@ var CommentTargetSchema = external_exports.object({
     readAt: external_exports.number().optional(),
     fenceId: external_exports.string().max(120).optional(),
     lineText: external_exports.string().max(500).optional()
-  }).optional().describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time")
+  }).optional().describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time"),
+  // #680 slice 2 — an element, text selection, table cell, Mermaid node or link
+  // pointed at inside a `page` artifact's sandboxed HTML. Optional; an old
+  // comment with no `htmlAnchor` loads unchanged.
+  htmlAnchor: HtmlAnchorSchema.optional().describe("Page artifacts: the element, text, cell, diagram node or link this comment points at")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -26901,7 +26935,19 @@ var CommentBodySchema = external_exports.object({
   /** Optional target metadata: line/finding/evidence/step/sectionId,
    *  shape varies by the artifact's renderer. Validated as a record so we
    *  don't have to enumerate every renderer's anchor strategy here. */
-  target: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
+  target: external_exports.record(external_exports.string(), external_exports.unknown()).superRefine((t, ctx) => {
+    if (t.htmlAnchor === void 0)
+      return;
+    const r = HtmlAnchorSchema.safeParse(t.htmlAnchor);
+    if (!r.success) {
+      const first = r.error.issues[0];
+      ctx.addIssue({
+        code: "custom",
+        path: ["htmlAnchor", ...(first?.path ?? []).map((p) => typeof p === "symbol" ? String(p) : p)],
+        message: `invalid htmlAnchor: ${first?.message ?? "malformed"}`
+      });
+    }
+  }).optional(),
   intent: external_exports.enum(["comment", "question", "suggestion"]).optional(),
   parentCommentId: external_exports.string().nullable().optional(),
   // #172 — a first-class suggested edit (intent === "suggestion"). Optional so
@@ -29501,6 +29547,39 @@ function describeRegionRef(region) {
   if (labels.length > 0) return `[${labels.join(", ")}]`;
   return "";
 }
+function clipProse(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}\u2026` : s;
+}
+function describeHtmlAnchor(a) {
+  if (!a) return "";
+  let out = ` \u2014 on page ${a.kind}`;
+  const quote = a.quote.trim();
+  if (quote) out += ` "${clipProse(quote, 120)}"`;
+  const headers = [];
+  if (a.table?.row) headers.push(`row "${clipProse(a.table.row, 60)}"`);
+  if (a.table?.col) headers.push(`column "${clipProse(a.table.col, 60)}"`);
+  if (headers.length) out += ` (${headers.join(", ")})`;
+  if (a.nodeId) out += ` (node ${a.nodeId})`;
+  if (a.href) out += ` (href ${clipProse(a.href, 120)})`;
+  out += ` at \`${a.locator}\``;
+  return out;
+}
+function structuredHtmlAnchor(a) {
+  if (!a) return {};
+  return {
+    htmlAnchor: {
+      kind: a.kind,
+      locator: a.locator,
+      quote: a.quote,
+      ...a.prefix ? { prefix: a.prefix } : {},
+      ...a.suffix ? { suffix: a.suffix } : {},
+      ...a.table && (a.table.row || a.table.col) ? { table: { ...a.table.row ? { row: a.table.row } : {}, ...a.table.col ? { col: a.table.col } : {} } } : {},
+      ...a.nodeId ? { nodeId: a.nodeId } : {},
+      ...a.href ? { href: a.href } : {},
+      ...a.version != null ? { version: a.version } : {}
+    }
+  };
+}
 function describeDecisionSection(sectionId) {
   if (sectionId === "decision:question") return "the decision question";
   const m = /^(pro|con)s?:(\d+)$/.exec(sectionId);
@@ -29581,7 +29660,10 @@ function commonTargetFields(c, removedLine) {
     // labels (byte-for-byte as before); a DECISION region comment (optionId set)
     // carries optionId + visualId + rect + nearNodes so the anchor survives a
     // re-render (#163). See structuredRegionFields.
-    ...structuredRegionFields(c.target)
+    ...structuredRegionFields(c.target),
+    // #680 slice 2 — a page anchor (element / text / cell / diagram node /
+    // link). Spread only when present so every other payload is unchanged.
+    ...structuredHtmlAnchor(c.target.htmlAnchor)
   };
 }
 function deliverComment(c, artsForTargets) {
@@ -29687,6 +29769,7 @@ ${s.replacementText}${note ? `
   }
   const regionRef = describeRegionRef(c.target.region);
   if (regionRef) loc += ` \u2014 on region ${regionRef}`;
+  loc += describeHtmlAnchor(c.target.htmlAnchor);
   const followUpPrefix = c.followUp ? `[follow-up on the APPROVED/RESOLVED artifact "${artsForTargets.find((a) => a.id === c.target.artifactId)?.title ?? c.target.artifactId}"] ` : "";
   const humanLabel = artifactHumanLabel(artsForTargets.find((a) => a.id === c.target.artifactId));
   if (c.intent === "question" && !c.answeredByCommentId) {
@@ -41035,6 +41118,21 @@ Give the human THIS exact URL to open the review surface.`;
 }
 
 // src/mcp/server.ts
+var HTML_ANCHOR_OUTPUT_SCHEMA = {
+  type: "object",
+  description: "Page artifacts \u2014 where on the page this comment points: kind (element|text|cell|diagram-node|link), CSS locator, quoted text (+ prefix/suffix), table header names for a cell, Mermaid nodeId, link href, and the page version it was made on. Find the spot in the HTML you authored.",
+  properties: {
+    kind: { type: "string", enum: ["element", "text", "cell", "diagram-node", "link"] },
+    locator: { type: "string" },
+    quote: { type: "string" },
+    prefix: { type: "string" },
+    suffix: { type: "string" },
+    table: { type: "object", properties: { row: { type: "string" }, col: { type: "string" } } },
+    nodeId: { type: "string" },
+    href: { type: "string" },
+    version: { type: "number" }
+  }
+};
 function createMcpServer(store, broadcast, port = BASE_PORT, hintEnv = {}) {
   const server = new Server(
     { name: "deeppairing", version: SERVER_VERSION },
@@ -41189,7 +41287,9 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   anchors: { type: "array", description: "Cross-file thread \u2014 2+ {filePath, lineStart, lineEnd?} anchors.", items: { type: "object", properties: { filePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" } } } },
                   // #140 — region-anchored diagram comment: the node labels it
                   // covers (textual; ids/rect are deliberately omitted).
-                  region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } }
+                  region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
+                  // #680 slice 2 — see comments.items.htmlAnchor.
+                  htmlAnchor: HTML_ANCHOR_OUTPUT_SCHEMA
                 }
               }
             },
@@ -41209,7 +41309,9 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   // #171 — cross-file thread anchors (a changeset comment binding 2+ locations).
                   anchors: { type: "array", items: { type: "object", properties: { filePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" } } } },
                   // #140 — see questions.items.region.
-                  region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } }
+                  region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
+                  // #680 slice 2 — the spot on a page artifact this comment points at.
+                  htmlAnchor: HTML_ANCHOR_OUTPUT_SCHEMA
                 }
               }
             },

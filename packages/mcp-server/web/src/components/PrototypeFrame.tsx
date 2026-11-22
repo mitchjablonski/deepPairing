@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState, type Ref } from "react";
 
 /**
  * Renders an agent-authored HTML/CSS/JS prototype in a hardened sandbox.
@@ -31,27 +31,77 @@ function hasScripts(html: string): boolean {
   return /<script\b|\son[a-z]+\s*=|javascript:/i.test(html);
 }
 
-const CSP = [
-  "default-src 'none'",
-  "img-src data: blob:",
-  "style-src 'unsafe-inline'",
-  "font-src data:",
-  "script-src 'unsafe-inline'",
-  "form-action 'none'",
-  "base-uri 'none'",
-].join("; ");
+/** The injected CSP. `script-src` is `'unsafe-inline'` once the human has
+ *  chosen Run (agent scripts run), or a per-render NONCE before Run (#680 slice
+ *  2: only our annotator's script tag carries it, so no agent markup can
+ *  execute even if the sanitiser missed something). */
+function buildCsp(scriptSrc: string): string {
+  return [
+    "default-src 'none'",
+    "img-src data: blob:",
+    "style-src 'unsafe-inline'",
+    "font-src data:",
+    `script-src ${scriptSrc}`,
+    "form-action 'none'",
+    "base-uri 'none'",
+  ].join("; ");
+}
 
-function wrapHtml(html: string): string {
+/** A fresh nonce for the before-Run CSP. */
+function makeNonce(): string {
+  const bytes = new Uint8Array(16);
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (c?.getRandomValues) c.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Attribute-value escaping for the wrapper's own `<html>`/`<body>` tags. */
+function escapeAttr(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+/** Only these names are ever written onto the wrapper (the sanitiser already
+ *  filtered the values; this is the second gate on the names). */
+const WRAPPER_ATTR_NAMES = new Set(["class", "dir", "lang", "style"]);
+function attrString(attrs: Record<string, string> | undefined): string {
+  if (!attrs) return "";
+  return Object.entries(attrs)
+    .filter(([k]) => WRAPPER_ATTR_NAMES.has(k))
+    .map(([k, v]) => ` ${k}="${escapeAttr(v)}"`)
+    .join("");
+}
+
+export function wrapHtml(
+  html: string,
+  opts: { headScript?: string; nonce?: string; htmlAttrs?: Record<string, string>; bodyAttrs?: Record<string, string> } = {},
+): string {
   // Wrap the agent payload in a document we control so OUR CSP meta is first in
   // <head> and governs the whole document (it combines with anything the agent
   // included — most restrictive wins). The sandbox attribute is the primary
   // defense regardless; this is defense-in-depth against network egress.
+  // #680 slice 2 — an optional head script (the page annotator) goes right
+  // after the CSP, before any agent markup, so it is the first script to run.
+  const csp = buildCsp(opts.nonce ? `'nonce-${opts.nonce}'` : "'unsafe-inline'");
+  const head = opts.headScript
+    ? `<script${opts.nonce ? ` nonce="${opts.nonce}"` : ""}>${opts.headScript}</script>`
+    : "";
   return (
-    `<!doctype html><html><head><meta charset="utf-8">` +
-    `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +
+    `<!doctype html><html${attrString(opts.htmlAttrs)}><head><meta charset="utf-8">` +
+    `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
+    head +
     `<style>html,body{margin:0;padding:10px;font-family:system-ui,-apple-system,sans-serif;color:#111;background:#fff}</style>` +
-    `</head><body>${html}</body></html>`
+    `</head><body${attrString(opts.bodyAttrs)}>${html}</body></html>`
   );
+}
+
+/** #680 slice 2 — page annotation: the annotator script (inlined first in the
+ *  frame) and the before-Run sanitiser. Passed in by the page renderer so this
+ *  component, which prototype visuals also use, carries neither by default. */
+export interface FrameAnnotation {
+  script: string;
+  /** Returns the cleaned markup plus the page's safe `<html>`/`<body>`
+   *  presentation attributes, which go on our wrapper elements. */
+  sanitize: (html: string) => { html: string; htmlAttrs?: Record<string, string>; bodyAttrs?: Record<string, string> };
 }
 
 export interface PrototypeFrameProps {
@@ -69,6 +119,15 @@ export interface PrototypeFrameProps {
   noun?: string;
   /** Classes for the live iframe (height). */
   frameClassName?: string;
+  /** #680 slice 2 — annotate the page. Before Run the frame gets
+   *  `allow-scripts` but only the sanitised markup plus our annotator (nonce
+   *  CSP); after Run, the full agent HTML plus the annotator. Still never
+   *  `allow-same-origin`, still no network. Requires `staticFirst`. */
+  annotation?: FrameAnnotation;
+  /** The live iframe element (to match `event.source` and post to it). */
+  iframeRef?: Ref<HTMLIFrameElement>;
+  /** Told when the human chooses Run (the frame remounts). */
+  onRunningChange?: (running: boolean) => void;
 }
 
 export function PrototypeFrame({
@@ -78,6 +137,9 @@ export function PrototypeFrame({
   staticFirst = false,
   noun = "prototype",
   frameClassName = "w-full h-[420px] rounded border border-border-default bg-white",
+  annotation,
+  iframeRef,
+  onRunningChange,
 }: PrototypeFrameProps) {
   const [running, setRunning] = useState(false);
   const [showSource, setShowSource] = useState(false);
@@ -85,6 +147,30 @@ export function PrototypeFrame({
   const size = new Blob([html]).size;
   const tooBig = size > maxBytes;
   const scripted = staticFirst && hasScripts(html);
+  const annotating = staticFirst && !!annotation;
+
+  useEffect(() => {
+    onRunningChange?.(running);
+  }, [running, onRunningChange]);
+
+  // #680 slice 2 — the before-Run document: sanitised agent markup, our
+  // annotator first, and a nonce CSP so only the annotator can run. Memoized
+  // so a re-render doesn't hand the iframe a new srcdoc (which would reload it).
+  const staticDoc = useMemo(() => {
+    if (!staticFirst || tooBig) return "";
+    if (!annotation) return wrapHtml(html);
+    const clean = annotation.sanitize(html);
+    return wrapHtml(clean.html, {
+      headScript: annotation.script,
+      nonce: makeNonce(),
+      htmlAttrs: clean.htmlAttrs,
+      bodyAttrs: clean.bodyAttrs,
+    });
+  }, [html, staticFirst, tooBig, annotation]);
+  const runDoc = useMemo(
+    () => (running ? wrapHtml(html, annotating && annotation ? { headScript: annotation.script } : {}) : ""),
+    [html, running, annotating, annotation],
+  );
 
   if (!html.trim()) {
     return <div className="text-2xs text-text-muted">No {noun} HTML provided.</div>;
@@ -112,8 +198,9 @@ export function PrototypeFrame({
       ) : running ? (
         <iframe
           // No `allow-same-origin` — opaque origin, no parent/cookie/storage access.
+          ref={iframeRef}
           sandbox="allow-scripts"
-          srcDoc={wrapHtml(html)}
+          srcDoc={runDoc}
           title={`Sandboxed ${noun}`}
           className={frameClassName}
         />
@@ -123,8 +210,12 @@ export function PrototypeFrame({
         // stay inert until the human opts in below.
         <div className="space-y-1.5">
           <iframe
-            sandbox=""
-            srcDoc={wrapHtml(html)}
+            ref={iframeRef}
+            // #680 slice 2 — when annotating, `allow-scripts` so the annotator
+            // runs; the agent's scripts were stripped and the nonce CSP stops
+            // anything else. Never `allow-same-origin` in either mode.
+            sandbox={annotating ? "allow-scripts" : ""}
+            srcDoc={staticDoc}
             title={`Sandboxed ${noun} (scripts paused)`}
             className={frameClassName}
           />

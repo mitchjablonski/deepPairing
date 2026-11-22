@@ -5,7 +5,7 @@ import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutco
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor } from "@deeppairing/shared";
+import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor, sanitizeHtmlAnchor } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -94,6 +94,13 @@ export const LEDGER_EXEMPT_REJECT_TYPES: ReadonlySet<ArtifactType> = new Set<Art
   "explainer",
   "debrief",
 ]);
+
+/** #680 slice 2 — drop `htmlAnchor` unless the comment is on a `page`. */
+function pageOnlyHtmlAnchor<T extends Record<string, unknown> | undefined>(target: T, artifactType: string | undefined): T {
+  if (!target || !("htmlAnchor" in target) || artifactType === "page") return target;
+  const { htmlAnchor: _dropped, ...rest } = target as Record<string, unknown>;
+  return rest as unknown as T;
+}
 
 /**
  * File-based store for deepPairing artifacts, comments, and decisions.
@@ -1192,7 +1199,16 @@ export class FileStore implements IStore {
       // must NOT collapse. Key off the region's labels (the stable anchor; ids
       // are render-unique). A label-less region falls back to its rounded rect
       // so distinct blank-area drags still stay distinct.
-      + `|region=${FileStore.regionKey(t.region)}`;
+      + `|region=${FileStore.regionKey(t.region)}`
+      // #680 slice 2 — two same-text comments on DIFFERENT spots of one page
+      // (two cells both saying "why?") must not collapse either.
+      + `|html=${FileStore.htmlAnchorKey(t.htmlAnchor)}`;
+  }
+
+  private static htmlAnchorKey(anchor: unknown): string {
+    if (!anchor || typeof anchor !== "object") return "";
+    const a = anchor as { kind?: unknown; locator?: unknown; quote?: unknown; prefix?: unknown; suffix?: unknown };
+    return JSON.stringify([a.kind ?? "", a.locator ?? "", a.quote ?? "", a.prefix ?? "", a.suffix ?? ""]);
   }
 
   private static regionKey(region: unknown): string {
@@ -1275,7 +1291,14 @@ export class FileStore implements IStore {
       sessionId: this.sessionId,
       // #609 review LOW — the browser-supplied skeleton anchor is capped and
       // shape-checked here, the single choke point every comment converges on.
-      target: { artifactId: params.artifactId, ...sanitizeSkeletonAnchor(params.target) },
+      // #680 slice 2 — same choke point for a page anchor: a valid htmlAnchor
+      // is kept in its parsed (capped, unknown-keys-dropped) form, an invalid
+      // one is dropped, never persisted.
+      // Page-only: an htmlAnchor names a spot inside a `page` artifact's HTML,
+      // so it is stripped from a comment on any other artifact (or the session).
+      // The validated owner is stamped LAST, so a conflicting
+      // `target.artifactId` can never override the id the store checked.
+      target: { ...pageOnlyHtmlAnchor(sanitizeHtmlAnchor(sanitizeSkeletonAnchor(params.target)), targetArtifact?.type), artifactId: params.artifactId },
       parentCommentId: params.parentCommentId ?? null,
       author: params.author,
       content: params.content,

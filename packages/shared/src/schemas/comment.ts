@@ -11,6 +11,77 @@ export const CodeReferenceSchema = z.object({
 
 export type CodeReference = z.infer<typeof CodeReferenceSchema>;
 
+/**
+ * #680 slice 2 — caps for an anchor pointed at inside an HTML `page` artifact.
+ * The anchor is built by the annotator script running INSIDE the sandboxed
+ * frame (untrusted: after Run, agent script shares that frame and could post a
+ * spoofed one), so every string is capped here and the schema is checked at
+ * every boundary: the parent's postMessage filter, the HTTP comment route and
+ * the store.
+ */
+export const HTML_ANCHOR_LIMITS = {
+  locator: 512,
+  quote: 280,
+  affix: 32,
+  header: 200,
+  nodeId: 200,
+  href: 512,
+} as const;
+
+export const HtmlAnchorKindSchema = z.enum(["element", "text", "cell", "diagram-node", "link"]);
+export type HtmlAnchorKind = z.infer<typeof HtmlAnchorKindSchema>;
+
+/**
+ * #680 slice 2 — where on an HTML page a comment points, modelled on the W3C
+ * Web Annotation selectors: a CSS path (`locator`, preferring `#id`, then a
+ * stable `data-*`, then `tag:nth-of-type`) plus a text-quote selector (`quote`
+ * with up to 32 characters of `prefix`/`suffix`) so the spot can be re-found
+ * when the locator no longer matches. `table` names a cell by its header TEXT
+ * (not indices), `nodeId` names a Mermaid node, `href` is the link target (link
+ * anchors only). `version` is the page version the anchor was made on.
+ */
+export const HtmlAnchorSchema = z
+  .object({
+    kind: HtmlAnchorKindSchema,
+    locator: z.string().min(1).max(HTML_ANCHOR_LIMITS.locator),
+    quote: z.string().max(HTML_ANCHOR_LIMITS.quote),
+    prefix: z.string().max(HTML_ANCHOR_LIMITS.affix).optional(),
+    suffix: z.string().max(HTML_ANCHOR_LIMITS.affix).optional(),
+    table: z
+      .object({
+        row: z.string().max(HTML_ANCHOR_LIMITS.header).optional(),
+        col: z.string().max(HTML_ANCHOR_LIMITS.header).optional(),
+      })
+      .optional(),
+    nodeId: z.string().max(HTML_ANCHOR_LIMITS.nodeId).optional(),
+    href: z.string().max(HTML_ANCHOR_LIMITS.href).optional(),
+    version: z.number().int().positive().optional(),
+  })
+  .superRefine((a, ctx) => {
+    if (a.kind === "text" && a.quote.trim().length === 0) {
+      ctx.addIssue({ code: "custom", path: ["quote"], message: "a text anchor needs the selected text as its quote" });
+    }
+    if (a.href !== undefined && a.kind !== "link") {
+      ctx.addIssue({ code: "custom", path: ["href"], message: "href is only allowed on a link anchor" });
+    }
+  });
+export type HtmlAnchor = z.infer<typeof HtmlAnchorSchema>;
+
+/**
+ * #680 slice 2 — the store choke point for `target.htmlAnchor` (mirrors
+ * sanitizeSkeletonAnchor): a valid anchor is kept in its parsed form (unknown
+ * keys dropped), an invalid one is dropped rather than persisted. The HTTP route
+ * refuses an invalid anchor with a 400 before it gets here; this is the backstop
+ * for every other writer.
+ */
+export function sanitizeHtmlAnchor<T extends Record<string, unknown> | undefined>(target: T): T {
+  if (!target || !("htmlAnchor" in target)) return target;
+  const { htmlAnchor: raw, ...rest } = target as Record<string, unknown>;
+  const parsed = HtmlAnchorSchema.safeParse(raw);
+  if (!parsed.success) return rest as unknown as T;
+  return { ...rest, htmlAnchor: parsed.data } as unknown as T;
+}
+
 export const CommentTargetSchema = z.object({
   artifactId: z.string(),
   lineNumber: z.number().int().optional(),
@@ -95,6 +166,10 @@ export const CommentTargetSchema = z.object({
     })
     .optional()
     .describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time"),
+  // #680 slice 2 — an element, text selection, table cell, Mermaid node or link
+  // pointed at inside a `page` artifact's sandboxed HTML. Optional; an old
+  // comment with no `htmlAnchor` loads unchanged.
+  htmlAnchor: HtmlAnchorSchema.optional().describe("Page artifacts: the element, text, cell, diagram node or link this comment points at"),
 });
 
 export type CommentTarget = z.infer<typeof CommentTargetSchema>;

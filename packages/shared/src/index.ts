@@ -144,6 +144,12 @@ export {
 export {
   CodeReferenceSchema,
   CommentTargetSchema,
+  HtmlAnchorSchema,
+  HtmlAnchorKindSchema,
+  HTML_ANCHOR_LIMITS,
+  sanitizeHtmlAnchor,
+  type HtmlAnchor,
+  type HtmlAnchorKind,
   CommentAuthorSchema,
   CommentIntentSchema,
   CommentSchema,

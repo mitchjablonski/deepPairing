@@ -108,4 +108,4 @@ Open the companion UI at the daemon's port — a deterministic per-project port 
 - `Evidence` — filePath, lineStart, lineEnd, snippet, explanation, relatedPaths
 - `Finding` — required: category, detail, `significance` (`low`|`medium`|`high`); optional: title, evidence (string | Evidence[]), severity, confidence, impact, recommendation, relatedFindings. (`significance` is the required note-worthiness enum; `impact`/`severity` are the distinct optional risk fields — don't confuse them.)
 - `Artifact` — id, type, version, parentId, status, content (type-specific)
-- `Comment` — target (artifactId + optional line/finding/evidence/step/`region` (diagram rect)/`optionId`/`visualId`/`requirementId`/`questionIndex`/`sectionId`), codeReferences[]
+- `Comment` — target (artifactId + optional line/finding/evidence/step/`region` (diagram rect)/`optionId`/`visualId`/`requirementId`/`questionIndex`/`sectionId`/`htmlAnchor` (page element/text/cell/diagram-node/link)), codeReferences[]

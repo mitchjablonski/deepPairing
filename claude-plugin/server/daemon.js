@@ -19981,6 +19981,45 @@ var CodeReferenceSchema = external_exports.object({
   lineEnd: external_exports.number().int().positive(),
   snippet: external_exports.string().optional().describe("The selected code text")
 });
+var HTML_ANCHOR_LIMITS = {
+  locator: 512,
+  quote: 280,
+  affix: 32,
+  header: 200,
+  nodeId: 200,
+  href: 512
+};
+var HtmlAnchorKindSchema = external_exports.enum(["element", "text", "cell", "diagram-node", "link"]);
+var HtmlAnchorSchema = external_exports.object({
+  kind: HtmlAnchorKindSchema,
+  locator: external_exports.string().min(1).max(HTML_ANCHOR_LIMITS.locator),
+  quote: external_exports.string().max(HTML_ANCHOR_LIMITS.quote),
+  prefix: external_exports.string().max(HTML_ANCHOR_LIMITS.affix).optional(),
+  suffix: external_exports.string().max(HTML_ANCHOR_LIMITS.affix).optional(),
+  table: external_exports.object({
+    row: external_exports.string().max(HTML_ANCHOR_LIMITS.header).optional(),
+    col: external_exports.string().max(HTML_ANCHOR_LIMITS.header).optional()
+  }).optional(),
+  nodeId: external_exports.string().max(HTML_ANCHOR_LIMITS.nodeId).optional(),
+  href: external_exports.string().max(HTML_ANCHOR_LIMITS.href).optional(),
+  version: external_exports.number().int().positive().optional()
+}).superRefine((a, ctx) => {
+  if (a.kind === "text" && a.quote.trim().length === 0) {
+    ctx.addIssue({ code: "custom", path: ["quote"], message: "a text anchor needs the selected text as its quote" });
+  }
+  if (a.href !== void 0 && a.kind !== "link") {
+    ctx.addIssue({ code: "custom", path: ["href"], message: "href is only allowed on a link anchor" });
+  }
+});
+function sanitizeHtmlAnchor(target) {
+  if (!target || !("htmlAnchor" in target))
+    return target;
+  const { htmlAnchor: raw2, ...rest } = target;
+  const parsed = HtmlAnchorSchema.safeParse(raw2);
+  if (!parsed.success)
+    return rest;
+  return { ...rest, htmlAnchor: parsed.data };
+}
 var CommentTargetSchema = external_exports.object({
   artifactId: external_exports.string(),
   lineNumber: external_exports.number().int().optional(),
@@ -20053,7 +20092,11 @@ var CommentTargetSchema = external_exports.object({
     readAt: external_exports.number().optional(),
     fenceId: external_exports.string().max(120).optional(),
     lineText: external_exports.string().max(500).optional()
-  }).optional().describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time")
+  }).optional().describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time"),
+  // #680 slice 2 — an element, text selection, table cell, Mermaid node or link
+  // pointed at inside a `page` artifact's sandboxed HTML. Optional; an old
+  // comment with no `htmlAnchor` loads unchanged.
+  htmlAnchor: HtmlAnchorSchema.optional().describe("Page artifacts: the element, text, cell, diagram node or link this comment points at")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -21035,7 +21078,19 @@ var CommentBodySchema = external_exports.object({
   /** Optional target metadata: line/finding/evidence/step/sectionId,
    *  shape varies by the artifact's renderer. Validated as a record so we
    *  don't have to enumerate every renderer's anchor strategy here. */
-  target: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
+  target: external_exports.record(external_exports.string(), external_exports.unknown()).superRefine((t, ctx) => {
+    if (t.htmlAnchor === void 0)
+      return;
+    const r = HtmlAnchorSchema.safeParse(t.htmlAnchor);
+    if (!r.success) {
+      const first = r.error.issues[0];
+      ctx.addIssue({
+        code: "custom",
+        path: ["htmlAnchor", ...(first?.path ?? []).map((p) => typeof p === "symbol" ? String(p) : p)],
+        message: `invalid htmlAnchor: ${first?.message ?? "malformed"}`
+      });
+    }
+  }).optional(),
   intent: external_exports.enum(["comment", "question", "suggestion"]).optional(),
   parentCommentId: external_exports.string().nullable().optional(),
   // #172 — a first-class suggested edit (intent === "suggestion"). Optional so
@@ -27739,6 +27794,11 @@ var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
   "explainer",
   "debrief"
 ]);
+function pageOnlyHtmlAnchor(target, artifactType) {
+  if (!target || !("htmlAnchor" in target) || artifactType === "page") return target;
+  const { htmlAnchor: _dropped, ...rest } = target;
+  return rest;
+}
 var FileStore = class _FileStore {
   basePath;
   projectHint;
@@ -28612,7 +28672,12 @@ var FileStore = class _FileStore {
       // to prevent).
       "requirementId",
       "questionIndex"
-    ].map((f) => `${f}=${t[f] ?? ""}`).join("|") + `|region=${_FileStore.regionKey(t.region)}`;
+    ].map((f) => `${f}=${t[f] ?? ""}`).join("|") + `|region=${_FileStore.regionKey(t.region)}|html=${_FileStore.htmlAnchorKey(t.htmlAnchor)}`;
+  }
+  static htmlAnchorKey(anchor) {
+    if (!anchor || typeof anchor !== "object") return "";
+    const a = anchor;
+    return JSON.stringify([a.kind ?? "", a.locator ?? "", a.quote ?? "", a.prefix ?? "", a.suffix ?? ""]);
   }
   static regionKey(region) {
     if (!region || typeof region !== "object") return "";
@@ -28646,7 +28711,14 @@ var FileStore = class _FileStore {
       sessionId: this.sessionId,
       // #609 review LOW — the browser-supplied skeleton anchor is capped and
       // shape-checked here, the single choke point every comment converges on.
-      target: { artifactId: params.artifactId, ...sanitizeSkeletonAnchor(params.target) },
+      // #680 slice 2 — same choke point for a page anchor: a valid htmlAnchor
+      // is kept in its parsed (capped, unknown-keys-dropped) form, an invalid
+      // one is dropped, never persisted.
+      // Page-only: an htmlAnchor names a spot inside a `page` artifact's HTML,
+      // so it is stripped from a comment on any other artifact (or the session).
+      // The validated owner is stamped LAST, so a conflicting
+      // `target.artifactId` can never override the id the store checked.
+      target: { ...pageOnlyHtmlAnchor(sanitizeHtmlAnchor(sanitizeSkeletonAnchor(params.target)), targetArtifact?.type), artifactId: params.artifactId },
       parentCommentId: params.parentCommentId ?? null,
       author: params.author,
       content: params.content,
