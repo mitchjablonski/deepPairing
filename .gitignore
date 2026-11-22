@@ -12,3 +12,7 @@ coverage
 # File real bugs in the GitHub issue tracker instead.
 ISSUE-*.md
 .claude/
+
+# Copied in by packages/mcp-server prepublishOnly (sources live at the repo root).
+packages/mcp-server/README.md
+packages/mcp-server/skills/

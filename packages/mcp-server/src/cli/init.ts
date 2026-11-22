@@ -1441,6 +1441,10 @@ ${helpInvocations}
                                            version. Same request-ID rules as options.
     dp read-decision --session-id ID --decision-id ID
                                            Read a saved choice and linked rejection reasons without consuming feedback.
+    dp guide [--json]                      Print the standalone review protocol for any shell-capable agent
+    dp setup-agent --agent codex|cursor|copilot|opencode [--dry-run]
+                                           Add a marked block to that agent's instruction file telling it to
+                                           run \`dp guide\` (backs up first; --dry-run prints the diff)
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
@@ -1561,6 +1565,18 @@ ${helpInvocations}
   try {
     const { standaloneReadDecision } = await import("./standalone-session.js");
     console.log(JSON.stringify(await standaloneReadDecision(cwd, args.slice(1))));
+  } catch (err) {
+    console.error(`deepPairing: ${errorMessage(err)}`);
+    process.exitCode = 1;
+  }
+} else if (cmd === "guide") {
+  // #681 — the standalone protocol, single-sourced in standalone-guide.ts.
+  const { renderStandaloneGuide, standaloneGuideJson } = await import("./standalone-guide.js");
+  console.log(args.includes("--json") ? JSON.stringify(standaloneGuideJson()) : renderStandaloneGuide());
+} else if (cmd === "setup-agent") {
+  try {
+    const { runSetupAgentCommand } = await import("./setup-agent.js");
+    console.log(runSetupAgentCommand(cwd, args.slice(1), cliInvocation("guide")));
   } catch (err) {
     console.error(`deepPairing: ${errorMessage(err)}`);
     process.exitCode = 1;

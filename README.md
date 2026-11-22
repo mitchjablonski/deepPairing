@@ -120,6 +120,52 @@ install paths are in [INSTALL.md](INSTALL.md).
 
 If something is stuck, see [docs/troubleshooting.md](docs/troubleshooting.md).
 
+## Standalone (any agent)
+
+Agents other than Claude Code (Codex, Cursor, Copilot, OpenCode, or anything
+with a shell) can drive the same review loop through the `deeppairing` CLI,
+with no MCP setup. The protocol lives in the CLI itself: `deeppairing guide`
+prints it, so the instructions always match the version you run.
+
+**Install.** Once the package is on npm, invoke the CLI with
+`npx -y -p @deeppairing/mcp-server deeppairing <command>`. Until then, build it
+from a clone (`pnpm install && pnpm build`) and use
+`node <clone>/packages/mcp-server/dist/cli/init.js <command>`. Below,
+`deeppairing` stands for whichever form you use.
+
+**Point your agent at the guide.** Run this in your project:
+
+```bash
+deeppairing setup-agent --agent codex      # or cursor, copilot, opencode; add --dry-run to preview
+```
+
+It adds a short marked block telling the agent to run `deeppairing guide` at the
+start of a task: `AGENTS.md` for Codex and OpenCode,
+`.cursor/rules/deeppairing.mdc` for Cursor, `.github/copilot-instructions.md`
+for Copilot. Reruns replace the block in place, an existing file is backed up
+first, and nothing outside the block changes. For agents that load skills,
+[`skills/deeppairing/SKILL.md`](skills/deeppairing/SKILL.md) does the same
+(`npx skills add mitchjablonski/deepPairing --skill deeppairing`).
+
+**The core loop**, as `deeppairing guide` teaches it:
+
+1. `deeppairing open` prints a session ID and the companion URL. Open the URL;
+   you review there. A later process continues with `deeppairing resume <id>`.
+2. The agent presents a real decision with `deeppairing present options` (a
+   JSON file of 2 to 4 options) or a page with `deeppairing present page`
+   (HTML).
+3. You pick an option, or reject one with a reason, in the companion.
+4. The agent reads your answer with `deeppairing read-decision`, optionally
+   waiting with `--wait-ms`.
+5. If the agent later proposes an approach you rejected, the present command is
+   refused with `rejected_approach_blocked` and your reason, and the agent has
+   to change its approach.
+
+**What standalone agents don't get:** the prompt before a guarded `Write` or
+`Edit` is a Claude Code `PreToolUse` hook, so it exists only in Claude Code.
+Standalone agents get your rejections enforced as refusals when they present,
+not when they edit files.
+
 ## Try the sample demo (no build)
 
 The demo plays a **scripted sample**. No AI agent or model runs; a script plays
