@@ -93,6 +93,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // focuses it on mount; a frame-initiated open is focused only after a fresh
   // ownership check (frameFocusNonce below).
   const [explicitOpen, setExplicitOpen] = useState(false);
+  const acceptingFrame = useRef<HTMLIFrameElement | null>(null);
   const [frameFocusNonce, setFrameFocusNonce] = useState(0);
   const composerBoxRef = useRef<HTMLDivElement>(null);
   const artifactIdRef = useRef(artifact.id);
@@ -102,12 +103,11 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
    *  actually in THIS page's frame: the iframe is connected, owns focus in the
    *  companion document, is not inside an exiting (inert) pane, and this page
    *  is still the selected artifact. */
-  const frameOwnsFocus = useCallback((): boolean => {
-    const f = iframeRef.current;
-    if (!f || !f.isConnected || document.activeElement !== f) return false;
+  const frameOwnsFocus = useCallback((f: HTMLIFrameElement | null): boolean => {
+    if (!f || f !== iframeRef.current || !f.isConnected || document.activeElement !== f) return false;
     if (f.closest("[inert]")) return false;
     const selected = useArtifactStore.getState().selectedArtifactId;
-    return selected == null || selected === artifactIdRef.current;
+    return selected === artifactIdRef.current;
   }, []);
   const frameOwnsFocusRef = useRef(frameOwnsFocus);
   frameOwnsFocusRef.current = frameOwnsFocus;
@@ -132,7 +132,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
-      const frame = iframeRef.current?.contentWindow;
+      const element = iframeRef.current;
+      const frame = element?.contentWindow;
       const anchor = acceptAnchorMessage(event, frame);
       if (anchor) {
         // Pointing is off (clicks belong to the page), the artifact is
@@ -142,7 +143,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         // read-only, or the reviewer is not in this frame right now (typing in
         // or focused on a companion control, another pane, an exiting pane). An
         // anchor only ever opens the composer; submitting stays explicit.
-        if (readOnly || !pointingRef.current || !frameOwnsFocusRef.current()) return;
+        if (readOnly || !pointingRef.current || !frameOwnsFocusRef.current(element)) return;
+        acceptingFrame.current = element;
         setDraft({ ...anchor, version: artifact.version });
         setExplicitOpen(false);
         setOpenNonce((n) => n + 1);
@@ -175,7 +177,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
 
   // Frame-initiated focus: re-check ownership at the moment of moving it.
   useEffect(() => {
-    if (!frameFocusNonce || !frameOwnsFocus()) return;
+    if (!frameFocusNonce || !frameOwnsFocus(acceptingFrame.current)) return;
     composerBoxRef.current?.querySelector("textarea")?.focus?.();
   }, [frameFocusNonce, frameOwnsFocus]);
 
@@ -186,6 +188,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     if (!anchor) return;
     postToFrame({ dp: "focus", index });
     if (!readOnly) {
+      acceptingFrame.current = null;
       setDraft({ ...anchor, version: artifact.version });
       setExplicitOpen(true);
       setOpenNonce((n) => n + 1);

@@ -208,14 +208,40 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
   });
 
-  it("drops a frame anchor once another artifact is selected", () => {
+  it.each([null, "art_somewhere_else"])("drops a frame anchor when selection is %s", (selectedArtifactId) => {
     render(<PageArtifact artifact={pageArtifact} />);
     const win = fakeFrameWindow();
     act(() => {
-      useArtifactStore.setState({ selectedArtifactId: "art_somewhere_else" });
+      useArtifactStore.setState({ selectedArtifactId });
     });
     fromFrame(win, { dp: "anchor", anchor: cellAnchor });
     expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+  });
+
+  it("does not transfer focus when Run replaces the accepting iframe before the effect", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const initialFrame = frame();
+    const win = fakeFrameWindow();
+    const run = screen.getByRole("button", { name: /run page scripts/i });
+    // The parent reports whichever iframe is mounted as focused, including
+    // the replacement. Only the original iframe accepted this message.
+    const active = vi.spyOn(document, "activeElement", "get").mockImplementation(() => frame());
+    const focus = vi.spyOn(HTMLTextAreaElement.prototype, "focus");
+    try {
+      act(() => {
+        run.click();
+        window.dispatchEvent(new MessageEvent("message", {
+          data: { dp: "anchor", anchor: cellAnchor }, source: win as unknown as MessageEventSource,
+        }));
+      });
+      expect(initialFrame?.isConnected).toBe(false);
+      expect(frame()).not.toBeNull();
+      expect(screen.getByTestId("page-anchor-composer")).toBeInTheDocument();
+      expect(focus).not.toHaveBeenCalled();
+    } finally {
+      focus.mockRestore();
+      active.mockRestore();
+    }
   });
 
   it("ignores an anchor from any other source, a malformed one, and an over-length one", () => {
