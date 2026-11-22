@@ -74,6 +74,12 @@ function isWithin(root: string, target: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
+function nativeRealpath(p: string): string {
+  try { return fs.realpathSync.native(p); } catch {
+    try { return fs.realpathSync(p); } catch { return p; }
+  }
+}
+
 /** Inside the root's `.deeppairing/` (the daemon's own state, incl. its bearer token)? */
 function isInDaemonDir(root: string, target: string): boolean {
   const first = path.relative(root, target).split(path.sep)[0] ?? "";
@@ -113,7 +119,9 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
   if (!isWithin(rootReal, real)) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
   }
-  if (isInDaemonDir(rootReal, real)) {
+  // Canonical names for this check (Windows 8.3 short names, trailing dots or
+  // spaces), so `.deeppairing` can't hide behind an alias of itself.
+  if (isInDaemonDir(nativeRealpath(rootReal), nativeRealpath(real))) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) into .deeppairing/, deepPairing's own state directory.`);
   }
   // Open once and work from the descriptor. O_NOFOLLOW refuses a symlink

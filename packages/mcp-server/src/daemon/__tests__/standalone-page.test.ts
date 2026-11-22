@@ -218,6 +218,45 @@ describe("authenticated standalone page", () => {
     }
   });
 
+  it("replays with the backing artifact's real status and the newest live successor, even across a fork", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const store = daemon.sessions.get(f.sessionId)!;
+      const child = (id: string, parentId: string, version: number) => store.createArtifact({
+        id, type: "page", title: id, content: { title: id, html: `<p>${id}</p>` }, parentId, version,
+      });
+
+      // An allowance admission (supersedeSkipped) adds a child but leaves its parent approved.
+      const approvedOp = randomUUID();
+      const input = page("<p>Approved page</p>");
+      const first = (await (await f.present(daemon, approvedOp, input)).json()).structuredContent.artifactId as string;
+      store.updateArtifactStatus(first, "approved");
+      child("art_after_approval", first, 2);
+      const approved = await (await f.present(daemon, approvedOp, input)).json();
+      expect(approved.structuredContent).toEqual({
+        artifactId: first, replayed: true, status: "approved",
+        currentArtifactId: "art_after_approval", currentVersion: 2, currentStatus: "draft",
+      });
+      expect(approved.content[0].text).toContain("It is approved; the page has since moved to v2 (art_after_approval");
+
+      // A two-child fork: the live child wins over a closed one, whatever the order.
+      const forkOp = randomUUID();
+      const forkInput = page("<p>Forked page</p>");
+      const parent = (await (await f.present(daemon, forkOp, forkInput)).json()).structuredContent.artifactId as string;
+      store.updateArtifactStatus(parent, "rejected");
+      child("art_fork_live", parent, 2);
+      child("art_fork_closed", parent, 3);
+      store.updateArtifactStatus("art_fork_closed", "rejected");
+      expect((await (await f.present(daemon, forkOp, forkInput)).json()).structuredContent).toMatchObject({
+        artifactId: parent, status: "rejected", currentArtifactId: "art_fork_live", currentVersion: 2, currentStatus: "draft",
+      });
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("keeps standalone sessions isolated and refuses unknown or foreign sessions", async () => {
     const f = fixture();
     try {

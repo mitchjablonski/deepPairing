@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { errorMessage, PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
+import { errorMessage, isClosedArtifactStatus, PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
 import { z } from "zod";
 import { DaemonClient } from "../daemon/client.js";
 import { ensureDaemon } from "../daemon/lifecycle.js";
@@ -223,7 +223,7 @@ async function standalonePresentPage(projectRoot: string, args: string[]): Promi
     ...(moved ? { currentArtifactId, currentVersion } : {}),
     ...(replayed === true && moved && currentArtifactId !== artifactId
       ? { note: `replayed; the page has since moved to v${currentVersion} (${currentArtifactId})` }
-      : replayed === true && typeof status === "string" && status !== "draft" && status !== "reviewing"
+      : replayed === true && typeof status === "string" && isClosedArtifactStatus(status)
         ? { note: `replayed; the page is ${status}` }
         : {}),
   };
