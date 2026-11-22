@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
-import type { Artifact } from "@deeppairing/shared";
+import type { Artifact, FileWatchNoticeRef } from "@deeppairing/shared";
+import { fileWatchNoticeKey, undeliveredFileWatchRefs } from "@deeppairing/shared";
 import type { IStore } from "../../store/store-interface.js";
 import type { ToolState } from "./types.js";
 
@@ -156,7 +157,7 @@ export class PendingAcks {
   /** #569 pilot task A — worker-stop ids to mark delivered. */
   workerStops: string[] = [];
   /** #680 slice 3 — page artifacts whose file-watch notices were reported. */
-  fileWatchNotices: string[] = [];
+  fileWatchNotices: FileWatchNoticeRef[] = [];
 
   /** Flush every lane; a failing lane does not stop the others. Returns the
    *  errors (an un-flushed lane simply re-delivers next poll). */
@@ -197,7 +198,7 @@ function matchesFilter(a: Artifact, byId: Record<string, Artifact>, filter: Feed
   return true;
 }
 
-type Lane = "comments" | "decisions" | "statusChanges" | "renderFailures";
+type Lane = "comments" | "decisions" | "statusChanges" | "renderFailures" | "fileWatch";
 
 /** Per held-back consumer label: the ids it kept from this poll, by lane. */
 export type HeldTally = Record<string, Record<Lane, Set<string>>>;
@@ -280,7 +281,7 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
         const heldBy = owner(artifactOf(x));
         if (heldBy !== null) {
           if (heldBy) {
-            const t = (held[heldBy] ??= { comments: new Set(), decisions: new Set(), statusChanges: new Set(), renderFailures: new Set() });
+            const t = (held[heldBy] ??= { comments: new Set(), decisions: new Set(), statusChanges: new Set(), renderFailures: new Set(), fileWatch: new Set() });
             t[lane].add(idOf(x));
           }
           continue;
@@ -313,7 +314,12 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
       claim,
     );
 
+  // #680 slice 3 (review P3-7) — file-watch notices ride on the artifacts, so
+  // the lane reads the poll's own snapshot (no extra store read on the legacy
+  // path) and claims / holds back like the other lanes.
   const overrides: Record<string, unknown> = {
+    selectFileWatchNotices: (artifacts: Artifact[]) =>
+      consumable<FileWatchNoticeRef>("fileWatch", () => undeliveredFileWatchRefs(artifacts), (r) => r.artifactId, fileWatchNoticeKey, true)(),
     getUnacknowledgedComments: commentsLane(true),
     getResolvedDecisions: decisionsLane(true),
     getUnacknowledgedStatusChanges: statusLane(true),
@@ -351,7 +357,7 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
     overrides.acknowledgeDecisions = (ids: string[]) => void pending.decisions.push(...ids);
     overrides.acknowledgeStatusChanges = (ids: string[]) => void pending.statusChanges.push(...ids);
     if (typeof store.acknowledgeFileWatchNotices === "function") {
-      overrides.acknowledgeFileWatchNotices = (ids: string[]) => void pending.fileWatchNotices.push(...ids);
+      overrides.acknowledgeFileWatchNotices = (refs: FileWatchNoticeRef[]) => void pending.fileWatchNotices.push(...refs);
     }
     if (typeof store.acknowledgeRenderFailures === "function") {
       overrides.acknowledgeRenderFailures = (refs: Array<{ artifactId: string; visualId: string }>) =>
@@ -439,6 +445,7 @@ export function describeHeld(t: Record<Lane, Set<string>>): { total: number; tex
   add(t.comments.size, "comment", "comments");
   add(t.statusChanges.size, "status change", "status changes");
   add(t.renderFailures.size, "render failure", "render failures");
-  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size;
+  add(t.fileWatch?.size ?? 0, "page file-watch notice", "page file-watch notices");
+  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size + (t.fileWatch?.size ?? 0);
   return { total, text: parts.join(", ") };
 }

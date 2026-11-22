@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { Comment } from "@deeppairing/shared";
-import { pageHaystack, relocateHtmlAnchor, relocatePageComments } from "../page-anchor-relocate.js";
+import { decodeHtmlEntities, pageHaystack, relocateHtmlAnchor, relocatePageComments } from "../page-anchor-relocate.js";
 
 type Anchor = NonNullable<Comment["target"]["htmlAnchor"]>;
 const v = (html: string, a: Anchor) => relocateHtmlAnchor(a, pageHaystack(html));
@@ -62,6 +62,20 @@ describe("relocateHtmlAnchor", () => {
     expect(v(`<pre class="mermaid">flowchart LR\n cacheLayer[Edge cache] --> db</pre>`, a)).toBe("carried");
   });
 
+  it("decodes entities in attribute values before comparing an href (review P2-3)", () => {
+    const a: Anchor = { kind: "link", locator: "a", quote: "search", href: "https://example.com/?q=1&lang=en" };
+    expect(v(`<a href="https://example.com/?q=1&amp;lang=en">search</a>`, a)).toBe("carried");
+  });
+
+  it("decodes named Latin-1 entities in text (review P2-3)", () => {
+    expect(v("<p>Meet at the caf&eacute; on Friday</p>", { kind: "text", locator: "p", quote: "the café on Friday" })).toBe("carried");
+    expect(v("<p>Prices &mdash; in &euro;</p>", { kind: "text", locator: "p", quote: "Prices — in €" })).toBe("carried");
+  });
+
+  it("an entity it can't decode makes a miss inconclusive, never an orphan", () => {
+    expect(v("<p>The &zwsp;unknown&notarealentity; thing</p>", { kind: "text", locator: "p", quote: "gone entirely" })).toBe("unknown");
+  });
+
   it("never orphans an anchor it has no evidence for", () => {
     expect(v("<p>anything</p>", { kind: "element", locator: "#hero", quote: "" })).toBe("unknown");
   });
@@ -86,5 +100,13 @@ describe("relocatePageComments", () => {
     expect(out.unknown).toEqual(["cmt_blank"]);
     expect(out.orphaned).toEqual([{ commentId: "cmt_gone", kind: "text", quote: "removed words", locator: "p", version: 2 }]);
     expect(out.orphanedOverflow).toBe(0);
+  });
+});
+
+describe("decodeHtmlEntities", () => {
+  it("decodes numeric and the full Latin-1 named set, leaves bare ampersands alone", () => {
+    expect(decodeHtmlEntities("&#233;&#xE9;&eacute;&Eacute;&nbsp;&yuml;&iexcl;").text).toBe("éééÉ\u00a0ÿ¡");
+    expect(decodeHtmlEntities("AT&T and a=1&b=2").text).toBe("AT&T and a=1&b=2");
+    expect(decodeHtmlEntities("AT&T").unknownEntity).toBe(false);
   });
 });

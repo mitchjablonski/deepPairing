@@ -11,8 +11,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileWatch, type Artifact } from "@deeppairing/shared";
-import { FileStore } from "../../store/file-store.js";
-import { PageWatcher, type PageDirWatcher } from "../page-watch.js";
+import { FileStore, ParentSupersededError } from "../../store/file-store.js";
+import { PageWatcher, type PageDirWatcher, type PageWatchDeps } from "../page-watch.js";
+import { preflightRejectedApproaches } from "../../mcp/tool-helpers.js";
 
 const SID = "sess_pagewatch";
 
@@ -24,7 +25,7 @@ let live: boolean;
 let fakeWatchers: Array<{ dir: string; fire: (name: string | null) => void; closed: boolean }>;
 let watcher: PageWatcher;
 
-function makeWatcher(opts: { pollIntervalMs?: number } = {}): PageWatcher {
+function makeWatcher(opts: { pollIntervalMs?: number; gate?: PageWatchDeps["gate"] } = {}): PageWatcher {
   return new PageWatcher({
     projectRoot: root,
     getStore: (sid) => (sid === SID ? store : undefined),
@@ -37,6 +38,7 @@ function makeWatcher(opts: { pollIntervalMs?: number } = {}): PageWatcher {
       return handle;
     },
     pollIntervalMs: opts.pollIntervalMs ?? 0,
+    ...(opts.gate ? { gate: opts.gate } : {}),
   });
 }
 
@@ -273,5 +275,137 @@ describe("page file watch — lifetime and hostile files", () => {
     store.createArtifact({ id: "art_inline", type: "page", title: "Inline", content: { title: "Inline", html: "<p>x</p>" } });
     watcher.sync(SID);
     expect(watcher.watched(SID)).toEqual([]);
+  });
+});
+
+describe("page file watch — review fixes", () => {
+  it("P2-1: stopSession while the gate is in flight records nothing; re-registering re-watches and records", async () => {
+    watcher.dispose();
+    // A fake gate: the REAL gate, held open until the test releases it.
+    let hold = true;
+    let release: (() => void) | null = null;
+    const gate: PageWatchDeps["gate"] = async (...args) => {
+      if (hold) {
+        hold = false;
+        await new Promise<void>((r) => { release = r; });
+      }
+      return preflightRejectedApproaches(...args);
+    };
+    watcher = makeWatcher({ gate });
+    const v1 = presentFilePage("docs/page.html", "<p>one</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>two</p>");
+    await vi.advanceTimersByTimeAsync(2_000); // the quiet timer fired; the gate is pending
+    expect(release).not.toBeNull();
+    watcher.stopSession(SID);
+    release!();
+    await watcher.idle();
+    expect(pages()).toHaveLength(1);
+    expect(store.getArtifacts().find((a) => a.id === v1.id)!.status).toBe("draft");
+    expect(watcher.watched(SID)).toEqual([]);
+
+    // Re-registration: watched again, and the save made meanwhile is recorded
+    // by the start-up check (P3-5c), then a later save too.
+    watcher.sync(SID);
+    expect(watcher.watched(SID)).toEqual([v1.id]);
+    await settle(2_000);
+    expect(pages()).toHaveLength(2);
+    expect((liveTip()!.content as any).html).toBe("<p>two</p>");
+    write("docs/page.html", "<p>three</p>");
+    await settle(12_000);
+    expect((liveTip()!.content as any).html).toBe("<p>three</p>");
+  });
+
+  it("P2-1: dispose while the gate is in flight records nothing", async () => {
+    watcher.dispose();
+    let release: (() => void) | null = null;
+    const gate: PageWatchDeps["gate"] = async (...args) => {
+      await new Promise<void>((r) => { release = r; });
+      return preflightRejectedApproaches(...args);
+    };
+    watcher = makeWatcher({ gate });
+    presentFilePage("docs/page.html", "<p>one</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>two</p>");
+    await vi.advanceTimersByTimeAsync(2_000);
+    watcher.dispose();
+    release!();
+    await watcher.idle();
+    expect(pages()).toHaveLength(1);
+  });
+
+  it("P2-2: a revise that already versioned the page wins; the watch records nothing", async () => {
+    const v1 = presentFilePage("docs/page.html", "<p>one</p>");
+    watcher.sync(SID);
+    // revise_artifact mid-flight over HTTP: its v2 exists, v1 not yet superseded.
+    store.createArtifact({ id: "art_manual", type: "page", title: "Cache options", content: { title: "Cache options", html: "<p>manual</p>" }, parentId: v1.id, version: 2, requireUnsupersededParent: true });
+    write("docs/page.html", "<p>from the file</p>");
+    await settle(2_000);
+    const kids = store.getArtifacts().filter((a) => a.parentId === v1.id);
+    expect(kids.map((a) => a.id)).toEqual(["art_manual"]);
+  });
+
+  it("P2-2: the store refuses a second supersede-create on one parent", async () => {
+    const v1 = presentFilePage("docs/page.html", "<p>one</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>two</p>");
+    await settle(2_000);
+    const v2 = liveTip()!;
+    expect(() => store.createArtifact({ id: "art_late", type: "page", title: "x", content: { title: "x", html: "<p>x</p>" }, parentId: v1.id, version: 2, requireUnsupersededParent: true }))
+      .toThrow(ParentSupersededError);
+    try {
+      store.createArtifact({ id: "art_late", type: "page", title: "x", content: { title: "x", html: "<p>x</p>" }, parentId: v1.id, version: 2, requireUnsupersededParent: true });
+    } catch (err) {
+      expect(err).toMatchObject({ code: "parent_superseded", successorId: v2.id, successorVersion: 2, successorFromFile: true });
+    }
+    expect(store.getArtifacts().some((a) => a.id === "art_late")).toBe(false);
+  });
+
+  it("P3-5b: retiring the stance re-admits identical refused bytes", async () => {
+    store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive" });
+    presentFilePage("docs/page.html", "<p>Keep the current host.</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>We should move the API to Railway for simpler deploys.</p>");
+    await settle(2_000);
+    expect(pages()).toHaveLength(1);
+    store.retractRejectedApproach("Deploy: Railway");
+    write("docs/page.html", "<p>We should move the API to Railway for simpler deploys.</p>"); // same bytes
+    await settle(12_000);
+    expect(pages()).toHaveLength(2);
+  });
+
+  it("P3-5c: a save made before the watch started is picked up at start", async () => {
+    presentFilePage("docs/page.html", "<p>one</p>");
+    fs.writeFileSync(path.join(root, "docs/page.html"), "<p>edited while unwatched</p>");
+    watcher.sync(SID);
+    await settle(2_000);
+    expect((liveTip()!.content as any).html).toBe("<p>edited while unwatched</p>");
+  });
+
+  it("P3-6: a path swapped for a symlink to ANOTHER in-project file is refused, not recorded", async () => {
+    const v1 = presentFilePage("docs/page.html", "<p>inside</p>");
+    watcher.sync(SID);
+    fs.writeFileSync(path.join(root, "docs/other.html"), "<p>a different page</p>");
+    fs.rmSync(path.join(root, "docs/page.html"));
+    fs.symlinkSync(path.join(root, "docs/other.html"), path.join(root, "docs/page.html"));
+    for (const w of fakeWatchers) w.fire("page.html");
+    await settle(2_000);
+    expect(pages()).toHaveLength(1);
+    const refused = readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused!;
+    expect(refused.cause).toBe("unreadable");
+    expect(refused.message).toContain("resolves to a different file (docs/other.html)");
+  });
+
+  it("P3-4: acknowledging an old refusal never swallows a newer one", () => {
+    const v1 = presentFilePage("docs/page.html", "<p>one</p>");
+    store.setPageFileWatch(v1.id, "refused", { at: "2026-11-21T00:00:00.000Z", sourcePath: "docs/page.html", cause: "gate", message: "old", digest: "d1" });
+    const oldRef = { artifactId: v1.id, refusedAt: "2026-11-21T00:00:00.000Z", refusedDigest: "d1" };
+    store.setPageFileWatch(v1.id, "refused", { at: "2026-11-21T00:00:05.000Z", sourcePath: "docs/page.html", cause: "gate", message: "new", digest: "d2" });
+    store.acknowledgeFileWatchNotices([oldRef]);
+    const refused = readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused!;
+    expect(refused).toMatchObject({ message: "new" });
+    expect(refused.delivered).toBeUndefined();
+    store.acknowledgeFileWatchNotices([{ artifactId: v1.id, refusedAt: "2026-11-21T00:00:05.000Z", refusedDigest: "d2" }]);
+    expect(readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused!.delivered).toBe(true);
   });
 });

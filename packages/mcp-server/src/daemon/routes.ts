@@ -9,7 +9,7 @@ import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
-import type { FileStore } from "../store/file-store.js";
+import { ParentSupersededError, type FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import type { PreflightTrace } from "@deeppairing/shared";
 import { AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
@@ -622,7 +622,23 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, CreateArtifactBody);
     if (!parsed.ok) return parsed.res;
-    const artifact = r.store.createArtifact(parsed.data as Parameters<typeof r.store.createArtifact>[0]);
+    let artifact: ReturnType<typeof r.store.createArtifact>;
+    try {
+      artifact = r.store.createArtifact(parsed.data as Parameters<typeof r.store.createArtifact>[0]);
+    } catch (err) {
+      // #680 slice 3 (review P2-2) — the supersede compare-and-swap lost.
+      if (err instanceof ParentSupersededError) {
+        return c.json({
+          error: err.message,
+          code: ERROR_CODES.parent_superseded,
+          parentId: err.parentId,
+          ...(err.successorId ? { successorId: err.successorId } : {}),
+          ...(err.successorVersion ? { successorVersion: err.successorVersion } : {}),
+          successorFromFile: err.successorFromFile,
+        }, 409);
+      }
+      throw err;
+    }
     broadcast(sessionId, { type: "artifact_created", artifact });
     return c.json({ artifact });
   });
@@ -663,10 +679,19 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body !== "object") {
-      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+      return c.json({ error: "Expected a JSON body with { refs: FileWatchNoticeRef[] }", code: ERROR_CODES.validation_error }, 400);
     }
-    const { ids } = body as { ids?: unknown };
-    r.store.acknowledgeFileWatchNotices(Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : []);
+    const { refs } = body as { refs?: unknown };
+    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+    const clean = (Array.isArray(refs) ? refs : [])
+      .filter((x): x is Record<string, unknown> => !!x && typeof x === "object" && typeof (x as { artifactId?: unknown }).artifactId === "string")
+      .map((x) => ({
+        artifactId: x.artifactId as string,
+        ...(str(x.recordedAt) !== undefined ? { recordedAt: str(x.recordedAt) } : {}),
+        ...(str(x.refusedAt) !== undefined ? { refusedAt: str(x.refusedAt) } : {}),
+        ...(str(x.refusedDigest) !== undefined ? { refusedDigest: str(x.refusedDigest) } : {}),
+      }));
+    r.store.acknowledgeFileWatchNotices(clean);
     return c.json({ status: "acknowledged" });
   });
 

@@ -3,7 +3,7 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES 
 import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage, undeliveredFileWatchRefs } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { formatWorkerStops, workerStopClause, type WorkerStopBatch } from "../../store/worker-stop-notices.js";
@@ -417,7 +417,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0
     // #680 slice 3 — a page version the file watch recorded (or a save it
     // refused) is news for the agent, so the poll returns it without waiting.
-    || collectPageWatchNotices(allArtsForScope).ids.length > 0;
+    || collectPageWatchNotices(allArtsForScope, undeliveredFileWatchRefs(allArtsForScope)).prose !== "";
 
   if (!hasImmediate) {
     // Check if there are draft artifacts — if so, wait for human action
@@ -1115,11 +1115,15 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // gone: orphaned), or a save it refused (rejection memory / unreadable file).
   // Reported once, then acknowledged (buffered like the other lanes). Read off
   // the post-wake artifact snapshot: the notices ride on the artifacts.
-  const pageWatch = collectPageWatchNotices(postWakeArtifacts);
-  if (pageWatch.ids.length > 0) {
-    parts.push(pageWatch.prose);
-    await store.acknowledgeFileWatchNotices?.(pageWatch.ids);
-  }
+  // Review P3-7 — the view's claim lane (when present) picks the notices this
+  // poll may deliver: claimed against a concurrent poll, held back for a live
+  // subagent consumer, exactly like comments.
+  const pageWatchRefs = store.selectFileWatchNotices
+    ? await store.selectFileWatchNotices(postWakeArtifacts)
+    : undeliveredFileWatchRefs(postWakeArtifacts);
+  const pageWatch = collectPageWatchNotices(postWakeArtifacts, pageWatchRefs);
+  if (pageWatch.prose) parts.push(pageWatch.prose);
+  if (pageWatch.refs.length > 0) await store.acknowledgeFileWatchNotices?.(pageWatch.refs);
 
   // #569 pilot task A (#553/#572) — a WORKER SUBAGENT this session's lead
   // spawned was stopped (strict-stop deny) or held (ask) by a stance. Claude

@@ -32,6 +32,51 @@ import { extractPageTextBlocks, PAGE_TEXT_MAX_BLOCKS } from "./page-text.js";
  * quote now appears twice and the context no longer decides between them).
  */
 
+/**
+ * Review P2-3 — HTML character references, decoded before any comparison (the
+ * annotator's quotes and hrefs come from the DOM, i.e. already decoded). No
+ * entity library is a dependency here, so: every numeric reference, the full
+ * Latin-1 named set, and the common typographic names. A named reference
+ * outside this table is reported as `unknownEntity`, which makes a miss
+ * inconclusive ("unknown") rather than an orphan.
+ */
+const LATIN1_NAMES = (
+  "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para " +
+  "middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute " +
+  "Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute " +
+  "THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde " +
+  "ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml"
+).split(" ");
+const NAMED: Record<string, string> = {
+  amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'",
+  mdash: "\u2014", ndash: "\u2013", hellip: "\u2026", lsquo: "\u2018", rsquo: "\u2019", sbquo: "\u201a", ldquo: "\u201c",
+  rdquo: "\u201d", bdquo: "\u201e", bull: "\u2022", prime: "\u2032", Prime: "\u2033", trade: "\u2122", euro: "\u20ac",
+  larr: "\u2190", uarr: "\u2191", rarr: "\u2192", darr: "\u2193", harr: "\u2194", lArr: "\u21d0", rArr: "\u21d2", hArr: "\u21d4",
+  minus: "\u2212", le: "\u2264", ge: "\u2265", ne: "\u2260", asymp: "\u2248", infin: "\u221e", ensp: "\u2002", emsp: "\u2003",
+  thinsp: "\u2009", zwnj: "\u200c", zwj: "\u200d", OElig: "\u0152", oelig: "\u0153", Scaron: "\u0160", scaron: "\u0161",
+  Yuml: "\u0178", fnof: "\u0192", circ: "\u02c6", tilde: "\u02dc", dagger: "\u2020", Dagger: "\u2021", permil: "\u2030",
+  lsaquo: "\u2039", rsaquo: "\u203a", check: "\u2713", hearts: "\u2665", star: "\u2606",
+};
+LATIN1_NAMES.forEach((n, i) => { NAMED[n] = String.fromCharCode(160 + i); });
+
+export function decodeHtmlEntities(s: string): { text: string; unknownEntity: boolean } {
+  let unknownEntity = false;
+  const text = s.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{1,31});?/g, (m, body: string) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return "\ufffd";
+      try { return String.fromCodePoint(code); } catch { return "\ufffd"; }
+    }
+    const hit = NAMED[body] ?? NAMED[body.toLowerCase()];
+    if (hit !== undefined) return hit;
+    // `&foo` without `;` is usually just text ("AT&T"); only a terminated
+    // unknown name is an entity we failed to decode.
+    if (m.endsWith(";")) unknownEntity = true;
+    return m;
+  });
+  return { text, unknownEntity };
+}
+
 /** Letters and digits only, so whitespace, punctuation and entity spelling
  *  differences never decide anything. */
 function core(s: string): string {
@@ -45,10 +90,12 @@ function norm(s: string): string {
 export interface PageHaystack {
   /** Visible text, letters and digits only. */
   text: string;
-  /** Raw HTML, letters and digits only. */
+  /** Raw HTML, entities decoded, letters and digits only. */
   raw: string;
-  /** The raw HTML, for exact attribute checks (href). */
+  /** The raw HTML with entities decoded, for exact attribute checks (href). */
   html: string;
+  /** A named reference this decoder doesn't know: a miss proves nothing. */
+  unknownEntity: boolean;
   /** The text extractor hit its block cap: text past it was not read, so a
    *  miss proves nothing. */
   truncated: boolean;
@@ -56,7 +103,16 @@ export interface PageHaystack {
 
 export function pageHaystack(html: string): PageHaystack {
   const blocks = extractPageTextBlocks(html);
-  return { text: core(blocks.join(" ")), raw: core(html), html, truncated: blocks.length >= PAGE_TEXT_MAX_BLOCKS };
+  const decoded = decodeHtmlEntities(html);
+  // page-text decodes only a handful of names; decode what it left behind.
+  const text = decodeHtmlEntities(blocks.join(" "));
+  return {
+    text: core(text.text),
+    raw: core(decoded.text),
+    html: decoded.text,
+    unknownEntity: decoded.unknownEntity || text.unknownEntity,
+    truncated: blocks.length >= PAGE_TEXT_MAX_BLOCKS,
+  };
 }
 
 function present(hay: PageHaystack, s: string): boolean | null {
@@ -87,8 +143,9 @@ export function relocateHtmlAnchor(anchor: NonNullable<Comment["target"]["htmlAn
   const known = checks.filter((c): c is boolean => c !== null);
   if (known.length === 0) return "unknown";
   if (known.every(Boolean)) return "carried";
-  // A miss in visible text past the extractor's cap is not proof.
-  if (hay.truncated) return "unknown";
+  // A miss in visible text past the extractor's cap, or in a page holding an
+  // entity we couldn't decode, is not proof.
+  if (hay.truncated || hay.unknownEntity) return "unknown";
   return "orphaned";
 }
 

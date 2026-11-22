@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, BriefRef, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, BriefRef, FileWatchNoticeRef, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 import type { PostedReviewRecord } from "./posted-reviews.js";
 import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
@@ -81,6 +81,13 @@ export interface CreateArtifactParams {
   parentId?: string | null;
   /** Override the default version of 1; used when superseding. */
   version?: number;
+  /**
+   * #680 slice 3 (review P2-2) — supersede compare-and-swap: refuse (throw
+   * ParentSupersededError / HTTP 409 `parent_superseded`) unless `parentId`
+   * is still open and has no other version. revise_artifact and the page file
+   * watch both set it, so they can never mint two v(N+1) drafts on one parent.
+   */
+  requireUnsupersededParent?: boolean;
   /**
    * #206 (I1) — the RAW feature tag from the present_* tool's `feature` param
    * (e.g. "Milestone 7", "auth-rework"). The store NORMALIZES it through
@@ -463,7 +470,15 @@ export interface IStore {
    * so no separate read is needed. Optional: stores without a file watch have
    * nothing to acknowledge.
    */
-  acknowledgeFileWatchNotices?(ids: string[]): MaybePromise<void>;
+  acknowledgeFileWatchNotices?(refs: FileWatchNoticeRef[]): MaybePromise<void>;
+  /**
+   * #680 slice 3 (review P3-7) — VIEW-ONLY hook, implemented by
+   * feedbackStoreView (never by FileStore/DaemonClient): select, from this
+   * poll's artifact snapshot, the file-watch notices this poll may deliver
+   * (claimed against concurrent polls, held back for live subagent consumers).
+   * Absent → check_feedback takes every undelivered notice in the snapshot.
+   */
+  selectFileWatchNotices?(artifacts: Artifact[]): MaybePromise<FileWatchNoticeRef[]>;
 
   // Comments
   addComment(params: AddCommentParams): MaybePromise<Comment>;

@@ -3,7 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { nanoid } from "nanoid";
 import { isClosedArtifactStatus, readFileWatch, type Artifact, type Comment, type PageFileWatchRecorded, type PageFileWatchRefused } from "@deeppairing/shared";
-import type { FileStore } from "../store/file-store.js";
+import { ParentSupersededError, type FileStore } from "../store/file-store.js";
 import { readPageSource } from "../mcp/tools/present-page.js";
 import { validateRevisePageInput } from "../mcp/validate-tool-input.js";
 import { artifactProposal } from "../mcp/artifact-preflight.js";
@@ -76,6 +76,9 @@ export interface PageWatchDeps {
   pollIntervalMs?: number;
   quietMs?: number;
   minIntervalMs?: number;
+  /** The rejection gate. Default preflightRejectedApproaches; tests pass a
+   *  fake that can hold the check open (stop-during-gate regression). */
+  gate?: typeof preflightRejectedApproaches;
 }
 
 interface Entry {
@@ -214,6 +217,9 @@ export class PageWatcher {
   }
 
   private rekey(entry: Entry, artifactId: string): void {
+    // Review P2-1 — a stopped entry is dead: re-inserting it would make sync()
+    // think the new version is watched and skip it forever.
+    if (entry.stopped || this.disposed) return;
     this.entries.delete(this.key(entry.sessionId, entry.artifactId));
     entry.artifactId = artifactId;
     this.entries.set(this.key(entry.sessionId, artifactId), entry);
@@ -259,6 +265,11 @@ export class PageWatcher {
     } catch (err) {
       this.log(`could not watch ${sourcePath} (${String((err as { code?: string })?.code ?? err)}); relying on the stat poll`);
     }
+    // Review P3-5c — check once on (re)start: a save made while nothing was
+    // watching (daemon restart, wrapper re-registration) is picked up too. An
+    // unchanged file records nothing.
+    entry.dirty = true;
+    this.arm(entry, this.quietMs);
     if (this.pollMs > 0) {
       entry.poll = setInterval(() => {
         const sig = statSig(entry.absPath);
@@ -334,6 +345,14 @@ export class PageWatcher {
       this.refuse(store, entry, cur, { cause: "unreadable", message, digest: sha256(`unreadable:${message}`) });
       return;
     }
+    // Review P3-6 — the path must still BE the watched file: one replaced by a
+    // symlink to another file inside the project is not silently recorded as
+    // this page.
+    if (source.sourcePath !== entry.sourcePath) {
+      const message = `${entry.sourcePath} now resolves to a different file (${source.sourcePath}); present that file as its own page if it is meant to be one`;
+      this.refuse(store, entry, cur, { cause: "unreadable", message, digest: sha256(`redirect:${source.sourcePath}`) });
+      return;
+    }
     const html = source.html;
     const curContent = cur.content as Record<string, unknown>;
     if (html === curContent.html) return; // touched, not changed
@@ -345,18 +364,25 @@ export class PageWatcher {
       return;
     }
     const content: Record<string, unknown> = { ...v.data, sourcePath: entry.sourcePath };
-    const digest = sha256(html);
+    // Review P3-5b — the refused-content key includes the stances in force, so
+    // retiring (or adding) a stance re-admits (or re-checks) identical bytes.
+    const digest = sha256(`${html}\u0000${await this.stanceFingerprint(store)}`);
+    if (entry.stopped || this.disposed) return;
     if (readFileWatch(cur.fileWatch).refused?.digest === digest) return; // already refused
 
     // The rejection gate — the same projection present_page and revise use.
     const proposal = artifactProposal("page", cur.title, content)!;
     const bc = (event: unknown) => this.deps.broadcast(entry.sessionId, event);
-    const pre = await preflightRejectedApproaches(store, bc, "page_watch", proposal.text, proposal.paths, proposal.concepts, {
+    const gate = this.deps.gate ?? preflightRejectedApproaches;
+    const pre = await gate(store, bc, "page_watch", proposal.text, proposal.paths, proposal.concepts, {
       advisory: proposal.advisory,
       deferRecord: true,
       ...(proposal.rawEditTextFrom !== undefined ? { rawEditTextFrom: proposal.rawEditTextFrom } : {}),
     });
 
+    // Review P2-1 — stopped (resolved, session ended) or disposed while the
+    // gate ran: record nothing.
+    if (entry.stopped || this.disposed) return;
     // Re-read after the await: the agent may have revised, or the human
     // resolved, the artifact meanwhile.
     const now = live();
@@ -380,6 +406,17 @@ export class PageWatcher {
     this.record(store, entry, cur, content, pre.trace);
   }
 
+  /** The stances the gate reads, as one hash (session rejections + team rules). */
+  private async stanceFingerprint(store: FileStore): Promise<string> {
+    try {
+      const mem = await store.getSessionMemory();
+      const team = (await store.getTeamPreferences?.()) ?? [];
+      return sha256(JSON.stringify([mem.rejectedApproaches ?? [], team]));
+    } catch {
+      return "unknown";
+    }
+  }
+
   private refuse(store: FileStore, entry: Entry, cur: Artifact, r: Pick<PageFileWatchRefused, "cause" | "message" | "digest" | "concept">): void {
     entry.lastRecordAt = Date.now();
     const prev = readFileWatch(cur.fileWatch).refused;
@@ -392,9 +429,15 @@ export class PageWatcher {
   }
 
   private record(store: FileStore, entry: Entry, cur: Artifact, content: Record<string, unknown>, trace: Parameters<typeof persistPreflightTrace>[4]): void {
+    if (entry.stopped || this.disposed) return;
     const newId = `art_${nanoid(10)}`;
-    const created = store.createArtifact({
+    let created: Artifact;
+    try {
+      created = store.createArtifact({
       id: newId,
+      // Review P2-2 — the supersede compare-and-swap: a revise_artifact that
+      // already versioned this page wins, and the watch records nothing.
+      requireUnsupersededParent: true,
       type: "page",
       title: cur.title,
       content,
@@ -405,6 +448,13 @@ export class PageWatcher {
       ...(cur.featureId ? { feature: cur.featureId } : {}),
       ...(cur.presentedBy ? { presentedBy: cur.presentedBy } : {}),
     });
+    } catch (err) {
+      if (err instanceof ParentSupersededError) {
+        this.log(`skipped ${entry.sourcePath}: ${cur.id} was already replaced${err.successorId ? ` by ${err.successorId}` : ""}`);
+        return;
+      }
+      throw err;
+    }
     store.updateArtifactStatus(cur.id, "superseded", "agent_supersede");
     store.addComment({
       id: `cmt_${nanoid(10)}`,

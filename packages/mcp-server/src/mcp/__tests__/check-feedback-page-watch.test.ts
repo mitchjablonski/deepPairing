@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { readFileWatch } from "@deeppairing/shared";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+import { feedbackStoreView } from "../tools/feedback-ownership.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -74,5 +75,59 @@ describe("check_feedback — page file watch (#680 slice 3)", () => {
     const res = await callTool("check_feedback");
     expect(res.text).not.toContain("Page file watch");
     expect((res.structuredContent as any).pageFileWatch).toBeUndefined();
+  });
+
+  it("consumes, without reporting, a refusal on a version that is no longer open (review P3-5a)", async () => {
+    seedChain();
+    store.setPageFileWatch("art_v1", "refused", {
+      at: new Date().toISOString(), sourcePath: "docs/page.html", cause: "gate", message: "stale refusal", digest: "z",
+    });
+    store.addComment({ id: "cmt_y", artifactId: "art_v2", content: "something to wake the poll", author: "human" });
+    const res = await callTool("check_feedback");
+    expect(res.text).not.toContain("stale refusal");
+    expect(res.text).not.toContain("still sees v1");
+    expect(readFileWatch(store.getArtifacts().find((a) => a.id === "art_v1")!.fileWatch).refused!.delivered).toBe(true);
+  });
+
+  it("two concurrent polls never both take one notice (review P3-7)", async () => {
+    const { v1, v2 } = seedChain();
+    store.setPageFileWatch(v2, "recorded", { at: new Date().toISOString(), sourcePath: "docs/page.html", fromArtifactId: v1, fromVersion: 1, carriedCount: 0, orphaned: [] });
+    const a = feedbackStoreView(store, { filter: null, reservations: [], pending: null });
+    const b = feedbackStoreView(store, { filter: null, reservations: [], pending: null });
+    const arts = store.getArtifacts();
+    const first = await a.store.selectFileWatchNotices!(arts);
+    const second = await b.store.selectFileWatchNotices!(arts);
+    expect(first.map((r) => r.artifactId)).toEqual([v2]);
+    expect(second).toEqual([]);
+    a.release();
+    // Released without acknowledging: the notice is available again.
+    expect((await b.store.selectFileWatchNotices!(arts)).map((r) => r.artifactId)).toEqual([v2]);
+    b.release();
+  });
+});
+
+describe("revise_artifact — racing the page file watch (#680 slice 3, review P2-2)", () => {
+  it("refuses when the file watch already versioned the page, naming the winner", async () => {
+    const { v1, v2 } = seedChain();
+    store.setPageFileWatch(v2, "recorded", { at: new Date().toISOString(), sourcePath: "docs/page.html", fromArtifactId: v1, fromVersion: 1, carriedCount: 0, orphaned: [] });
+    const res = await callTool("revise_artifact", { artifactId: v1, mode: "supersede", reason: "tweak", content: { html: "<p>manual</p>" } });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain(`${v1} changed under you — the page file watch auto-recorded ${v2} (v2)`);
+    expect(res.text).toContain(`Revise from ${v2}`);
+    expect(store.getArtifacts().filter((a) => a.parentId === v1).map((a) => a.id)).toEqual([v2]);
+  });
+
+  it("the compare-and-swap refuses a revise whose parent gained a version mid-call", async () => {
+    // The watch's v2 exists but v1 is still open: the window between the
+    // watch's create and its supersede (or revise's own read and create).
+    store.createArtifact({ id: "art_p1", type: "page", title: "Cache options", content: { title: "Cache options", html: "<p>one</p>", sourcePath: "docs/page.html" } });
+    store.createArtifact({ id: "art_p2", type: "page", title: "Cache options", content: { title: "Cache options", html: "<p>file</p>", sourcePath: "docs/page.html" }, parentId: "art_p1", version: 2 });
+    store.setPageFileWatch("art_p2", "recorded", { at: new Date().toISOString(), sourcePath: "docs/page.html", fromArtifactId: "art_p1", fromVersion: 1, carriedCount: 0, orphaned: [] });
+    const res = await callTool("revise_artifact", { artifactId: "art_p1", mode: "supersede", reason: "tweak", content: { html: "<p>manual</p>" } });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("changed under you — the page file watch auto-recorded art_p2 (v2)");
+    expect(res.text).toContain("Nothing was created");
+    expect(store.getArtifacts().filter((a) => a.parentId === "art_p1").map((a) => a.id)).toEqual(["art_p2"]);
+    expect(store.getArtifacts().find((a) => a.id === "art_p1")!.status).toBe("draft");
   });
 });

@@ -4,7 +4,7 @@ import { retirementFeedback, type RetirementInput, type RetirementOutcome } from
 import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, PageFileWatch, PageFileWatchRecorded, PageFileWatchRefused, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, FileWatchNoticeRef, PageFileWatch, PageFileWatchRecorded, PageFileWatchRefused, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor, sanitizeHtmlAnchor, readFileWatch } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
@@ -100,6 +100,21 @@ function pageOnlyHtmlAnchor<T extends Record<string, unknown> | undefined>(targe
   if (!target || !("htmlAnchor" in target) || artifactType === "page") return target;
   const { htmlAnchor: _dropped, ...rest } = target as Record<string, unknown>;
   return rest as unknown as T;
+}
+
+/**
+ * #680 slice 3 (review P2-2) — a supersede-create (`requireUnsupersededParent`)
+ * found its parent already replaced: closed, or already the parent of another
+ * version. Two writers (revise_artifact and the page file watch) raced to
+ * version the same artifact; the loser creates nothing. `successorId` is the
+ * version that won, when there is one.
+ */
+export class ParentSupersededError extends Error {
+  readonly code = "parent_superseded" as const;
+  constructor(readonly parentId: string, readonly successorId: string | undefined, readonly successorVersion: number | undefined, readonly successorFromFile: boolean) {
+    super(`${parentId} was already replaced${successorId ? ` by ${successorId}${successorVersion ? ` (v${successorVersion})` : ""}` : ""}; nothing was created.`);
+    this.name = "ParentSupersededError";
+  }
 }
 
 /**
@@ -639,6 +654,7 @@ export class FileStore implements IStore {
     feature?: string | null;
     presentedBy?: string | null;
     briefRef?: BriefRef;
+    requireUnsupersededParent?: boolean;
   }): Artifact {
     // #338 (F1) — a frozen writer refuses BEFORE any side effect. Pre-this a
     // createArtifact on a conflicted store pushed the record into memory,
@@ -648,6 +664,22 @@ export class FileStore implements IStore {
     // success for a dropped artifact. Same contract as the guarded readers —
     // the caller gets the typed conflict and creates nothing.
     this.assertAuthorizationReadable();
+    // #680 slice 3 (review P2-2) — the supersede compare-and-swap. Checked here,
+    // synchronously, at the one create choke point, so no interleaving of
+    // revise_artifact and the page file watch can mint two v(N+1) drafts on one
+    // parent: the parent must still be open AND have no other version yet.
+    if (params.requireUnsupersededParent && params.parentId) {
+      const parent = this.artifacts.find((a) => a.id === params.parentId);
+      const child = this.artifacts.filter((a) => a.parentId === params.parentId).pop();
+      if (!parent || child || ["superseded", "retracted", "rejected", "obsolete"].includes(parent.status)) {
+        throw new ParentSupersededError(
+          params.parentId,
+          child?.id,
+          child?.version,
+          child !== undefined && readFileWatch(child.fileWatch).recorded?.fromArtifactId === params.parentId,
+        );
+      }
+    }
     const now = new Date().toISOString();
     // #206 (I1) — normalize the raw feature tag to a stable slug at the single
     // create choke point (parity with the secret scan below). An empty/
@@ -1478,13 +1510,20 @@ export class FileStore implements IStore {
    * #680 slice 3 — check_feedback reported these artifacts' file-watch notices:
    * mark each undelivered one delivered (mirrors acknowledgeStatusChanges).
    */
-  acknowledgeFileWatchNotices(ids: string[]): void {
+  acknowledgeFileWatchNotices(refs: FileWatchNoticeRef[]): void {
     this.assertAuthorizationReadable();
-    for (const a of this.artifacts) {
-      if (!ids.includes(a.id) || a.fileWatch === undefined) continue;
+    // Review P3-4 — only the exact notice a ref names (its `at`, and a
+    // refusal's digest) is marked delivered; a newer one stays undelivered.
+    for (const r of refs) {
+      const a = this.artifacts.find((x) => x.id === r?.artifactId);
+      if (!a || a.fileWatch === undefined) continue;
       const fw = readFileWatch(a.fileWatch);
-      if (fw.recorded && !fw.recorded.delivered) fw.recorded = { ...fw.recorded, delivered: true };
-      if (fw.refused && !fw.refused.delivered) fw.refused = { ...fw.refused, delivered: true };
+      if (fw.recorded && !fw.recorded.delivered && r.recordedAt !== undefined && fw.recorded.at === r.recordedAt) {
+        fw.recorded = { ...fw.recorded, delivered: true };
+      }
+      if (fw.refused && !fw.refused.delivered && r.refusedAt !== undefined && fw.refused.at === r.refusedAt && fw.refused.digest === r.refusedDigest) {
+        fw.refused = { ...fw.refused, delivered: true };
+      }
       a.fileWatch = fw;
     }
     this.scheduleFlush();

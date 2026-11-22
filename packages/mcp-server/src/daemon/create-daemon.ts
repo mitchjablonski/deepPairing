@@ -73,7 +73,7 @@ import { isSessionReviewConflictError } from "../store/session-records.js";
 // Static on purpose — see the note in client.ts (a dynamic import of
 // lifecycle.ts broke the plugin bundle's module initialisation order).
 import { probeDaemonIdentity } from "./lifecycle.js";
-import { PageWatcher } from "./page-watch.js";
+import { PageWatcher, type PageWatchDeps } from "./page-watch.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -153,6 +153,9 @@ export interface CreateDaemonDeps {
   version?: string;
   /** H4 — browser opener; injectable so the #152 guard test can observe calls. */
   openBrowser?: (url: string) => Promise<void>;
+  /** #680 slice 3 — overrides for the page file watch (watcher factory,
+   *  poll/quiet/rate timings, gate). Tests only; production uses the defaults. */
+  pageWatch?: Partial<Pick<PageWatchDeps, "watch" | "pollIntervalMs" | "quietMs" | "minIntervalMs" | "gate">>;
   /** X7/H1-2 — hooks-dir watcher factory; defaults to fs.watch. Injectable so
    *  the guardWatcher wiring test can hand in a fake (real EventEmitter). */
   watch?: (
@@ -209,6 +212,8 @@ export interface Daemon {
    *  factory's timers/watcher and closes the WS server so a suite doesn't
    *  leak handles. Never called by index.ts. */
   dispose: () => void;
+  /** #680 slice 3 — the page file watch (exposed for tests and diagnostics). */
+  pageWatcher: PageWatcher;
 }
 
 export function createDaemon(deps: CreateDaemonDeps): Daemon {
@@ -226,6 +231,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     heartbeatIntervalMs = 30_000,
     hooksPollIntervalMs = 750,
     stanceExceptionClock,
+    pageWatch: pageWatchOverrides,
     stanceExceptionMonotonic,
     stanceExceptionFault,
   } = deps;
@@ -277,6 +283,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     broadcast: (sessionId, event) => broadcast(sessionId, event),
     isSessionLive: (sessionId) => activeSessions.has(sessionId),
     log,
+    ...(pageWatchOverrides ?? {}),
   });
   const PAGE_WATCH_SYNC_EVENTS = new Set<string>(["artifact_created", "artifact_updated", "artifact_content_updated", "daemon_resumed"]);
   const pageWatchSyncPending = new Set<string>();
@@ -1614,5 +1621,6 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     scheduleInstallHealthPing,
     cleanup,
     dispose,
+    pageWatcher,
   };
 }

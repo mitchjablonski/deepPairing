@@ -1,5 +1,7 @@
 import { nanoid } from "nanoid";
 import { retirementFailure } from "../../store/retirement.js";
+import { ParentSupersededError } from "../../store/file-store.js";
+import { readFileWatch } from "@deeppairing/shared";
 import type { DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
@@ -51,6 +53,29 @@ const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
   reasoning: validateLogReasoningInput,
 };
 
+/** #680 slice 3 (review P2-2) — the CAS refusal, from the in-process store
+ *  (ParentSupersededError) or the daemon (HTTP 409 `parent_superseded`). */
+function parentSupersededInfo(err: unknown): { successorId?: string; successorVersion?: number; successorFromFile: boolean } | null {
+  if (err instanceof ParentSupersededError) return { successorId: err.successorId, successorVersion: err.successorVersion, successorFromFile: err.successorFromFile };
+  const e = err as { code?: unknown; body?: unknown } | null;
+  if (e?.code !== "parent_superseded") return null;
+  const b = (e.body && typeof e.body === "object" ? e.body : {}) as Record<string, unknown>;
+  return {
+    ...(typeof b.successorId === "string" ? { successorId: b.successorId } : {}),
+    ...(typeof b.successorVersion === "number" ? { successorVersion: b.successorVersion } : {}),
+    successorFromFile: b.successorFromFile === true,
+  };
+}
+
+function pageChangedUnderYou(artifactId: string, successorId: string | undefined, successorVersion: number | undefined, fromFile: boolean): ToolResult {
+  const winner = successorId ? `${successorId}${successorVersion ? ` (v${successorVersion})` : ""}` : "a newer version";
+  const how = fromFile ? `the page file watch auto-recorded ${winner} from the page's source file` : `${winner} was recorded first`;
+  return {
+    content: [{ type: "text", text: `revise_artifact: ${artifactId} changed under you — ${how}. Nothing was created. Revise from ${successorId ?? "the newest version"} instead (and for a file-backed page, either edit the file OR call revise_artifact, not both).` }],
+    isError: true,
+  };
+}
+
 /** B3 — revise_artifact, extracted verbatim from the server.ts switch. */
 export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise<ToolResult> {
   const { store, server, broadcast } = ctx;
@@ -97,6 +122,9 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // fresh v(N+1) draft re-opens work the human deliberately closed (and
     // re-queues a pending review). Only live artifacts can be revised.
     if (["superseded", "retracted", "rejected", "obsolete"].includes(old.status)) {
+      // #680 slice 3 — a page the file watch already moved on from.
+      const fileSuccessor = old.status === "superseded" ? all.find((a) => a.parentId === old.id) : undefined;
+      if (fileSuccessor && readFileWatch(fileSuccessor.fileWatch).recorded?.fromArtifactId === old.id) return pageChangedUnderYou(artifactId, fileSuccessor.id, fileSuccessor.version, true);
       return {
         content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${old.status} — a closed artifact can't be superseded. Present a new artifact instead.` }],
         isError: true,
@@ -226,8 +254,15 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // #162 — that re-scan now happens INSIDE createArtifact (the store is the
     // authoritative choke point, parity with addComment) — no handler-side
     // scan needed here.
-    const newArtifact = await store.createArtifact({
+    let newArtifact: Awaited<ReturnType<typeof store.createArtifact>>;
+    try {
+    newArtifact = await store.createArtifact({
       id: newId,
+      // #680 slice 3 (review P2-2) — the supersede compare-and-swap: if the
+      // page file watch (or another revise) versioned `old` while this call
+      // was in flight, nothing is created and the agent is told to revise the
+      // winner instead of minting a second v(N+1) on the same parent.
+      requireUnsupersededParent: true,
       type: old.type,
       title,
       content: skeletonSnap.content as Record<string, unknown>,
@@ -255,6 +290,11 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       // that pin; otherwise the exact predecessor pin carries as above.
       ...(debriefPin?.ref ? { briefRef: debriefPin.ref } : carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}),
     });
+    } catch (err) {
+      const lost = parentSupersededInfo(err);
+      if (lost) return pageChangedUnderYou(artifactId, lost.successorId, lost.successorVersion, lost.successorFromFile);
+      throw err;
+    }
     // Parity PR 4 (#610 review M1) — a reshaped skeleton's fills are PAUSED
     // (enforced by the preflight hook) until the human approves the new version.
     // `old.status` is read before the supersede flips it.

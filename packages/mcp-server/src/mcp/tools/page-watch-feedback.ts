@@ -1,5 +1,5 @@
-import type { Artifact, PageFileWatchRecorded, PageFileWatchRefused } from "@deeppairing/shared";
-import { undeliveredFileWatch } from "@deeppairing/shared";
+import type { Artifact, FileWatchNoticeRef, PageFileWatchRecorded, PageFileWatchRefused } from "@deeppairing/shared";
+import { isClosedArtifactStatus, readFileWatch } from "@deeppairing/shared";
 
 /**
  * #680 slice 3 — check_feedback's report of what the page file watch did since
@@ -9,8 +9,8 @@ import { undeliveredFileWatch } from "@deeppairing/shared";
  */
 
 export interface PageWatchNotices {
-  /** Artifacts carrying an undelivered notice (to acknowledge). */
-  ids: string[];
+  /** The notices this poll consumed (to acknowledge, exactly these). */
+  refs: FileWatchNoticeRef[];
   prose: string;
   structured: Array<Record<string, unknown>>;
 }
@@ -45,15 +45,32 @@ function refusedLine(a: Artifact, r: PageFileWatchRefused): string {
   return `- ⚠ A save to ${r.sourcePath} could not be recorded for ${a.id} "${a.title}": ${r.message}. Your pair still sees v${a.version}.`;
 }
 
-export function collectPageWatchNotices(artifacts: readonly Artifact[]): PageWatchNotices {
-  const ids: string[] = [];
+/**
+ * Format the selected notice refs (see undeliveredFileWatchRefs and the
+ * check_feedback view's claim lane). A ref names its exact notices; one that
+ * changed since the ref was taken is skipped (it stays for the next poll).
+ * A refusal on a version that is no longer open (superseded by a manual
+ * revise, resolved) is consumed WITHOUT being reported: "your pair still sees
+ * vN" would no longer be true (review P3-5a).
+ */
+export function collectPageWatchNotices(artifacts: readonly Artifact[], refs: readonly FileWatchNoticeRef[]): PageWatchNotices {
+  const byId = new Map(artifacts.map((a) => [a.id, a]));
+  const out: FileWatchNoticeRef[] = [];
   const lines: string[] = [];
   const structured: Array<Record<string, unknown>> = [];
-  for (const a of artifacts) {
-    if (a.type !== "page" || a.fileWatch === undefined) continue;
-    const { recorded, refused } = undeliveredFileWatch(a.fileWatch);
-    if (!recorded && !refused) continue;
-    ids.push(a.id);
+  for (const ref of refs) {
+    const a = byId.get(ref.artifactId);
+    if (!a || a.type !== "page") continue;
+    const fw = readFileWatch(a.fileWatch);
+    const recorded = fw.recorded && !fw.recorded.delivered && fw.recorded.at === ref.recordedAt ? fw.recorded : undefined;
+    const refusedLive = fw.refused && !fw.refused.delivered && fw.refused.at === ref.refusedAt && fw.refused.digest === ref.refusedDigest ? fw.refused : undefined;
+    if (!recorded && !refusedLive) continue;
+    out.push({
+      artifactId: a.id,
+      ...(recorded ? { recordedAt: recorded.at } : {}),
+      ...(refusedLive ? { refusedAt: refusedLive.at, refusedDigest: refusedLive.digest } : {}),
+    });
+    const refused = refusedLive && !isClosedArtifactStatus(a.status) ? refusedLive : undefined;
     if (recorded) {
       lines.push(recordedLine(a, recorded));
       structured.push({
@@ -82,5 +99,5 @@ export function collectPageWatchNotices(artifacts: readonly Artifact[]): PageWat
     }
   }
   const prose = lines.length > 0 ? `📄 Page file watch (${lines.length}):\n${lines.join("\n")}` : "";
-  return { ids, prose, structured };
+  return { refs: out, prose, structured };
 }

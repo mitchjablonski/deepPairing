@@ -93,3 +93,38 @@ export function undeliveredFileWatch(fw: unknown): { recorded?: PageFileWatchRec
   if (parsed.data.refused && !parsed.data.refused.delivered) out.refused = parsed.data.refused;
   return out;
 }
+
+/**
+ * #680 slice 3 (review P3-4) — one artifact's undelivered notices, identified
+ * by the notice itself (its `at`, and a refusal's digest), not just the
+ * artifact id: acknowledging a ref marks delivered ONLY the notice it names,
+ * so a newer refusal written after the poll read can never be swallowed by an
+ * acknowledgement that never reported it.
+ */
+export interface FileWatchNoticeRef {
+  artifactId: string;
+  recordedAt?: string;
+  refusedAt?: string;
+  refusedDigest?: string;
+}
+
+/** Stable identity of a notice ref (claims, dedupe). */
+export function fileWatchNoticeKey(r: FileWatchNoticeRef): string {
+  return [r.artifactId, r.recordedAt ?? "", r.refusedAt ?? "", r.refusedDigest ?? ""].join("|");
+}
+
+/** Every artifact's undelivered file-watch notices, as refs. */
+export function undeliveredFileWatchRefs(artifacts: ReadonlyArray<{ id: string; fileWatch?: unknown }>): FileWatchNoticeRef[] {
+  const out: FileWatchNoticeRef[] = [];
+  for (const a of artifacts) {
+    if (a.fileWatch === undefined) continue;
+    const { recorded, refused } = undeliveredFileWatch(a.fileWatch);
+    if (!recorded && !refused) continue;
+    out.push({
+      artifactId: a.id,
+      ...(recorded ? { recordedAt: recorded.at } : {}),
+      ...(refused ? { refusedAt: refused.at, refusedDigest: refused.digest } : {}),
+    });
+  }
+  return out;
+}
