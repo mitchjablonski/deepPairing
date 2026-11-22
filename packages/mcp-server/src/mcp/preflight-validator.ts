@@ -49,7 +49,9 @@ export function normalizeConceptKey(name: string): string {
  * semantics already make common words harmless; this only guards the case of
  * a concept whose ONLY tokens are function words. Checked pre-stem.
  */
-const SHORT_STOPWORDS = new Set([
+// #680 slice 4 — mirrored in @deeppairing/shared (stopwords.ts) for the page
+// "Rule this out" content-token rule; stopwords-mirror.test.ts pins the copies.
+export const SHORT_STOPWORDS: ReadonlySet<string> = new Set([
   "the", "and", "for", "but", "not", "use", "with", "from", "into", "onto",
   "that", "this", "than", "then", "via", "per", "our", "your", "its",
 ]);
@@ -487,6 +489,22 @@ function containsAsPhrase(haystack: string, needle: string): boolean {
   return new RegExp(`(?:^|[^a-z0-9])${esc}(?:[^a-z0-9]|$)`).test(haystack);
 }
 
+/**
+ * #680 slice 4 — the page rule-out lane's phrase test: like containsAsPhrase,
+ * but with UNICODE word boundaries (a rule-out phrase may be non-Latin text,
+ * and an ASCII boundary class treats every non-Latin letter as a boundary, so
+ * "очередь" would match inside "переочередь"). Used ONLY for page_rule_out rows;
+ * ordinary stance matching keeps containsAsPhrase unchanged. Lookbehind and
+ * \p{…} with the `u` flag are supported on every Node this package runs on
+ * (>=20), including inside the PreToolUse hook.
+ */
+function containsAsPhraseUnicode(haystack: string, needle: string): boolean {
+  const n = needle.trim();
+  if (n.length < 3) return false;
+  const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, "u").test(haystack);
+}
+
 export function findRejectedApproachMatch(
   proposalStrings: string[],
   rejected: RejectedApproach[],
@@ -496,6 +514,22 @@ export function findRejectedApproachMatch(
   for (const rej of rejected) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
+    // #680 slice 4 — a page "Rule this out" stance reaches ONLY a page's own
+    // text, and only FORWARD: it blocks when the ruled-out phrase appears in a
+    // page body block. Page bodies are the strings from `rawEditTextFrom` on,
+    // which only a page proposal sets (present_page, a page revise, a file-watch
+    // save). No reverse lane (an option titled "Purge queue" or a page titled
+    // "Stale sessions" is not the phrase), no specific-noun lane, no concept
+    // lane, and nothing else (other artifact types, the PreToolUse hook's raw
+    // edits) — the phrase is page text, not a named approach.
+    if (rej.origin === "page_rule_out") {
+      if (opts.rawEditTextFrom === undefined) continue;
+      for (let idx = opts.rawEditTextFrom; idx < proposalStrings.length; idx++) {
+        const proposal = proposalStrings[idx]!;
+        if (containsAsPhraseUnicode(clean(proposal), rejNormalized)) return { proposal, rejected: rej, via: "surface" };
+      }
+      continue;
+    }
     // The portion AFTER the first colon is the specific rejection noun
     // ("Deploy: Railway" → "railway"); the prefix is the category and
     // recurs across unrelated rejections, so we don't match on it.
@@ -700,6 +734,9 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   // near miss; it's a block).
   const nearMisses: PreflightNearMiss[] = [];
   for (const rej of rejectedApproaches) {
+    // #680 slice 4 — a page rule-out is a literal phrase scoped to page text;
+    // a partial token overlap is not a near miss of it.
+    if (rej.origin === "page_rule_out") continue;
     const conceptText = rej.concept ?? rej.description;
     const cov = Math.max(
       ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),
@@ -781,7 +818,16 @@ export function runPreflight(input: PreflightInput): PreflightResult {
           ? `\nMatched on underlying concept: "${match.rejected.concept}". ` +
             `A paraphrased proposal still counts — the user has rejected this kind of approach.`
           : "";
-      const message =
+      // #680 slice 4 — a page rule-out is scoped to page text, so its refusal
+      // says so (and doesn't steer the agent away from the phrase elsewhere).
+      const message = match.rejected.origin === "page_rule_out"
+        ? `REJECTED_APPROACH_BLOCKED: ${toolName} refused — this page's text still contains "${match.rejected.description}", ` +
+          `which the user ruled out on a page (in the block "${match.proposal}").${reasonLine}\n\n` +
+          `Take that text out of the page and present it again. This stance applies only to pages (present_page, a page revise, ` +
+          `a watched-file save); other tools are not affected. A page rule-out can't be allowed once: if it no longer applies, ` +
+          `ask the human to retire it in the companion's Ledger, then present the page again. ` +
+          `The artifact was NOT created.`
+        :
         `REJECTED_APPROACH_BLOCKED: ${toolName} refused — your proposal contains "${match.proposal}" ` +
         `which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}\n\n` +
         `Do NOT retry with this approach. Propose an alternative. If this is a false positive or ` +
@@ -806,6 +852,9 @@ export function runPreflight(input: PreflightInput): PreflightResult {
               // #470 — with description + concept, the exact stance row an
               // allowance binds to.
               rejectedAt: match.rejected.rejectedAt,
+              // #680 slice 4 — a page rule-out block is never allow-once
+              // eligible (the daemon marks it so; see prepareBlockEvent).
+              ...(match.rejected.origin === "page_rule_out" ? { origin: "page_rule_out" as const } : {}),
             },
           },
         },

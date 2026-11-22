@@ -313,11 +313,25 @@ function containsAsPhrase(haystack, needle) {
   const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^a-z0-9])${esc}(?:[^a-z0-9]|$)`).test(haystack);
 }
+function containsAsPhraseUnicode(haystack, needle) {
+  const n = needle.trim();
+  if (n.length < 3) return false;
+  const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, "u").test(haystack);
+}
 function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
   const clean = (s) => s.trim().toLowerCase();
   for (const rej of rejected) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
+    if (rej.origin === "page_rule_out") {
+      if (opts.rawEditTextFrom === void 0) continue;
+      for (let idx = opts.rawEditTextFrom; idx < proposalStrings.length; idx++) {
+        const proposal = proposalStrings[idx];
+        if (containsAsPhraseUnicode(clean(proposal), rejNormalized)) return { proposal, rejected: rej, via: "surface" };
+      }
+      continue;
+    }
     const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
     for (let idx = 0; idx < proposalStrings.length; idx++) {
       const proposal = proposalStrings[idx];
@@ -367,6 +381,7 @@ function runPreflight(input2) {
   }
   const nearMisses = [];
   for (const rej of rejectedApproaches) {
+    if (rej.origin === "page_rule_out") continue;
     const conceptText = rej.concept ?? rej.description;
     const cov = Math.max(
       ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),
@@ -428,7 +443,9 @@ function runPreflight(input2) {
 Prior rejection reason: "${match.rejected.reason}"` : "";
       const conceptLine = match.via === "concept" && match.rejected.concept ? `
 Matched on underlying concept: "${match.rejected.concept}". A paraphrased proposal still counts \u2014 the user has rejected this kind of approach.` : "";
-      const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match.proposal}" which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}
+      const message = match.rejected.origin === "page_rule_out" ? `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 this page's text still contains "${match.rejected.description}", which the user ruled out on a page (in the block "${match.proposal}").${reasonLine}
+
+Take that text out of the page and present it again. This stance applies only to pages (present_page, a page revise, a watched-file save); other tools are not affected. A page rule-out can't be allowed once: if it no longer applies, ask the human to retire it in the companion's Ledger, then present the page again. The artifact was NOT created.` : `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match.proposal}" which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}
 
 Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to allow this proposal once or retire the stance from the companion UI's gate log before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
       return {
@@ -448,7 +465,10 @@ Do NOT retry with this approach. Propose an alternative. If this is a false posi
               via: match.via,
               // #470 — with description + concept, the exact stance row an
               // allowance binds to.
-              rejectedAt: match.rejected.rejectedAt
+              rejectedAt: match.rejected.rejectedAt,
+              // #680 slice 4 — a page rule-out block is never allow-once
+              // eligible (the daemon marks it so; see prepareBlockEvent).
+              ...match.rejected.origin === "page_rule_out" ? { origin: "page_rule_out" } : {}
             }
           }
         },
@@ -1518,7 +1538,11 @@ function readRejectedApproachEntries(projectRoot, failures) {
         reason: e?.reason,
         rejectedAt: e?.rejectedAt,
         sourceArtifactId: e?.sourceArtifactId,
-        concept: e?.concept
+        concept: e?.concept,
+        // #680 slice 4 — kept so the matcher can scope a page rule-out
+        // to page proposals: it never matches a raw Edit/Write here (a
+        // file-backed page is enforced by the daemon's file watch).
+        ...e?.origin === "page_rule_out" ? { origin: "page_rule_out" } : {}
       }
     })).filter((r) => r.entry.description);
   } catch (err) {

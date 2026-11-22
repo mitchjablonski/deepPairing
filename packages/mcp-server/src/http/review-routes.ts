@@ -5,8 +5,13 @@ import {
   ChangesetReviewBodySchema,
   DecisionOptionNeverSuggestBodySchema,
   DecisionResolveBodySchema,
+  PageRuleOutBodySchema,
   StatusUpdateBodySchema,
   formatZodIssues,
+  isClosedArtifactStatus,
+  isLateCommentableStatus,
+  checkPageRuleOut,
+  PAGE_RULE_OUT_MESSAGES,
 } from "@deeppairing/shared";
 import { ERROR_CODES } from "../error-codes.js";
 import { LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
@@ -17,6 +22,8 @@ import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
 import { staleResolveBody, closedResolveBody, classifyClosedDecision, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { getSessionId, NO_SESSION_RESPONSE, readJsonValue } from "./route-helpers.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../store/rejected-option-recorder.js";
+import { artifactProposal } from "../mcp/artifact-preflight.js";
+import { findRejectedApproachMatch } from "../mcp/preflight-validator.js";
 
 /** The persistence surface required by current-session review mutations. */
 export type ReviewStore = Pick<
@@ -25,6 +32,7 @@ export type ReviewStore = Pick<
   | "getAutonomyLevel"
   | "forceFlush"
   | "getArtifacts"
+  | "getCommentsForArtifact"
   | "getDecision"
   | "getSessionId"
   | "getSessionMemory"
@@ -365,6 +373,134 @@ export function createReviewRoutes({
         alreadyRecorded,
         ...(stored?.reason ? { reason: stored.reason } : {}),
       });
+    });
+  });
+
+  // #680 slice 4 — "Rule this out" on a spot in a page: record a rejected
+  // stance from the anchored text, with the human's own reason.
+  //   - description = pageRuleOutKey(anchor.quote) (shared, so the companion
+  //     shows the exact phrase recorded); reason = the human's text, required,
+  //     never composed; sourceArtifactId = this page; sourceAnchor = the anchor
+  //     (provenance only); origin = "page_rule_out", which keeps the stance
+  //     project-local: it is never mirrored into the cross-project ledger,
+  //     even when this project publishes (the phrase is agent-written page
+  //     text and may be private).
+  //   - The phrase must pass the shared checkPageRuleOut (no_text /
+  //     too_short / too_generic, the same messages the companion shows), and
+  //     the SAME matcher and page projection the gate uses (artifactProposal +
+  //     findRejectedApproachMatch, page-rule-out scoping) must fire on this
+  //     page's body, or the stance would never fire (a selection across
+  //     paragraphs, a whole container).
+  //   - Scope: the gate matches a page rule-out ONLY against page body text
+  //     (present_page, a page revise, a file-watch save), forward only — never
+  //     other artifact types, titles, or the PreToolUse hook.
+  //   - The stance is recorded FIRST (a busy preferences lock commits nothing,
+  //     as /api/comments does for the send-back), then an anchored human
+  //     comment carrying the reason and a `ruleOut` marker lands on the page.
+  //     That comment is how the agent hears about it: check_feedback delivers
+  //     it in the page's comment stream, the same lane every page comment uses.
+  //   - The page's status doesn't change (an approved page may take a rule-out:
+  //     it applies to future pages).
+  //   - An anchor from the frame only ever pre-targets the companion UI; this
+  //     route runs only on the human's explicit submit there.
+  app.post("/api/artifacts/:artifactId/rule-out", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const artifactId = c.req.param("artifactId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = PageRuleOutBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const anchor = parsed.data.htmlAnchor;
+    const reason = parsed.data.reason.trim();
+
+    const artifacts = await store.getArtifacts();
+    const page = artifacts.find((a) => a.id === artifactId);
+    if (!page) {
+      return c.json(
+        { error: "artifact_not_in_session", code: ERROR_CODES.artifact_not_in_session,
+          message: "This artifact belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
+    if (page.type !== "page") {
+      return c.json({ error: "Only a page's spots can be ruled out this way.", code: ERROR_CODES.validation_error }, 400);
+    }
+    if (isClosedArtifactStatus(page.status) && !isLateCommentableStatus(page.status)) {
+      return c.json(
+        { error: "This version of the page is no longer under review.", code: ERROR_CODES.rule_out_page_closed, status: page.status },
+        409,
+      );
+    }
+
+    const notGateable = (why: string, message: string) =>
+      c.json({ error: message, code: ERROR_CODES.rule_out_not_gateable, reason: why }, 400);
+    // Same check, same message the companion shows before submit.
+    const checked = checkPageRuleOut(anchor.quote);
+    if (!checked.ok) return notGateable(checked.reason, PAGE_RULE_OUT_MESSAGES[checked.reason]);
+    const description = checked.key;
+    // The exact rule the gate will apply to this stance (a page rule-out
+    // matches page body text only, forward): it must fire on this page.
+    const proposal = artifactProposal("page", page.title, page.content);
+    const probe = [{ description, origin: "page_rule_out" as const }];
+    if (!proposal || !findRejectedApproachMatch(proposal.text, probe, { rawEditTextFrom: proposal.rawEditTextFrom ?? 0 })) {
+      return notGateable(
+        "not_on_page",
+        `The gate can't find “${description}” within one block of this page, so it would never fire. Select text inside one paragraph, cell or heading.`,
+      );
+    }
+
+    // Idempotent on the description, like never-suggest: a repeat keeps the
+    // first recorded reason (the store only fills a blank one) and adds no
+    // second rule-out comment.
+    const before = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+    const alreadyRecorded = !!before;
+    // origin page_rule_out: project-local always, never mirrored to the shared ledger.
+    await store.recordRejectedApproach({ description, reason, sourceArtifactId: page.id, sourceAnchor: anchor, origin: "page_rule_out" });
+    const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+    // The reason that is actually recorded (the first one, on a repeat).
+    const storedReason = stored?.reason ?? reason;
+
+    // The comment the agent hears about it through. On a repeat, reuse the
+    // existing rule-out comment; if there is none (the first attempt's comment
+    // never landed) and the row is this page's rule-out, leave one carrying the
+    // RECORDED reason; a pre-existing row from elsewhere gets no comment (the
+    // agent already holds that stance).
+    let comment: Awaited<ReturnType<ReviewStore["addComment"]>> | undefined;
+    if (alreadyRecorded) {
+      comment = (await store.getCommentsForArtifact(page.id))
+        .find((x) => x.author === "human" && x.ruleOut?.description === description);
+    }
+    const ownsRow = stored?.origin === "page_rule_out" && stored.sourceArtifactId === page.id;
+    if (!comment && ownsRow) {
+      const newId = `cmt_${nanoid(10)}`;
+      const added = await store.addComment({
+        id: newId,
+        artifactId: page.id,
+        content: storedReason,
+        author: "human",
+        target: { artifactId: page.id, htmlAnchor: anchor },
+        intent: "comment",
+        parentCommentId: null,
+        ruleOut: { description },
+      });
+      comment = added;
+      if (added.id === newId) {
+        broadcast({ type: "comment_added", comment: added }, sid);
+        broadcast({ type: "feedback_received", commentId: added.id, artifactId: page.id, intent: "comment" }, sid);
+      }
+    }
+    if (!alreadyRecorded) {
+      broadcast({ type: "ledger_write", kind: "rejected", description, reason: storedReason, sourceArtifactId: page.id }, sid);
+    }
+    log(`[page] rule-out ${page.id}${alreadyRecorded ? " (already recorded)" : ""}`);
+    return c.json({
+      status: "recorded",
+      description,
+      alreadyRecorded,
+      reason: storedReason,
+      ...(comment ? { comment } : {}),
     });
   });
 

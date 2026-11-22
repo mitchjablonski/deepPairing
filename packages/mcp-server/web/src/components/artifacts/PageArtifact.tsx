@@ -14,6 +14,9 @@ import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
 import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage } from "../../lib/pageAnchorMessages";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
+import { PageRuleOutControl } from "./PageRuleOutControl";
+import { useRememberedRejections } from "../decision/NeverSuggestControl";
+import { pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -72,6 +75,10 @@ function AnchorContext({ anchor }: { anchor: HtmlAnchor }) {
  * down to the frame as numbered pins; clicking one in the list focuses its pin,
  * and an anchor the frame can't find in this version says so.
  *
+ * Slice 4 — with a spot selected, "Rule this out" (PageRuleOutControl) records
+ * the spot's text as a rejected stance with your reason; the page stays under
+ * review and the gate refuses later pages containing that text.
+ *
  * The footer is the standard ArtifactStatusActions: Respond / Ask, Request
  * changes, Reject (with the "name the pattern" capture, so a reject feeds
  * rejection memory) and Approve.
@@ -90,6 +97,16 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     [artifact.fileWatch],
   );
   const comments = useChainComments(artifact.id);
+  // #680 slice 4 — "Ruled out" reflects the LIVE stance (GET /api/memory, kept
+  // fresh by ledger writes), not just the comment marker: a stance retired in
+  // the Ledger stops showing as ruled out, and the spot can be ruled out again.
+  // Any live row with exactly this phrase counts, including one a later
+  // ordinary rejection widened (origin dropped): every stance is matched
+  // forward against page body text, so a page still containing the phrase is
+  // refused either way — "Ruled out" stays true.
+  const owner = useArtifactStore((s) => s.owningSession(artifact.id));
+  const { rows: rememberedRows, remember } = useRememberedRejections(owner);
+  const liveStances = useMemo(() => new Set(rememberedRows.map((r) => r.description)), [rememberedRows]);
   const anchored = useMemo(() => anchoredPageComments(comments), [comments]);
   const anchors = useMemo(() => anchored.map((c) => c.target.htmlAnchor as HtmlAnchor), [anchored]);
 
@@ -306,6 +323,20 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             secondarySubmitLabel="Ask"
             secondarySubmitTitle="Post as a question about this spot — the agent owes you an answer"
           />
+          {/* #680 slice 4 — record this spot's text as a rejected stance. Inline
+              under the composer (never over it); opens its own confirm step. */}
+          <div className="flex justify-end" data-testid="page-rule-out">
+            <PageRuleOutControl
+              key={openNonce}
+              artifactId={artifact.id}
+              anchor={draft}
+              ruledOut={(() => {
+                const phrase = pageRuleOutKey(draft.quote);
+                return phrase && liveStances.has(phrase) ? phrase : undefined;
+              })()}
+              onRecorded={(description) => remember({ description, sourceArtifactId: artifact.id })}
+            />
+          </div>
         </div>
       )}
 
@@ -332,6 +363,16 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
                     </span>
                     <span className="flex-1 min-w-0 space-y-1">
                       <AnchorContext anchor={anchor} />
+                      {c.ruleOut && liveStances.has(c.ruleOut.description) && (
+                        <span className="block text-2xs text-accent-red" data-testid="page-annotation-ruled-out">
+                          Ruled out: Claude won't present a page that still contains “{c.ruleOut.description}”
+                        </span>
+                      )}
+                      {c.ruleOut && !liveStances.has(c.ruleOut.description) && (
+                        <span className="block text-2xs text-text-muted" data-testid="page-annotation-ruled-out-retired">
+                          Was ruled out; that stance has since been retired
+                        </span>
+                      )}
                       {missing && (
                         <span className="block text-2xs text-accent-amber" data-testid="page-anchor-missing">
                           Not found in this version

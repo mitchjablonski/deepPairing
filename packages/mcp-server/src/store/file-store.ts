@@ -4,8 +4,8 @@ import { retirementFeedback, type RetirementInput, type RetirementOutcome } from
 import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, FileWatchNoticeRef, PageFileWatch, PageFileWatchRecorded, PageFileWatchRefused, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor, sanitizeHtmlAnchor, readFileWatch } from "@deeppairing/shared";
+import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, CommentRuleOut, HtmlAnchor, FileWatchNoticeRef, PageFileWatch, PageFileWatchRecorded, PageFileWatchRefused, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor, sanitizeHtmlAnchor, readFileWatch, HtmlAnchorSchema, CommentRuleOutSchema } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -30,7 +30,8 @@ import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult, RejectedApproachOrigin } from "./store-interface.js";
+import { isRejectedApproachOrigin } from "./store-interface.js";
 import { normalizeConceptKey } from "../mcp/preflight-validator.js";
 
 import { isPublishableStance } from "./stance-add.js";
@@ -94,6 +95,19 @@ export const LEDGER_EXEMPT_REJECT_TYPES: ReadonlySet<ArtifactType> = new Set<Art
   "explainer",
   "debrief",
 ]);
+
+/** #680 slice 4 — an anchor in its parsed (capped, unknown-keys-dropped) form, or undefined. */
+function parseHtmlAnchor(raw: unknown): HtmlAnchor | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const parsed = HtmlAnchorSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** #680 slice 4 — `{ sourceAnchor }` when the stored value is a valid anchor, else `{}`. */
+function withSourceAnchor(raw: unknown): { sourceAnchor?: HtmlAnchor } {
+  const sourceAnchor = parseHtmlAnchor(raw);
+  return sourceAnchor ? { sourceAnchor } : {};
+}
 
 /** #680 slice 2 — drop `htmlAnchor` unless the comment is on a `page`. */
 function pageOnlyHtmlAnchor<T extends Record<string, unknown> | undefined>(target: T, artifactType: string | undefined): T {
@@ -1264,6 +1278,7 @@ export class FileStore implements IStore {
     parentCommentId?: string | null;
     codeReferences?: Array<{ filePath: string; lineStart: number; lineEnd: number; snippet?: string }>;
     suggestion?: CommentSuggestion;
+    ruleOut?: CommentRuleOut;
     verdictFeedback?: boolean;
   }): Comment {
     const now = Date.now();
@@ -1276,6 +1291,12 @@ export class FileStore implements IStore {
       if ((c.parentCommentId ?? "") !== parentKey) return false;
       // F3 — only a dupe if it targets the SAME anchor (line/finding/step/etc).
       if (FileStore.targetKey(c.target as Record<string, unknown>) !== newTargetKey) return false;
+      // #680 slice 4 review — a page rule-out comment and a plain note never
+      // collapse into each other (same text, same spot): the marker is part of
+      // the identity, or an explicit rule-out could be absorbed by an earlier
+      // unmarked note (stance recorded, pin and agent notice missing). Two
+      // rule-outs of the same phrase still dedupe.
+      if ((c.ruleOut?.description ?? "") !== (params.ruleOut?.description ?? "")) return false;
       const t = new Date(c.createdAt).getTime();
       return Number.isFinite(t) && now - t < FileStore.DEDUPE_WINDOW_MS;
     });
@@ -1295,6 +1316,7 @@ export class FileStore implements IStore {
     // and flowed into agent context (check_feedback) with zero warning.
     // Labels/pattern/line only, NEVER the matched value.
     const secretWarnings = scanForSecrets(params.content);
+    const ruleOutParsed = params.ruleOut ? CommentRuleOutSchema.safeParse(params.ruleOut) : null;
     // #187 — STORE-AUTHORITATIVE follow-up flag. A HUMAN comment landing on an
     // already-CLOSED-but-commentable (approved) artifact is a late follow-up on a
     // standing verdict, not review feedback. The store owns the artifact status,
@@ -1318,6 +1340,22 @@ export class FileStore implements IStore {
       !params.verdictFeedback &&
       !!targetArtifact &&
       isLateCommentableStatus(targetArtifact.status);
+    // #680 slice 4 — store-authoritative: the marker is kept only on a human
+    // comment on a page, and only when the stance it names really is in this
+    // project's rejection memory as THIS page's rule-out (origin page_rule_out,
+    // sourceArtifactId = this page), so no writer (the internal comment route
+    // is passthrough) can label a plain comment as a recorded stance.
+    const ruleOut =
+      ruleOutParsed?.success &&
+      params.author === "human" &&
+      targetArtifact?.type === "page" &&
+      this.normalizeRejectedApproaches(this.readPreferences().rejectedApproaches ?? [])
+        .some((r) =>
+          r.description === ruleOutParsed.data.description &&
+          r.origin === "page_rule_out" &&
+          r.sourceArtifactId === params.artifactId)
+        ? ruleOutParsed.data
+        : undefined;
     const comment: Comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -1346,6 +1384,9 @@ export class FileStore implements IStore {
       // #172 — persist the first-class suggested edit. Spread so a plain comment
       // stays byte-identical on disk.
       ...(params.suggestion ? { suggestion: params.suggestion } : {}),
+      // #680 slice 4 — the rule-out marker, server-set; dropped when malformed or
+      // when the comment isn't a human comment on a page.
+      ...(ruleOut ? { ruleOut } : {}),
       // #187 — spread so a normal draft-review comment is byte-identical on disk.
       ...(isFollowUp ? { followUp: true } : {}),
       answeredByCommentId: null,
@@ -2149,8 +2190,13 @@ export class FileStore implements IStore {
     reason?: string;
     sourceArtifactId?: string;
     concept?: string;
+    sourceAnchor?: HtmlAnchor;
+    origin?: RejectedApproachOrigin;
   }): void {
     const { description, reason, sourceArtifactId, concept } = params;
+    const origin = isRejectedApproachOrigin(params.origin) ? params.origin : undefined;
+    // #680 slice 4 — provenance only; kept in its parsed (capped) form or dropped.
+    const sourceAnchor = parseHtmlAnchor(params.sourceAnchor);
     // #193 E2 — STORE-AUTHORITATIVE ledger guard (mirrors the #187 follow-up
     // stamping: the store owns the invariant so the client can neither forge
     // nor suppress it). The comprehension artifacts are NOT proposed approaches:
@@ -2218,6 +2264,13 @@ export class FileStore implements IStore {
         if (reason && !existing.reason) { existing.reason = reason; changed = true; }
         if (concept && !existing.concept) { existing.concept = concept; changed = true; }
         if (sourceArtifactId && !existing.sourceArtifactId) { existing.sourceArtifactId = sourceArtifactId; changed = true; }
+        if (sourceAnchor && !existing.sourceAnchor) { existing.sourceAnchor = sourceAnchor; changed = true; }
+        // #680 slice 4 review — an ORDINARY rejection (artifact reject,
+        // never-suggest, send-back…) landing on a page rule-out row WIDENS it to
+        // an ordinary stance: drop the page-only scoping, so options, findings
+        // and every other proposal naming the phrase are gated too, and the row
+        // becomes publishable under this project's opt-in like any other.
+        if (origin !== "page_rule_out" && existing.origin === "page_rule_out") { delete existing.origin; changed = true; }
         if (changed) {
           existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
           prefs.rejectedApproaches = rejected;
@@ -2230,6 +2283,8 @@ export class FileStore implements IStore {
         concept: concept || undefined,
         rejectedAt: new Date().toISOString(),
         sourceArtifactId,
+        ...(sourceAnchor ? { sourceAnchor } : {}),
+        ...(origin ? { origin } : {}),
       });
       prefs.rejectedApproaches = rejected;
       return true;
@@ -2255,6 +2310,10 @@ export class FileStore implements IStore {
     // deliberate defense-in-depth, not dead code: they keep the invariant
     // even if demo prefs ever get seeded from disk. Don't strip them.
     const conceptKey = concept?.trim() || description.trim();
+    // #680 slice 4 — a page rule-out is project-local ALWAYS: its phrase is
+    // agent-written page text that may be private, so it never reaches the
+    // shared ledger, even in a project that opted in to publishing.
+    if (origin === "page_rule_out") return;
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         // Q2 review H2 — publish the MINIMUM that makes the stance usable
@@ -2306,6 +2365,24 @@ export class FileStore implements IStore {
         (r) => normalizeConceptKey(r.description) === key || (typeof r.concept === "string" && normalizeConceptKey(r.concept) === key),
       );
       if (existing) {
+        // #680 slice 4 review — a terminal stance add on a page rule-out row
+        // widens it to an ordinary stance (see recordRejectedApproach) instead
+        // of answering "exists": it changes what the row gates.
+        if (existing.origin === "page_rule_out") {
+          // Fully ordinary: the same explicit fields a fresh add stores
+          // (concept, addedVia, requestedBy), so every lane — concept↔concept
+          // included — treats it exactly like a fresh `stance add`. The
+          // existing reason is kept (an existing reason is never replaced).
+          delete existing.origin;
+          existing.concept = concept;
+          existing.addedVia = addedVia;
+          existing.requestedBy = requestedBy;
+          if (!existing.reason) existing.reason = reason;
+          existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
+          prefs.rejectedApproaches = rejected;
+          result = { status: "widened", row: { ...existing } };
+          return true;
+        }
         if (existing.reason) { result = { status: "exists", row: { ...existing } }; return false; }
         // Same rule as recordRejectedApproach's dedupe: fill a missing reason,
         // never replace one. The reason is display-only, so what the row
@@ -2329,9 +2406,11 @@ export class FileStore implements IStore {
     if (!out) throw new Error("addStance: the preferences transaction produced no result");
     if (this.isDemoSession || !this.globalLedgerPublishEnabled()) return out;
     let mirror: { key: string; description: string } | null = null;
-    if (out.status === "recorded" && isPublishableStance(addedVia, requestedBy)) {
+    if ((out.status === "recorded" || out.status === "widened") && isPublishableStance(addedVia, requestedBy)) {
+      // A widened page rule-out publishes like a new stance: keyed on the
+      // phrase the human just typed, never on anything the agent wrote.
       mirror = { key: concept, description: concept };
-    } else if (out.status === "reason_added" && out.row.concept?.trim() && isPublishableStance(addedVia, requestedBy)) {
+    } else if (out.status === "reason_added" && out.row.origin !== "page_rule_out" && out.row.concept?.trim() && isPublishableStance(addedVia, requestedBy)) {
       mirror = { key: out.row.concept.trim(), description: out.row.description };
     }
     if (mirror) {
@@ -2400,6 +2479,9 @@ export class FileStore implements IStore {
             // retire of a different row) doesn't strip a stance's provenance.
             ...(isStanceAddedVia((entry as any)?.addedVia) ? { addedVia: (entry as any).addedVia } : {}),
             ...(isStanceRequestedBy((entry as any)?.requestedBy) ? { requestedBy: (entry as any).requestedBy } : {}),
+            // #680 slice 4 — same: a later write must not strip a page stance's anchor.
+            ...withSourceAnchor((entry as { sourceAnchor?: unknown } | null)?.sourceAnchor),
+            ...(isRejectedApproachOrigin((entry as { origin?: unknown } | null)?.origin) ? { origin: "page_rule_out" as const } : {}),
           },
     ).filter((r) => r.description);
   }
@@ -2467,6 +2549,9 @@ export class FileStore implements IStore {
     // Demo isolation — same never-mirror gate as the record paths.
     // #408 review — local retire first (a busy lock throws before the mirror).
     let retired = 0;
+    // #680 slice 4 — retiring only page rule-outs (never published) writes no
+    // global counter-approval either: the phrase stays project-local.
+    let onlyPageRuleOuts = false;
     const retireLocal = () => this.mutatePreferences((prefs) => {
       const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
       const keep = rejected.filter(
@@ -2474,6 +2559,8 @@ export class FileStore implements IStore {
           !((description && r.description === description) || (concept && r.concept === concept)),
       );
       retired = rejected.length - keep.length;
+      const gone = rejected.filter((r) => !keep.includes(r));
+      onlyPageRuleOuts = gone.length > 0 && gone.every((r) => r.origin === "page_rule_out");
       if (retired === 0) return false;
       prefs.rejectedApproaches = keep;
       return true;
@@ -2492,7 +2579,7 @@ export class FileStore implements IStore {
     } else {
       retireLocal();
     }
-    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
+    if (conceptKey && !this.isDemoSession && !onlyPageRuleOuts && this.globalLedgerPublishEnabled()) {
       try {
         // Q2 review LOW — the stored reason said "not my taste", the label of a
         // button that no longer exists. It is written into the user's own data

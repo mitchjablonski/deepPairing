@@ -299,6 +299,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                   region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
                   // #680 slice 2 — the spot on a page artifact this comment points at.
                   htmlAnchor: HTML_ANCHOR_OUTPUT_SCHEMA,
+                  // #680 slice 4 — present when the human ruled this spot out: the
+                  // phrase now recorded as a rejected stance (content is their reason).
+                  ruleOut: { type: "object", properties: { description: { type: "string" } }, description: "Page only — the human ruled this spot out; `description` is now a rejected stance the gate enforces, with `content` as the reason." },
                 },
               },
             },

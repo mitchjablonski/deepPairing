@@ -110,6 +110,10 @@ export function readRejectedApproachEntries(projectRoot: string, failures?: Pref
               rejectedAt: e?.rejectedAt,
               sourceArtifactId: e?.sourceArtifactId,
               concept: e?.concept,
+              // #680 slice 4 — kept so the matcher can scope a page rule-out
+              // to page proposals: it never matches a raw Edit/Write here (a
+              // file-backed page is enforced by the daemon's file watch).
+              ...(e?.origin === "page_rule_out" ? { origin: "page_rule_out" } : {}),
             }) as RejectedApproach,
       }))
       .filter((r) => r.entry.description);

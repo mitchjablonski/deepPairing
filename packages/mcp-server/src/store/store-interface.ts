@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, BriefRef, FileWatchNoticeRef, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, BriefRef, FileWatchNoticeRef, ArtifactStatus, Comment, CommentRuleOut, CommentSuggestion, HtmlAnchor, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 import type { PostedReviewRecord } from "./posted-reviews.js";
 import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
@@ -136,6 +136,10 @@ export interface AddCommentParams {
   /** #172 — a first-class suggested edit posted with the comment (a plain
    *  Record so the store doesn't need to import the shared schema type). */
   suggestion?: CommentSuggestion;
+  /** #680 slice 4 — INTERNAL, server-only: this is the anchored comment a page
+   *  "Rule this out" leaves; `description` is the stance phrase it recorded.
+   *  Set only by the rule-out route; the public comment route never passes it. */
+  ruleOut?: CommentRuleOut;
   /**
    * #187 — INTERNAL, server-only: this addComment is the status route's own
    * VERDICT-FEEDBACK comment (an approve/send-back/reject note), posted AFTER the
@@ -254,6 +258,15 @@ export interface RejectedApproach {
    * gets blocked after "Deploy to Railway" was rejected for the same reason.
    */
   concept?: string;
+  /** #680 slice 4 — a stance recorded from a spot on a `page` (the companion's
+   *  "Rule this out"): the anchor it was made on, kept for provenance only.
+   *  Nothing matches on it; the gate matches on `description`. */
+  sourceAnchor?: HtmlAnchor;
+  /** #680 slice 4 — where the stance came from when that changes how it may be
+   *  shared. `page_rule_out` = the companion's "Rule this out" on a page: its
+   *  phrase is page text the agent wrote (possibly private), so it is NEVER
+   *  mirrored into the cross-project ledger, whatever the publish opt-in. */
+  origin?: RejectedApproachOrigin;
   /** #620 — which door recorded a stance added from the terminal (`cli` =
    *  `deeppairing stance add`, `mcp` = the `record_stance` tool behind
    *  `/deeppairing:reject`). Absent on stances born from a rejected artifact.
@@ -265,6 +278,11 @@ export interface RejectedApproach {
 }
 
 export type StanceAddedVia = "cli" | "mcp";
+
+export type RejectedApproachOrigin = "page_rule_out";
+export function isRejectedApproachOrigin(v: unknown): v is RejectedApproachOrigin {
+  return v === "page_rule_out";
+}
 
 export interface AddStanceParams {
   concept: string;
@@ -278,6 +296,9 @@ export interface AddStanceParams {
  *  nothing; `count` is the number of rows the project holds. */
 export type AddStanceResult =
   | { status: "recorded" | "exists" | "reason_added"; row: RejectedApproach }
+  /** #680 slice 4 — the add landed on a page rule-out row and widened it to
+   *  an ordinary stance (its page-only scoping dropped). */
+  | { status: "widened"; row: RejectedApproach }
   | { status: "cap_reached"; count: number };
 /** `user` = the door says a human asked (the MCP tool accepts nothing else; the
  *  CLI says so only from a TTY outside Claude Code). `unknown` = the CLI could
@@ -594,6 +615,10 @@ export interface IStore {
     reason?: string;
     sourceArtifactId?: string;
     concept?: string;
+    /** #680 slice 4 — provenance for a stance ruled out on a page. */
+    sourceAnchor?: HtmlAnchor;
+    /** #680 slice 4 — `page_rule_out` keeps the stance project-local. */
+    origin?: RejectedApproachOrigin;
   }): MaybePromise<void>;
   /**
    * #620/#625 — add a terminal stance (store/stance-add.ts) as ONE preferences

@@ -20230,6 +20230,10 @@ function suggestionSummary(filePath, lineStart, lineEnd) {
   const loc = lineEnd > lineStart ? `${lineStart}\u2013${lineEnd}` : `${lineStart}`;
   return `Suggested edit to ${filePath ?? "code"}:${loc}`;
 }
+var PAGE_RULE_OUT_KEY_MAX = 120;
+var CommentRuleOutSchema = external_exports.object({
+  description: external_exports.string().min(1).max(PAGE_RULE_OUT_KEY_MAX)
+});
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -20248,6 +20252,9 @@ var CommentSchema = external_exports.object({
   // daemon that doesn't understand it treats the comment as a plain comment and
   // simply ignores this field — graceful degradation, never a crash.
   suggestion: CommentSuggestionSchema.optional(),
+  // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
+  // the matching rejected stance is in the project's rejection memory.
+  ruleOut: CommentRuleOutSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: external_exports.string().nullable().optional(),
   /**
@@ -21362,6 +21369,122 @@ function formatZodIssues(err) {
   const summary = issues.length === 1 ? `${first.path}: ${first.message}` : `${issues.length} validation errors (first: ${first.path}: ${first.message})`;
   return { error: summary, code: "validation_error", issues };
 }
+
+// ../shared/dist/stopwords.js
+var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
+  "the",
+  "and",
+  "for",
+  "but",
+  "not",
+  "use",
+  "with",
+  "from",
+  "into",
+  "onto",
+  "that",
+  "this",
+  "than",
+  "then",
+  "via",
+  "per",
+  "our",
+  "your",
+  "its"
+]);
+var MIN_CONTENT_TOKEN_LEN = 3;
+function contentTokens(s) {
+  return String(s ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= MIN_CONTENT_TOKEN_LEN && !SHORT_STOPWORDS.has(t));
+}
+
+// ../shared/dist/schemas/page-rule-out.js
+var PAGE_RULE_OUT_EXTRA_STOPWORDS = /* @__PURE__ */ new Set([
+  "you",
+  "your",
+  "can",
+  "could",
+  "will",
+  "would",
+  "was",
+  "were",
+  "are",
+  "has",
+  "have",
+  "had",
+  "all",
+  "one",
+  "out",
+  "not",
+  "but",
+  "our",
+  "any",
+  "may",
+  "also",
+  "just",
+  "more",
+  "most",
+  "some",
+  "each",
+  "very",
+  "here",
+  "there",
+  "then",
+  "than",
+  "them",
+  "they",
+  "this",
+  "that",
+  "these",
+  "those",
+  "with",
+  "from",
+  "into",
+  "about",
+  "what",
+  "which",
+  "when",
+  "where",
+  "who",
+  "how"
+]);
+var PAGE_RULE_OUT_REASON_MAX = 2e3;
+var PAGE_RULE_OUT_MIN_WORDS = 2;
+var PAGE_RULE_OUT_MIN_WORD_LEN = 2;
+var PAGE_RULE_OUT_MIN_CHARS = 8;
+var PAGE_RULE_OUT_MESSAGES = {
+  no_text: "That spot has no text to rule out. Select the words you want gone.",
+  too_short: "That's too short to rule out without blocking ordinary text. Select at least two words, or a longer word or phrase.",
+  too_generic: "That's only common words, so ruling it out would block ordinary text. Include a word that names the thing you want gone."
+};
+function normalizeRuleOutPhrase(quote) {
+  let key = String(quote ?? "").replace(/\s+/g, " ").trim();
+  if (key.includes(":")) {
+    key = key.split(":").map((part) => part.trim()).reduce((best, part) => part.length > best.length ? part : best, "");
+  }
+  if (key.length > PAGE_RULE_OUT_KEY_MAX) {
+    const cut = key.slice(0, PAGE_RULE_OUT_KEY_MAX);
+    const space = cut.lastIndexOf(" ");
+    key = (space > 0 ? cut.slice(0, space) : cut).trim();
+  }
+  return key;
+}
+function checkPageRuleOut(quote) {
+  const key = normalizeRuleOutPhrase(quote);
+  const words = key.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= PAGE_RULE_OUT_MIN_WORD_LEN);
+  const chars = key.replace(/[^\p{L}\p{N}]/gu, "").length;
+  if (chars === 0)
+    return { ok: false, reason: "no_text" };
+  if (words.length < PAGE_RULE_OUT_MIN_WORDS && chars < PAGE_RULE_OUT_MIN_CHARS)
+    return { ok: false, reason: "too_short" };
+  if (contentTokens(key).filter((t) => !PAGE_RULE_OUT_EXTRA_STOPWORDS.has(t)).length === 0) {
+    return { ok: false, reason: "too_generic" };
+  }
+  return { ok: true, key };
+}
+var PageRuleOutBodySchema = external_exports.object({
+  htmlAnchor: HtmlAnchorSchema,
+  reason: external_exports.string().max(PAGE_RULE_OUT_REASON_MAX).refine((s) => s.trim().length > 0, { message: "Say why you're ruling this out" })
+});
 
 // ../shared/dist/schemas/annotation.js
 var SessionAnnotationSchema = external_exports.object({
@@ -26210,6 +26333,13 @@ var ERROR_CODES = {
   standalone_operation_conflict: "standalone_operation_conflict",
   /** The standalone proposal matched a previously rejected approach. */
   rejected_approach_blocked: "rejected_approach_blocked",
+  /** #680 slice 4 — "Rule this out" on a page spot: the anchored text can't
+   *  become a stance the gate would enforce sensibly (`reason`: no_text,
+   *  too_short, too_generic, or not_on_page — not within one block of it). */
+  rule_out_not_gateable: "rule_out_not_gateable",
+  /** #680 slice 4 — "Rule this out" on a page version that is no longer under
+   *  review (superseded, retracted, rejected or dismissed). */
+  rule_out_page_closed: "rule_out_page_closed",
   /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
    *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
    *  unverifiable) owner. Nothing was committed; retry, or inspect with
@@ -28535,7 +28665,7 @@ import path14 from "node:path";
 function normalizeConceptKey2(name) {
   return String(name).trim().toLowerCase().replace(/\s+/g, " ");
 }
-var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
+var SHORT_STOPWORDS2 = /* @__PURE__ */ new Set([
   "the",
   "and",
   "for",
@@ -28595,7 +28725,7 @@ function aliasCanonical(token) {
   return CONCEPT_ALIASES[token] ?? token;
 }
 function meaningfulTokens(s) {
-  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken).map(aliasCanonical);
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS2.has(t)).map(stemToken).map(aliasCanonical);
 }
 function tokenCoverage(concept, proposal) {
   const tokens = meaningfulTokens(concept);
@@ -28701,11 +28831,25 @@ function containsAsPhrase(haystack, needle) {
   const esc3 = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^a-z0-9])${esc3}(?:[^a-z0-9]|$)`).test(haystack);
 }
+function containsAsPhraseUnicode(haystack, needle) {
+  const n = needle.trim();
+  if (n.length < 3) return false;
+  const esc3 = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${esc3}(?![\\p{L}\\p{N}])`, "u").test(haystack);
+}
 function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
   const clean = (s) => s.trim().toLowerCase();
   for (const rej of rejected) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
+    if (rej.origin === "page_rule_out") {
+      if (opts.rawEditTextFrom === void 0) continue;
+      for (let idx = opts.rawEditTextFrom; idx < proposalStrings.length; idx++) {
+        const proposal = proposalStrings[idx];
+        if (containsAsPhraseUnicode(clean(proposal), rejNormalized)) return { proposal, rejected: rej, via: "surface" };
+      }
+      continue;
+    }
     const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
     for (let idx = 0; idx < proposalStrings.length; idx++) {
       const proposal = proposalStrings[idx];
@@ -28755,6 +28899,7 @@ function runPreflight(input) {
   }
   const nearMisses = [];
   for (const rej of rejectedApproaches) {
+    if (rej.origin === "page_rule_out") continue;
     const conceptText = rej.concept ?? rej.description;
     const cov = Math.max(
       ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),
@@ -28816,7 +28961,9 @@ function runPreflight(input) {
 Prior rejection reason: "${match2.rejected.reason}"` : "";
       const conceptLine = match2.via === "concept" && match2.rejected.concept ? `
 Matched on underlying concept: "${match2.rejected.concept}". A paraphrased proposal still counts \u2014 the user has rejected this kind of approach.` : "";
-      const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match2.proposal}" which the user previously rejected ("${match2.rejected.description}").${reasonLine}${conceptLine}
+      const message = match2.rejected.origin === "page_rule_out" ? `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 this page's text still contains "${match2.rejected.description}", which the user ruled out on a page (in the block "${match2.proposal}").${reasonLine}
+
+Take that text out of the page and present it again. This stance applies only to pages (present_page, a page revise, a watched-file save); other tools are not affected. A page rule-out can't be allowed once: if it no longer applies, ask the human to retire it in the companion's Ledger, then present the page again. The artifact was NOT created.` : `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match2.proposal}" which the user previously rejected ("${match2.rejected.description}").${reasonLine}${conceptLine}
 
 Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to allow this proposal once or retire the stance from the companion UI's gate log before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
       return {
@@ -28836,7 +28983,10 @@ Do NOT retry with this approach. Propose an alternative. If this is a false posi
               via: match2.via,
               // #470 — with description + concept, the exact stance row an
               // allowance binds to.
-              rejectedAt: match2.rejected.rejectedAt
+              rejectedAt: match2.rejected.rejectedAt,
+              // #680 slice 4 — a page rule-out block is never allow-once
+              // eligible (the daemon marks it so; see prepareBlockEvent).
+              ...match2.rejected.origin === "page_rule_out" ? { origin: "page_rule_out" } : {}
             }
           }
         },
@@ -29534,6 +29684,37 @@ var ReviewPostJournal = class {
   }
 };
 
+// src/store/store-interface.ts
+function validateSuggestionTransition(current, update) {
+  if (update.state === "countered") {
+    if (current.state === "insisted") {
+      return {
+        ok: false,
+        code: "suggestion_insisted_authoritative",
+        message: 'The human INSISTED on their exact version after your counter \u2014 it is authoritative. Apply it verbatim with suggestionState:"applied" + appliedInVersion; do not counter or re-argue.'
+      };
+    }
+    if (current.appliedInVersion != null) {
+      return {
+        ok: false,
+        code: "suggestion_already_applied",
+        message: `This suggestion already shipped in v${current.appliedInVersion} \u2014 it can no longer be countered.`
+      };
+    }
+  }
+  if (update.appliedInVersion != null && current.appliedInVersion != null && current.appliedInVersion !== update.appliedInVersion) {
+    return {
+      ok: false,
+      code: "suggestion_already_applied",
+      message: `This suggestion already shipped in v${current.appliedInVersion}; it can't be re-stamped as v${update.appliedInVersion}.`
+    };
+  }
+  return { ok: true };
+}
+function isRejectedApproachOrigin(v2) {
+  return v2 === "page_rule_out";
+}
+
 // src/store/stance-add.ts
 function isPublishableStance(addedVia, requestedBy) {
   return addedVia !== "mcp" && requestedBy !== "unknown";
@@ -29562,6 +29743,15 @@ var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
   "explainer",
   "debrief"
 ]);
+function parseHtmlAnchor(raw2) {
+  if (raw2 === void 0 || raw2 === null) return void 0;
+  const parsed = HtmlAnchorSchema.safeParse(raw2);
+  return parsed.success ? parsed.data : void 0;
+}
+function withSourceAnchor(raw2) {
+  const sourceAnchor = parseHtmlAnchor(raw2);
+  return sourceAnchor ? { sourceAnchor } : {};
+}
 function pageOnlyHtmlAnchor(target, artifactType) {
   if (!target || !("htmlAnchor" in target) || artifactType === "page") return target;
   const { htmlAnchor: _dropped, ...rest } = target;
@@ -30492,6 +30682,7 @@ var FileStore = class _FileStore {
       if (c.content !== params.content) return false;
       if ((c.parentCommentId ?? "") !== parentKey) return false;
       if (_FileStore.targetKey(c.target) !== newTargetKey) return false;
+      if ((c.ruleOut?.description ?? "") !== (params.ruleOut?.description ?? "")) return false;
       const t = new Date(c.createdAt).getTime();
       return Number.isFinite(t) && now - t < _FileStore.DEDUPE_WINDOW_MS;
     });
@@ -30499,8 +30690,10 @@ var FileStore = class _FileStore {
       return dupe;
     }
     const secretWarnings = scanForSecrets(params.content);
+    const ruleOutParsed = params.ruleOut ? CommentRuleOutSchema.safeParse(params.ruleOut) : null;
     const targetArtifact = params.artifactId && params.artifactId !== "__session__" ? this.artifacts.find((a) => a.id === params.artifactId) : void 0;
     const isFollowUp = params.author === "human" && !params.verdictFeedback && !!targetArtifact && isLateCommentableStatus(targetArtifact.status);
+    const ruleOut = ruleOutParsed?.success && params.author === "human" && targetArtifact?.type === "page" && this.normalizeRejectedApproaches(this.readPreferences().rejectedApproaches ?? []).some((r) => r.description === ruleOutParsed.data.description && r.origin === "page_rule_out" && r.sourceArtifactId === params.artifactId) ? ruleOutParsed.data : void 0;
     const comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -30527,6 +30720,9 @@ var FileStore = class _FileStore {
       // #172 — persist the first-class suggested edit. Spread so a plain comment
       // stays byte-identical on disk.
       ...params.suggestion ? { suggestion: params.suggestion } : {},
+      // #680 slice 4 — the rule-out marker, server-set; dropped when malformed or
+      // when the comment isn't a human comment on a page.
+      ...ruleOut ? { ruleOut } : {},
       // #187 — spread so a normal draft-review comment is byte-identical on disk.
       ...isFollowUp ? { followUp: true } : {},
       answeredByCommentId: null,
@@ -31165,6 +31361,8 @@ var FileStore = class _FileStore {
   }
   recordRejectedApproach(params) {
     const { description, reason, sourceArtifactId, concept } = params;
+    const origin = isRejectedApproachOrigin(params.origin) ? params.origin : void 0;
+    const sourceAnchor = parseHtmlAnchor(params.sourceAnchor);
     if (sourceArtifactId) {
       const src = this.artifacts.find((a) => a.id === sourceArtifactId);
       if (src && LEDGER_EXEMPT_REJECT_TYPES.has(src.type)) return;
@@ -31198,6 +31396,14 @@ var FileStore = class _FileStore {
           existing.sourceArtifactId = sourceArtifactId;
           changed = true;
         }
+        if (sourceAnchor && !existing.sourceAnchor) {
+          existing.sourceAnchor = sourceAnchor;
+          changed = true;
+        }
+        if (origin !== "page_rule_out" && existing.origin === "page_rule_out") {
+          delete existing.origin;
+          changed = true;
+        }
         if (changed) {
           existing.rejectedAt = existing.rejectedAt ?? (/* @__PURE__ */ new Date()).toISOString();
           prefs.rejectedApproaches = rejected;
@@ -31209,12 +31415,15 @@ var FileStore = class _FileStore {
         reason: reason || void 0,
         concept: concept || void 0,
         rejectedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        sourceArtifactId
+        sourceArtifactId,
+        ...sourceAnchor ? { sourceAnchor } : {},
+        ...origin ? { origin } : {}
       });
       prefs.rejectedApproaches = rejected;
       return true;
     });
     const conceptKey = concept?.trim() || description.trim();
+    if (origin === "page_rule_out") return;
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         this.mirrorToLedger("rejected", conceptKey, description, reason);
@@ -31247,6 +31456,17 @@ var FileStore = class _FileStore {
         (r) => normalizeConceptKey2(r.description) === key || typeof r.concept === "string" && normalizeConceptKey2(r.concept) === key
       );
       if (existing) {
+        if (existing.origin === "page_rule_out") {
+          delete existing.origin;
+          existing.concept = concept;
+          existing.addedVia = addedVia;
+          existing.requestedBy = requestedBy;
+          if (!existing.reason) existing.reason = reason;
+          existing.rejectedAt = existing.rejectedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+          prefs.rejectedApproaches = rejected;
+          result = { status: "widened", row: { ...existing } };
+          return true;
+        }
         if (existing.reason) {
           result = { status: "exists", row: { ...existing } };
           return false;
@@ -31271,9 +31491,9 @@ var FileStore = class _FileStore {
     if (!out) throw new Error("addStance: the preferences transaction produced no result");
     if (this.isDemoSession || !this.globalLedgerPublishEnabled()) return out;
     let mirror = null;
-    if (out.status === "recorded" && isPublishableStance(addedVia, requestedBy)) {
+    if ((out.status === "recorded" || out.status === "widened") && isPublishableStance(addedVia, requestedBy)) {
       mirror = { key: concept, description: concept };
-    } else if (out.status === "reason_added" && out.row.concept?.trim() && isPublishableStance(addedVia, requestedBy)) {
+    } else if (out.status === "reason_added" && out.row.origin !== "page_rule_out" && out.row.concept?.trim() && isPublishableStance(addedVia, requestedBy)) {
       mirror = { key: out.row.concept.trim(), description: out.row.description };
     }
     if (mirror) {
@@ -31334,7 +31554,10 @@ var FileStore = class _FileStore {
         // #620 — carried through so a later write (another rejection, a
         // retire of a different row) doesn't strip a stance's provenance.
         ...isStanceAddedVia(entry?.addedVia) ? { addedVia: entry.addedVia } : {},
-        ...isStanceRequestedBy(entry?.requestedBy) ? { requestedBy: entry.requestedBy } : {}
+        ...isStanceRequestedBy(entry?.requestedBy) ? { requestedBy: entry.requestedBy } : {},
+        // #680 slice 4 — same: a later write must not strip a page stance's anchor.
+        ...withSourceAnchor(entry?.sourceAnchor),
+        ...isRejectedApproachOrigin(entry?.origin) ? { origin: "page_rule_out" } : {}
       }
     ).filter((r) => r.description);
   }
@@ -31387,12 +31610,15 @@ var FileStore = class _FileStore {
   overrideRejectedApproach(params) {
     const { description, concept } = params;
     let retired = 0;
+    let onlyPageRuleOuts = false;
     const retireLocal = () => this.mutatePreferences((prefs) => {
       const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
       const keep = rejected.filter(
         (r) => !(description && r.description === description || concept && r.concept === concept)
       );
       retired = rejected.length - keep.length;
+      const gone = rejected.filter((r) => !keep.includes(r));
+      onlyPageRuleOuts = gone.length > 0 && gone.every((r) => r.origin === "page_rule_out");
       if (retired === 0) return false;
       prefs.rejectedApproaches = keep;
       return true;
@@ -31403,7 +31629,7 @@ var FileStore = class _FileStore {
     } else {
       retireLocal();
     }
-    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
+    if (conceptKey && !this.isDemoSession && !onlyPageRuleOuts && this.globalLedgerPublishEnabled()) {
       try {
         this.mirrorToLedger("override", conceptKey, description, "Retired by you \u2014 the gate was blocking something you wanted");
       } catch (err) {
@@ -35073,6 +35299,7 @@ var StanceExceptionRegistry = class {
       return out2;
     };
     if (source !== "session") return ineligible("team_rule");
+    if (match2.origin === "page_rule_out") return ineligible("page_rule_out");
     if (sessionId.startsWith("demo_")) return ineligible("demo_session");
     const toolName = typeof event.toolName === "string" ? event.toolName : "";
     if (!Object.hasOwn(EXCEPTION_TOOL_TYPES, toolName)) return ineligible("unsupported_tool");
@@ -35756,6 +35983,250 @@ function getSessionId(c) {
   return c.req.header("X-Session-Id") ?? void 0;
 }
 
+// src/mcp/page-text.ts
+var DROP_ELEMENTS = ["script", "style", "template", "title"];
+var TEXT_ELEMENTS = ["textarea", "xmp"];
+var BLOCK_TAGS = /* @__PURE__ */ new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "br",
+  "caption",
+  "dd",
+  "details",
+  "div",
+  "dl",
+  "dt",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "li",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+  "body",
+  "html",
+  "label",
+  "button",
+  "option",
+  "legend",
+  "fieldset",
+  "head",
+  "noscript",
+  "textarea",
+  "xmp"
+]);
+var PAGE_TEXT_MAX_BLOCKS = 2e3;
+var NAMED_ENTITIES = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  rsquo: "'",
+  lsquo: "'",
+  rdquo: '"',
+  ldquo: '"',
+  middot: "\xB7",
+  times: "\xD7",
+  rarr: "\u2192",
+  larr: "\u2190"
+};
+function decodeEntities(s) {
+  return s.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,8});/gi, (m, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return " ";
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return " ";
+      }
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? m;
+  });
+}
+function opensElement(lower, at, tag) {
+  if (!lower.startsWith(tag, at + 1)) return false;
+  const next = lower.charCodeAt(at + 1 + tag.length);
+  return Number.isNaN(next) || next === 62 || next === 47 || next <= 32;
+}
+function extractPageTextBlocks(html) {
+  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  const lastAt = /* @__PURE__ */ new Map();
+  const memoIndexOf = (hay, needle, from) => {
+    const prev = lastAt.get(needle);
+    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
+    const at = hay.indexOf(needle, from);
+    lastAt.set(needle, at);
+    return at;
+  };
+  const findClose = (tag, from) => memoIndexOf(lower, `</${tag}`, from);
+  const findMarker = (marker, from) => memoIndexOf(html, marker, from);
+  let text = "";
+  let i = 0;
+  const n = html.length;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      text += html.slice(i);
+      break;
+    }
+    text += html.slice(i, lt);
+    if (lower.startsWith("<!--", lt)) {
+      if (lower.startsWith("<!-->", lt)) {
+        i = lt + 5;
+        continue;
+      }
+      if (lower.startsWith("<!--->", lt)) {
+        i = lt + 6;
+        continue;
+      }
+      const a = findMarker("-->", lt + 4);
+      const b = findMarker("--!>", lt + 4);
+      const end = a === -1 ? b === -1 ? -1 : b + 4 : b === -1 || a < b ? a + 3 : b + 4;
+      i = end === -1 ? n : end;
+      continue;
+    }
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) {
+      text += html.slice(lt);
+      break;
+    }
+    if (opensElement(lower, lt, "plaintext")) {
+      text += "\n" + html.slice(gt + 1);
+      break;
+    }
+    const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const literal2 = drop ? void 0 : TEXT_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
+    const raw2 = drop ?? literal2;
+    if (raw2) {
+      const close = findClose(raw2, gt + 1);
+      if (close === -1) {
+        text += "\n";
+        i = gt + 1;
+        continue;
+      }
+      if (literal2) text += "\n" + html.slice(gt + 1, close);
+      const closeEnd = html.indexOf(">", close);
+      text += "\n";
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const m = /^<\/?\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
+    if (m && BLOCK_TAGS.has(m[1])) text += "\n";
+    i = gt + 1;
+  }
+  const blocks = [];
+  for (const line of decodeEntities(text).split("\n")) {
+    const t = line.replace(/\s+/g, " ").trim();
+    if (t) blocks.push(t);
+    if (blocks.length >= PAGE_TEXT_MAX_BLOCKS) break;
+  }
+  return blocks;
+}
+
+// src/mcp/artifact-preflight.ts
+var record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+var list = (value) => Array.isArray(value) ? value : [];
+var strings = (values) => values.filter((v2) => typeof v2 === "string").map((v2) => v2.trim()).filter((v2) => v2.length > 0);
+var field = (values, key) => list(values).map((v2) => record2(v2)[key]);
+function artifactProposal(type, title, value) {
+  const c = record2(value);
+  let text = [];
+  let paths = [];
+  let concepts = [];
+  let body = [];
+  switch (type) {
+    case "research":
+      text = [title, c.summary, ...field(c.findings, "title"), ...field(c.findings, "recommendation")];
+      paths = list(c.findings).flatMap((f) => field(record2(f).evidence, "filePath"));
+      break;
+    case "decision":
+      text = [c.context, ...field(c.options, "title"), ...field(c.options, "description")];
+      concepts = field(c.options, "concept").map((v2) => record2(v2).name);
+      break;
+    case "spec":
+      text = [title, c.objective, ...field(c.requirements, "statement"), ...field(c.requirements, "rationale"), ...field(c.tasks, "description")];
+      break;
+    case "plan":
+      paths = list(c.steps).flatMap((s) => list(record2(s).files).map((f) => typeof f === "string" ? f : record2(f).filePath));
+      text = [title, ...field(c.steps, "description"), ...field(c.steps, "reasoning"), ...paths];
+      break;
+    case "code_change":
+      text = [c.filePath, c.reasoning];
+      paths = [c.filePath];
+      concepts = [record2(c.concept).name];
+      break;
+    case "changeset":
+      text = [title, c.summary, ...list(c.risks)];
+      paths = field(c.files, "path");
+      break;
+    case "debrief":
+      text = [title, c.summary, ...field(c.sections, "title"), ...field(c.decisionsMade, "what")];
+      concepts = list(c.sections).flatMap((s) => field(record2(s).concepts, "name"));
+      break;
+    case "explainer":
+      text = [title, c.overview, ...field(c.sections, "heading")];
+      break;
+    case "page":
+      text = [title, c.summary];
+      body = typeof c.html === "string" ? extractPageTextBlocks(c.html) : [];
+      concepts = [record2(c.concept).name];
+      break;
+    default:
+      return null;
+  }
+  const head = strings(text);
+  const bodyText = strings(body);
+  return {
+    text: [...head, ...bodyText],
+    paths: strings(paths),
+    concepts: strings(concepts),
+    // A debrief reports what already happened; it is not a fresh proposal.
+    // Recalled rejections still surface as advice, but cannot prevent the
+    // historical record from naming the rejected path.
+    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external",
+    // #680 — page BODY text is free prose, not a named proposal: the matcher's
+    // #621 raw-text rule applies from the first body block on.
+    ...type === "page" ? { rawEditTextFrom: head.length } : {}
+  };
+}
+function preflightArtifact(ctx, toolName, type, title, content, opts = {}) {
+  const proposal = artifactProposal(type, title, content);
+  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, {
+    ...opts,
+    advisory: proposal.advisory,
+    ...proposal.rawEditTextFrom !== void 0 ? { rawEditTextFrom: proposal.rawEditTextFrom } : {}
+  }) : null;
+}
+
 // src/http/review-routes.ts
 function createReviewRoutes({
   getStore,
@@ -35952,6 +36423,90 @@ function createReviewRoutes({
         alreadyRecorded,
         ...stored?.reason ? { reason: stored.reason } : {}
       });
+    });
+  });
+  app.post("/api/artifacts/:artifactId/rule-out", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const artifactId = c.req.param("artifactId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = PageRuleOutBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const anchor = parsed.data.htmlAnchor;
+    const reason = parsed.data.reason.trim();
+    const artifacts = await store.getArtifacts();
+    const page = artifacts.find((a) => a.id === artifactId);
+    if (!page) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: ERROR_CODES.artifact_not_in_session,
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (page.type !== "page") {
+      return c.json({ error: "Only a page's spots can be ruled out this way.", code: ERROR_CODES.validation_error }, 400);
+    }
+    if (isClosedArtifactStatus(page.status) && !isLateCommentableStatus(page.status)) {
+      return c.json(
+        { error: "This version of the page is no longer under review.", code: ERROR_CODES.rule_out_page_closed, status: page.status },
+        409
+      );
+    }
+    const notGateable = (why, message) => c.json({ error: message, code: ERROR_CODES.rule_out_not_gateable, reason: why }, 400);
+    const checked = checkPageRuleOut(anchor.quote);
+    if (!checked.ok) return notGateable(checked.reason, PAGE_RULE_OUT_MESSAGES[checked.reason]);
+    const description = checked.key;
+    const proposal = artifactProposal("page", page.title, page.content);
+    const probe = [{ description, origin: "page_rule_out" }];
+    if (!proposal || !findRejectedApproachMatch(proposal.text, probe, { rawEditTextFrom: proposal.rawEditTextFrom ?? 0 })) {
+      return notGateable(
+        "not_on_page",
+        `The gate can't find \u201C${description}\u201D within one block of this page, so it would never fire. Select text inside one paragraph, cell or heading.`
+      );
+    }
+    const before = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+    const alreadyRecorded = !!before;
+    await store.recordRejectedApproach({ description, reason, sourceArtifactId: page.id, sourceAnchor: anchor, origin: "page_rule_out" });
+    const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+    const storedReason = stored?.reason ?? reason;
+    let comment;
+    if (alreadyRecorded) {
+      comment = (await store.getCommentsForArtifact(page.id)).find((x) => x.author === "human" && x.ruleOut?.description === description);
+    }
+    const ownsRow = stored?.origin === "page_rule_out" && stored.sourceArtifactId === page.id;
+    if (!comment && ownsRow) {
+      const newId = `cmt_${nanoid3(10)}`;
+      const added = await store.addComment({
+        id: newId,
+        artifactId: page.id,
+        content: storedReason,
+        author: "human",
+        target: { artifactId: page.id, htmlAnchor: anchor },
+        intent: "comment",
+        parentCommentId: null,
+        ruleOut: { description }
+      });
+      comment = added;
+      if (added.id === newId) {
+        broadcast({ type: "comment_added", comment: added }, sid);
+        broadcast({ type: "feedback_received", commentId: added.id, artifactId: page.id, intent: "comment" }, sid);
+      }
+    }
+    if (!alreadyRecorded) {
+      broadcast({ type: "ledger_write", kind: "rejected", description, reason: storedReason, sourceArtifactId: page.id }, sid);
+    }
+    log2(`[page] rule-out ${page.id}${alreadyRecorded ? " (already recorded)" : ""}`);
+    return c.json({
+      status: "recorded",
+      description,
+      alreadyRecorded,
+      reason: storedReason,
+      ...comment ? { comment } : {}
     });
   });
   app.post("/api/artifacts/:artifactId/status", async (c) => {
@@ -37356,34 +37911,6 @@ function mountStaticUi(app, opts) {
 import fs26 from "node:fs";
 import path27 from "node:path";
 
-// src/store/store-interface.ts
-function validateSuggestionTransition(current, update) {
-  if (update.state === "countered") {
-    if (current.state === "insisted") {
-      return {
-        ok: false,
-        code: "suggestion_insisted_authoritative",
-        message: 'The human INSISTED on their exact version after your counter \u2014 it is authoritative. Apply it verbatim with suggestionState:"applied" + appliedInVersion; do not counter or re-argue.'
-      };
-    }
-    if (current.appliedInVersion != null) {
-      return {
-        ok: false,
-        code: "suggestion_already_applied",
-        message: `This suggestion already shipped in v${current.appliedInVersion} \u2014 it can no longer be countered.`
-      };
-    }
-  }
-  if (update.appliedInVersion != null && current.appliedInVersion != null && current.appliedInVersion !== update.appliedInVersion) {
-    return {
-      ok: false,
-      code: "suggestion_already_applied",
-      message: `This suggestion already shipped in v${current.appliedInVersion}; it can't be re-stamped as v${update.appliedInVersion}.`
-    };
-  }
-  return { ok: true };
-}
-
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/middleware/body-limit/index.js
 var ERROR_MESSAGE = "Payload Too Large";
 var bodyLimit = (options) => {
@@ -37768,250 +38295,6 @@ async function revisionNudge(store, type, title, excludeId) {
   return `
 
 \u21BB This looks like a revision of a live ${type} you already presented (${match2.id}${match2.title ? ` "${match2.title}"` : ""}). Next time, call \`revise_artifact\` mode='supersede' artifactId='${match2.id}' with the new content \u2014 it links the versions and gives your pair a clean before/after diff, instead of a separate ${type} that orphans the thread. (This one was still created.)`;
-}
-
-// src/mcp/page-text.ts
-var DROP_ELEMENTS = ["script", "style", "template", "title"];
-var TEXT_ELEMENTS = ["textarea", "xmp"];
-var BLOCK_TAGS = /* @__PURE__ */ new Set([
-  "address",
-  "article",
-  "aside",
-  "blockquote",
-  "br",
-  "caption",
-  "dd",
-  "details",
-  "div",
-  "dl",
-  "dt",
-  "figcaption",
-  "figure",
-  "footer",
-  "form",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "header",
-  "hr",
-  "li",
-  "main",
-  "nav",
-  "ol",
-  "p",
-  "pre",
-  "section",
-  "summary",
-  "table",
-  "tbody",
-  "td",
-  "tfoot",
-  "th",
-  "thead",
-  "tr",
-  "ul",
-  "body",
-  "html",
-  "label",
-  "button",
-  "option",
-  "legend",
-  "fieldset",
-  "head",
-  "noscript",
-  "textarea",
-  "xmp"
-]);
-var PAGE_TEXT_MAX_BLOCKS = 2e3;
-var NAMED_ENTITIES = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-  mdash: "\u2014",
-  ndash: "\u2013",
-  hellip: "\u2026",
-  rsquo: "'",
-  lsquo: "'",
-  rdquo: '"',
-  ldquo: '"',
-  middot: "\xB7",
-  times: "\xD7",
-  rarr: "\u2192",
-  larr: "\u2190"
-};
-function decodeEntities(s) {
-  return s.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,8});/gi, (m, body) => {
-    if (body[0] === "#") {
-      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return " ";
-      try {
-        return String.fromCodePoint(code);
-      } catch {
-        return " ";
-      }
-    }
-    return NAMED_ENTITIES[body.toLowerCase()] ?? m;
-  });
-}
-function opensElement(lower, at, tag) {
-  if (!lower.startsWith(tag, at + 1)) return false;
-  const next = lower.charCodeAt(at + 1 + tag.length);
-  return Number.isNaN(next) || next === 62 || next === 47 || next <= 32;
-}
-function extractPageTextBlocks(html) {
-  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
-  const lastAt = /* @__PURE__ */ new Map();
-  const memoIndexOf = (hay, needle, from) => {
-    const prev = lastAt.get(needle);
-    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
-    const at = hay.indexOf(needle, from);
-    lastAt.set(needle, at);
-    return at;
-  };
-  const findClose = (tag, from) => memoIndexOf(lower, `</${tag}`, from);
-  const findMarker = (marker, from) => memoIndexOf(html, marker, from);
-  let text = "";
-  let i = 0;
-  const n = html.length;
-  while (i < n) {
-    const lt = html.indexOf("<", i);
-    if (lt === -1) {
-      text += html.slice(i);
-      break;
-    }
-    text += html.slice(i, lt);
-    if (lower.startsWith("<!--", lt)) {
-      if (lower.startsWith("<!-->", lt)) {
-        i = lt + 5;
-        continue;
-      }
-      if (lower.startsWith("<!--->", lt)) {
-        i = lt + 6;
-        continue;
-      }
-      const a = findMarker("-->", lt + 4);
-      const b = findMarker("--!>", lt + 4);
-      const end = a === -1 ? b === -1 ? -1 : b + 4 : b === -1 || a < b ? a + 3 : b + 4;
-      i = end === -1 ? n : end;
-      continue;
-    }
-    const gt = html.indexOf(">", lt + 1);
-    if (gt === -1) {
-      text += html.slice(lt);
-      break;
-    }
-    if (opensElement(lower, lt, "plaintext")) {
-      text += "\n" + html.slice(gt + 1);
-      break;
-    }
-    const drop = DROP_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
-    const literal2 = drop ? void 0 : TEXT_ELEMENTS.find((tag) => opensElement(lower, lt, tag));
-    const raw2 = drop ?? literal2;
-    if (raw2) {
-      const close = findClose(raw2, gt + 1);
-      if (close === -1) {
-        text += "\n";
-        i = gt + 1;
-        continue;
-      }
-      if (literal2) text += "\n" + html.slice(gt + 1, close);
-      const closeEnd = html.indexOf(">", close);
-      text += "\n";
-      i = closeEnd === -1 ? n : closeEnd + 1;
-      continue;
-    }
-    const m = /^<\/?\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
-    if (m && BLOCK_TAGS.has(m[1])) text += "\n";
-    i = gt + 1;
-  }
-  const blocks = [];
-  for (const line of decodeEntities(text).split("\n")) {
-    const t = line.replace(/\s+/g, " ").trim();
-    if (t) blocks.push(t);
-    if (blocks.length >= PAGE_TEXT_MAX_BLOCKS) break;
-  }
-  return blocks;
-}
-
-// src/mcp/artifact-preflight.ts
-var record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
-var list = (value) => Array.isArray(value) ? value : [];
-var strings = (values) => values.filter((v2) => typeof v2 === "string").map((v2) => v2.trim()).filter((v2) => v2.length > 0);
-var field = (values, key) => list(values).map((v2) => record2(v2)[key]);
-function artifactProposal(type, title, value) {
-  const c = record2(value);
-  let text = [];
-  let paths = [];
-  let concepts = [];
-  let body = [];
-  switch (type) {
-    case "research":
-      text = [title, c.summary, ...field(c.findings, "title"), ...field(c.findings, "recommendation")];
-      paths = list(c.findings).flatMap((f) => field(record2(f).evidence, "filePath"));
-      break;
-    case "decision":
-      text = [c.context, ...field(c.options, "title"), ...field(c.options, "description")];
-      concepts = field(c.options, "concept").map((v2) => record2(v2).name);
-      break;
-    case "spec":
-      text = [title, c.objective, ...field(c.requirements, "statement"), ...field(c.requirements, "rationale"), ...field(c.tasks, "description")];
-      break;
-    case "plan":
-      paths = list(c.steps).flatMap((s) => list(record2(s).files).map((f) => typeof f === "string" ? f : record2(f).filePath));
-      text = [title, ...field(c.steps, "description"), ...field(c.steps, "reasoning"), ...paths];
-      break;
-    case "code_change":
-      text = [c.filePath, c.reasoning];
-      paths = [c.filePath];
-      concepts = [record2(c.concept).name];
-      break;
-    case "changeset":
-      text = [title, c.summary, ...list(c.risks)];
-      paths = field(c.files, "path");
-      break;
-    case "debrief":
-      text = [title, c.summary, ...field(c.sections, "title"), ...field(c.decisionsMade, "what")];
-      concepts = list(c.sections).flatMap((s) => field(record2(s).concepts, "name"));
-      break;
-    case "explainer":
-      text = [title, c.overview, ...field(c.sections, "heading")];
-      break;
-    case "page":
-      text = [title, c.summary];
-      body = typeof c.html === "string" ? extractPageTextBlocks(c.html) : [];
-      concepts = [record2(c.concept).name];
-      break;
-    default:
-      return null;
-  }
-  const head = strings(text);
-  const bodyText = strings(body);
-  return {
-    text: [...head, ...bodyText],
-    paths: strings(paths),
-    concepts: strings(concepts),
-    // A debrief reports what already happened; it is not a fresh proposal.
-    // Recalled rejections still surface as advice, but cannot prevent the
-    // historical record from naming the rejected path.
-    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external",
-    // #680 — page BODY text is free prose, not a named proposal: the matcher's
-    // #621 raw-text rule applies from the first body block on.
-    ...type === "page" ? { rawEditTextFrom: head.length } : {}
-  };
-}
-function preflightArtifact(ctx, toolName, type, title, content, opts = {}) {
-  const proposal = artifactProposal(type, title, content);
-  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, {
-    ...opts,
-    advisory: proposal.advisory,
-    ...proposal.rawEditTextFrom !== void 0 ? { rawEditTextFrom: proposal.rawEditTextFrom } : {}
-  }) : null;
 }
 
 // src/mcp/validate-tool-input.ts
