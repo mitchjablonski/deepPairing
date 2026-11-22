@@ -3227,8 +3227,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path22) {
-      let input = path22;
+    function removeDotSegments(path23) {
+      let input = path23;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3427,8 +3427,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path22, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path22 && path22 !== "/" ? path22 : void 0;
+        const [path23, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path23 && path23 !== "/" ? path23 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -7326,10 +7326,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path22) {
-  if (!path22)
+function getElementAtPath(obj2, path23) {
+  if (!path23)
     return obj2;
-  return path22.reduce((acc, key2) => acc?.[key2], obj2);
+  return path23.reduce((acc, key2) => acc?.[key2], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7738,11 +7738,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path22, issues) {
+function prefixIssues(path23, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path22);
+    iss.path.unshift(path23);
     return iss;
   });
 }
@@ -7889,16 +7889,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path22 = []) => {
+  const processError = (error52, path23 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7925,17 +7925,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path22 = []) => {
+  const processError = (error52, path23 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -7967,8 +7967,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path22 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path22) {
+  const path23 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path23) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -20966,13 +20966,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path22 = ref.slice(1).split("/").filter(Boolean);
-  if (path22.length === 0) {
+  const path23 = ref.slice(1).split("/").filter(Boolean);
+  if (path23.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path22[0] === defsKey) {
-    const key2 = path22[1];
+  if (path23[0] === defsKey) {
+    const key2 = path23[1];
     if (!key2 || !ctx.defs[key2]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -30578,8 +30578,8 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   }
   try {
     const fs20 = await import("node:fs");
-    const path22 = await import("node:path");
-    const claudeMd = path22.join(process.cwd(), "CLAUDE.md");
+    const path23 = await import("node:path");
+    const claudeMd = path23.join(process.cwd(), "CLAUDE.md");
     if (fs20.existsSync(claudeMd)) {
       const content = fs20.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
@@ -31491,7 +31491,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path22, v: v2 }) => `- ${path22}: ${v2.message}`);
+  const lines = shown.map(({ path: path23, v: v2 }) => `- ${path23}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function formatProseStyleWarnings(label, text, mode = "strict") {
@@ -31505,7 +31505,7 @@ function formatProseStyleWarnings(label, text, mode = "strict") {
   const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  return styleBlock(result.score, shown.map(({ path: path22, v: v2 }) => `- ${path22}: ${v2.message}`), rest);
+  return styleBlock(result.score, shown.map(({ path: path23, v: v2 }) => `- ${path23}: ${v2.message}`), rest);
 }
 function styleBlock(score, lines, rest) {
   const tail = rest > 0 ? ` (+${rest} more)` : "";
@@ -31904,9 +31904,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path22) {
+function receivedSize(input, path23) {
   let cur = input;
-  for (const seg of path22) {
+  for (const seg of path23) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -31929,8 +31929,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path22) {
-  return path22.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path23) {
+  return path23.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -31956,9 +31956,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path22 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path23 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path22}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path23}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -33261,7 +33261,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path22 = sanitizePath(file2.path, projectRoot2);
+  const path23 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -33278,7 +33278,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path23)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -33397,9 +33397,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path22 = sanitizePath(e.filePath, projectRoot2);
+    const path23 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path22 ? `<p class="anchor"><code>${esc2(path22 + range)}</code></p>` : "";
+    let anchor = path23 ? `<p class="anchor"><code>${esc2(path23 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -33556,9 +33556,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path22 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path23 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path23)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -37714,11 +37714,17 @@ function selectSkeletonScope(scopes, args) {
 }
 
 // src/mcp/skeleton-snapshot.ts
-import fs12 from "node:fs";
-import path13 from "node:path";
+import path14 from "node:path";
 
 // src/mcp/skeleton-drift.ts
 import { createHash as createHash4 } from "node:crypto";
+var SKELETON_VISUAL_PREFIX2 = "skelcode:";
+var isSkeletonApprovedVisualId2 = (id) => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX2);
+var CLOSED_FOR_PROGRESS2 = /* @__PURE__ */ new Set(["superseded", "rejected", "retracted", "obsolete"]);
+function isLivePlanVersion2(art, artifacts) {
+  if (art.type !== "plan" || CLOSED_FOR_PROGRESS2.has(art.status)) return false;
+  return !artifacts.some((a) => !!a && typeof a === "object" && a.parentId === art.id);
+}
 var MAX_LINES_LISTED = 5;
 var MAX_APPROX_MORE = 20;
 var MAX_LCS_CELLS = 4e6;
@@ -37880,8 +37886,8 @@ function compareCode(file2, code, liveText) {
 function approvedSkeletonFiles(approvedVisuals) {
   const out = [];
   for (const v2 of approvedVisuals ?? []) {
-    if (!v2 || v2.kind !== "annotated_code" || !isSkeletonApprovedVisualId(v2.id) || !v2.skeleton) continue;
-    const file2 = typeof v2.filePath === "string" && v2.filePath ? v2.filePath : v2.id.slice(SKELETON_VISUAL_PREFIX.length);
+    if (!v2 || v2.kind !== "annotated_code" || !isSkeletonApprovedVisualId2(v2.id) || !v2.skeleton) continue;
+    const file2 = typeof v2.filePath === "string" && v2.filePath ? v2.filePath : v2.id.slice(SKELETON_VISUAL_PREFIX2.length);
     const digest = v2.skeleton.exterior;
     const fenceIds = digest?.fenceIds ?? v2.skeleton.fences.map((f) => f.id);
     if (v2.skeleton.withheld || typeof v2.code !== "string") out.push({ file: file2, ...digest ? { digest } : {}, fenceIds, codeless: "withheld from the approved snapshot" });
@@ -37950,6 +37956,12 @@ Exterior drift not checked for: ${drift.notChecked.map((n) => `${n.file} (${n.re
 }
 function formatExteriorDrift(drift) {
   if (drift.changed.length === 0 && drift.deleted.length === 0) return "";
+  const parts = exteriorDriftParts(drift);
+  const unchecked = drift.notChecked.length > 0 ? ` Not checked: ${drift.notChecked.map((n) => `${n.file} (${n.reason})`).join(", ")}.` : "";
+  return `
+\u26A0 Exterior drift since approval: ${parts.join("; ")}. Changes outside the SKEL fences are skeleton changes: propose them and revise_artifact the plan (reason "Skeleton change: \u2026"), or restore the approved structure.${unchecked}`;
+}
+function exteriorDriftParts(drift) {
   const renamedTo = new Map((drift.renamed ?? []).map((r) => [r.from, r.to]));
   const parts = [
     ...drift.changed.map((c) => {
@@ -37961,15 +37973,14 @@ function formatExteriorDrift(drift) {
     }),
     ...drift.deleted.map((f) => renamedTo.has(f) ? `${f} (deleted; its fences are now in ${renamedTo.get(f)} \u2014 renamed?)` : `${f} (deleted)`)
   ];
-  const unchecked = drift.notChecked.length > 0 ? ` Not checked: ${drift.notChecked.map((n) => `${n.file} (${n.reason})`).join(", ")}.` : "";
-  return `
-\u26A0 Exterior drift since approval: ${parts.join("; ")}. Changes outside the SKEL fences are skeleton changes: propose them and revise_artifact the plan (reason "Skeleton change: \u2026"), or restore the approved structure.${unchecked}`;
+  return parts;
 }
 function isSkeletonDriftBaseline(art, artifacts) {
-  if (art.type !== "plan") return false;
-  if (art.status === "approved") return isLivePlanVersion(art, artifacts);
+  if (!art || typeof art !== "object" || art.type !== "plan") return false;
+  artifacts = artifacts.filter((a) => !!a && typeof a === "object");
+  if (art.status === "approved") return isLivePlanVersion2(art, artifacts);
   if (art.status !== "superseded") return false;
-  const history = (art.statusHistory ?? []).map((h) => h?.status);
+  const history = (Array.isArray(art.statusHistory) ? art.statusHistory : []).map((h) => h && typeof h === "object" ? h.status : void 0);
   const beforeSupersede = history.slice(0, history.lastIndexOf("superseded")).filter((s) => s !== "superseded").at(-1);
   if (beforeSupersede !== "approved") return false;
   const descendants = [];
@@ -37986,20 +37997,18 @@ function isSkeletonDriftBaseline(art, artifacts) {
   return descendants.length > 0 && descendants.every((d) => d.status === "rejected" || d.status === "retracted");
 }
 
-// src/mcp/skeleton-snapshot.ts
+// src/mcp/skeleton-read.ts
+import fs12 from "node:fs";
+import path13 from "node:path";
 var SKELETON_SNAPSHOT_LIMITS = {
   maxFiles: 12,
   maxFileBytes: 48 * 1024,
   maxTotalBytes: 192 * 1024,
   maxReadBytes: 1e6
 };
-var UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
-var MAX_OMITTED_DIGESTS = 64;
-var MAX_OMITTED_BYTES = 8 * 1024 * 1024;
 var MAX_RENAME_FILE_BYTES = 256 * 1024;
 var MAX_RENAME_TOTAL_BYTES = 2 * 1024 * 1024;
 var MAX_RENAME_ENTRIES = 200;
-var MIN_USEFUL_BYTES = 512;
 function within2(dir, abs) {
   const rel = path13.relative(dir, abs);
   return rel === "" || !rel.startsWith("..") && !path13.isAbsolute(rel);
@@ -38072,6 +38081,91 @@ function readConfined(root, rel, limits) {
     }
   }
 }
+function checkSkeletonExteriorDrift(content, opts = {}) {
+  const empty = { changed: [], deleted: [], notChecked: [] };
+  try {
+    const visuals = (Array.isArray(content?.visuals) ? content.visuals : []).filter((v2) => v2 && typeof v2 === "object" && v2.kind === "annotated_code" && isSkeletonApprovedVisualId2(v2.id) && v2.skeleton);
+    if (visuals.length === 0) return empty;
+    const root = path13.resolve(opts.root ?? (() => {
+      const r = resolveProjectRoot();
+      return r.worktree?.workspaceRoot ?? r.projectRoot;
+    })());
+    const limits = opts.limits ?? SKELETON_SNAPSHOT_LIMITS;
+    const live = {};
+    const approved = approvedSkeletonFiles(visuals);
+    for (const a of approved) {
+      if (a.code === void 0 && !a.digest) continue;
+      const rel = normalizeSkeletonPath(root, a.file);
+      if (!rel) {
+        live[a.file] = { unchecked: "outside the project" };
+        continue;
+      }
+      const read = readConfined(root, rel, limits);
+      live[a.file] = read.ok ? { text: read.text } : read.reason === "not on disk" ? { missing: true } : { unchecked: read.reason };
+    }
+    const drift = skeletonExteriorDrift(visuals, live);
+    if (drift.deleted.length > 0) {
+      const known = new Set(approved.map((a) => a.file));
+      const renamed = [];
+      let budget = MAX_RENAME_TOTAL_BYTES;
+      for (const from of drift.deleted) {
+        const fences0 = visuals.find((v2) => (v2.filePath ?? v2.id.slice(SKELETON_VISUAL_PREFIX2.length)) === from)?.skeleton?.fences ?? [];
+        if (fences0.length === 0) continue;
+        const want = new Map(fences0.map((f) => [f.id, f.title]));
+        const dir = path13.posix.dirname(from);
+        let names;
+        try {
+          names = fs12.readdirSync(path13.resolve(root, dir)).slice(0, MAX_RENAME_ENTRIES);
+        } catch {
+          continue;
+        }
+        for (const name of names) {
+          if (budget <= 0) break;
+          const rel = dir === "." ? name : `${dir}/${name}`;
+          if (known.has(rel)) continue;
+          let size;
+          try {
+            const st = fs12.statSync(path13.resolve(root, rel));
+            if (!st.isFile()) continue;
+            size = st.size;
+          } catch {
+            continue;
+          }
+          if (size > MAX_RENAME_FILE_BYTES || size > budget) continue;
+          budget -= size;
+          const read = readConfined(root, rel, limits);
+          if (!read.ok || !read.text.includes("SKEL[")) continue;
+          let fences;
+          try {
+            fences = scanSkeletonText(read.text, rel);
+          } catch {
+            continue;
+          }
+          const ids = new Set(fences.map((f) => f.id));
+          const sameIds = ids.size === want.size && [...want.keys()].every((id) => ids.has(id));
+          const sameTitles = fences.every((f) => {
+            const t = want.get(f.id);
+            return t === void 0 || t === f.title;
+          });
+          if (sameIds && sameTitles) {
+            renamed.push({ from, to: rel });
+            break;
+          }
+        }
+      }
+      if (renamed.length > 0) drift.renamed = renamed;
+    }
+    return drift;
+  } catch {
+    return empty;
+  }
+}
+
+// src/mcp/skeleton-snapshot.ts
+var UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
+var MAX_OMITTED_DIGESTS = 64;
+var MAX_OMITTED_BYTES = 8 * 1024 * 1024;
+var MIN_USEFUL_BYTES = 512;
 function truncateToBytes(text, budget) {
   const lines = text.split("\n");
   const totalLines = lines.length > 1 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
@@ -38100,7 +38194,7 @@ function buildSkeletonSnapshot(args) {
   const steps = Array.isArray(args.steps) ? args.steps : [];
   const skelIds = [...new Set(steps.map((s) => s?.skelId).filter((id) => typeof id === "string" && id.length > 0))];
   if (skelIds.length === 0) return { visuals: [], note: "" };
-  const root = path13.resolve(args.root);
+  const root = path14.resolve(args.root);
   const agentVisuals = Array.isArray(args.visuals) ? args.visuals : [];
   const scan = scanSkeletonFences(root, {
     files: planDeclaredFiles({
@@ -38311,94 +38405,15 @@ function nextReadStamp() {
   lastStamp = now > lastStamp ? now : lastStamp + 1e-3;
   return lastStamp;
 }
-function checkSkeletonExteriorDrift(content, opts = {}) {
-  const empty = { changed: [], deleted: [], notChecked: [] };
-  try {
-    const visuals = (Array.isArray(content?.visuals) ? content.visuals : []).filter((v2) => v2 && typeof v2 === "object" && v2.kind === "annotated_code" && isSkeletonApprovedVisualId(v2.id) && v2.skeleton);
-    if (visuals.length === 0) return empty;
-    const root = path13.resolve(opts.root ?? (() => {
-      const r = resolveProjectRoot();
-      return r.worktree?.workspaceRoot ?? r.projectRoot;
-    })());
-    const limits = opts.limits ?? SKELETON_SNAPSHOT_LIMITS;
-    const live = {};
-    const approved = approvedSkeletonFiles(visuals);
-    for (const a of approved) {
-      if (a.code === void 0 && !a.digest) continue;
-      const rel = normalizeSkeletonPath(root, a.file);
-      if (!rel) {
-        live[a.file] = { unchecked: "outside the project" };
-        continue;
-      }
-      const read = readConfined(root, rel, limits);
-      live[a.file] = read.ok ? { text: read.text } : read.reason === "not on disk" ? { missing: true } : { unchecked: read.reason };
-    }
-    const drift = skeletonExteriorDrift(visuals, live);
-    if (drift.deleted.length > 0) {
-      const known = new Set(approved.map((a) => a.file));
-      const renamed = [];
-      let budget = MAX_RENAME_TOTAL_BYTES;
-      for (const from of drift.deleted) {
-        const fences0 = visuals.find((v2) => (v2.filePath ?? v2.id.slice(SKELETON_VISUAL_PREFIX.length)) === from)?.skeleton?.fences ?? [];
-        if (fences0.length === 0) continue;
-        const want = new Map(fences0.map((f) => [f.id, f.title]));
-        const dir = path13.posix.dirname(from);
-        let names;
-        try {
-          names = fs12.readdirSync(path13.resolve(root, dir)).slice(0, MAX_RENAME_ENTRIES);
-        } catch {
-          continue;
-        }
-        for (const name of names) {
-          if (budget <= 0) break;
-          const rel = dir === "." ? name : `${dir}/${name}`;
-          if (known.has(rel)) continue;
-          let size;
-          try {
-            const st = fs12.statSync(path13.resolve(root, rel));
-            if (!st.isFile()) continue;
-            size = st.size;
-          } catch {
-            continue;
-          }
-          if (size > MAX_RENAME_FILE_BYTES || size > budget) continue;
-          budget -= size;
-          const read = readConfined(root, rel, limits);
-          if (!read.ok || !read.text.includes("SKEL[")) continue;
-          let fences;
-          try {
-            fences = scanSkeletonText(read.text, rel);
-          } catch {
-            continue;
-          }
-          const ids = new Set(fences.map((f) => f.id));
-          const sameIds = ids.size === want.size && [...want.keys()].every((id) => ids.has(id));
-          const sameTitles = fences.every((f) => {
-            const t = want.get(f.id);
-            return t === void 0 || t === f.title;
-          });
-          if (sameIds && sameTitles) {
-            renamed.push({ from, to: rel });
-            break;
-          }
-        }
-      }
-      if (renamed.length > 0) drift.renamed = renamed;
-    }
-    return drift;
-  } catch {
-    return empty;
-  }
-}
 
 // src/mcp/skeleton-finalize.ts
 import fs13 from "node:fs";
-import path14 from "node:path";
+import path15 from "node:path";
 var MAX_BYTES = 1e6;
 var MAX_LISTED = 20;
 function within3(dir, abs) {
-  const rel = path14.relative(dir, abs);
-  return rel === "" || !rel.startsWith("..") && !path14.isAbsolute(rel);
+  const rel = path15.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path15.isAbsolute(rel);
 }
 var PROSE_FILE2 = /\.(md|mdx|markdown|rst|txt)$/i;
 function skeletonLeftovers(root, content) {
@@ -38421,12 +38436,12 @@ function skeletonLeftovers(root, content) {
   }
   for (const rel of files) {
     try {
-      const abs = fs13.realpathSync(path14.resolve(root, rel));
+      const abs = fs13.realpathSync(path15.resolve(root, rel));
       if (!within3(realRoot, abs)) continue;
       const st = fs13.statSync(abs);
       if (!st.isFile() || st.size > MAX_BYTES) continue;
       const lines = fs13.readFileSync(abs, "utf-8").split("\n");
-      const shown = path14.relative(realRoot, abs).split(path14.sep).join("/");
+      const shown = path15.relative(realRoot, abs).split(path15.sep).join("/");
       lines.forEach((l, i) => {
         if (l.includes("SKEL_TODO")) out.push({ file: shown, line: i + 1, what: "SKEL_TODO" });
       });
@@ -40382,7 +40397,7 @@ async function handlePresentExplainer(ctx, args) {
 
 // src/mcp/tools/present-page.ts
 import fs14 from "node:fs";
-import path15 from "node:path";
+import path16 from "node:path";
 function refuse(message) {
   const code = TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED;
   return {
@@ -40395,8 +40410,8 @@ function refuse(message) {
   };
 }
 function isWithin(root, target) {
-  const rel = path15.relative(root, target);
-  return rel === "" || !rel.startsWith("..") && !path15.isAbsolute(rel);
+  const rel = path16.relative(root, target);
+  return rel === "" || !rel.startsWith("..") && !path16.isAbsolute(rel);
 }
 function readPageSource(projectRoot2, requested) {
   if (requested.includes("\0")) return refuse("`path` contains a NUL byte.");
@@ -40406,7 +40421,7 @@ function readPageSource(projectRoot2, requested) {
   } catch {
     return refuse("the project root could not be resolved, so `path` cannot be checked. Pass the page inline as `html`.");
   }
-  const lexical = path15.resolve(projectRoot2, requested);
+  const lexical = path16.resolve(projectRoot2, requested);
   if (!isWithin(projectRoot2, lexical) && !isWithin(rootReal, lexical)) {
     return refuse(`\`path\` "${requested}" is outside the project root. Write the page inside the project, or pass it inline as \`html\`.`);
   }
@@ -40458,7 +40473,7 @@ function readPageSource(projectRoot2, requested) {
     }
   }
   if (!html.trim()) return refuse(`the file at \`path\` "${requested}" is empty.`);
-  const sourcePath = path15.relative(rootReal, real).split(path15.sep).join("/");
+  const sourcePath = path16.relative(rootReal, real).split(path16.sep).join("/");
   return { ok: true, html, sourcePath };
 }
 async function presentPage(ctx, args, opts = {}) {
@@ -40925,11 +40940,11 @@ async function handleRecordStance(ctx, args) {
 
 // src/daemon/status.ts
 import fs15 from "node:fs";
-import path16 from "node:path";
+import path17 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path16.resolve(startDir);
+  let dir = path17.resolve(startDir);
   for (; ; ) {
-    const candidate = path16.join(dir, ".deeppairing", "daemon.json");
+    const candidate = path17.join(dir, ".deeppairing", "daemon.json");
     if (fs15.existsSync(candidate)) {
       try {
         const parsed = JSON.parse(fs15.readFileSync(candidate, "utf-8"));
@@ -40939,7 +40954,7 @@ function findDaemonJson(startDir) {
         return { dir, info: {} };
       }
     }
-    const parent = path16.dirname(dir);
+    const parent = path17.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -41900,25 +41915,25 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
 import { spawn as spawn2, execFileSync } from "node:child_process";
 import fs17 from "node:fs";
 import net from "node:net";
-import path18 from "node:path";
+import path19 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/daemon/token.ts
 import fs16 from "node:fs";
 import os3 from "node:os";
-import path17 from "node:path";
+import path18 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path17.isAbsolute(xdg)) {
+  if (xdg && path18.isAbsolute(xdg)) {
     try {
-      if (fs16.statSync(xdg).isDirectory()) return path17.join(xdg, "deeppairing");
+      if (fs16.statSync(xdg).isDirectory()) return path18.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path17.join(os3.tmpdir(), "deeppairing");
+  return path18.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path17.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path18.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
@@ -41931,7 +41946,7 @@ function readTokenSidecar(projectRoot2) {
 }
 
 // src/daemon/lifecycle.ts
-var __thisDir2 = path18.dirname(fileURLToPath3(import.meta.url));
+var __thisDir2 = path19.dirname(fileURLToPath3(import.meta.url));
 var DAEMON_FILE = "daemon.json";
 var MAX_PORT_ATTEMPTS = 10;
 function logStale(msg) {
@@ -41942,7 +41957,7 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path18.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path19.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
@@ -42096,7 +42111,7 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path18.join(projectRoot2, ".deeppairing", "daemon.log");
+  const logPath = path19.join(projectRoot2, ".deeppairing", "daemon.log");
   if (fs17.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
@@ -42139,8 +42154,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path18.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs17.existsSync(daemonScript) ? daemonScript : path18.join(__thisDir2, "daemon.js");
+  const daemonScript = path19.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs17.existsSync(daemonScript) ? daemonScript : path19.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -42516,8 +42531,8 @@ var DaemonClient = class {
     if (!this.projectRoot) return false;
     try {
       const fs20 = await import("node:fs");
-      const path22 = await import("node:path");
-      const infoPath = path22.join(this.projectRoot, ".deeppairing", "daemon.json");
+      const path23 = await import("node:path");
+      const infoPath = path23.join(this.projectRoot, ".deeppairing", "daemon.json");
       if (!fs20.existsSync(infoPath)) return false;
       const raw = fs20.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
@@ -42573,7 +42588,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path22, init, isRetry = false) {
+  async request(path23, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -42584,12 +42599,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path22}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path23}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path22, init, true);
+        if (recovered) return this.request(path23, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -42604,7 +42619,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path22, init, true);
+        return this.request(path23, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -42615,7 +42630,7 @@ var DaemonClient = class {
       }
       await this.register(this.lastRegisterMeta);
       void this.notifyRecovered();
-      return this.request(path22, init, true);
+      return this.request(path23, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -42636,15 +42651,15 @@ var DaemonClient = class {
       );
     }
   }
-  async post(path22, body) {
-    return this.request(path22, {
+  async post(path23, body) {
+    return this.request(path23, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path22) {
-    return this.request(path22, {});
+  async get(path23) {
+    return this.request(path23, {});
   }
   // --- Session lifecycle ---
   /**
@@ -43065,9 +43080,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path22) {
+  async requestPublic(path23) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path22}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path23}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -43114,10 +43129,10 @@ var DaemonClient = class {
 // src/store/project-registry.ts
 import fs18 from "node:fs";
 import os4 from "node:os";
-import path19 from "node:path";
+import path20 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path19.join(os4.homedir(), ".deeppairing", "projects.json");
+  return path20.join(os4.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {
@@ -43166,7 +43181,7 @@ function readFile() {
     }
     projects[key2] = {
       projectRoot: v2.projectRoot,
-      name: typeof v2.name === "string" && v2.name ? v2.name : path19.basename(v2.projectRoot),
+      name: typeof v2.name === "string" && v2.name ? v2.name : path20.basename(v2.projectRoot),
       lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
@@ -43177,13 +43192,13 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
   try {
     const filePath = projectRegistryPath();
     const file2 = readFile();
-    const key2 = path19.resolve(projectRoot2);
+    const key2 = path20.resolve(projectRoot2);
     file2.projects[key2] = {
       projectRoot: key2,
-      name: path19.basename(key2) || key2,
+      name: path20.basename(key2) || key2,
       lastSeen: now.toISOString()
     };
-    fs18.mkdirSync(path19.dirname(filePath), { recursive: true });
+    fs18.mkdirSync(path20.dirname(filePath), { recursive: true });
     writeJsonAtomic(filePath, file2);
     return true;
   } catch (err) {
@@ -43195,9 +43210,9 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
 
 // src/session-id.ts
 import crypto4 from "node:crypto";
-import path20 from "node:path";
+import path21 from "node:path";
 function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
-  const projectName = path20.basename(projectRoot2);
+  const projectName = path21.basename(projectRoot2);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
   const base = `session_${safeProjectName}_${projectHash}`;
@@ -43210,15 +43225,15 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 
 // src/standalone.ts
 import fs19 from "node:fs";
-import path21 from "node:path";
+import path22 from "node:path";
 var { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
-var dpDir = path21.join(projectRoot, ".deeppairing");
-var logFile = path21.join(dpDir, "server.log");
+var dpDir = path22.join(projectRoot, ".deeppairing");
+var logFile = path22.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs19.mkdirSync(path21.dirname(logFile), { recursive: true });
+    fs19.mkdirSync(path22.dirname(logFile), { recursive: true });
     fs19.appendFileSync(logFile, line);
   } catch {
   }
@@ -43241,7 +43256,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path21.basename(projectRoot);
+  const projectName = path22.basename(projectRoot);
   const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
   const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
   const sessionId = derived.sessionId;
