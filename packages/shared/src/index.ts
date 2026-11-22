@@ -165,6 +165,8 @@ export {
   HtmlAnchorKindSchema,
   HTML_ANCHOR_LIMITS,
   sanitizeHtmlAnchor,
+  CommentRuleOutSchema,
+  type CommentRuleOut,
   type HtmlAnchor,
   type HtmlAnchorKind,
   CommentAuthorSchema,
@@ -184,6 +186,15 @@ export {
   type SuggestionCounter,
   type CommentSuggestion,
 } from "./schemas/comment.js";
+
+export {
+  PAGE_RULE_OUT_KEY_MAX,
+  PAGE_RULE_OUT_KEY_MIN,
+  PAGE_RULE_OUT_REASON_MAX,
+  PageRuleOutBodySchema,
+  pageRuleOutKey,
+  type PageRuleOutBody,
+} from "./schemas/page-rule-out.js";
 
 export {
   EvidenceSchema,

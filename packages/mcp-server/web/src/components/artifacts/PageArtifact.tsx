@@ -14,6 +14,7 @@ import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
 import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage } from "../../lib/pageAnchorMessages";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
+import { PageRuleOutControl } from "./PageRuleOutControl";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -71,6 +72,10 @@ function AnchorContext({ anchor }: { anchor: HtmlAnchor }) {
  * comment exists only when the human submits it. Anchored comments come back
  * down to the frame as numbered pins; clicking one in the list focuses its pin,
  * and an anchor the frame can't find in this version says so.
+ *
+ * Slice 4 — with a spot selected, "Rule this out" (PageRuleOutControl) records
+ * the spot's text as a rejected stance with your reason; the page stays under
+ * review and the gate refuses later pages containing that text.
  *
  * The footer is the standard ArtifactStatusActions: Respond / Ask, Request
  * changes, Reject (with the "name the pattern" capture, so a reject feeds
@@ -306,6 +311,16 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             secondarySubmitLabel="Ask"
             secondarySubmitTitle="Post as a question about this spot — the agent owes you an answer"
           />
+          {/* #680 slice 4 — record this spot's text as a rejected stance. Inline
+              under the composer (never over it); opens its own confirm step. */}
+          <div className="flex justify-end" data-testid="page-rule-out">
+            <PageRuleOutControl
+              key={openNonce}
+              artifactId={artifact.id}
+              anchor={draft}
+              ruledOut={draftComments.find((c) => c.ruleOut && !c.parentCommentId)?.ruleOut?.description}
+            />
+          </div>
         </div>
       )}
 
@@ -332,6 +347,11 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
                     </span>
                     <span className="flex-1 min-w-0 space-y-1">
                       <AnchorContext anchor={anchor} />
+                      {c.ruleOut && (
+                        <span className="block text-2xs text-accent-red" data-testid="page-annotation-ruled-out">
+                          Ruled out: Claude won't present “{c.ruleOut.description}” again
+                        </span>
+                      )}
                       {missing && (
                         <span className="block text-2xs text-accent-amber" data-testid="page-anchor-missing">
                           Not found in this version

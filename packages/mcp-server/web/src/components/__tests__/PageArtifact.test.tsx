@@ -15,6 +15,8 @@ import type { Artifact } from "@deeppairing/shared";
 import { pageArtifact } from "@deeppairing/shared/__fixtures__/artifacts";
 import { PageArtifact } from "../artifacts/PageArtifact";
 import { useArtifactStore } from "../../stores/artifact";
+import { useConnectionStore } from "../../stores/connection";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
 
 // The full verb row only renders once the reader reaches the artifact's end.
 function stubIO(isIntersecting: boolean) {
@@ -452,5 +454,125 @@ describe("PageArtifact — file watch (#680 slice 3)", () => {
     expect(note).toHaveTextContent(/was not recorded/);
     expect(note).toHaveTextContent(/too expensive/);
     expect(note).toHaveTextContent(/still looking at v1/);
+  });
+});
+
+// --- #680 slice 4: "Rule this out" on the selected spot -------------------------
+
+describe("PageArtifact — rule this out (#680 slice 4)", () => {
+  let posts: Array<{ url: string; body: any }>;
+  let reply: () => Response;
+  beforeEach(() => {
+    posts = [];
+    reply = () =>
+      new Response(
+        JSON.stringify({
+          status: "recorded",
+          description: "Up to 60s",
+          alreadyRecorded: false,
+          comment: {
+            id: "cmt_rule_out",
+            sessionId: "sess_1",
+            target: { artifactId: pageArtifact.id, htmlAnchor: { ...cellAnchor, version: 1 } },
+            parentCommentId: null,
+            author: "human",
+            content: "sixty seconds of stale sessions",
+            ruleOut: { description: "Up to 60s" },
+            acknowledged: false,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") posts.push({ url: String(url), body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (String(url).includes("/rule-out")) return reply();
+        return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "sess_1", activeSessions: [{ sessionId: "sess_1", live: true }], disconnectedSince: null } as any);
+    useConnectionGraceStore.setState({ everConnected: true, graceOver: false, hydrationStalled: false });
+  });
+
+  const ruleOutPosts = () => posts.filter((p) => p.url.includes("/rule-out"));
+
+  it("is offered only once a spot is selected", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    expect(screen.queryByRole("button", { name: "Rule this out" })).not.toBeInTheDocument();
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" })).toBeInTheDocument();
+  });
+
+  it("is misclick-safe: the first click only opens a confirm step, and confirm needs a reason", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    const composer = screen.getByTestId("page-anchor-composer");
+    await userEvent.click(within(composer).getByRole("button", { name: "Rule this out" }));
+    expect(ruleOutPosts()).toHaveLength(0);
+    const panel = screen.getByTestId("page-rule-out-panel");
+    // Shows the exact phrase that will be recorded, and the composer is still there.
+    expect(panel).toHaveTextContent("Rule out “Up to 60s”?");
+    expect(within(composer).getByLabelText("Comment on the selected spot")).toBeInTheDocument();
+    const confirm = within(panel).getByRole("button", { name: "Rule it out" });
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(panel).getByRole("textbox"), "   ");
+    expect(confirm).toBeDisabled();
+    await userEvent.click(confirm);
+    expect(ruleOutPosts()).toHaveLength(0);
+    // Escape (in the reason box) cancels without writing.
+    await userEvent.type(within(panel).getByRole("textbox"), "{Escape}");
+    expect(screen.queryByTestId("page-rule-out-panel")).not.toBeInTheDocument();
+    expect(ruleOutPosts()).toHaveLength(0);
+  });
+
+  it("submits the anchor and the human's reason to the rule-out route, then shows it ruled out", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    await userEvent.click(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" }));
+    const panel = screen.getByTestId("page-rule-out-panel");
+    await userEvent.type(within(panel).getByRole("textbox"), "  sixty seconds of stale sessions ");
+    await userEvent.click(within(panel).getByRole("button", { name: "Rule it out" }));
+
+    expect(ruleOutPosts()).toHaveLength(1);
+    expect(ruleOutPosts()[0]!.url).toContain(`/api/artifacts/${pageArtifact.id}/rule-out`);
+    expect(ruleOutPosts()[0]!.body).toEqual({
+      htmlAnchor: { ...cellAnchor, version: pageArtifact.version },
+      reason: "sixty seconds of stale sessions",
+    });
+    // No comment POST and no status change: the page stays under review.
+    expect(posts.some((p) => p.url.includes("/api/comments") || p.url.includes("/status"))).toBe(false);
+    expect(await screen.findByTestId("page-rule-out-recorded")).toHaveTextContent("Ruled out “Up to 60s”");
+    // The returned comment is listed on the page, marked.
+    expect(await screen.findByTestId("page-annotation-ruled-out")).toBeInTheDocument();
+  });
+
+  it("keeps the panel and the reason when the server refuses, showing why", async () => {
+    reply = () =>
+      new Response(
+        JSON.stringify({ error: "The gate can't find “Up to 60s” within one block of this page, so it would never fire.", code: "rule_out_not_gateable", reason: "not_on_page" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    await userEvent.click(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" }));
+    const panel = screen.getByTestId("page-rule-out-panel");
+    await userEvent.type(within(panel).getByRole("textbox"), "too stale");
+    await userEvent.click(within(panel).getByRole("button", { name: "Rule it out" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent(/would never fire/);
+    expect(within(panel).getByRole("textbox")).toHaveValue("too stale");
+    expect(screen.queryByTestId("page-rule-out-recorded")).not.toBeInTheDocument();
+  });
+
+  it("is disabled for a spot with too little text to rule out", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: { kind: "element", locator: "img", quote: "" } });
+    expect(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" })).toBeDisabled();
   });
 });

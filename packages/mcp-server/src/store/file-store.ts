@@ -4,8 +4,8 @@ import { retirementFeedback, type RetirementInput, type RetirementOutcome } from
 import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, FileWatchNoticeRef, PageFileWatch, PageFileWatchRecorded, PageFileWatchRefused, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor, sanitizeHtmlAnchor, readFileWatch } from "@deeppairing/shared";
+import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, CommentRuleOut, HtmlAnchor, FileWatchNoticeRef, PageFileWatch, PageFileWatchRecorded, PageFileWatchRefused, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor, sanitizeHtmlAnchor, readFileWatch, HtmlAnchorSchema, CommentRuleOutSchema } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -94,6 +94,19 @@ export const LEDGER_EXEMPT_REJECT_TYPES: ReadonlySet<ArtifactType> = new Set<Art
   "explainer",
   "debrief",
 ]);
+
+/** #680 slice 4 — an anchor in its parsed (capped, unknown-keys-dropped) form, or undefined. */
+function parseHtmlAnchor(raw: unknown): HtmlAnchor | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const parsed = HtmlAnchorSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** #680 slice 4 — `{ sourceAnchor }` when the stored value is a valid anchor, else `{}`. */
+function withSourceAnchor(raw: unknown): { sourceAnchor?: HtmlAnchor } {
+  const sourceAnchor = parseHtmlAnchor(raw);
+  return sourceAnchor ? { sourceAnchor } : {};
+}
 
 /** #680 slice 2 — drop `htmlAnchor` unless the comment is on a `page`. */
 function pageOnlyHtmlAnchor<T extends Record<string, unknown> | undefined>(target: T, artifactType: string | undefined): T {
@@ -1264,6 +1277,7 @@ export class FileStore implements IStore {
     parentCommentId?: string | null;
     codeReferences?: Array<{ filePath: string; lineStart: number; lineEnd: number; snippet?: string }>;
     suggestion?: CommentSuggestion;
+    ruleOut?: CommentRuleOut;
     verdictFeedback?: boolean;
   }): Comment {
     const now = Date.now();
@@ -1295,6 +1309,7 @@ export class FileStore implements IStore {
     // and flowed into agent context (check_feedback) with zero warning.
     // Labels/pattern/line only, NEVER the matched value.
     const secretWarnings = scanForSecrets(params.content);
+    const ruleOutParsed = params.ruleOut ? CommentRuleOutSchema.safeParse(params.ruleOut) : null;
     // #187 — STORE-AUTHORITATIVE follow-up flag. A HUMAN comment landing on an
     // already-CLOSED-but-commentable (approved) artifact is a late follow-up on a
     // standing verdict, not review feedback. The store owns the artifact status,
@@ -1318,6 +1333,18 @@ export class FileStore implements IStore {
       !params.verdictFeedback &&
       !!targetArtifact &&
       isLateCommentableStatus(targetArtifact.status);
+    // #680 slice 4 — store-authoritative: the marker is kept only on a human
+    // comment on a page, and only when the stance it names really is in this
+    // project's rejection memory, so no writer (the internal comment route is
+    // passthrough) can label a plain comment as a recorded stance.
+    const ruleOut =
+      ruleOutParsed?.success &&
+      params.author === "human" &&
+      targetArtifact?.type === "page" &&
+      this.normalizeRejectedApproaches(this.readPreferences().rejectedApproaches ?? [])
+        .some((r) => r.description === ruleOutParsed.data.description)
+        ? ruleOutParsed.data
+        : undefined;
     const comment: Comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -1346,6 +1373,9 @@ export class FileStore implements IStore {
       // #172 — persist the first-class suggested edit. Spread so a plain comment
       // stays byte-identical on disk.
       ...(params.suggestion ? { suggestion: params.suggestion } : {}),
+      // #680 slice 4 — the rule-out marker, server-set; dropped when malformed or
+      // when the comment isn't a human comment on a page.
+      ...(ruleOut ? { ruleOut } : {}),
       // #187 — spread so a normal draft-review comment is byte-identical on disk.
       ...(isFollowUp ? { followUp: true } : {}),
       answeredByCommentId: null,
@@ -2149,8 +2179,11 @@ export class FileStore implements IStore {
     reason?: string;
     sourceArtifactId?: string;
     concept?: string;
+    sourceAnchor?: HtmlAnchor;
   }): void {
     const { description, reason, sourceArtifactId, concept } = params;
+    // #680 slice 4 — provenance only; kept in its parsed (capped) form or dropped.
+    const sourceAnchor = parseHtmlAnchor(params.sourceAnchor);
     // #193 E2 — STORE-AUTHORITATIVE ledger guard (mirrors the #187 follow-up
     // stamping: the store owns the invariant so the client can neither forge
     // nor suppress it). The comprehension artifacts are NOT proposed approaches:
@@ -2218,6 +2251,7 @@ export class FileStore implements IStore {
         if (reason && !existing.reason) { existing.reason = reason; changed = true; }
         if (concept && !existing.concept) { existing.concept = concept; changed = true; }
         if (sourceArtifactId && !existing.sourceArtifactId) { existing.sourceArtifactId = sourceArtifactId; changed = true; }
+        if (sourceAnchor && !existing.sourceAnchor) { existing.sourceAnchor = sourceAnchor; changed = true; }
         if (changed) {
           existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
           prefs.rejectedApproaches = rejected;
@@ -2230,6 +2264,7 @@ export class FileStore implements IStore {
         concept: concept || undefined,
         rejectedAt: new Date().toISOString(),
         sourceArtifactId,
+        ...(sourceAnchor ? { sourceAnchor } : {}),
       });
       prefs.rejectedApproaches = rejected;
       return true;
@@ -2400,6 +2435,8 @@ export class FileStore implements IStore {
             // retire of a different row) doesn't strip a stance's provenance.
             ...(isStanceAddedVia((entry as any)?.addedVia) ? { addedVia: (entry as any).addedVia } : {}),
             ...(isStanceRequestedBy((entry as any)?.requestedBy) ? { requestedBy: (entry as any).requestedBy } : {}),
+            // #680 slice 4 — same: a later write must not strip a page stance's anchor.
+            ...withSourceAnchor((entry as { sourceAnchor?: unknown } | null)?.sourceAnchor),
           },
     ).filter((r) => r.description);
   }

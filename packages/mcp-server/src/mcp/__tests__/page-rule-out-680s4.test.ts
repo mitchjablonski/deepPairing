@@ -1,0 +1,235 @@
+/**
+ * #680 slice 4 — "Rule this out" on a spot in a page: the human's explicit
+ * submit records a rejected stance from the anchored text (description = the
+ * capped quote, reason = their own words, sourceArtifactId = the page, the
+ * anchor kept for provenance), leaves an anchored comment marked `ruleOut`,
+ * and leaves the page under review. The EXISTING gate then refuses a later
+ * present_page / revise whose page text contains that phrase, with the reason,
+ * and check_feedback tells the agent in the page's comment lane.
+ *
+ * Fakes, not mocks: a real FileStore, the real HTTP routes, the real MCP server.
+ */
+import { describe, it, expect, beforeEach } from "vitest";
+import type { FileStore } from "../../store/file-store.js";
+import { createHttpRoutes } from "../../http/routes.js";
+import { withHash } from "../../http/__tests__/routes.harness.js";
+import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+
+const ctx = setupServerTest();
+const callTool = makeCallTool(ctx);
+let store: FileStore;
+let app: ReturnType<typeof createHttpRoutes>;
+let broadcasts: any[];
+beforeEach(() => {
+  store = ctx.store;
+  broadcasts = [];
+  app = withHash(createHttpRoutes(store, ctx.tmpDir, (e) => broadcasts.push(e)), ctx.tmpDir);
+});
+
+const LONG_SENTENCE =
+  "We keep a second write-through purge queue on every node so that a dropped invalidation message never leaves a stale session behind for longer than one heartbeat interval in production";
+
+const PAGE_HTML =
+  "<h1>Cache invalidation</h1>" +
+  "<p>You can pick one of three strategies for the session cache.</p>" +
+  "<table><tr><th>Strategy</th><th>Staleness</th></tr>" +
+  "<tr><td>TTL expiry</td><td>Up to 60s</td></tr>" +
+  "<tr><td>Write-through purge</td><td>None</td></tr></table>" +
+  "<p>Note: shard the purge queue by tenant id</p>" +
+  `<p>${LONG_SENTENCE}</p>` +
+  "<div><p>Red apples ripen.</p><p>Green pears soften.</p><p>Blue plums dry.</p></div>" +
+  "<img alt=\"\" src=\"x.png\">";
+
+async function presentPage(html = PAGE_HTML): Promise<string> {
+  const res = await callTool("present_page", { title: "Session cache strategies", summary: "Which one should I build?", html });
+  expect(res.isError, res.text).toBeFalsy();
+  return store.getArtifacts().filter((a) => a.type === "page").at(-1)!.id;
+}
+
+const cellAnchor = {
+  kind: "cell" as const,
+  locator: "table > tbody > tr:nth-of-type(2) > td:nth-of-type(2)",
+  quote: "Up to 60s",
+  table: { row: "TTL expiry", col: "Staleness" },
+  version: 1,
+};
+
+const ruleOut = (artifactId: string, body: unknown) =>
+  app.request(`/api/artifacts/${artifactId}/rule-out`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+describe("#680 slice 4 — recording the stance", () => {
+  it("records a human-authored stance from the anchored text and an anchored ruleOut comment; the page stays under review", async () => {
+    const id = await presentPage();
+    const res = await ruleOut(id, { htmlAnchor: cellAnchor, reason: "  sixty seconds of stale sessions logged people out  " });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body).toMatchObject({ status: "recorded", description: "Up to 60s", alreadyRecorded: false, reason: "sixty seconds of stale sessions logged people out" });
+
+    const rows = store.getSessionMemory().rejectedApproaches;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      description: "Up to 60s",
+      reason: "sixty seconds of stale sessions logged people out",
+      sourceArtifactId: id,
+      sourceAnchor: cellAnchor,
+    });
+
+    const comments = store.getCommentsForArtifact(id);
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({
+      author: "human",
+      content: "sixty seconds of stale sessions logged people out",
+      ruleOut: { description: "Up to 60s" },
+      target: { artifactId: id, htmlAnchor: cellAnchor },
+    });
+
+    // Element-level: the page is NOT rejected or closed.
+    expect(store.getArtifacts().find((a) => a.id === id)!.status).toBe("draft");
+    expect(broadcasts.filter((b) => b?.type === "ledger_write" && b.kind === "rejected")).toEqual([
+      expect.objectContaining({ description: "Up to 60s", sourceArtifactId: id }),
+    ]);
+    expect(broadcasts.some((b) => b?.type === "comment_added" && b.comment.id === comments[0]!.id)).toBe(true);
+    expect(broadcasts.some((b) => b?.type === "artifact_status_changed" || b?.type === "artifact_updated")).toBe(false);
+  });
+
+  it("a repeat is idempotent on the stance (first reason kept)", async () => {
+    const id = await presentPage();
+    await ruleOut(id, { htmlAnchor: cellAnchor, reason: "first" });
+    const again = await ruleOut(id, { htmlAnchor: cellAnchor, reason: "second" });
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ alreadyRecorded: true, reason: "first" });
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(1);
+  });
+
+  it("caps a long quote at a word boundary, as a literal prefix of the page text", async () => {
+    const id = await presentPage();
+    const res = await ruleOut(id, { htmlAnchor: { kind: "text", locator: "p:nth-of-type(3)", quote: LONG_SENTENCE }, reason: "no second queue" });
+    expect(res.status).toBe(200);
+    const { description } = await res.json() as { description: string };
+    expect(description.length).toBeLessThanOrEqual(120);
+    expect(LONG_SENTENCE.startsWith(description)).toBe(true);
+    expect(LONG_SENTENCE.charAt(description.length)).toBe(" ");
+  });
+
+  it("keeps only the longest colon-free part of a quote (the gate would otherwise match the post-colon noun alone)", async () => {
+    const id = await presentPage();
+    const res = await ruleOut(id, { htmlAnchor: { kind: "element", locator: "p:nth-of-type(2)", quote: "Note: shard the purge queue by tenant id" }, reason: "tenants are uneven" });
+    expect(res.status).toBe(200);
+    expect((await res.json() as any).description).toBe("shard the purge queue by tenant id");
+  });
+});
+
+describe("#680 slice 4 — validation", () => {
+  it.each([
+    ["an empty reason", { htmlAnchor: cellAnchor, reason: "" }],
+    ["a whitespace-only reason", { htmlAnchor: cellAnchor, reason: "   \n " }],
+    ["no reason", { htmlAnchor: cellAnchor }],
+    ["an over-length quote", { htmlAnchor: { ...cellAnchor, quote: "q".repeat(281) }, reason: "x" }],
+    ["a malformed anchor", { htmlAnchor: { kind: "region", locator: "#a", quote: "a" }, reason: "x" }],
+    ["an over-length reason", { htmlAnchor: cellAnchor, reason: "r".repeat(2001) }],
+  ])("refuses %s with 400 and records nothing", async (_label, body) => {
+    const id = await presentPage();
+    const res = await ruleOut(id, body);
+    expect(res.status).toBe(400);
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+    expect(store.getCommentsForArtifact(id)).toHaveLength(0);
+  });
+
+  it("refuses an unknown artifact (404) and a non-page artifact (400)", async () => {
+    await presentPage();
+    expect((await ruleOut("art_nope", { htmlAnchor: cellAnchor, reason: "x" })).status).toBe(404);
+    store.createArtifact({ id: "plan_1", type: "plan", title: "Wire it", content: { steps: [] } });
+    expect((await ruleOut("plan_1", { htmlAnchor: cellAnchor, reason: "x" })).status).toBe(400);
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+  });
+
+  it.each([
+    ["no_text", { kind: "element" as const, locator: "img", quote: "" }],
+    ["no_text", { kind: "element" as const, locator: "td", quote: "ok" }],
+    // A selection spanning two blocks: the gate reads one block at a time, so it would never fire.
+    ["not_on_page", { kind: "text" as const, locator: "div", quote: "Red apples ripen. Green pears soften. Blue plums dry." }],
+    // Overlaps the page's own title: it would refuse every revision of this page.
+    ["matches_title", { kind: "text" as const, locator: "h1", quote: "Session cache strategies" }],
+  ])("refuses an anchor the gate couldn't enforce sensibly (%s)", async (why, htmlAnchor) => {
+    const id = await presentPage(PAGE_HTML + "<p>Session cache strategies</p>");
+    const res = await ruleOut(id, { htmlAnchor, reason: "x" });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "rule_out_not_gateable", reason: why });
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+  });
+
+  it("refuses a page version that is no longer under review (409)", async () => {
+    const id = await presentPage();
+    store.updateArtifactStatus(id, "superseded");
+    const res = await ruleOut(id, { htmlAnchor: cellAnchor, reason: "x" });
+    expect(res.status).toBe(409);
+    expect((await res.json() as any).code).toBe("rule_out_page_closed");
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+  });
+
+  it("the public comment route can't forge the ruleOut marker, nor can a writer claim a stance that doesn't exist", async () => {
+    const id = await presentPage();
+    const res = await app.request("/api/comments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artifactId: id, content: "fake", target: { artifactId: id, htmlAnchor: cellAnchor }, ruleOut: { description: "Up to 60s" } }),
+    });
+    expect(res.status).toBe(200);
+    // Store-level backstop: a marker naming no recorded stance is dropped.
+    const direct = store.addComment({ id: "cmt_forged", artifactId: id, content: "forged", author: "human", target: { artifactId: id, htmlAnchor: cellAnchor }, ruleOut: { description: "Up to 60s" } });
+    expect(direct.ruleOut).toBeUndefined();
+    expect(store.getCommentsForArtifact(id).every((c) => c.ruleOut === undefined)).toBe(true);
+  });
+});
+
+describe("#680 slice 4 — the existing gate enforces it", () => {
+  it("present_page refuses a page containing the ruled-out text, citing the reason; a page without it passes", async () => {
+    const id = await presentPage();
+    expect((await ruleOut(id, { htmlAnchor: cellAnchor, reason: "sixty seconds of stale sessions" })).status).toBe(200);
+
+    const blocked = await callTool("present_page", {
+      title: "Cache, take two",
+      html: "<h2>Options</h2><ul><li>TTL expiry, up to 60s stale</li></ul>",
+    });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.text).toContain("REJECTED_APPROACH_BLOCKED");
+    expect(blocked.text).toContain("sixty seconds of stale sessions");
+
+    const fine = await callTool("present_page", { title: "Cache, take three", html: "<p>TTL expiry, up to 5s stale</p>" });
+    expect(fine.isError, fine.text).toBeFalsy();
+  });
+
+  it("revise_artifact refuses a revision that keeps the text; one that drops it goes through", async () => {
+    const id = await presentPage();
+    await ruleOut(id, { htmlAnchor: cellAnchor, reason: "too stale" });
+    const keep = await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "tweak", content: { html: PAGE_HTML.replace("<h1>", "<h1>Revised ") } });
+    expect(keep.isError).toBe(true);
+    expect(keep.text).toContain("too stale");
+    const drop = await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "dropped the 60s option", content: { html: PAGE_HTML.replace("Up to 60s", "Up to 5s") } });
+    expect(drop.isError, drop.text).toBeFalsy();
+  });
+});
+
+describe("#680 slice 4 — check_feedback surfaces it in the page comment lane", () => {
+  it("delivers the rule-out comment with its anchor, reason and the recorded stance phrase", async () => {
+    const id = await presentPage();
+    await ruleOut(id, { htmlAnchor: cellAnchor, reason: "sixty seconds of stale sessions" });
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain("🚫");
+    expect(res.text).toContain("sixty seconds of stale sessions");
+    expect(res.text).toContain('RULED OUT: recorded as a rejected stance ("Up to 60s")');
+    expect(res.text).toContain('on page cell "Up to 60s"');
+    const c = (res.structuredContent as any).comments.find((x: any) => x.ruleOut);
+    expect(c).toMatchObject({ artifactId: id, content: "sixty seconds of stale sessions", ruleOut: { description: "Up to 60s" }, htmlAnchor: cellAnchor });
+    // A plain page comment carries no ruleOut key.
+    await store.addComment({ id: "cmt_plain", artifactId: id, content: "plain", author: "human", target: { artifactId: id, htmlAnchor: cellAnchor } });
+    const res2 = await callTool("check_feedback");
+    const plain = (res2.structuredContent as any).comments.find((x: any) => x.id === "cmt_plain");
+    expect(plain).toBeDefined();
+    expect("ruleOut" in plain).toBe(false);
+  });
+});

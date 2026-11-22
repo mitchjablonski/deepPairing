@@ -106,6 +106,13 @@ export const ERROR_CODES = {
   standalone_operation_conflict: "standalone_operation_conflict",
   /** The standalone proposal matched a previously rejected approach. */
   rejected_approach_blocked: "rejected_approach_blocked",
+  /** #680 slice 4 — "Rule this out" on a page spot: the anchored text can't
+   *  become a stance the gate would enforce (no text, not within one block of
+   *  this page, or it would also match the page's own title/summary). */
+  rule_out_not_gateable: "rule_out_not_gateable",
+  /** #680 slice 4 — "Rule this out" on a page version that is no longer under
+   *  review (superseded, retracted, rejected or dismissed). */
+  rule_out_page_closed: "rule_out_page_closed",
   /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
    *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
    *  unverifiable) owner. Nothing was committed; retry, or inspect with
