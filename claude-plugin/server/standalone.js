@@ -40917,7 +40917,22 @@ function refuse(message) {
 }
 function isWithin(root, target) {
   const rel = path16.relative(root, target);
-  return rel === "" || !rel.startsWith("..") && !path16.isAbsolute(rel);
+  return rel === "" || rel !== ".." && !rel.startsWith(`..${path16.sep}`) && !path16.isAbsolute(rel);
+}
+function nativeRealpath(p) {
+  try {
+    return fs14.realpathSync.native(p);
+  } catch {
+    try {
+      return fs14.realpathSync(p);
+    } catch {
+      return p;
+    }
+  }
+}
+function isInDaemonDir(root, target) {
+  const first = path16.relative(root, target).split(path16.sep)[0] ?? "";
+  return first.toLowerCase() === ".deeppairing";
 }
 function readPageSource(projectRoot2, requested) {
   if (requested.includes("\0")) return refuse("`path` contains a NUL byte.");
@@ -40931,6 +40946,9 @@ function readPageSource(projectRoot2, requested) {
   if (!isWithin(projectRoot2, lexical) && !isWithin(rootReal, lexical)) {
     return refuse(`\`path\` "${requested}" is outside the project root. Write the page inside the project, or pass it inline as \`html\`.`);
   }
+  if (isInDaemonDir(projectRoot2, lexical) || isInDaemonDir(rootReal, lexical)) {
+    return refuse(`\`path\` "${requested}" is inside .deeppairing/, deepPairing's own state directory. Write the page elsewhere in the project.`);
+  }
   let real;
   try {
     real = fs14.realpathSync(lexical);
@@ -40939,6 +40957,9 @@ function readPageSource(projectRoot2, requested) {
   }
   if (!isWithin(rootReal, real)) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
+  }
+  if (isInDaemonDir(nativeRealpath(rootReal), nativeRealpath(real))) {
+    return refuse(`\`path\` "${requested}" resolves (through a symlink) into .deeppairing/, deepPairing's own state directory.`);
   }
   const { O_RDONLY, O_NOFOLLOW: O_NOFOLLOW2, O_NONBLOCK: O_NONBLOCK2 } = fs14.constants;
   let fd;
@@ -41008,17 +41029,24 @@ async function presentPage(ctx, args, opts = {}) {
   const dedup = await ctx.helpers.beginPresentIdempotency("present_page", hashPresentArgs({ ...args ?? {}, html }));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
-  const id = `art_${nanoid3(10)}`;
+  const id = opts.standalone?.artifactId ?? `art_${nanoid3(10)}`;
   let artifact;
   try {
-    artifact = await ctx.store.createArtifact({
+    const createInput = {
       id,
       type: "page",
       title: input.title,
       content,
       feature: typeof args?.feature === "string" ? args.feature : void 0,
       presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
-    });
+    };
+    if (opts.standalone) {
+      const write = opts.standalone.persist(createInput);
+      if ("replay" in write) return write.replay;
+      artifact = write.artifact;
+    } else {
+      artifact = await ctx.store.createArtifact(createInput);
+    }
   } catch (e) {
     dedup.abort?.();
     throw e;
@@ -41036,7 +41064,7 @@ async function presentPage(ctx, args, opts = {}) {
     });
   }
   notifyResourcesListChanged(ctx.server);
-  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  if (ctx.server) await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
   const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const traceSummary = formatPreflightTraceSummary(pre.trace);
@@ -43111,6 +43139,23 @@ var DaemonClient = class {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedProjectRoot, operationId, args })
     }, true);
+  }
+  /** Submit a standalone HTML page through the daemon's shared presentPage() handler. */
+  async presentStandalonePage(expectedProjectRoot, operationId, args, signal) {
+    try {
+      return await this.request("/present-page", {
+        method: "POST",
+        signal,
+        redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot, operationId, args })
+      }, true);
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support standalone pages. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
   }
   async readStandaloneDecision(expectedProjectRoot, decisionId, signal) {
     let result;
