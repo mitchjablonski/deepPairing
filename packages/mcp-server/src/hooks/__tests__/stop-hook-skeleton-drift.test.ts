@@ -5,13 +5,14 @@
  * hooks-state.json. One nudge per approved version; blocking drafts first;
  * drift before the debrief nag; never file content.
  */
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { STOP_HOOK_SCRIPT } from "../../cli/hook-scripts.generated.js";
 import { buildSkeletonSnapshot } from "../../mcp/skeleton-snapshot.js";
+import { acquireHookStateLock, hookStatePath, releaseHookStateLock } from "../hook-state.js";
 
 const SRC = `export function smooth(raw: number[]): number[] {
   // SKEL[1] drop duplicates
@@ -59,10 +60,25 @@ function seed(artifacts: Art[]): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify(artifacts));
 }
+const stopOptions = () => ({
+  encoding: "utf-8" as const,
+  env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: "" },
+  timeout: 5_000,
+});
 function stop(input = ""): { stderr: string; status: number | null; reason: string; state: Record<string, unknown> } {
-  const res = spawnSync("node", [script], { input, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: "" } });
-  const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "hooks-state.json"), "utf-8"));
+  const res = spawnSync(process.execPath, [script], { ...stopOptions(), input });
+  if (res.error) throw res.error;
+  const state = JSON.parse(fs.readFileSync(hookStatePath(root), "utf-8"));
   return { stderr: res.stderr, status: res.status, reason: String(state.fires.at(-1)?.reason ?? ""), state };
+}
+function parallelStop(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(process.execPath, [script], stopOptions(), (error, _stdout, stderr) => {
+      if (error) reject(error);
+      else resolve(stderr);
+    });
+    child.stdin?.end();
+  });
 }
 const write = (text: string) => fs.writeFileSync(path.join(root, "a.ts"), text);
 
@@ -81,6 +97,59 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     const second = stop();
     expect(second.stderr).toBe("");
     expect(second.reason).toBe("pass: no blocking drafts");
+  });
+
+  it("concurrent Stop invocations warn only once for the same approval", async () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    const results = await Promise.all([parallelStop(), parallelStop()]);
+    expect(results.filter((stderr) => stderr.includes("skeleton exterior drift"))).toHaveLength(1);
+    const state = JSON.parse(fs.readFileSync(hookStatePath(root), "utf-8"));
+    expect(state.skeletonDriftNudged).toHaveLength(1);
+  });
+
+  it("leaves the warning available for retry when another hook owns the state lock", () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    const lock = acquireHookStateLock(hookStatePath(root));
+    if (!lock) throw new Error("Test could not acquire its hook-state lock");
+    try {
+      const blocked = stop();
+      expect(blocked.status).toBe(0);
+      expect(blocked.stderr).toBe("");
+      expect(blocked.state.skeletonDriftNudged).toBeUndefined();
+      expect(fs.existsSync(lock)).toBe(true);
+    } finally {
+      releaseHookStateLock(lock);
+    }
+    expect(stop().stderr).toContain("skeleton exterior drift");
+  });
+
+  it.skipIf(process.platform === "win32")("stays quiet when an approved source file is replaced by a FIFO", () => {
+    seed([approvedPlan()]);
+    const target = path.join(root, "a.ts");
+    fs.unlinkSync(target);
+    const fifo = spawnSync("mkfifo", [target], { timeout: 2_000 });
+    if (fifo.error) throw fifo.error;
+    expect(fifo.status).toBe(0);
+    const result = stop();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.state.skeletonDriftNudged).toBeUndefined();
+  }, 12_000);
+
+  it.skipIf(process.platform === "win32")("prints a single warning line for a source path with a line break", () => {
+    const file = "part\nname.ts";
+    const target = path.join(root, file);
+    fs.writeFileSync(target, SRC);
+    const steps = [{ ...STEPS[0]!, files: [file] }];
+    const visuals = buildSkeletonSnapshot({ steps, root, recordExterior: true }).visuals;
+    seed([approvedPlan({ content: { steps, visuals } })]);
+    fs.writeFileSync(target, `// header\n${SRC}`);
+    const result = stop();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("part\\u{a}name.ts line 1");
+    expect(result.stderr.trimEnd()).not.toContain("\n");
   });
 
   it("a new approval (or version) re-arms the nudge", () => {

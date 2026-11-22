@@ -83,6 +83,7 @@ export function isDeniedPath(rel: string): boolean {
 }
 
 const O_NOFOLLOW = (fs.constants as Record<string, number | undefined>).O_NOFOLLOW ?? 0;
+const O_NONBLOCK = (fs.constants as Record<string, number | undefined>).O_NONBLOCK ?? 0;
 
 /** Read one fenced file for the snapshot — confined, denylisted, size- and
  *  type-checked on the opened handle, text only. */
@@ -106,7 +107,8 @@ export function readConfined(root: string, rel: string, limits: SkeletonSnapshot
 
   let fd: number;
   try {
-    fd = fs.openSync(realAbs, fs.constants.O_RDONLY | O_NOFOLLOW);
+    // Opening a FIFO must not wait for a writer before fstat can reject it.
+    fd = fs.openSync(realAbs, fs.constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   } catch {
     return { ok: false, reason: "unreadable" };
   }
