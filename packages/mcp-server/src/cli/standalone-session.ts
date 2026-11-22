@@ -7,6 +7,7 @@ import { DaemonClient } from "../daemon/client.js";
 import { ensureDaemon } from "../daemon/lifecycle.js";
 import { ERROR_CODES } from "../error-codes.js";
 import { createStandaloneSessionId, isStandaloneSessionForProject, isStandaloneSessionId } from "../standalone-session-id.js";
+import type { ToolResult } from "../mcp/tools/types.js";
 import { readBoundedPageFile } from "./page-file.js";
 import { readSessionDirectories } from "./session-selection.js";
 
@@ -18,10 +19,10 @@ const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --
 const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
 
-type PresentPageReceipt = { sessionId: string; requestId: string } & (
+export type PresentPageReceipt = { sessionId: string; requestId: string } & (
   | {
     artifactId: string; companionUrl: string; sourcePath?: string; replayed?: true;
-    status?: string; currentArtifactId?: string; currentVersion?: number; note?: string; isError?: never;
+    status?: string; currentArtifactId?: string; currentVersion?: number; currentStatus?: string; note?: string; isError?: never;
   }
   | { isError: true; code: string; reason?: string; message: string }
 );
@@ -203,6 +204,18 @@ async function standalonePresentPage(projectRoot: string, args: string[]): Promi
     }
     throw new Error(`${errorMessage(err)} If retrying, use the same --request-id and page input.`);
   }
+  return pageReceiptFromResult(receipt, companionUrl, result);
+}
+
+/**
+ * Map the daemon's present-page tool result to the CLI's JSON receipt
+ * (exported for tests: the CLI layer has no process-level unit harness).
+ */
+export function pageReceiptFromResult(
+  receipt: { sessionId: string; requestId: string },
+  companionUrl: string,
+  result: ToolResult,
+): PresentPageReceipt {
   if (result.isError) {
     const { code: structuredCode, reason } = result.structuredContent ?? {};
     const metaCode = result._meta?.code;
@@ -216,7 +229,7 @@ async function standalonePresentPage(projectRoot: string, args: string[]): Promi
       message: code === ERROR_CODES.standalone_operation_conflict ? message : `${message} ${PRESENT_OPTIONS_RETRY}`,
     };
   }
-  const { artifactId, sourcePath, replayed, status, currentArtifactId, currentVersion } = result.structuredContent ?? {};
+  const { artifactId, sourcePath, replayed, status, currentArtifactId, currentVersion, currentStatus } = result.structuredContent ?? {};
   if (typeof artifactId !== "string") throw new Error("The daemon did not confirm the page presentation. If retrying, use the same --request-id and page input.");
   const moved = typeof currentArtifactId === "string" && typeof currentVersion === "number";
   return {
@@ -224,7 +237,7 @@ async function standalonePresentPage(projectRoot: string, args: string[]): Promi
     ...(typeof sourcePath === "string" ? { sourcePath } : {}),
     ...(replayed === true ? { replayed: true as const } : {}),
     ...(typeof status === "string" ? { status } : {}),
-    ...(moved ? { currentArtifactId, currentVersion } : {}),
+    ...(moved ? { currentArtifactId, currentVersion, ...(typeof currentStatus === "string" ? { currentStatus } : {}) } : {}),
     ...(replayed === true && moved && currentArtifactId !== artifactId
       ? { note: `replayed; the page has since moved to v${currentVersion} (${currentArtifactId})` }
       : replayed === true && typeof status === "string" && isClosedArtifactStatus(status)
