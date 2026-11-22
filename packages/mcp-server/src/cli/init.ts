@@ -1433,8 +1433,9 @@ ${helpInvocations}
     dp present options --session-id ID --request-id UUID --file options.json
                                            Present options from a JSON object. Reuse the request ID for unchanged input.
                                            Use a new UUID if you change the input.
-    dp read-decision --session-id ID --decision-id ID
+    dp read-decision --session-id ID --decision-id ID [--wait-ms MS]
                                            Read a saved choice and linked rejection reasons without consuming feedback.
+                                           Optionally wait 1–30000 ms for the choice.
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)

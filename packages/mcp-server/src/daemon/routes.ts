@@ -23,7 +23,7 @@ import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing
 import type { RetirementInput } from "../store/retirement.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
-import { decisionFeedback, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
+import { decisionFeedback, MAX_DECISION_WAIT_MS, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
 
 const OpenStandaloneReviewBody = z.object({
   mode: z.enum(["open", "resume"]),
@@ -37,6 +37,7 @@ const PresentStandaloneOptionsBody = z.object({
 const ReadStandaloneDecisionBody = z.object({
   expectedProjectRoot: z.string().min(1),
   decisionId: z.string().min(1),
+  waitMs: z.number().int().min(1).max(MAX_DECISION_WAIT_MS).optional(),
 }).strict();
 
 const RetirementBody = z.object({
@@ -551,9 +552,11 @@ export function createDaemonRoutes(
       return c.json(result);
     });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
+      const signal = c.req.raw.signal;
       const parsed = await parseJsonBody(c, ReadStandaloneDecisionBody);
       if (!parsed.ok) return parsed.res;
-      const { expectedProjectRoot, decisionId } = parsed.data;
+      const { expectedProjectRoot, decisionId, waitMs } = parsed.data;
+      const deadline = performance.now() + (waitMs ?? 0);
       const sessionId = c.req.param("sessionId");
       if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
@@ -568,25 +571,46 @@ export function createDaemonRoutes(
           code: ERROR_CODES.session_not_registered,
         }, 404);
       }
-      // Wait behind the browser's resolve-and-flush boundary before observing its choice.
-      return withDecisionResolveLock(store, async () => {
-        const decision = store.getDecision(decisionId);
-        const artifact = decision && store.getArtifacts().find((a) =>
-          a.type === "decision" && a.id === decision.artifactId &&
-          (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
-        if (!decision || !artifact) {
+      let idleRefreshed = false;
+      while (!signal.aborted) {
+        // Inspect the choice after resolve/flush. Arm inside the lock so a
+        // committed choice cannot fall between the snapshot and subscription.
+        const read = await withDecisionResolveLock(store, async () => {
+          if (signal.aborted) return null;
+          const decision = store.getDecision(decisionId);
+          const artifact = decision && store.getArtifacts().find((a) =>
+            a.type === "decision" && a.id === decision.artifactId &&
+            (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
+          if (!decision || !artifact) return null;
+          const remaining = deadline - performance.now();
+          if (waitMs !== undefined && !decision.response && remaining > 0) {
+            // Give an accepted wait a fresh idle interval without a wrapper lease.
+            if (!idleRefreshed) {
+              refreshCompanionLink();
+              idleRefreshed = true;
+            }
+            return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+          }
+          const result: StandaloneDecisionRead = {
+            ...decisionFeedback(decision),
+            sessionId,
+            artifactStatus: artifact.status,
+            recordedRejections: store.getSessionMemory().rejectedApproaches
+              .filter((entry) => entry.sourceArtifactId === artifact.id)
+              .map(({ description, reason }) => ({ description, reason })),
+            ...(waitMs === undefined ? {} : { waitStatus: decision.response ? "resolved" : "timed_out" }),
+          };
+          return { result };
+        });
+        if (signal.aborted) break;
+        if (!read) {
           return c.json({ error: "Decision does not exist in this standalone session.", code: ERROR_CODES.decision_not_in_session }, 404);
         }
-        const result: StandaloneDecisionRead = {
-          ...decisionFeedback(decision),
-          sessionId,
-          artifactStatus: artifact.status,
-          recordedRejections: store.getSessionMemory().rejectedApproaches
-            .filter((entry) => entry.sourceArtifactId === artifact.id)
-            .map(({ description, reason }) => ({ description, reason })),
-        };
-        return c.json(result);
-      });
+        if (read.result) return c.json(read.result);
+        // Do not hold the lock while waiting for the browser to resolve.
+        await read.wake;
+      }
+      return c.body(null, 408);
     });
   }
 

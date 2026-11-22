@@ -15,9 +15,12 @@ export function decisionFeedback(decision: DecisionRecord) {
   };
 }
 
+export const MAX_DECISION_WAIT_MS = 30_000;
+
 export type StandaloneDecisionRead = ReturnType<typeof decisionFeedback> & {
   sessionId: string;
   artifactStatus: ArtifactStatus;
+  waitStatus?: "resolved" | "timed_out";
   /** Current project stances sourced from this card, in their recorded form. */
   recordedRejections: Array<Pick<RejectedApproach, "description" | "reason">>;
 };

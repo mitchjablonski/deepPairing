@@ -5,12 +5,13 @@ import { z } from "zod";
 import { DaemonClient } from "../daemon/client.js";
 import { ensureDaemon } from "../daemon/lifecycle.js";
 import { ERROR_CODES } from "../error-codes.js";
+import { MAX_DECISION_WAIT_MS } from "../mcp/tools/decision-feedback.js";
 import { createStandaloneSessionId, isStandaloneSessionForProject, isStandaloneSessionId } from "../standalone-session-id.js";
 import { readSessionDirectories } from "./session-selection.js";
 
 const SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const PRESENT_OPTIONS_USAGE = "Usage: deeppairing present options --session-id ID --request-id UUID --file options.json";
-const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --decision-id ID";
+const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --decision-id ID [--wait-ms MS]";
 const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
 
@@ -62,13 +63,21 @@ export async function standaloneSession(
 export async function standaloneReadDecision(projectRoot: string, args: string[]) {
   const { values } = parseArgs({
     args,
-    options: { "session-id": { type: "string" }, "decision-id": { type: "string" } },
+    options: { "session-id": { type: "string" }, "decision-id": { type: "string" }, "wait-ms": { type: "string" } },
   });
-  const { "session-id": sessionId, "decision-id": decisionId } = values;
+  const { "session-id": sessionId, "decision-id": decisionId, "wait-ms": requestedWait } = values;
   if (!sessionId || !decisionId?.trim()) throw new Error(READ_DECISION_USAGE);
+  let waitMs: number | undefined;
+  if (requestedWait !== undefined) {
+    waitMs = Number(requestedWait);
+    if (!/^\d+$/.test(requestedWait) || waitMs < 1 || waitMs > MAX_DECISION_WAIT_MS) {
+      throw new Error("--wait-ms must be a whole number from 1 to 30000.");
+    }
+  }
   requireStandaloneSession(projectRoot, sessionId);
   const { client } = await connectStandaloneSession(projectRoot, sessionId);
-  return client.readStandaloneDecision(projectRoot, decisionId, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
+  return client.readStandaloneDecision(projectRoot, decisionId,
+    AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS + (waitMs ?? 0)), waitMs);
 }
 
 export async function standalonePresent(projectRoot: string, args: string[]): Promise<PresentOptionsReceipt> {

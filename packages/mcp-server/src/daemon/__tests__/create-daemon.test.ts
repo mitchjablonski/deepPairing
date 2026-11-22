@@ -18,6 +18,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { serve, type ServerType } from "@hono/node-server";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -25,6 +26,7 @@ import type { DecisionOption } from "@deeppairing/shared";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
 import { FileStore } from "../../store/file-store.js";
 import { projectHashOf } from "../../project-root.js";
+import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { ERROR_CODES } from "../../error-codes.js";
 import { PENDING_DRAFT_TYPES } from "../../mcp/tools/types.js";
@@ -88,6 +90,62 @@ afterEach(() => {
     h.fx.dispose();
   }
   vi.useRealTimers();
+});
+
+it("waits for the exact committed standalone choice and releases a disconnected HTTP waiter", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  store.createArtifact({ id: "a1", type: "decision", title: "Which cache?", content: { decisionId: "d1" } });
+  store.recordDecisionRequest({ decisionId: "d1", artifactId: "a1", context: "Which cache?", options: OPTS });
+  const waiters = () => (store as unknown as { feedbackWaiters: Array<() => void> }).feedbackWaiters;
+
+  let server!: ServerType;
+  const port = await new Promise<number>((resolve) => {
+    server = serve({ fetch: daemon.app.fetch, port: 0, hostname: "127.0.0.1" }, (info) => resolve(info.port));
+  });
+  const headers = {
+    "X-Project-Hash": projectHashOf(tmpDir), "X-Session-Id": sessionId,
+    "Content-Type": "application/json", Authorization: "Bearer test-token",
+  };
+  const read = (signal: AbortSignal) => fetch(`http://127.0.0.1:${port}/api/internal/sessions/${sessionId}/read-decision`, {
+    method: "POST", signal, headers,
+    body: JSON.stringify({ expectedProjectRoot: tmpDir, decisionId: "d1", waitMs: 10_000 }),
+  });
+  const disconnect = new AbortController();
+  const continueWait = new AbortController();
+  try {
+    const abandoned = read(disconnect.signal).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(waiters()).toHaveLength(1));
+    disconnect.abort();
+    expect(await abandoned).toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => expect(waiters()).toHaveLength(0));
+
+    const pending = read(continueWait.signal);
+    // Attach a handler in case cleanup aborts this request before we await it.
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(waiters()).toHaveLength(1));
+    const [originalWaiter] = waiters();
+    store.addComment({ id: "note", artifactId: "a1", content: "A comment is not a pick.", author: "human" });
+    await vi.waitFor(() => {
+      expect(waiters()).toHaveLength(1);
+      expect(waiters()[0]).not.toBe(originalWaiter);
+    });
+    const picked = await daemon.app.request("/api/decisions/d1/resolve", {
+      method: "POST", headers, body: JSON.stringify({ optionId: "o2", reasoning: "Simpler to run" }),
+    });
+    expect(picked.status).toBe(200);
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ waitStatus: "resolved", selectedOptionId: "o2", reasoning: "Simpler to run" });
+    expect(waiters()).toHaveLength(0);
+    expect(store.getResolvedDecisions()).toHaveLength(1);
+    expect(store.getUnacknowledgedComments().map((comment) => comment.id)).toEqual(["note"]);
+  } finally {
+    disconnect.abort();
+    continueWait.abort();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 describe("#151 — the REAL live-decisions closure (not a replica)", () => {

@@ -473,13 +473,13 @@ export class DaemonClient implements IStore {
     }, true); // Never auto-register an agent wrapper on a route or transport error.
   }
 
-  async readStandaloneDecision(expectedProjectRoot: string, decisionId: string, signal: AbortSignal): Promise<StandaloneDecisionRead> {
+  async readStandaloneDecision(expectedProjectRoot: string, decisionId: string, signal: AbortSignal, waitMs?: number): Promise<StandaloneDecisionRead> {
     let result: StandaloneDecisionRead;
     try {
       result = await this.request("/read-decision", {
         method: "POST", signal, redirect: "error",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expectedProjectRoot, decisionId }),
+        body: JSON.stringify({ expectedProjectRoot, decisionId, waitMs }),
       }, true);
     } catch (err) {
       if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
