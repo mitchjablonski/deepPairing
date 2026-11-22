@@ -226,6 +226,21 @@ export function suggestionSummary(filePath: string | undefined, lineStart: numbe
   return `Suggested edit to ${filePath ?? "code"}:${loc}`;
 }
 
+/** #680 slice 4 — the longest stance phrase a page "Rule this out" records
+ *  (see page-rule-out.ts), so a stance stays a phrase, not a paragraph. */
+export const PAGE_RULE_OUT_KEY_MAX = 120;
+
+/**
+ * #680 slice 4 — stamped on the anchored comment a page "Rule this out" leaves,
+ * so the agent (check_feedback) and the companion can tell it from a plain
+ * comment. `description` is the stance phrase that was recorded as rejected.
+ * Server-set only: the public comment route never accepts it.
+ */
+export const CommentRuleOutSchema = z.object({
+  description: z.string().min(1).max(PAGE_RULE_OUT_KEY_MAX),
+});
+export type CommentRuleOut = z.infer<typeof CommentRuleOutSchema>;
+
 export const CommentSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
@@ -244,6 +259,9 @@ export const CommentSchema = z.object({
   // daemon that doesn't understand it treats the comment as a plain comment and
   // simply ignores this field — graceful degradation, never a crash.
   suggestion: CommentSuggestionSchema.optional(),
+  // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
+  // the matching rejected stance is in the project's rejection memory.
+  ruleOut: CommentRuleOutSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: z.string().nullable().optional(),
   /**

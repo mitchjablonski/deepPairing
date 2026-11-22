@@ -567,9 +567,17 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
       isFollowUp: !!c.followUp,
     };
   }
+  // #680 slice 4 — a page "Rule this out": the human recorded the anchored
+  // text as a rejected stance, and this comment carries their reason. Said
+  // plainly so the agent knows the gate now refuses that phrase, not just that
+  // someone commented. Spread only when present: every other comment is
+  // byte-for-byte unchanged.
+  const ruleOutNote = c.ruleOut
+    ? ` → RULED OUT: recorded as a page-only rejected stance ("${clipProse(c.ruleOut.description, 120)}"). A page whose text still contains it (present_page, a page revise, a watched-file save) is now refused with this reason; take it out of this page. Other tools are not affected.`
+    : "";
   return {
     bucket: "comment",
-    prose: `- ${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
+    prose: `- ${c.ruleOut ? "🚫 " : ""}${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}${ruleOutNote}`,
     structured: {
       id: c.id,
       artifactId: c.target.artifactId,
@@ -577,6 +585,7 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
       content: c.content,
       // #187 — see the question path: present only for a late follow-up.
       ...(c.followUp ? { followUp: true as const } : {}),
+      ...(c.ruleOut ? { ruleOut: { description: c.ruleOut.description } } : {}),
       ...commonTargetFields(c, removedLine),
     },
     isFollowUp: !!c.followUp,

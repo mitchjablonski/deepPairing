@@ -11,10 +11,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Artifact } from "@deeppairing/shared";
+import type { Artifact, Comment } from "@deeppairing/shared";
+import { PAGE_RULE_OUT_MESSAGES } from "@deeppairing/shared";
 import { pageArtifact } from "@deeppairing/shared/__fixtures__/artifacts";
 import { PageArtifact } from "../artifacts/PageArtifact";
 import { useArtifactStore } from "../../stores/artifact";
+import { useConnectionStore } from "../../stores/connection";
+import { useLedgerStore } from "../../stores/ledger";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
 
 // The full verb row only renders once the reader reaches the artifact's end.
 function stubIO(isIntersecting: boolean) {
@@ -452,5 +456,206 @@ describe("PageArtifact — file watch (#680 slice 3)", () => {
     expect(note).toHaveTextContent(/was not recorded/);
     expect(note).toHaveTextContent(/too expensive/);
     expect(note).toHaveTextContent(/still looking at v1/);
+  });
+});
+
+// --- #680 slice 4: "Rule this out" on the selected spot -------------------------
+
+describe("PageArtifact — rule this out (#680 slice 4)", () => {
+  let posts: Array<{ url: string; body: any }>;
+  let reply: () => Response;
+  /** The fake daemon's live stance list, served at GET /api/memory. */
+  let memoryRows: Array<{ description: string; sourceArtifactId?: string }>;
+  beforeEach(() => {
+    posts = [];
+    memoryRows = [];
+    reply = () =>
+      new Response(
+        JSON.stringify({
+          status: "recorded",
+          description: "Up to 60s",
+          alreadyRecorded: false,
+          comment: {
+            id: "cmt_rule_out",
+            sessionId: "sess_1",
+            target: { artifactId: pageArtifact.id, htmlAnchor: { ...cellAnchor, version: 1 } },
+            parentCommentId: null,
+            author: "human",
+            content: "sixty seconds of stale sessions",
+            ruleOut: { description: "Up to 60s" },
+            acknowledged: false,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") posts.push({ url: String(url), body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (String(url).includes("/rule-out")) return reply();
+        if (String(url).endsWith("/api/memory")) {
+          return new Response(JSON.stringify({ rejectedApproaches: memoryRows, approvedPatterns: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "sess_1", activeSessions: [{ sessionId: "sess_1", live: true }], disconnectedSince: null } as any);
+    useConnectionGraceStore.setState({ everConnected: true, graceOver: false, hydrationStalled: false });
+  });
+
+  const ruleOutPosts = () => posts.filter((p) => p.url.includes("/rule-out"));
+
+  it("is offered only once a spot is selected", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    expect(screen.queryByRole("button", { name: "Rule this out" })).not.toBeInTheDocument();
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" })).toBeInTheDocument();
+  });
+
+  it("is misclick-safe: the first click only opens a confirm step, and confirm needs a reason", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    const composer = screen.getByTestId("page-anchor-composer");
+    await userEvent.click(within(composer).getByRole("button", { name: "Rule this out" }));
+    expect(ruleOutPosts()).toHaveLength(0);
+    const panel = screen.getByTestId("page-rule-out-panel");
+    // Shows the exact phrase that will be recorded, and the composer is still there.
+    expect(panel).toHaveTextContent("Rule out “Up to 60s”?");
+    expect(within(composer).getByLabelText("Comment on the selected spot")).toBeInTheDocument();
+    const confirm = within(panel).getByRole("button", { name: "Rule it out" });
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(panel).getByRole("textbox"), "   ");
+    expect(confirm).toBeDisabled();
+    await userEvent.click(confirm);
+    expect(ruleOutPosts()).toHaveLength(0);
+    // Escape (in the reason box) cancels without writing.
+    await userEvent.type(within(panel).getByRole("textbox"), "{Escape}");
+    expect(screen.queryByTestId("page-rule-out-panel")).not.toBeInTheDocument();
+    expect(ruleOutPosts()).toHaveLength(0);
+  });
+
+  it("submits the anchor and the human's reason to the rule-out route, then shows it ruled out", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    await userEvent.click(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" }));
+    const panel = screen.getByTestId("page-rule-out-panel");
+    await userEvent.type(within(panel).getByRole("textbox"), "  sixty seconds of stale sessions ");
+    await userEvent.click(within(panel).getByRole("button", { name: "Rule it out" }));
+
+    expect(ruleOutPosts()).toHaveLength(1);
+    expect(ruleOutPosts()[0]!.url).toContain(`/api/artifacts/${pageArtifact.id}/rule-out`);
+    expect(ruleOutPosts()[0]!.body).toEqual({
+      htmlAnchor: { ...cellAnchor, version: pageArtifact.version },
+      reason: "sixty seconds of stale sessions",
+    });
+    // No comment POST and no status change: the page stays under review.
+    expect(posts.some((p) => p.url.includes("/api/comments") || p.url.includes("/status"))).toBe(false);
+    expect(await screen.findByTestId("page-rule-out-recorded")).toHaveTextContent("Ruled out “Up to 60s”");
+    // The returned comment is listed on the page, marked.
+    expect(await screen.findByTestId("page-annotation-ruled-out")).toBeInTheDocument();
+  });
+
+  it("keeps the panel and the reason when the server refuses, showing why", async () => {
+    reply = () =>
+      new Response(
+        JSON.stringify({ error: "The gate can't find “Up to 60s” within one block of this page, so it would never fire.", code: "rule_out_not_gateable", reason: "not_on_page" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    await userEvent.click(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" }));
+    const panel = screen.getByTestId("page-rule-out-panel");
+    await userEvent.type(within(panel).getByRole("textbox"), "too stale");
+    await userEvent.click(within(panel).getByRole("button", { name: "Rule it out" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent(/would never fire/);
+    expect(within(panel).getByRole("textbox")).toHaveValue("too stale");
+    expect(screen.queryByTestId("page-rule-out-recorded")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["no_text", { kind: "element", locator: "img", quote: "" }],
+    ["too_short", { kind: "cell", locator: "td", quote: "None" }],
+    ["too_generic", { kind: "text", locator: "p", quote: "of the" }],
+  ] as const)("says why before submit and stays disabled for a spot it can't rule out (%s)", async (why, anchor) => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor });
+    const composer = screen.getByTestId("page-anchor-composer");
+    const button = within(composer).getByRole("button", { name: "Rule this out" });
+    expect(button).toBeDisabled();
+    expect(within(composer).getByTestId("page-rule-out-unavailable")).toHaveTextContent(PAGE_RULE_OUT_MESSAGES[why]);
+    await userEvent.click(button);
+    expect(screen.queryByTestId("page-rule-out-panel")).not.toBeInTheDocument();
+    expect(ruleOutPosts()).toHaveLength(0);
+  });
+  const ruleOutComment = (id: string): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id, htmlAnchor: { ...cellAnchor, kind: "cell", version: 1 } },
+    parentCommentId: null,
+    author: "human",
+    content: "sixty seconds of stale sessions",
+    ruleOut: { description: "Up to 60s" },
+    acknowledged: false,
+    createdAt: new Date().toISOString(),
+  });
+
+  it("shows a spot as ruled out from the LIVE stance list", async () => {
+    memoryRows = [{ description: "Up to 60s", sourceArtifactId: pageArtifact.id }];
+    useArtifactStore.getState().addComment(ruleOutComment("cmt_ro_live"));
+    render(<PageArtifact artifact={pageArtifact} />);
+    expect(await screen.findByTestId("page-annotation-ruled-out")).toBeInTheDocument();
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(await screen.findByTestId("page-rule-out-recorded")).toHaveTextContent("Ruled out “Up to 60s”");
+    expect(screen.queryByRole("button", { name: "Rule this out" })).not.toBeInTheDocument();
+  });
+
+  it("a retired stance stops showing as ruled out, and the spot can be ruled out again", async () => {
+    memoryRows = []; // retired in the Ledger: the comment marker remains, the stance doesn't
+    useArtifactStore.getState().addComment(ruleOutComment("cmt_ro_retired"));
+    render(<PageArtifact artifact={pageArtifact} />);
+    expect(await screen.findByTestId("page-annotation-ruled-out-retired")).toBeInTheDocument();
+    expect(screen.queryByTestId("page-annotation-ruled-out")).not.toBeInTheDocument();
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" })).toBeEnabled();
+    expect(screen.queryByTestId("page-rule-out-recorded")).not.toBeInTheDocument();
+  });
+
+  it("the confirm copy says it reaches only pages that still contain the text", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    await userEvent.click(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" }));
+    expect(screen.getByTestId("page-rule-out-panel")).toHaveTextContent(/won't present a page that still contains this text/);
+    expect(screen.getByTestId("page-rule-out-panel")).toHaveTextContent(/only applies to pages/);
+    expect(screen.getByTestId("page-rule-out-panel")).toHaveTextContent(/this page's status doesn't change/);
+    expect(screen.getByTestId("page-rule-out-panel")).not.toHaveTextContent(/stays under review/);
+  });
+  it("submit, then retire the stance with the spot still selected: the control is usable again", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    await userEvent.click(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" }));
+    const panel = screen.getByTestId("page-rule-out-panel");
+    await userEvent.type(within(panel).getByRole("textbox"), "too stale");
+    await userEvent.click(within(panel).getByRole("button", { name: "Rule it out" }));
+    // Optimistic: shown as ruled out at once (the live list hasn't refreshed yet).
+    expect(await screen.findByTestId("page-rule-out-recorded")).toBeInTheDocument();
+
+    // Retired in the Ledger: the live list refreshes without the row.
+    memoryRows = [];
+    act(() => {
+      useLedgerStore.setState({ version: useLedgerStore.getState().version + 1 });
+    });
+    const again = await within(screen.getByTestId("page-anchor-composer")).findByRole("button", { name: "Rule this out" });
+    expect(again).toBeEnabled();
+    expect(screen.queryByTestId("page-rule-out-recorded")).not.toBeInTheDocument();
   });
 });

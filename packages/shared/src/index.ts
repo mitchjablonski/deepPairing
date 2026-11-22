@@ -165,6 +165,8 @@ export {
   HtmlAnchorKindSchema,
   HTML_ANCHOR_LIMITS,
   sanitizeHtmlAnchor,
+  CommentRuleOutSchema,
+  type CommentRuleOut,
   type HtmlAnchor,
   type HtmlAnchorKind,
   CommentAuthorSchema,
@@ -184,6 +186,23 @@ export {
   type SuggestionCounter,
   type CommentSuggestion,
 } from "./schemas/comment.js";
+
+export { SHORT_STOPWORDS, MIN_CONTENT_TOKEN_LEN, contentTokens } from "./stopwords.js";
+
+export {
+  PAGE_RULE_OUT_KEY_MAX,
+  PAGE_RULE_OUT_EXTRA_STOPWORDS,
+  PAGE_RULE_OUT_MESSAGES,
+  PAGE_RULE_OUT_MIN_CHARS,
+  PAGE_RULE_OUT_MIN_WORDS,
+  PAGE_RULE_OUT_MIN_WORD_LEN,
+  PAGE_RULE_OUT_REASON_MAX,
+  PageRuleOutBodySchema,
+  checkPageRuleOut,
+  pageRuleOutKey,
+  type PageRuleOutBody,
+  type PageRuleOutRefusal,
+} from "./schemas/page-rule-out.js";
 
 export {
   EvidenceSchema,

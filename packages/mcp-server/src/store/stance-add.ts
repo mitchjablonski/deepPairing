@@ -195,6 +195,7 @@ export type RecordStanceOutcome =
   | { status: "recorded"; row: RejectedApproach; publishable: boolean }
   | { status: "exists"; row: RejectedApproach }
   | { status: "reason_added"; row: RejectedApproach }
+  | { status: "widened"; row: RejectedApproach; publishable: boolean }
   | { status: "invalid"; error: string };
 
 /**
@@ -223,8 +224,8 @@ export async function recordStance(
       error: `This project already has ${result.count} stances (from every source); an add is refused once it has ${MAX_PROJECT_STANCES}, because more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`,
     };
   }
-  if (result.status === "recorded") {
-    return { status: "recorded", row: result.row, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
+  if (result.status === "recorded" || result.status === "widened") {
+    return { status: result.status, row: result.row, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
   }
   return { status: result.status, row: result.row };
 }
@@ -247,6 +248,17 @@ export function formatRecordStanceOutcome(outcome: RecordStanceOutcome, scope: s
     return {
       ok: true,
       text: `${scope} already had the stance "${name}" with no reason recorded. Added yours: "${row.reason}". Nothing else about it changed.`,
+    };
+  }
+  if (outcome.status === "widened") {
+    return {
+      ok: true,
+      text:
+        `${scope} already had "${name}" as a page rule-out, which only refused pages containing it. ` +
+        `It is now an ordinary stance: any proposal naming it is refused (reason: "${row.reason ?? ""}"). ` +
+        (outcome.publishable
+          ? "It can now be published to the cross-project ledger if this project publishes."
+          : "It is still not published to the cross-project ledger, because who asked for it can't be verified."),
     };
   }
   if (outcome.status === "exists") {

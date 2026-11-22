@@ -14,6 +14,8 @@ import { readFileWatch, type Artifact } from "@deeppairing/shared";
 import { FileStore, ParentSupersededError } from "../../store/file-store.js";
 import { PageWatcher, type PageDirWatcher, type PageWatchDeps } from "../page-watch.js";
 import { preflightRejectedApproaches } from "../../mcp/tool-helpers.js";
+import { createHttpRoutes } from "../../http/routes.js";
+import { withHash } from "../../http/__tests__/routes.harness.js";
 
 const SID = "sess_pagewatch";
 
@@ -205,6 +207,32 @@ describe("page file watch — the rejection gate", () => {
     await settle(12_000);
     expect(pages()).toHaveLength(2);
     expect(readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused!.delivered).toBe(true);
+  });
+});
+
+describe("page file watch — a spot ruled out on the page (#680 slice 4)", () => {
+  it("refuses a later save that keeps the ruled-out text, with the human's reason; a save without it records", async () => {
+    const v1 = presentFilePage("docs/page.html", "<h1>Hosting</h1><p>Move the API to a managed edge host.</p><p>Keep the worker on the VM.</p>");
+    watcher.sync(SID);
+    // The companion's explicit submit, through the real route.
+    const app = withHash(createHttpRoutes(store, root, () => {}), root);
+    const res = await app.request(`/api/artifacts/${v1.id}/rule-out`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ htmlAnchor: { kind: "element", locator: "p:nth-of-type(1)", quote: "Move the API to a managed edge host." }, reason: "edge cold starts hurt our p99" }),
+    });
+    expect(res.status).toBe(200);
+
+    write("docs/page.html", "<h1>Hosting</h1><p>Move the API to a managed edge host.</p><p>Move the worker too.</p>");
+    await settle(2_000);
+    expect(pages()).toHaveLength(1);
+    const refused = readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused!;
+    expect(refused).toMatchObject({ cause: "gate", sourcePath: "docs/page.html" });
+    expect(refused.message).toContain("edge cold starts hurt our p99");
+
+    write("docs/page.html", "<h1>Hosting</h1><p>Keep the API on the VM.</p><p>Keep the worker on the VM.</p>");
+    await settle(12_000);
+    expect(pages()).toHaveLength(2);
   });
 });
 

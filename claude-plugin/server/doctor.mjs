@@ -15884,6 +15884,10 @@ var CommentSuggestionSchema = external_exports.object({
   appliedInVersion: external_exports.number().int().positive().optional(),
   counter: SuggestionCounterSchema.optional()
 });
+var PAGE_RULE_OUT_KEY_MAX = 120;
+var CommentRuleOutSchema = external_exports.object({
+  description: external_exports.string().min(1).max(PAGE_RULE_OUT_KEY_MAX)
+});
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -15902,6 +15906,9 @@ var CommentSchema = external_exports.object({
   // daemon that doesn't understand it treats the comment as a plain comment and
   // simply ignores this field — graceful degradation, never a crash.
   suggestion: CommentSuggestionSchema.optional(),
+  // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
+  // the matching rejected stance is in the project's rejection memory.
+  ruleOut: CommentRuleOutSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: external_exports.string().nullable().optional(),
   /**
@@ -16388,6 +16395,13 @@ var PromptBodySchema = external_exports.object({
   content: external_exports.string().min(1),
   decisionId: external_exports.string().min(1),
   sessionId: external_exports.string().min(1)
+});
+
+// ../shared/dist/schemas/page-rule-out.js
+var PAGE_RULE_OUT_REASON_MAX = 2e3;
+var PageRuleOutBodySchema = external_exports.object({
+  htmlAnchor: HtmlAnchorSchema,
+  reason: external_exports.string().max(PAGE_RULE_OUT_REASON_MAX).refine((s) => s.trim().length > 0, { message: "Say why you're ruling this out" })
 });
 
 // ../shared/dist/schemas/annotation.js
