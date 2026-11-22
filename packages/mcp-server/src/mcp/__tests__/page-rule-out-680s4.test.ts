@@ -15,6 +15,7 @@ import type { FileStore } from "../../store/file-store.js";
 import { getGlobalStore } from "../../store/global-store.js";
 import { findRejectedApproachMatch } from "../preflight-validator.js";
 import { readRejectedApproachEntries } from "../../cli/preflight-hook-core.js";
+import { recordStance, formatRecordStanceOutcome } from "../../store/stance-add.js";
 import { createHttpRoutes } from "../../http/routes.js";
 import { withHash } from "../../http/__tests__/routes.harness.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
@@ -318,6 +319,82 @@ describe("#680 slice 4 — a rule-out reaches only pages that still contain the 
     expect(findRejectedApproachMatch([`const note = "${phrase}";`], [row], { rawEditText: true })).toBeNull();
     const entries = readRejectedApproachEntries(ctx.tmpDir);
     expect(entries.find((e) => e.entry.description === phrase)?.entry.origin).toBe("page_rule_out");
+  });
+});
+
+describe("#680 slice 4 — a later ordinary stance on the same phrase widens the row", () => {
+  const PHRASE = "Redis Streams queue";
+  const OPT = (id: string, title: string) => ({ id, title, description: `use ${title}`, pros: [], cons: [], effort: "low", risk: "low", recommendation: false });
+  const presentOptionNaming = () =>
+    callTool("present_options", { title: "Job runner", context: "Which job runner?", options: [OPT("x", PHRASE), OPT("y", "Plain cron")] });
+  const row = () => store.getSessionMemory().rejectedApproaches.find((r) => r.description === PHRASE);
+  let pageId: string;
+  beforeEach(async () => {
+    pageId = await presentPage(`<h1>Jobs</h1><p>${PHRASE}</p><p>Plain cron</p>`);
+    const res = await ruleOut(pageId, { htmlAnchor: { kind: "element", locator: "p", quote: PHRASE }, reason: "streams were flaky" });
+    expect(res.status).toBe(200);
+    expect(row()?.origin).toBe("page_rule_out");
+    // Page-scoped: an option naming the phrase is NOT refused yet.
+    const before = await presentOptionNaming();
+    expect(before.isError, before.text).toBeFalsy();
+  });
+
+  it("artifact reject: rejecting an artifact titled with the phrase drops the origin; an option naming it is refused", async () => {
+    store.createArtifact({ id: "plan_rs", type: "plan", title: PHRASE, content: { steps: [] } });
+    const res = await app.request("/api/artifacts/plan_rs/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "rejected", feedback: "no streams" }),
+    });
+    expect(res.status).toBe(200);
+    expect(row()).toBeDefined();
+    expect(row()!.origin).toBeUndefined();
+    expect(row()!.reason).toBe("streams were flaky"); // the first reason is kept
+    const after = await presentOptionNaming();
+    expect(after.isError).toBe(true);
+    expect(after.text).toContain("REJECTED_APPROACH_BLOCKED");
+  });
+
+  it("stance add: returns `widened` (not `exists`), says so, drops the origin; an option naming it is refused", async () => {
+    const outcome = await recordStance(store, { what: PHRASE, why: "we tried it", addedVia: "cli", requestedBy: "user" });
+    expect(outcome.status).toBe("widened");
+    const text = formatRecordStanceOutcome(outcome, "This project").text;
+    expect(text).toMatch(/now an ordinary stance/);
+    expect(text).not.toMatch(/Nothing changed/);
+    expect(row()!.origin).toBeUndefined();
+    const after = await presentOptionNaming();
+    expect(after.isError).toBe(true);
+    expect(after.text).toContain("REJECTED_APPROACH_BLOCKED");
+  });
+
+  it("stance add on a widened page phrase publishes like any stance when the project opts in", async () => {
+    store.setGlobalLedgerPublish(true);
+    await recordStance(store, { what: PHRASE, why: "we tried it", addedVia: "cli", requestedBy: "user" });
+    expect(getGlobalStore().query({ limit: 100 }).map((e) => e.concept.toLowerCase())).toContain(PHRASE.toLowerCase());
+  });
+
+  it("never-suggest: the option's own row (\"<label>: <title>\") gates options naming it; the page row keeps its scope", async () => {
+    // never-suggest keys "<label>: <title>", which never equals a rule-out
+    // phrase (those have no colon), so it adds its own ordinary row rather
+    // than deduping onto the page row — and that row is what gates.
+    await callTool("present_options", { title: "Queue", context: "Which queue?", options: [OPT("a", "SQS"), OPT("b", PHRASE)] });
+    const dec = store.getArtifacts().find((a) => a.type === "decision" && a.title === "Queue")!;
+    const decisionId = (dec.content as { decisionId: string }).decisionId;
+    await app.request(`/api/decisions/${decisionId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ optionId: "a" }) });
+    const ns = await app.request(`/api/decisions/${decisionId}/options/b/never-suggest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "no streams" }) });
+    expect(ns.status).toBe(200);
+    expect(store.getSessionMemory().rejectedApproaches.find((r) => r.description === `Queue: ${PHRASE}`)?.origin).toBeUndefined();
+    const after = await presentOptionNaming();
+    expect(after.isError).toBe(true);
+    expect(after.text).toContain("REJECTED_APPROACH_BLOCKED");
+  });
+
+  it("any ordinary write that dedupes onto the page row (e.g. the send-back's concept key) widens it", () => {
+    store.recordRejectedApproach({ description: PHRASE, reason: "none of these", concept: PHRASE, sourceArtifactId: "dec_x" });
+    expect(row()!.origin).toBeUndefined();
+    // …but a repeat page rule-out never re-narrows an ordinary row.
+    store.recordRejectedApproach({ description: PHRASE, reason: "x", sourceArtifactId: pageId, origin: "page_rule_out" });
+    expect(row()!.origin).toBeUndefined();
   });
 });
 

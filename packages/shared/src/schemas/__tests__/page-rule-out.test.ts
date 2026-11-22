@@ -29,7 +29,13 @@ describe("pageRuleOutKey", () => {
     for (const q of ["of the", "in the", "to be", "to be or", "and the", "for the", "with this", "is it"]) {
       expect(checkPageRuleOut(q), q).toEqual({ ok: false, reason: "too_generic" });
     }
-    expect(pageRuleOutKey("most of the")).toBe("most of the"); // "most" is a content token
+    // The rule-out-only extra stoplist: second-person and other common words.
+    for (const q of ["you can", "most of the", "you will have", "all of them", "what you can do here"]) {
+      expect(checkPageRuleOut(q), q).toEqual({ ok: false, reason: "too_generic" });
+    }
+    expect(pageRuleOutKey("Redis Streams queue")).toBe("Redis Streams queue");
+    expect(pageRuleOutKey("up to sixty seconds")).toBe("up to sixty seconds");
+    expect(pageRuleOutKey("you can shard the queue")).toBe("you can shard the queue");
     expect(pageRuleOutKey("in the cache")).toBe("in the cache");
     expect(pageRuleOutKey("использовать кэш")).toBe("использовать кэш"); // non-Latin content tokens count
   });

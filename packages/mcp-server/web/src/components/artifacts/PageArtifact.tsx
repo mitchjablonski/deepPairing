@@ -100,6 +100,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // #680 slice 4 — "Ruled out" reflects the LIVE stance (GET /api/memory, kept
   // fresh by ledger writes), not just the comment marker: a stance retired in
   // the Ledger stops showing as ruled out, and the spot can be ruled out again.
+  // Any live row with exactly this phrase counts, including one a later
+  // ordinary rejection widened (origin dropped): every stance is matched
+  // forward against page body text, so a page still containing the phrase is
+  // refused either way — "Ruled out" stays true.
   const owner = useArtifactStore((s) => s.owningSession(artifact.id));
   const { rows: rememberedRows, remember } = useRememberedRejections(owner);
   const liveStances = useMemo(() => new Set(rememberedRows.map((r) => r.description)), [rememberedRows]);

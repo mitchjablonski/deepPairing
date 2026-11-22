@@ -296,6 +296,9 @@ export interface AddStanceParams {
  *  nothing; `count` is the number of rows the project holds. */
 export type AddStanceResult =
   | { status: "recorded" | "exists" | "reason_added"; row: RejectedApproach }
+  /** #680 slice 4 — the add landed on a page rule-out row and widened it to
+   *  an ordinary stance (its page-only scoping dropped). */
+  | { status: "widened"; row: RejectedApproach }
   | { status: "cap_reached"; count: number };
 /** `user` = the door says a human asked (the MCP tool accepts nothing else; the
  *  CLI says so only from a TTY outside Claude Code). `unknown` = the CLI could

@@ -2,6 +2,20 @@ import { z } from "zod";
 import { HtmlAnchorSchema, PAGE_RULE_OUT_KEY_MAX } from "./comment.js";
 import { contentTokens } from "../stopwords.js";
 
+/**
+ * Rule-out ONLY: extra common function words that don't count as a content
+ * token when deciding whether a phrase can be ruled out ("you can", "most of
+ * the" are everywhere in second-person page prose). This never touches
+ * matching — the gate's SHORT_STOPWORDS is unchanged — it only narrows which
+ * phrases the companion and the route accept.
+ */
+export const PAGE_RULE_OUT_EXTRA_STOPWORDS: ReadonlySet<string> = new Set([
+  "you", "your", "can", "could", "will", "would", "was", "were", "are", "has", "have", "had",
+  "all", "one", "out", "not", "but", "our", "any", "may", "also", "just", "more", "most", "some",
+  "each", "very", "here", "there", "then", "than", "them", "they", "this", "that", "these",
+  "those", "with", "from", "into", "about", "what", "which", "when", "where", "who", "how",
+]);
+
 export { PAGE_RULE_OUT_KEY_MAX };
 
 /**
@@ -67,7 +81,8 @@ function normalizeRuleOutPhrase(quote: string): string {
  *  - Long enough to gate on: at least PAGE_RULE_OUT_MIN_WORDS words of
  *    PAGE_RULE_OUT_MIN_WORD_LEN+ letters/digits, or PAGE_RULE_OUT_MIN_CHARS
  *    letters/digits in total (else `too_short`), AND at least one content
- *    token — 3+ letters/digits, not a stopword (else `too_generic`).
+ *    token — 3+ letters/digits, not a stopword nor one of the rule-out-only
+ *    PAGE_RULE_OUT_EXTRA_STOPWORDS (else `too_generic`).
  */
 export function checkPageRuleOut(quote: string): { ok: true; key: string } | { ok: false; reason: PageRuleOutRefusal } {
   const key = normalizeRuleOutPhrase(quote);
@@ -78,7 +93,10 @@ export function checkPageRuleOut(quote: string): { ok: true; key: string } | { o
   // At least one content token (3+ letters/digits, not a stopword — the same
   // rule the matcher's meaningfulTokens uses), so "of the" or "to be" can't
   // become a stance that refuses ordinary prose.
-  if (contentTokens(key).length === 0) return { ok: false, reason: "too_generic" };
+  // The rule-out-only extra stoplist also applies here ("you can").
+  if (contentTokens(key).filter((t) => !PAGE_RULE_OUT_EXTRA_STOPWORDS.has(t)).length === 0) {
+    return { ok: false, reason: "too_generic" };
+  }
   return { ok: true, key };
 }
 

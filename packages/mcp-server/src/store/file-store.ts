@@ -2259,6 +2259,12 @@ export class FileStore implements IStore {
         if (concept && !existing.concept) { existing.concept = concept; changed = true; }
         if (sourceArtifactId && !existing.sourceArtifactId) { existing.sourceArtifactId = sourceArtifactId; changed = true; }
         if (sourceAnchor && !existing.sourceAnchor) { existing.sourceAnchor = sourceAnchor; changed = true; }
+        // #680 slice 4 review — an ORDINARY rejection (artifact reject,
+        // never-suggest, send-back…) landing on a page rule-out row WIDENS it to
+        // an ordinary stance: drop the page-only scoping, so options, findings
+        // and every other proposal naming the phrase are gated too, and the row
+        // becomes publishable under this project's opt-in like any other.
+        if (origin !== "page_rule_out" && existing.origin === "page_rule_out") { delete existing.origin; changed = true; }
         if (changed) {
           existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
           prefs.rejectedApproaches = rejected;
@@ -2353,6 +2359,17 @@ export class FileStore implements IStore {
         (r) => normalizeConceptKey(r.description) === key || (typeof r.concept === "string" && normalizeConceptKey(r.concept) === key),
       );
       if (existing) {
+        // #680 slice 4 review — a terminal stance add on a page rule-out row
+        // widens it to an ordinary stance (see recordRejectedApproach) instead
+        // of answering "exists": it changes what the row gates.
+        if (existing.origin === "page_rule_out") {
+          delete existing.origin;
+          if (!existing.reason) existing.reason = reason;
+          existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
+          prefs.rejectedApproaches = rejected;
+          result = { status: "widened", row: { ...existing } };
+          return true;
+        }
         if (existing.reason) { result = { status: "exists", row: { ...existing } }; return false; }
         // Same rule as recordRejectedApproach's dedupe: fill a missing reason,
         // never replace one. The reason is display-only, so what the row
@@ -2376,7 +2393,9 @@ export class FileStore implements IStore {
     if (!out) throw new Error("addStance: the preferences transaction produced no result");
     if (this.isDemoSession || !this.globalLedgerPublishEnabled()) return out;
     let mirror: { key: string; description: string } | null = null;
-    if (out.status === "recorded" && isPublishableStance(addedVia, requestedBy)) {
+    if ((out.status === "recorded" || out.status === "widened") && isPublishableStance(addedVia, requestedBy)) {
+      // A widened page rule-out publishes like a new stance: keyed on the
+      // phrase the human just typed, never on anything the agent wrote.
       mirror = { key: concept, description: concept };
     } else if (out.status === "reason_added" && out.row.origin !== "page_rule_out" && out.row.concept?.trim() && isPublishableStance(addedVia, requestedBy)) {
       mirror = { key: out.row.concept.trim(), description: out.row.description };
