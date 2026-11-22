@@ -1439,8 +1439,9 @@ ${helpInvocations}
                                            --path names a file inside the project (resolved from the current directory,
                                            sent project-relative), watched while under review: each save records a new
                                            version. Same request-ID rules as options.
-    dp read-decision --session-id ID --decision-id ID
+    dp read-decision --session-id ID --decision-id ID [--wait-ms MS]
                                            Read a saved choice and linked rejection reasons without consuming feedback.
+                                           Optionally wait 1–30000 ms for the choice.
     dp guide [--json]                      Print the standalone review protocol for any shell-capable agent
     dp setup-agent --agent codex|cursor|copilot|opencode [--dry-run]
                                            Add a marked block to that agent's instruction file telling it to

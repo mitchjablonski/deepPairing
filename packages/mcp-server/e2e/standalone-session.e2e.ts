@@ -134,24 +134,35 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     });
     expect(JSON.parse((await runPresent(requestId)).stdout)).toEqual({ ...presented, replayed: true });
 
-    const runRead = (sessionId: string) => run(project, "read-decision",
-      "--session-id", sessionId, "--decision-id", presented.decisionId);
-    const readDecision = async () => JSON.parse((await runRead(resumed.sessionId)).stdout);
-    expect(await readDecision()).toEqual({
+    const runRead = (sessionId: string, ...flags: string[]) => run(project, "read-decision",
+      "--session-id", sessionId, "--decision-id", presented.decisionId, ...flags);
+    const readDecision = async (...flags: string[]) => JSON.parse((await runRead(resumed.sessionId, ...flags)).stdout);
+    const draft = {
       sessionId: resumed.sessionId,
       decisionId: presented.decisionId,
       artifactId: presented.artifactId,
       context: input.context,
       artifactStatus: "draft",
       recordedRejections: [],
+    };
+    expect(await readDecision()).toEqual(draft);
+    expect(await readDecision("--wait-ms", "25")).toEqual({ ...draft, waitStatus: "timed_out" });
+    await expect(runRead(resumed.sessionId, "--wait-ms", "30001")).rejects.toMatchObject({
+      code: 1, stdout: "", stderr: expect.stringContaining("--wait-ms must be a whole number from 1 to 30000."),
     });
-    await expect(runRead(second.sessionId)).rejects.toMatchObject({
+    await expect(runRead(second.sessionId, "--wait-ms", "10000")).rejects.toMatchObject({
       code: 1, stdout: "", stderr: expect.stringContaining("Decision does not exist in this standalone session."),
     });
 
     await page.goto(resumed.companionUrl);
     const pane = page.locator(`[data-artifact-id="${presented.artifactId}"]`);
-    await pane.getByRole("button", { name: "Select Local file", exact: true }).click();
+    const [choice] = await Promise.all([
+      readDecision("--wait-ms", "10000"),
+      pane.getByRole("button", { name: "Select Local file", exact: true }).click(),
+    ]);
+    expect(choice).toEqual({
+      ...draft, artifactStatus: "approved", waitStatus: "resolved", selectedOptionId: "local", selectedTitle: "Local file",
+    });
     await expect(pane.getByText("Decision Made", { exact: true })).toBeVisible();
     await pane.getByRole("button", { name: "Never suggest Redis Streams", exact: true }).click();
     const reason = "No operators for this dependency.";
