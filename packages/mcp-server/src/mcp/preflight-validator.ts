@@ -489,6 +489,22 @@ function containsAsPhrase(haystack: string, needle: string): boolean {
   return new RegExp(`(?:^|[^a-z0-9])${esc}(?:[^a-z0-9]|$)`).test(haystack);
 }
 
+/**
+ * #680 slice 4 — the page rule-out lane's phrase test: like containsAsPhrase,
+ * but with UNICODE word boundaries (a rule-out phrase may be non-Latin text,
+ * and an ASCII boundary class treats every non-Latin letter as a boundary, so
+ * "очередь" would match inside "переочередь"). Used ONLY for page_rule_out rows;
+ * ordinary stance matching keeps containsAsPhrase unchanged. Lookbehind and
+ * \p{…} with the `u` flag are supported on every Node this package runs on
+ * (>=20), including inside the PreToolUse hook.
+ */
+function containsAsPhraseUnicode(haystack: string, needle: string): boolean {
+  const n = needle.trim();
+  if (n.length < 3) return false;
+  const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, "u").test(haystack);
+}
+
 export function findRejectedApproachMatch(
   proposalStrings: string[],
   rejected: RejectedApproach[],
@@ -510,7 +526,7 @@ export function findRejectedApproachMatch(
       if (opts.rawEditTextFrom === undefined) continue;
       for (let idx = opts.rawEditTextFrom; idx < proposalStrings.length; idx++) {
         const proposal = proposalStrings[idx]!;
-        if (containsAsPhrase(clean(proposal), rejNormalized)) return { proposal, rejected: rej, via: "surface" };
+        if (containsAsPhraseUnicode(clean(proposal), rejNormalized)) return { proposal, rejected: rej, via: "surface" };
       }
       continue;
     }

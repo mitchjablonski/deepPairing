@@ -1291,6 +1291,12 @@ export class FileStore implements IStore {
       if ((c.parentCommentId ?? "") !== parentKey) return false;
       // F3 — only a dupe if it targets the SAME anchor (line/finding/step/etc).
       if (FileStore.targetKey(c.target as Record<string, unknown>) !== newTargetKey) return false;
+      // #680 slice 4 review — a page rule-out comment and a plain note never
+      // collapse into each other (same text, same spot): the marker is part of
+      // the identity, or an explicit rule-out could be absorbed by an earlier
+      // unmarked note (stance recorded, pin and agent notice missing). Two
+      // rule-outs of the same phrase still dedupe.
+      if ((c.ruleOut?.description ?? "") !== (params.ruleOut?.description ?? "")) return false;
       const t = new Date(c.createdAt).getTime();
       return Number.isFinite(t) && now - t < FileStore.DEDUPE_WINDOW_MS;
     });
@@ -2363,7 +2369,14 @@ export class FileStore implements IStore {
         // widens it to an ordinary stance (see recordRejectedApproach) instead
         // of answering "exists": it changes what the row gates.
         if (existing.origin === "page_rule_out") {
+          // Fully ordinary: the same explicit fields a fresh add stores
+          // (concept, addedVia, requestedBy), so every lane — concept↔concept
+          // included — treats it exactly like a fresh `stance add`. The
+          // existing reason is kept (an existing reason is never replaced).
           delete existing.origin;
+          existing.concept = concept;
+          existing.addedVia = addedVia;
+          existing.requestedBy = requestedBy;
           if (!existing.reason) existing.reason = reason;
           existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
           prefs.rejectedApproaches = rejected;

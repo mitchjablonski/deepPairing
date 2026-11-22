@@ -399,7 +399,8 @@ export function createReviewRoutes({
   //     comment carrying the reason and a `ruleOut` marker lands on the page.
   //     That comment is how the agent hears about it: check_feedback delivers
   //     it in the page's comment stream, the same lane every page comment uses.
-  //   - The page itself stays under review: no status change.
+  //   - The page's status doesn't change (an approved page may take a rule-out:
+  //     it applies to future pages).
   //   - An anchor from the frame only ever pre-targets the companion UI; this
   //     route runs only on the human's explicit submit there.
   app.post("/api/artifacts/:artifactId/rule-out", async (c) => {

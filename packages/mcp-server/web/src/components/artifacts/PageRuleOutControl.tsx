@@ -12,7 +12,8 @@ import { useArtifactStore } from "../../stores/artifact";
  * Records a rejected stance from the anchored text, with your reason, so the
  * gate refuses a later page (present_page, revise, or a watched-file save)
  * whose text still contains it. Pages only: other artifacts and edits are not
- * checked against it. The page itself stays under review. The phrase shown is
+ * checked against it. This page's own status doesn't change (an approved page
+ * can take a rule-out too: it applies to future pages). The phrase shown is
  * the exact one the server records (pageRuleOutKey is shared).
  *
  * Misclick-safe like "Never suggest this": the first click only opens a
@@ -53,7 +54,12 @@ export function PageRuleOutControl({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recordedHere, setRecorded] = useState<string | null>(null);
-  const recorded = recordedHere ?? ruledOut ?? null;
+  // The LIVE stance list wins: with a parent tracking it (onRecorded feeds a
+  // successful submit straight into that list, so the optimistic state shows
+  // at once), "ruled out" is exactly `ruledOut` — a stance retired in the
+  // Ledger while this spot is still selected makes the control usable again.
+  // Only a standalone use (no live list) falls back to the local record.
+  const recorded = onRecorded ? (ruledOut ?? null) : (recordedHere ?? ruledOut ?? null);
 
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const refocus = useRef(false);
@@ -138,7 +144,7 @@ export function PageRuleOutControl({
     >
       <label htmlFor={reasonId} className="block text-2xs text-text-muted mb-1.5">
         Rule out “<span className="text-text-primary">{phrase}</span>”? Claude won't present a page that still contains this
-        text in this project. It only applies to pages, and this page stays under review (you can retire the stance later
+        text in this project. It only applies to pages, and this page's status doesn't change (you can retire the stance later
         in the Ledger). Why are you ruling it out? (required)
       </label>
       <textarea

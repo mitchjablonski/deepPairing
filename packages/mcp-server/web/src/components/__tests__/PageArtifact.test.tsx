@@ -17,6 +17,7 @@ import { pageArtifact } from "@deeppairing/shared/__fixtures__/artifacts";
 import { PageArtifact } from "../artifacts/PageArtifact";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
+import { useLedgerStore } from "../../stores/ledger";
 import { useConnectionGraceStore } from "../../lib/connectionGrace";
 
 // The full verb row only renders once the reader reaches the artifact's end.
@@ -634,5 +635,27 @@ describe("PageArtifact — rule this out (#680 slice 4)", () => {
     await userEvent.click(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" }));
     expect(screen.getByTestId("page-rule-out-panel")).toHaveTextContent(/won't present a page that still contains this text/);
     expect(screen.getByTestId("page-rule-out-panel")).toHaveTextContent(/only applies to pages/);
+    expect(screen.getByTestId("page-rule-out-panel")).toHaveTextContent(/this page's status doesn't change/);
+    expect(screen.getByTestId("page-rule-out-panel")).not.toHaveTextContent(/stays under review/);
+  });
+  it("submit, then retire the stance with the spot still selected: the control is usable again", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    await userEvent.click(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" }));
+    const panel = screen.getByTestId("page-rule-out-panel");
+    await userEvent.type(within(panel).getByRole("textbox"), "too stale");
+    await userEvent.click(within(panel).getByRole("button", { name: "Rule it out" }));
+    // Optimistic: shown as ruled out at once (the live list hasn't refreshed yet).
+    expect(await screen.findByTestId("page-rule-out-recorded")).toBeInTheDocument();
+
+    // Retired in the Ledger: the live list refreshes without the row.
+    memoryRows = [];
+    act(() => {
+      useLedgerStore.setState({ version: useLedgerStore.getState().version + 1 });
+    });
+    const again = await within(screen.getByTestId("page-anchor-composer")).findByRole("button", { name: "Rule this out" });
+    expect(again).toBeEnabled();
+    expect(screen.queryByTestId("page-rule-out-recorded")).not.toBeInTheDocument();
   });
 });

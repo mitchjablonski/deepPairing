@@ -398,6 +398,96 @@ describe("#680 slice 4 — a later ordinary stance on the same phrase widens the
   });
 });
 
+describe("#680 slice 4 — review follow-ups", () => {
+  it("an APPROVED page accepts a rule-out (it applies to future pages); its status doesn't change", async () => {
+    const id = await presentPage();
+    store.updateArtifactStatus(id, "approved");
+    const res = await ruleOut(id, { htmlAnchor: cellAnchor, reason: "too stale" });
+    expect(res.status).toBe(200);
+    expect(store.getArtifacts().find((a) => a.id === id)!.status).toBe("approved");
+    expect(store.getSessionMemory().rejectedApproaches.find((r) => r.description === "Up to 60s")?.origin).toBe("page_rule_out");
+  });
+
+  it("stance add widening a page row stores what a fresh add stores, so a proposal naming only the CONCEPT is refused the same way", async () => {
+    const id = await presentPage(`${PAGE_HTML}<p>Redis Streams queue</p>`);
+    expect((await ruleOut(id, { htmlAnchor: { kind: "element", locator: "p", quote: "Redis Streams queue" }, reason: "flaky" })).status).toBe(200);
+    const widened = await recordStance(store, { what: "Redis Streams queue", why: "we tried it", addedVia: "cli", requestedBy: "user" });
+    const fresh = await recordStance(store, { what: "Kafka topic fanout", why: "too heavy", addedVia: "cli", requestedBy: "user" });
+    expect([widened.status, fresh.status]).toEqual(["widened", "recorded"]);
+    const rows = store.getSessionMemory().rejectedApproaches;
+    const w = rows.find((r) => r.description === "Redis Streams queue")!;
+    const f = rows.find((r) => r.description === "Kafka topic fanout")!;
+    for (const r of [w, f]) {
+      expect(r.origin).toBeUndefined();
+      expect(r).toMatchObject({ addedVia: "cli", requestedBy: "user" });
+      expect(r.concept).toBe(r.description);
+    }
+    expect(w.reason).toBe("flaky"); // an existing reason is never replaced
+
+    // Display text unrelated; only the option's named concept names the stance.
+    const optionNamingConcept = (concept: string) => callTool("present_options", {
+      title: "Pipeline",
+      context: "Which pipeline?",
+      options: [
+        { id: "a", title: "Option A", description: "a durable log", pros: [], cons: [], effort: "low", risk: "low", recommendation: true, concept: { name: concept } },
+        { id: "b", title: "Option B", description: "plain cron", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+      ],
+    });
+    const rf = await optionNamingConcept("Kafka topic fanout");
+    const rw = await optionNamingConcept("Redis Streams queue");
+    expect(rf.isError).toBe(true);
+    expect(rw.isError).toBe(true);
+    expect(rf.text).toContain("REJECTED_APPROACH_BLOCKED");
+    expect(rw.text).toContain("REJECTED_APPROACH_BLOCKED");
+  });
+
+  it("the page-only lane uses Unicode word boundaries; ordinary matching and Latin behaviour are unchanged", () => {
+    const ru = { description: "очередь задач", origin: "page_rule_out" as const };
+    const opts = { rawEditTextFrom: 0 };
+    expect(findRejectedApproachMatch(["Используйте очередь задач для фоновых работ"], [ru], opts)).not.toBeNull();
+    expect(findRejectedApproachMatch(["переочередь задачами"], [ru], opts)).toBeNull();
+    const latin = { description: "up to 60s", origin: "page_rule_out" as const };
+    expect(findRejectedApproachMatch(["TTL expiry, up to 60s stale"], [latin], opts)).not.toBeNull();
+    expect(findRejectedApproachMatch(["setup to 60s"], [latin], opts)).toBeNull();
+    // An ordinary stance keeps the ASCII boundary class (unchanged).
+    expect(findRejectedApproachMatch(["переочередь задачами"], [{ description: "очередь задач" }])).not.toBeNull();
+  });
+});
+
+describe("#680 slice 4 — a plain note and a rule-out never dedupe onto each other", () => {
+  const postNote = (id: string, content: string) =>
+    app.request("/api/comments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artifactId: id, content, target: { artifactId: id, htmlAnchor: cellAnchor } }),
+    });
+
+  it("a plain note, then a rule-out with the same reason and spot: a MARKED rule-out comment exists and check_feedback shows it", async () => {
+    const id = await presentPage();
+    expect((await postNote(id, "sixty seconds is too stale")).status).toBe(200);
+    const res = await ruleOut(id, { htmlAnchor: cellAnchor, reason: "sixty seconds is too stale" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.comment.ruleOut).toEqual({ description: "Up to 60s" });
+    const comments = store.getCommentsForArtifact(id);
+    expect(comments).toHaveLength(2);
+    expect(comments.filter((c) => c.ruleOut)).toHaveLength(1);
+    const fb = await callTool("check_feedback");
+    expect(fb.text).toContain('RULED OUT: recorded as a rejected stance ("Up to 60s")');
+    expect((fb.structuredContent as any).comments.filter((c: any) => c.ruleOut)).toHaveLength(1);
+  });
+
+  it("a rule-out, then a plain note with the same text: both are kept", async () => {
+    const id = await presentPage();
+    await ruleOut(id, { htmlAnchor: cellAnchor, reason: "sixty seconds is too stale" });
+    expect((await postNote(id, "sixty seconds is too stale")).status).toBe(200);
+    const comments = store.getCommentsForArtifact(id);
+    expect(comments).toHaveLength(2);
+    expect(comments.filter((c) => c.ruleOut)).toHaveLength(1);
+    expect(comments.filter((c) => !c.ruleOut)).toHaveLength(1);
+  });
+});
+
 describe("#680 slice 4 — check_feedback surfaces it in the page comment lane", () => {
   it("delivers the rule-out comment with its anchor, reason and the recorded stance phrase", async () => {
     const id = await presentPage();
