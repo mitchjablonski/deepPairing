@@ -1430,6 +1430,8 @@ ${helpInvocations}
     dp url [--open]                        Print this project's companion UI URL (--open launches it)
     dp open                                Create a standalone review session and print its ID and companion URL as JSON
     dp resume <standalone-session-id>      Print a fresh URL for an existing standalone review session in this project
+    dp present options --session-id ID --request-id UUID --file options.json
+                                           Present options from a JSON object. Reuse the request ID for retries.
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
@@ -1532,6 +1534,16 @@ ${helpInvocations}
   try {
     const { standaloneSession } = await import("./standalone-session.js");
     console.log(JSON.stringify(await standaloneSession(cwd, cmd, args.slice(1))));
+  } catch (err) {
+    console.error(`deepPairing: ${errorMessage(err)}`);
+    process.exitCode = 1;
+  }
+} else if (cmd === "present") {
+  try {
+    const { standalonePresent } = await import("./standalone-session.js");
+    const result = await standalonePresent(cwd, args.slice(1));
+    console.log(JSON.stringify(result));
+    if (result.isError) process.exitCode = 1;
   } catch (err) {
     console.error(`deepPairing: ${errorMessage(err)}`);
     process.exitCode = 1;

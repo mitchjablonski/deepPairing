@@ -108,6 +108,41 @@ test("standalone CLI opens and resumes the exact session across processes and da
       sessions: expect.arrayContaining([expect.objectContaining({ sessionId: resumed.sessionId, live: false })]),
     });
 
+    const inputFile = path.join(root, "options.json");
+    await fs.writeFile(inputFile, JSON.stringify({
+      title: "Choose a replay backend",
+      context: "Choose the storage backend for event replay.",
+      options: [
+        { id: "redis", title: "Redis Streams", description: "Use Redis Streams", concept: { name: "Redis Streams" },
+          pros: [], cons: [], effort: "medium", risk: "medium" },
+        { id: "local", title: "Local file", description: "Keep a local replay file",
+          pros: [], cons: [], effort: "low", risk: "low" },
+      ],
+    }));
+    const runPresent = (requestId: string) => run(project, "present", "options",
+      "--session-id", resumed.sessionId, "--request-id", requestId, "--file", inputFile);
+    const requestId = randomUUID();
+    const presented = JSON.parse((await runPresent(requestId)).stdout);
+    expect(presented).toMatchObject({
+      sessionId: resumed.sessionId, requestId, companionUrl: resumed.companionUrl,
+      artifactId: expect.stringMatching(/^art_/), decisionId: expect.stringMatching(/^dec_/),
+    });
+    expect(JSON.parse((await runPresent(requestId)).stdout)).toEqual({ ...presented, replayed: true });
+
+    // Seed the exact same project rejection memory the normal handler reads.
+    const reason = "No operators for this dependency.";
+    await sibling.recordRejectedApproach({ description: "Redis Streams", concept: "Redis Streams", reason });
+    const deniedId = randomUUID();
+    const refused = await runPresent(deniedId).catch((error: { code: number; stdout: string; stderr: string }) => error);
+    expect(refused).toMatchObject({ code: 1, stderr: "" });
+    expect(JSON.parse(refused.stdout)).toMatchObject({
+      sessionId: resumed.sessionId, requestId: deniedId, isError: true, code: "rejected_approach_blocked", reason,
+    });
+    expect(await readCatalog()).toMatchObject({
+      sessions: expect.arrayContaining([expect.objectContaining({ sessionId: resumed.sessionId, live: false, artifactCount: 1 })]),
+    });
+    expect(await fs.readdir(project)).not.toContain(".mcp.json");
+
     await page.goto(resumed.companionUrl);
     await expect.poll(() => page.evaluate(() => {
       const store = (window as Window & { __dpConnectionStore?: {

@@ -22,10 +22,16 @@ import { REGISTRATION_HEADER, type StanceExceptionRegistry } from "./stance-exce
 import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing/shared";
 import type { RetirementInput } from "../store/retirement.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
+import { presentStandaloneOptions } from "./standalone-options.js";
 
 const OpenStandaloneReviewBody = z.object({
   mode: z.enum(["open", "resume"]),
   expectedProjectRoot: z.string().min(1),
+}).strict();
+const PresentStandaloneOptionsBody = z.object({
+  operationId: z.string().uuid().transform((id) => id.toLowerCase()),
+  expectedProjectRoot: z.string().min(1),
+  args: z.record(z.string(), z.unknown()),
 }).strict();
 
 const RetirementBody = z.object({
@@ -390,7 +396,7 @@ export function createDaemonRoutes(
    * them can grant (A1 — granting is the public human route's job alone).
    */
   stanceExceptions?: StanceExceptionRegistry,
-  refreshCompanionLink?: () => void,
+  refreshCompanionLink?: () => number,
 ) {
   // U0.6 — same diagnostic seam as routes.ts. Wrapper-side mutations log
   // here; we want both UI clicks and agent-driven status updates in one log.
@@ -495,6 +501,10 @@ export function createDaemonRoutes(
   // A shell command can disappear before it receives its response. Give it a
   // browser link without leaving a wrapper registered or granting stance authority.
   if (authToken && daemonProjectRoot && refreshCompanionLink) {
+    const projectRoot = daemonProjectRoot;
+    function reviewDir(sessionId: string): string {
+      return path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+    }
     app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
       const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
       if (!parsed.ok) return parsed.res;
@@ -502,7 +512,7 @@ export function createDaemonRoutes(
       if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
       }
-      const dir = path.join(daemonProjectRoot, ".deeppairing", "sessions", sessionId);
+      const dir = reviewDir(sessionId);
       const existing = fs.lstatSync(dir, { throwIfNoEntry: false });
       if (parsed.data.mode === "resume" && !existing?.isDirectory()) {
         return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
@@ -513,6 +523,22 @@ export function createDaemonRoutes(
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
       return c.json({ sessionId });
+    });
+    app.post("/api/internal/sessions/:sessionId/present-options", async (c) => {
+      const parsed = await parseJsonBody(c, PresentStandaloneOptionsBody);
+      if (!parsed.ok) return parsed.res;
+      const sessionId = c.req.param("sessionId");
+      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+      }
+      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+      }
+      const store = sessions.get(sessionId) ?? installSession(sessionId, {});
+      const port = refreshCompanionLink();
+      const result = await presentStandaloneOptions(daemonProjectRoot, store, parsed.data.operationId, parsed.data.args, port,
+        (event) => broadcast(sessionId, event));
+      return c.json(result);
     });
   }
 
