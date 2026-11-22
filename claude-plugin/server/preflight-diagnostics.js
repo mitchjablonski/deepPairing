@@ -85,20 +85,23 @@ function writeHookStateAtomic(statePath, state) {
 function mutateHookState(statePath, mutate, opts = {}) {
   try {
     if (opts.createDir === false) {
-      if (!fs.statSync(path.dirname(statePath)).isDirectory()) return;
+      if (!fs.statSync(path.dirname(statePath)).isDirectory()) return false;
     } else {
       fs.mkdirSync(path.dirname(statePath), { recursive: true });
     }
     const lock = acquireHookStateLock(statePath);
+    if (opts.requireLock && !lock) return false;
     try {
       const state = readHookState(statePath);
       state.version = 1;
-      mutate(state);
+      if (mutate(state) === false) return false;
       writeHookStateAtomic(statePath, state);
+      return true;
     } finally {
       releaseHookStateLock(lock);
     }
   } catch {
+    return false;
   }
 }
 function hookStatePath(projectRoot) {
