@@ -367,17 +367,26 @@ describe("R1 fix 8 — an external changeset runs the preflight ADVISORY", () =>
 // --- fix 9: the payload ceiling --------------------------------------------
 
 describe("R1 fix 9 — a real PR's diff fits, and nothing else got a bigger allowance", () => {
-  it("isArtifactCreateRoute matches only the artifact and standalone Options POST routes", () => {
+  it("isArtifactCreateRoute matches only the artifact and standalone Options/Page POST routes", () => {
     expect(isArtifactCreateRoute("POST", "/api/internal/sessions/s1/artifacts")).toBe(true);
     expect(isArtifactCreateRoute("GET", "/api/internal/sessions/s1/artifacts")).toBe(false);
     expect(isArtifactCreateRoute("POST", "/api/internal/sessions/s1/present-options")).toBe(true);
     expect(isArtifactCreateRoute("GET", "/api/internal/sessions/s1/present-options")).toBe(false);
+    expect(isArtifactCreateRoute("POST", "/api/internal/sessions/s1/present-page")).toBe(true);
+    expect(isArtifactCreateRoute("GET", "/api/internal/sessions/s1/present-page")).toBe(false);
+    expect(isArtifactCreateRoute("PUT", "/api/internal/sessions/s1/present-page")).toBe(false);
     for (const p of [
       "/api/internal/sessions/s1/artifacts/a1/status",
       "/api/internal/sessions/s1/artifacts/status-changes/acknowledge",
       "/api/internal/sessions/s1/comments",
       "/api/internal/sessions/s1/open-review",
       "/api/internal/sessions/s1/present-options/other",
+      "/api/internal/sessions/s1/present-page/other",
+      "/api/internal/sessions/s1/present-pages",
+      "/api/internal/sessions/s1/present-page/",
+      "/api/internal/sessions/present-page",
+      "/api/sessions/s1/present-page",
+      "/api/internal/sessions/s1/x/present-page",
       "/api/evict",
       "/api/demo/run",
     ]) {

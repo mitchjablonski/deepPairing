@@ -473,6 +473,27 @@ export class DaemonClient implements IStore {
     }, true); // Never auto-register an agent wrapper on a route or transport error.
   }
 
+  /** Submit a standalone HTML page through the daemon's shared presentPage() handler. */
+  async presentStandalonePage(
+    expectedProjectRoot: string,
+    operationId: string,
+    args: { title: string; summary?: string; concept?: string } & ({ htmlBase64: string; path?: never } | { path: string; htmlBase64?: never }),
+    signal: AbortSignal,
+  ): Promise<ToolResult> {
+    try {
+      return await this.request<ToolResult>("/present-page", {
+        method: "POST", signal, redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot, operationId, args }),
+      }, true); // Never auto-register an agent wrapper on a route or transport error.
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support standalone pages. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
+  }
+
   async readStandaloneDecision(expectedProjectRoot: string, decisionId: string, signal: AbortSignal, waitMs?: number): Promise<StandaloneDecisionRead> {
     let result: StandaloneDecisionRead;
     try {
