@@ -157,6 +157,39 @@ describe("present_page — path escapes are refused", () => {
   });
 });
 
+describe("present_page — .deeppairing/ and dot-dot names", () => {
+  it("refuses a path inside .deeppairing/ (the daemon's state dir), directly or through a symlink", async () => {
+    fs.mkdirSync(path.join(root, ".deeppairing"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".deeppairing", "daemon.json"), '{"authToken":"secret"}');
+    fs.writeFileSync(path.join(root, ".deeppairing", "page.html"), "<p>state</p>");
+    for (const p of [".deeppairing/page.html", "docs/../.deeppairing/daemon.json", path.join(root, ".DeepPairing", "page.html")]) {
+      const res = await callTool("present_page", { title: "State", path: p });
+      expect(res.isError, p).toBe(true);
+      expect(res.text, p).toContain(".deeppairing/");
+    }
+    try {
+      fs.symlinkSync(path.join(root, ".deeppairing", "daemon.json"), path.join(root, "docs", "token.html"));
+    } catch {
+      return; // symlinks unavailable on this host
+    }
+    const viaLink = await callTool("present_page", { title: "State link", path: "docs/token.html" });
+    expect(viaLink.isError).toBe(true);
+    expect(viaLink.text).toContain(".deeppairing/");
+    expect(pages()).toHaveLength(0);
+  });
+
+  it("accepts an in-root name that merely starts with '..'", async () => {
+    fs.writeFileSync(path.join(root, "..notes.html"), "<p>dot-dot name</p>");
+    fs.mkdirSync(path.join(root, "..drafts"));
+    fs.writeFileSync(path.join(root, "..drafts", "p.html"), "<p>dot-dot dir</p>");
+    const file = await callTool("present_page", { title: "Dot dot file", path: "..notes.html" });
+    expect(file.isError).toBeFalsy();
+    const dir = await callTool("present_page", { title: "Dot dot dir", path: "..drafts/p.html" });
+    expect(dir.isError).toBeFalsy();
+    expect(pages().map((p) => (p.content as { sourcePath?: string }).sourcePath).sort()).toEqual(["..drafts/p.html", "..notes.html"]);
+  });
+});
+
 describe("present_page — the rejection gate", () => {
   it("refuses a page whose visible text matches a stored rejection, and returns its reason", async () => {
     store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });

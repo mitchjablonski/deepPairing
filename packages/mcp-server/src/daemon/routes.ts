@@ -4,7 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { staleResolveBody, closedResolveBody, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
+import { staleResolveBody, closedResolveBody, classifyClosedDecision, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -12,7 +12,7 @@ import { z } from "zod";
 import { ParentSupersededError, type FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import type { PreflightTrace } from "@deeppairing/shared";
-import { AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
+import { AutonomyLevelSchema, decisionCanAcceptAnswer, DetailDensitySchema, PAGE_HTML_MAX_BYTES, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
 import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
@@ -23,7 +23,8 @@ import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing
 import type { RetirementInput } from "../store/retirement.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
-import { decisionFeedback, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
+import { presentStandalonePage } from "./standalone-page.js";
+import { decisionFeedback, MAX_DECISION_WAIT_MS, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
 
 const OpenStandaloneReviewBody = z.object({
   mode: z.enum(["open", "resume"]),
@@ -34,9 +35,27 @@ const PresentStandaloneOptionsBody = z.object({
   expectedProjectRoot: z.string().min(1),
   args: z.record(z.string(), z.unknown()),
 }).strict();
+/** Inline HTML travels base64-encoded so the measured body cap is a fixed
+ *  function of the 2 MiB page cap (JSON string escaping can grow HTML up to
+ *  six-fold; base64 is exactly 4/3). Exactly one of htmlBase64 / path. */
+const PresentStandalonePageBody = z.object({
+  operationId: z.string().uuid().transform((id) => id.toLowerCase()),
+  expectedProjectRoot: z.string().min(1),
+  args: z.object({
+    title: z.string().optional(),
+    summary: z.string().optional(),
+    concept: z.string().optional(),
+    htmlBase64: z.string().min(1, "htmlBase64 must not be empty.")
+      .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, "htmlBase64 must be canonical base64.").optional(),
+    path: z.string().min(1).optional(),
+  }).strict().refine((a) => (a.htmlBase64 === undefined) !== (a.path === undefined), {
+    message: "Give exactly one of htmlBase64 or path.",
+  }),
+}).strict();
 const ReadStandaloneDecisionBody = z.object({
   expectedProjectRoot: z.string().min(1),
   decisionId: z.string().min(1),
+  waitMs: z.number().int().min(1).max(MAX_DECISION_WAIT_MS).optional(),
 }).strict();
 
 const RetirementBody = z.object({
@@ -532,6 +551,9 @@ export function createDaemonRoutes(
       }
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
+      // A resumed standalone review re-arms the file watch for its live
+      // file-backed pages (e.g. after a daemon restart). No wrapper lease.
+      try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks the link */ }
       return c.json({ sessionId });
     });
     app.post("/api/internal/sessions/:sessionId/present-options", async (c) => {
@@ -550,10 +572,44 @@ export function createDaemonRoutes(
         (event) => broadcast(sessionId, event));
       return c.json(result);
     });
+    app.post("/api/internal/sessions/:sessionId/present-page", async (c) => {
+      const parsed = await parseJsonBody(c, PresentStandalonePageBody);
+      if (!parsed.ok) return parsed.res;
+      const sessionId = c.req.param("sessionId");
+      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+      }
+      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+      }
+      const { htmlBase64, ...rest } = parsed.data.args;
+      let html: string | undefined;
+      if (htmlBase64 !== undefined) {
+        const bytes = Buffer.from(htmlBase64, "base64");
+        if (bytes.length > PAGE_HTML_MAX_BYTES) {
+          return c.json({
+            error: `The page is ${bytes.length} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
+            code: ERROR_CODES.body_too_large,
+          }, 413);
+        }
+        html = bytes.toString("utf8");
+      }
+      const store = sessions.get(sessionId) ?? installSession(sessionId, {});
+      const port = refreshCompanionLink();
+      // Re-arm the file watch for this review's live file-backed pages even
+      // when the call below only replays (no artifact event fires then), e.g.
+      // a same-ID retry straight after a daemon restart, without a resume.
+      try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks the present */ }
+      const result = await presentStandalonePage(daemonProjectRoot, store, parsed.data.operationId,
+        { ...rest, ...(html !== undefined ? { html } : {}) }, port, (event) => broadcast(sessionId, event));
+      return c.json(result);
+    });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
+      const signal = c.req.raw.signal;
       const parsed = await parseJsonBody(c, ReadStandaloneDecisionBody);
       if (!parsed.ok) return parsed.res;
-      const { expectedProjectRoot, decisionId } = parsed.data;
+      const { expectedProjectRoot, decisionId, waitMs } = parsed.data;
+      const deadline = performance.now() + (waitMs ?? 0);
       const sessionId = c.req.param("sessionId");
       if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
@@ -568,25 +624,56 @@ export function createDaemonRoutes(
           code: ERROR_CODES.session_not_registered,
         }, 404);
       }
-      // Wait behind the browser's resolve-and-flush boundary before observing its choice.
-      return withDecisionResolveLock(store, async () => {
-        const decision = store.getDecision(decisionId);
-        const artifact = decision && store.getArtifacts().find((a) =>
-          a.type === "decision" && a.id === decision.artifactId &&
-          (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
-        if (!decision || !artifact) {
+      let idleRefreshed = false;
+      while (!signal.aborted) {
+        // Inspect the choice after resolve/flush. Arm inside the lock so a
+        // committed choice cannot fall between the snapshot and subscription.
+        const read = await withDecisionResolveLock(store, async () => {
+          if (signal.aborted) return null;
+          const decision = store.getDecision(decisionId);
+          const artifacts = decision ? store.getArtifacts() : [];
+          const artifact = decision && artifacts.find((a) =>
+            a.type === "decision" && a.id === decision.artifactId &&
+            (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
+          if (!decision || !artifact) return null;
+          let waitStatus: StandaloneDecisionRead["waitStatus"];
+          if (waitMs !== undefined) {
+            const remaining = deadline - performance.now();
+            if (decision.response) {
+              waitStatus = "resolved";
+            } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
+              waitStatus = "closed";
+            } else if (remaining > 0) {
+              // Give an accepted wait a fresh idle interval without a wrapper lease.
+              if (!idleRefreshed) {
+                refreshCompanionLink();
+                idleRefreshed = true;
+              }
+              return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+            } else {
+              waitStatus = "timed_out";
+            }
+          }
+          const result: StandaloneDecisionRead = {
+            ...decisionFeedback(decision),
+            sessionId,
+            artifactStatus: artifact.status,
+            recordedRejections: store.getSessionMemory().rejectedApproaches
+              .filter((entry) => entry.sourceArtifactId === artifact.id)
+              .map(({ description, reason }) => ({ description, reason })),
+            ...(waitStatus === undefined ? {} : { waitStatus }),
+          };
+          return { result };
+        });
+        if (signal.aborted) break;
+        if (!read) {
           return c.json({ error: "Decision does not exist in this standalone session.", code: ERROR_CODES.decision_not_in_session }, 404);
         }
-        const result: StandaloneDecisionRead = {
-          ...decisionFeedback(decision),
-          sessionId,
-          artifactStatus: artifact.status,
-          recordedRejections: store.getSessionMemory().rejectedApproaches
-            .filter((entry) => entry.sourceArtifactId === artifact.id)
-            .map(({ description, reason }) => ({ description, reason })),
-        };
-        return c.json(result);
-      });
+        if (read.result) return c.json(read.result);
+        // Do not hold the lock while waiting for the browser to resolve.
+        await read.wake;
+      }
+      return c.body(null, 408);
     });
   }
 

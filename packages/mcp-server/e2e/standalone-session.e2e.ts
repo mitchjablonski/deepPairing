@@ -25,7 +25,7 @@ async function stopProjectDaemon(projectRoot: string): Promise<void> {
 }
 
 test("standalone CLI resumes the exact session and reads browser feedback without consuming it", async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dp-cli-review-")));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
@@ -134,24 +134,35 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     });
     expect(JSON.parse((await runPresent(requestId)).stdout)).toEqual({ ...presented, replayed: true });
 
-    const runRead = (sessionId: string) => run(project, "read-decision",
-      "--session-id", sessionId, "--decision-id", presented.decisionId);
-    const readDecision = async () => JSON.parse((await runRead(resumed.sessionId)).stdout);
-    expect(await readDecision()).toEqual({
+    const runRead = (sessionId: string, ...flags: string[]) => run(project, "read-decision",
+      "--session-id", sessionId, "--decision-id", presented.decisionId, ...flags);
+    const readDecision = async (...flags: string[]) => JSON.parse((await runRead(resumed.sessionId, ...flags)).stdout);
+    const draft = {
       sessionId: resumed.sessionId,
       decisionId: presented.decisionId,
       artifactId: presented.artifactId,
       context: input.context,
       artifactStatus: "draft",
       recordedRejections: [],
+    };
+    expect(await readDecision()).toEqual(draft);
+    expect(await readDecision("--wait-ms", "25")).toEqual({ ...draft, waitStatus: "timed_out" });
+    await expect(runRead(resumed.sessionId, "--wait-ms", "30001")).rejects.toMatchObject({
+      code: 1, stdout: "", stderr: expect.stringContaining("--wait-ms must be a whole number from 1 to 30000."),
     });
-    await expect(runRead(second.sessionId)).rejects.toMatchObject({
+    await expect(runRead(second.sessionId, "--wait-ms", "10000")).rejects.toMatchObject({
       code: 1, stdout: "", stderr: expect.stringContaining("Decision does not exist in this standalone session."),
     });
 
     await page.goto(resumed.companionUrl);
     const pane = page.locator(`[data-artifact-id="${presented.artifactId}"]`);
-    await pane.getByRole("button", { name: "Select Local file", exact: true }).click();
+    const [choice] = await Promise.all([
+      readDecision("--wait-ms", "10000"),
+      pane.getByRole("button", { name: "Select Local file", exact: true }).click(),
+    ]);
+    expect(choice).toEqual({
+      ...draft, artifactStatus: "approved", waitStatus: "resolved", selectedOptionId: "local", selectedTitle: "Local file",
+    });
     await expect(pane.getByText("Decision Made", { exact: true })).toBeVisible();
     await pane.getByRole("button", { name: "Never suggest Redis Streams", exact: true }).click();
     const reason = "No operators for this dependency.";
@@ -243,6 +254,34 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     await page.locator(`button[data-artifact-item="${changed.artifactId}"]`).click();
     await expect(page.locator(`[data-dp-pane][data-artifact-id="${changed.artifactId}"]:not([inert])`)
       .getByRole("button", { name: "Select SQLite", exact: true })).toBeVisible();
+
+    // #679/#680 — an HTML page from a project file goes through the same
+    // daemon route and replays on a retried request ID.
+    await fs.mkdir(path.join(project, "review"));
+    await fs.writeFile(path.join(project, "review", "page.html"), "<h1>Replay plan</h1><p>Keep a local replay file.</p>");
+    const pageId = randomUUID();
+    const runPage = () => run(project, "present", "page", "--session-id", resumed.sessionId, "--request-id", pageId,
+      "--path", "review/page.html", "--title", "Replay plan page");
+    const presentedPage = JSON.parse((await runPage()).stdout);
+    expect(presentedPage).toMatchObject({
+      sessionId: resumed.sessionId, requestId: pageId, artifactId: expect.stringMatching(/^art_/), sourcePath: "review/page.html",
+    });
+    expect(JSON.parse((await runPage()).stdout)).toEqual({ ...presentedPage, replayed: true, status: "draft" });
+    // Saving the file records v2 through the daemon's watch; a retry of the
+    // original call still replays v1 but says where the page went.
+    await fs.writeFile(path.join(project, "review", "page.html"), "<h1>Replay plan</h1><p>Keep a local replay file, compacted daily.</p>");
+    let movedReplay: Record<string, unknown> = {};
+    for (const end = Date.now() + 20_000; Date.now() < end;) {
+      movedReplay = JSON.parse((await runPage()).stdout);
+      if (movedReplay.currentArtifactId) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    expect(movedReplay).toEqual({
+      ...presentedPage, replayed: true, status: "superseded",
+      currentArtifactId: expect.stringMatching(/^art_/), currentVersion: 2, currentStatus: "draft",
+      note: expect.stringMatching(/^replayed; the page has since moved to v2 \(art_/),
+    });
+    expect(movedReplay.currentArtifactId).not.toBe(presentedPage.artifactId);
   } finally {
     await page.close();
     await stopProjectDaemon(project);
