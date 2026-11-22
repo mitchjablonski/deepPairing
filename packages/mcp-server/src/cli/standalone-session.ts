@@ -10,6 +10,7 @@ import { readSessionDirectories } from "./session-selection.js";
 
 const SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const PRESENT_OPTIONS_USAGE = "Usage: deeppairing present options --session-id ID --request-id UUID --file options.json";
+const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --decision-id ID";
 const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
 
@@ -56,6 +57,18 @@ export async function standaloneSession(
     throw new Error(`${errorMessage(err)}${recovery}`);
   }
   return { sessionId, companionUrl };
+}
+
+export async function standaloneReadDecision(projectRoot: string, args: string[]) {
+  const { values } = parseArgs({
+    args,
+    options: { "session-id": { type: "string" }, "decision-id": { type: "string" } },
+  });
+  const { "session-id": sessionId, "decision-id": decisionId } = values;
+  if (!sessionId || !decisionId?.trim()) throw new Error(READ_DECISION_USAGE);
+  requireStandaloneSession(projectRoot, sessionId);
+  const { client } = await connectStandaloneSession(projectRoot, sessionId);
+  return client.readStandaloneDecision(projectRoot, decisionId, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
 }
 
 export async function standalonePresent(projectRoot: string, args: string[]): Promise<PresentOptionsReceipt> {

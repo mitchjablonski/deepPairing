@@ -23,6 +23,7 @@ import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing
 import type { RetirementInput } from "../store/retirement.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
+import { decisionFeedback, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
 
 const OpenStandaloneReviewBody = z.object({
   mode: z.enum(["open", "resume"]),
@@ -32,6 +33,10 @@ const PresentStandaloneOptionsBody = z.object({
   operationId: z.string().uuid().transform((id) => id.toLowerCase()),
   expectedProjectRoot: z.string().min(1),
   args: z.record(z.string(), z.unknown()),
+}).strict();
+const ReadStandaloneDecisionBody = z.object({
+  expectedProjectRoot: z.string().min(1),
+  decisionId: z.string().min(1),
 }).strict();
 
 const RetirementBody = z.object({
@@ -448,8 +453,8 @@ export function createDaemonRoutes(
   const AGENT_ACTIVITY_THROTTLE_MS = 5_000;
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    // Preparing a browser link is not wrapper activity.
-    if (c.res.status >= 400 || c.req.path.endsWith("/open-review")) return;
+    // Preparing a browser link and reading a decision are independent of wrapper activity.
+    if (c.res.status >= 400 || c.req.path.endsWith("/open-review") || c.req.path.endsWith("/read-decision")) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
     const sid = m?.[1];
     if (!sid) return;
@@ -544,6 +549,44 @@ export function createDaemonRoutes(
       const result = await presentStandaloneOptions(daemonProjectRoot, store, parsed.data.operationId, parsed.data.args, port,
         (event) => broadcast(sessionId, event));
       return c.json(result);
+    });
+    app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
+      const parsed = await parseJsonBody(c, ReadStandaloneDecisionBody);
+      if (!parsed.ok) return parsed.res;
+      const { expectedProjectRoot, decisionId } = parsed.data;
+      const sessionId = c.req.param("sessionId");
+      if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
+        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+      }
+      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+      }
+      const store = sessions.get(sessionId);
+      if (!store) {
+        return c.json({
+          error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry read-decision.`,
+          code: ERROR_CODES.session_not_registered,
+        }, 404);
+      }
+      // Wait behind the browser's resolve-and-flush boundary before observing its choice.
+      return withDecisionResolveLock(store, async () => {
+        const decision = store.getDecision(decisionId);
+        const artifact = decision && store.getArtifacts().find((a) =>
+          a.type === "decision" && a.id === decision.artifactId &&
+          (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
+        if (!decision || !artifact) {
+          return c.json({ error: "Decision does not exist in this standalone session.", code: ERROR_CODES.decision_not_in_session }, 404);
+        }
+        const result: StandaloneDecisionRead = {
+          ...decisionFeedback(decision),
+          sessionId,
+          artifactStatus: artifact.status,
+          recordedRejections: store.getSessionMemory().rejectedApproaches
+            .filter((entry) => entry.sourceArtifactId === artifact.id)
+            .map(({ description, reason }) => ({ description, reason })),
+        };
+        return c.json(result);
+      });
     });
   }
 
