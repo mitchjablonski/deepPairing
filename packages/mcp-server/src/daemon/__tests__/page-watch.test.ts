@@ -409,3 +409,67 @@ describe("page file watch — review fixes", () => {
     expect(readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused!.delivered).toBe(true);
   });
 });
+
+describe("page file watch — a save landing during the gate check (Codex review)", () => {
+  /** The real gate, with its FIRST call held open until released. */
+  function heldFirstGate(): { gate: PageWatchDeps["gate"]; release: () => void; pending: () => boolean } {
+    let release: (() => void) | null = null;
+    let first = true;
+    const gate: PageWatchDeps["gate"] = async (...args) => {
+      if (first) {
+        first = false;
+        await new Promise<void>((r) => { release = r; });
+      }
+      return preflightRejectedApproaches(...args);
+    };
+    return { gate, release: () => release!(), pending: () => release !== null };
+  }
+
+  it("save B during save A's gate: only B is recorded, after its own quiet period (not the rate limit)", async () => {
+    watcher.dispose();
+    const held = heldFirstGate();
+    watcher = makeWatcher({ gate: held.gate });
+    const v1 = presentFilePage("docs/page.html", "<p>zero</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>save A</p>");
+    await vi.advanceTimersByTimeAsync(2_000); // A's quiet period ends; A's gate is now pending
+    expect(held.pending()).toBe(true);
+    write("docs/page.html", "<p>save B</p>"); // B lands mid-gate
+    held.release();
+    await watcher.idle();
+    // A is stale: no version, no notice.
+    expect(pages()).toHaveLength(1);
+    expect(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).toBeUndefined();
+    // B: its own 2s quiet read — NOT 10s behind a window A never earned.
+    await settle(1_900);
+    expect(pages()).toHaveLength(1);
+    await settle(200);
+    expect(pages()).toHaveLength(2);
+    const v2 = liveTip()!;
+    expect((v2.content as any).html).toBe("<p>save B</p>");
+    expect(store.getArtifacts().filter((a) => a.parentId === v1.id)).toHaveLength(1);
+    expect(events.filter((e) => e.type === "artifact_created")).toHaveLength(1);
+  });
+
+  it("refusal variant: A matches a stance, B doesn't — no refusal for A, B recorded", async () => {
+    store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });
+    watcher.dispose();
+    const held = heldFirstGate();
+    watcher = makeWatcher({ gate: held.gate });
+    const v1 = presentFilePage("docs/page.html", "<p>Keep the current host.</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>We should move the API to Railway for simpler deploys.</p>");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(held.pending()).toBe(true);
+    write("docs/page.html", "<p>Stay on the current host for now.</p>");
+    held.release();
+    await watcher.idle();
+    expect(readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused).toBeUndefined();
+    expect(events.filter((e) => e.type === "preflight_blocked")).toHaveLength(0);
+    await settle(2_100);
+    expect(pages()).toHaveLength(2);
+    expect((liveTip()!.content as any).html).toBe("<p>Stay on the current host for now.</p>");
+    expect(readFileWatch(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).refused).toBeUndefined();
+    expect(events.filter((e) => e.type === "preflight_blocked")).toHaveLength(0);
+  });
+});

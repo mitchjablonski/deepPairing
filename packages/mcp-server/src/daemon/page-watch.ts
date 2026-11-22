@@ -92,6 +92,9 @@ interface Entry {
   lastSig: string;
   lastRecordAt: number;
   dirty: boolean;
+  /** Bumped on every file event. A read whose generation is no longer
+   *  current describes a save that has since been overwritten. */
+  gen: number;
   processing: Promise<void> | null;
   stopped: boolean;
 }
@@ -242,6 +245,7 @@ export class PageWatcher {
       lastSig: statSig(absPath),
       lastRecordAt: 0,
       dirty: false,
+      gen: 0,
       processing: null,
       stopped: false,
     };
@@ -295,6 +299,7 @@ export class PageWatcher {
     if (entry.stopped) return;
     entry.lastSig = statSig(entry.absPath);
     entry.dirty = true;
+    entry.gen++;
     // A read in flight reschedules itself when it finishes (dirty).
     if (entry.processing) return;
     this.arm(entry, this.quietMs);
@@ -326,6 +331,13 @@ export class PageWatcher {
   private async process(entry: Entry): Promise<void> {
     const store = this.deps.getStore(entry.sessionId);
     if (!store) return;
+    // Codex review — the snapshot this read is about. A save that lands while
+    // an await below is pending (save B during save A's gate check) bumps
+    // `gen`: A is then stale, so it records nothing, posts no refusal and
+    // does NOT start the rate-limit window. The completion handler re-arms
+    // the quiet timer (dirty), so B gets its own 2s quiet read.
+    const startGen = entry.gen;
+    const stale = () => entry.stopped || this.disposed || entry.gen !== startGen;
     const live = (): Artifact | undefined => {
       const a = store.getArtifacts().find((x) => x.id === entry.artifactId);
       return a && isWatchable(a) && sourceOf(a) === entry.sourcePath ? a : undefined;
@@ -367,7 +379,7 @@ export class PageWatcher {
     // Review P3-5b — the refused-content key includes the stances in force, so
     // retiring (or adding) a stance re-admits (or re-checks) identical bytes.
     const digest = sha256(`${html}\u0000${await this.stanceFingerprint(store)}`);
-    if (entry.stopped || this.disposed) return;
+    if (stale()) return;
     if (readFileWatch(cur.fileWatch).refused?.digest === digest) return; // already refused
 
     // The rejection gate — the same projection present_page and revise use.
@@ -381,8 +393,8 @@ export class PageWatcher {
     });
 
     // Review P2-1 — stopped (resolved, session ended) or disposed while the
-    // gate ran: record nothing.
-    if (entry.stopped || this.disposed) return;
+    // gate ran: record nothing. Codex review — nor if a newer save landed.
+    if (stale()) return;
     // Re-read after the await: the agent may have revised, or the human
     // resolved, the artifact meanwhile.
     const now = live();
