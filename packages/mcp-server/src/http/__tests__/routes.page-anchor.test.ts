@@ -100,3 +100,19 @@ describe("#680 slice 2 — page-only invariant", () => {
   });
 });
 
+describe("#680 slice 2 — the saved owner is the id the store checked", () => {
+  it("stamps params.artifactId last, over a conflicting target.artifactId", () => {
+    store.createArtifact({ id: "plan_9", type: "plan", title: "Other", content: { steps: [] } });
+    const c = store.addComment({
+      id: "cmt_conflict",
+      artifactId: "page_1",
+      content: "which owner?",
+      author: "human",
+      target: { artifactId: "plan_9", htmlAnchor: cellAnchor },
+    });
+    expect(c.target.artifactId).toBe("page_1");
+    // The anchor was judged against page_1 (a page), so it is kept.
+    expect(c.target.htmlAnchor).toEqual(cellAnchor);
+    expect(store.getCommentsForArtifact("plan_9")).toHaveLength(0);
+  });
+});

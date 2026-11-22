@@ -100,27 +100,47 @@ export interface SanitizedPage {
   bodyAttrs: Record<string, string>;
 }
 
+/** Every element under the document root, depth first, in any namespace. */
+function allElements(doc: Document): Element[] {
+  const out: Element[] = [];
+  const stack: Element[] = doc.documentElement ? [doc.documentElement] : [];
+  while (stack.length) {
+    const el = stack.pop()!;
+    out.push(el);
+    const kids = el.childNodes;
+    for (let i = kids.length - 1; i >= 0; i--) {
+      const k = kids[i]!;
+      if (k.nodeType === 1) stack.push(k as Element);
+    }
+  }
+  return out;
+}
+
 /** Parse, strip, serialise. Never executes the input. */
 export function sanitizePageHtml(html: string): SanitizedPage {
   if (typeof DOMParser === "undefined") return { html: "", htmlAttrs: {}, bodyAttrs: {} };
   const doc = new DOMParser().parseFromString(html, "text/html");
-  // Every element, any namespace (getElementsByTagNameNS("*", "*")), head
-  // included. A second pass over script elements by namespace-wildcard lookup
-  // is the belt-and-braces check for the one tag that matters most.
-  for (const el of Array.from(doc.getElementsByTagNameNS("*", "*"))) {
+  // Walk the WHOLE parsed document (head and body, every namespace: HTML, SVG,
+  // MathML) by plain child traversal and drop by lowercased localName. Plain
+  // traversal does not depend on how a DOM implementation answers namespace-
+  // or case-sensitive queries (a selector or getElementsByTagNameNS lookup can
+  // miss elements in one namespace or the other). Two query passes follow as
+  // belt and braces for the tag that matters most.
+  for (const el of allElements(doc)) {
     if (DROP_TAGS.has(el.localName.toLowerCase())) el.remove();
   }
+  for (const el of Array.from(doc.querySelectorAll("script"))) el.remove();
   for (const el of Array.from(doc.getElementsByTagNameNS("*", "script"))) el.remove();
   for (const el of Array.from(doc.querySelectorAll("meta"))) {
     if ((el.getAttribute("http-equiv") ?? "").trim().toLowerCase() === "refresh") el.remove();
   }
-  for (const el of Array.from(doc.querySelectorAll("*"))) {
+  for (const el of allElements(doc)) {
     const tag = el.localName.toLowerCase();
     if (tag !== "set" && !tag.startsWith("animate")) continue;
     const target = Array.from(el.attributes).find((a) => a.name.toLowerCase() === "attributename")?.value ?? "";
     if (target.toLowerCase().includes("href")) el.remove();
   }
-  for (const el of Array.from(doc.querySelectorAll("*"))) scrubAttributes(el);
+  for (const el of allElements(doc)) scrubAttributes(el);
   return {
     html: doc.head.innerHTML + doc.body.innerHTML,
     htmlAttrs: safeRootAttrs(doc.documentElement),

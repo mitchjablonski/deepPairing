@@ -406,15 +406,15 @@ function findAnchor(a) {
     }
     return pickBest(scored);
   }
+  // Candidates are deduplicated on exact node identity only; every one is
+  // validated on its own below. An equal-text wrapper and the real target are
+  // separate candidates, so a wrapper that fails the kind/identity checks can
+  // never stand in for (or suppress) the right element.
   var cands = [];
   function add(el, fromLocator) {
     if (!isEl(el)) return;
     for (var k = 0; k < cands.length; k++) {
-      var c = cands[k];
-      if (c.el === el || ((c.el.contains(el) || el.contains(c.el)) && elementText(c.el) === elementText(el))) {
-        if (fromLocator) { c.el = el; c.fromLocator = true; }
-        return;
-      }
+      if (cands[k].el === el) { if (fromLocator) cands[k].fromLocator = true; return; }
     }
     cands.push({ el: el, fromLocator: !!fromLocator });
   }
@@ -669,6 +669,13 @@ function onAuxClick(e) {
   if (t && t.closest && t.closest("a[href], area[href]")) e.preventDefault();
 }
 function onResize() { schedule(); }
+/** Capture phase so an inner scroll container (a wide table, a diagram) is
+ *  seen too; schedule() coalesces bursts into one bounded redraw. */
+function onScroll(e) {
+  var t = e && e.target;
+  if (t && t.nodeType === 1 && own(t)) return;
+  schedule();
+}
 function onReady() {
   if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
   post({ dp: "ready" });
@@ -680,6 +687,7 @@ window.addEventListener("mouseup", onMouseUp, true);
 window.addEventListener("mousemove", onMove, true);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
+window.addEventListener("scroll", onScroll, true);
 observe();
 if (document.readyState === "complete") onReady(); else window.addEventListener("load", onReady);
 return function uninstall() {
@@ -690,6 +698,7 @@ return function uninstall() {
   window.removeEventListener("mousemove", onMove, true);
   window.removeEventListener("message", onMessage);
   window.removeEventListener("resize", onResize);
+  window.removeEventListener("scroll", onScroll, true);
   window.removeEventListener("load", onReady);
   if (mo) mo.disconnect();
   if (ro) ro.disconnect();

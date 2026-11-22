@@ -8,6 +8,7 @@ import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { useChainComments } from "../../hooks/useChainComments";
 import { useReplayStore } from "../../stores/replay";
+import { useArtifactStore } from "../../stores/artifact";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
@@ -16,15 +17,6 @@ import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
-
-/** True while the reviewer is typing in a control of the companion itself
- *  (not the page frame): a frame message must never move focus out of it. */
-function parentControlFocused(frame: HTMLIFrameElement | null): boolean {
-  const el = typeof document !== "undefined" ? document.activeElement : null;
-  if (!el || el === frame || el === document.body) return false;
-  const tag = el.tagName.toLowerCase();
-  return tag === "textarea" || tag === "input" || tag === "select" || (el as HTMLElement).isContentEditable === true;
-}
 
 /** The root comments that point at a spot on the page, oldest first: their
  *  order is the pin numbering. */
@@ -97,6 +89,28 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
 
   const [draft, setDraft] = useState<HtmlAnchor | null>(null);
   const [openNonce, setOpenNonce] = useState(0);
+  // Who opened the composer: an explicit parent action (a pin in the list)
+  // focuses it on mount; a frame-initiated open is focused only after a fresh
+  // ownership check (frameFocusNonce below).
+  const [explicitOpen, setExplicitOpen] = useState(false);
+  const [frameFocusNonce, setFrameFocusNonce] = useState(0);
+  const composerBoxRef = useRef<HTMLDivElement>(null);
+  const artifactIdRef = useRef(artifact.id);
+  artifactIdRef.current = artifact.id;
+
+  /** A frame-initiated action may touch focus only while the reviewer is
+   *  actually in THIS page's frame: the iframe is connected, owns focus in the
+   *  companion document, is not inside an exiting (inert) pane, and this page
+   *  is still the selected artifact. */
+  const frameOwnsFocus = useCallback((): boolean => {
+    const f = iframeRef.current;
+    if (!f || !f.isConnected || document.activeElement !== f) return false;
+    if (f.closest("[inert]")) return false;
+    const selected = useArtifactStore.getState().selectedArtifactId;
+    return selected == null || selected === artifactIdRef.current;
+  }, []);
+  const frameOwnsFocusRef = useRef(frameOwnsFocus);
+  frameOwnsFocusRef.current = frameOwnsFocus;
   const [found, setFound] = useState<boolean[] | null>(null);
   const [running, setRunning] = useState(false);
   const [annotate, setAnnotate] = useState(true);
@@ -124,9 +138,15 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         // Pointing is off (clicks belong to the page), the artifact is
         // read-only, or the reviewer is typing in a companion control: drop it.
         // An anchor only ever opens the composer; submitting stays explicit.
-        if (readOnly || !pointingRef.current || parentControlFocused(iframeRef.current)) return;
+        // Dropped when pointing is off (clicks belong to the page), the page is
+        // read-only, or the reviewer is not in this frame right now (typing in
+        // or focused on a companion control, another pane, an exiting pane). An
+        // anchor only ever opens the composer; submitting stays explicit.
+        if (readOnly || !pointingRef.current || !frameOwnsFocusRef.current()) return;
         setDraft({ ...anchor, version: artifact.version });
+        setExplicitOpen(false);
         setOpenNonce((n) => n + 1);
+        setFrameFocusNonce((n) => n + 1);
         return;
       }
       if (isReadyMessage(event, frame)) {
@@ -153,6 +173,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     setFound(null);
   }, [running]);
 
+  // Frame-initiated focus: re-check ownership at the moment of moving it.
+  useEffect(() => {
+    if (!frameFocusNonce || !frameOwnsFocus()) return;
+    composerBoxRef.current?.querySelector("textarea")?.focus?.();
+  }, [frameFocusNonce, frameOwnsFocus]);
+
   const onRunningChange = useCallback((r: boolean) => setRunning(r), []);
 
   const focusComment = (index: number) => {
@@ -161,6 +187,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     postToFrame({ dp: "focus", index });
     if (!readOnly) {
       setDraft({ ...anchor, version: artifact.version });
+      setExplicitOpen(true);
       setOpenNonce((n) => n + 1);
     }
   };
@@ -221,6 +248,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       {draft && !readOnly && (
         <div
           className="p-3 rounded-lg border border-accent-blue/30 bg-surface-elevated space-y-2"
+          ref={composerBoxRef}
           data-testid="page-anchor-composer"
         >
           <div className="flex items-start gap-2">
@@ -241,7 +269,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             comments={draftComments}
             target={{ htmlAnchor: draft }}
             roomy
-            focusOnOpen
+            focusOnOpen={explicitOpen}
             placeholder="Comment on this spot… (⌘⏎ to send)"
             textareaLabel="Comment on the selected spot"
             secondarySubmitLabel="Ask"

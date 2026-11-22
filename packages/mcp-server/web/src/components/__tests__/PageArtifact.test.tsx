@@ -138,10 +138,24 @@ function fakeFrameWindow() {
   return win;
 }
 
-function fromFrame(source: unknown, data: unknown) {
-  act(() => {
-    window.dispatchEvent(new MessageEvent("message", { data, source: source as MessageEventSource }));
-  });
+/** Pretend focus is (or is not) inside the page frame while a message lands:
+ *  a real click into the frame gives the iframe focus in the companion. */
+function withActiveElement(el: Element | null, fn: () => void) {
+  Object.defineProperty(document, "activeElement", { get: () => el, configurable: true });
+  try {
+    fn();
+  } finally {
+    delete (document as any).activeElement;
+  }
+}
+
+function fromFrame(source: unknown, data: unknown, opts: { frameFocused?: boolean } = {}) {
+  const dispatch = () =>
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", { data, source: source as MessageEventSource }));
+    });
+  if (opts.frameFocused === false) dispatch();
+  else withActiveElement(frame(), dispatch);
 }
 
 const cellAnchor = {
@@ -164,6 +178,44 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     expect(within(composer).getByText("Staleness")).toBeInTheDocument();
     // Opening the composer creates nothing: a comment exists only on submit.
     expect(useArtifactStore.getState().comments[pageArtifact.id] ?? []).toHaveLength(0);
+    // The reviewer was in the frame, so the caret follows them to the composer.
+    expect(document.activeElement).toBe(within(composer).getByLabelText("Comment on the selected spot"));
+  });
+
+  it("drops a frame anchor while a companion BUTTON holds focus", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    const button = document.createElement("button");
+    button.textContent = "elsewhere";
+    document.body.appendChild(button);
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor }, { frameFocused: false });
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(button);
+    button.remove();
+  });
+
+  it("drops a frame anchor in an exiting (inert) pane, even with the frame focused", () => {
+    render(
+      <div data-testid="pane">
+        <PageArtifact artifact={pageArtifact} />
+      </div>,
+    );
+    const win = fakeFrameWindow();
+    screen.getByTestId("pane").setAttribute("inert", "");
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+  });
+
+  it("drops a frame anchor once another artifact is selected", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    act(() => {
+      useArtifactStore.setState({ selectedArtifactId: "art_somewhere_else" });
+    });
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
   });
 
   it("ignores an anchor from any other source, a malformed one, and an over-length one", () => {
@@ -244,6 +296,8 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
 
     await userEvent.click(screen.getByTestId("page-annotation"));
     expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", index: 0 }, "*");
+    // An explicit open from the companion still focuses the composer.
+    expect(document.activeElement).toBe(screen.getByLabelText("Comment on the selected spot"));
   });
 
   it("drops anchors while pointing is off (after Run), and accepts them again when it is back on", async () => {
@@ -266,7 +320,7 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     await userEvent.click(respond);
     await userEvent.type(respond, "half a thought");
     expect(document.activeElement).toBe(respond);
-    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor }, { frameFocused: false });
     expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
     expect(document.activeElement).toBe(respond);
     expect(useArtifactStore.getState().comments[pageArtifact.id] ?? []).toHaveLength(0);

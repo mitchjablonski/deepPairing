@@ -222,6 +222,19 @@ describe("annotator core — re-finding anchors", () => {
     expect(core.findAnchor({ kind: "link", locator: "#l1", quote: "docs", href: "https://b.example" })?.el.id).toBe("l2");
   });
 
+  it("a stale equal-text wrapper at the old locator cannot suppress the real link", () => {
+    document.body.innerHTML = "<div id=\"w\"><a href=\"https://b.example\">docs</a></div><p>more</p>";
+    const core = makeCore();
+    const hit = core.findAnchor({ kind: "link", locator: "#w", quote: "docs", href: "https://b.example" });
+    expect(hit?.el.localName).toBe("a");
+  });
+
+  it("an element locator wins over an equal-text descendant found by quote", () => {
+    const core = makeCore();
+    const hit = core.findAnchor({ kind: "element", locator: "div[data-testid=\"card\"]", quote: "Card body" });
+    expect(hit?.el.getAttribute("data-testid")).toBe("card");
+  });
+
   it("a text anchor uses prefix/suffix before the locator", () => {
     document.body.innerHTML = "<p id=\"a\">one beta two</p><p id=\"b\">three beta four</p>";
     const core = makeCore();
@@ -345,6 +358,20 @@ describe("annotator main — event wiring", () => {
     window.dispatchEvent(new MessageEvent("message", { data: { dp: "focus", index: 0 }, source: window }));
     expect(spy).toHaveBeenCalled();
     expect((old as any).scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("an inner scroll container's scroll redraws the pins (capture phase, coalesced)", async () => {
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }] }, source: window }),
+    );
+    const before = document.querySelector("dp-annotator-pin");
+    expect(before).not.toBeNull();
+    const inner = document.querySelector("section")!;
+    for (let i = 0; i < 5; i++) inner.dispatchEvent(new Event("scroll")); // scroll does not bubble
+    await new Promise((r) => setTimeout(r, 300));
+    const after = document.querySelector("dp-annotator-pin");
+    expect(after).not.toBeNull();
+    expect(after).not.toBe(before);
   });
 
   it("drawing pins does not trigger its own redraw loop", async () => {

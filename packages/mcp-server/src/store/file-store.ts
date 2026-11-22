@@ -1296,7 +1296,9 @@ export class FileStore implements IStore {
       // one is dropped, never persisted.
       // Page-only: an htmlAnchor names a spot inside a `page` artifact's HTML,
       // so it is stripped from a comment on any other artifact (or the session).
-      target: { artifactId: params.artifactId, ...pageOnlyHtmlAnchor(sanitizeHtmlAnchor(sanitizeSkeletonAnchor(params.target)), targetArtifact?.type) },
+      // The validated owner is stamped LAST, so a conflicting
+      // `target.artifactId` can never override the id the store checked.
+      target: { ...pageOnlyHtmlAnchor(sanitizeHtmlAnchor(sanitizeSkeletonAnchor(params.target)), targetArtifact?.type), artifactId: params.artifactId },
       parentCommentId: params.parentCommentId ?? null,
       author: params.author,
       content: params.content,
