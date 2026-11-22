@@ -27,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sessionOwesDebrief } from "../debrief-gate.js";
 import { deriveSessionId } from "../session-id.js";
-import { appendHookFire, hookErrorMessage, hookStatePath, resolveHookProjectRoot } from "./hook-state.js";
+import { appendHookFire, hookErrorMessage, hookStatePath, mutateHookState, resolveHookProjectRoot } from "./hook-state.js";
 import { exteriorDriftParts, isSkeletonDriftBaseline, isSkeletonApprovedVisualId } from "../mcp/skeleton-drift.js";
 import { checkSkeletonExteriorDrift } from "../mcp/skeleton-read.js";
 import { SKELETON_SCOPE_MAX_AGE_MS, readSkeletonScopeFile } from "../skeleton-scope.js";
@@ -43,6 +43,7 @@ const BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "
 
 type StopArtifact = {
   id?: string;
+  title?: string;
   status?: string;
   type?: string;
   createdAt?: string;
@@ -53,11 +54,11 @@ type StopArtifact = {
   content?: unknown;
 };
 
-/** #686 P2c — hooks-state field: drift nudges already sent (dedupe keys). */
+/** Drift claims have their own file so best-effort telemetry can't overwrite them. */
+const DRIFT_NUDGED_FILE = "skeleton-drift-nudges.json";
 const DRIFT_NUDGED_KEY = "skeletonDriftNudged";
 const DRIFT_NUDGED_CAP = 50;
-/** The nudge line's bounds: plans named, files per plan, and the drift
- *  phrase's length (the fixed text around it adds ~110 characters). */
+/** The nudge line's bounds: plans named, files per plan, and the drift phrase's length. */
 const MAX_NUDGE_PLANS = 3;
 const MAX_NUDGE_FILES = 3;
 const MAX_NUDGE_WHAT_CHARS = 280;
@@ -101,30 +102,46 @@ function driftBaselines(raw: unknown[], now: number): StopArtifact[] {
   });
 }
 
-/** The nudge keys already sent, read WITHOUT readHookState's salvage copy
- *  (a corrupt file is backed up once, by the locked write at exit). */
-function peekNudged(statePath: string): unknown[] {
+function nudgeKeys(state: Record<string, unknown>): string[] {
+  const keys = state[DRIFT_NUDGED_KEY];
+  return Array.isArray(keys) ? keys.filter((key): key is string => typeof key === "string") : [];
+}
+
+/** The nudge keys already sent, read without writing a salvage copy. */
+function peekNudged(statePath: string): string[] {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-    const list = isObj(parsed) ? parsed[DRIFT_NUDGED_KEY] : undefined;
-    return Array.isArray(list) ? list : [];
+    return isObj(parsed) ? nudgeKeys(parsed) : [];
   } catch {
     return [];
   }
 }
 
-const oneLine = (t: unknown): string => String(t ?? "").replace(/[\r\n\u2028\u2029]+/g, " ").slice(0, 60);
+function oneLine(text: string): string {
+  return text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (char) => `\\u{${char.codePointAt(0)!.toString(16)}}`);
+}
+
+function describeDrift(candidates: Array<{ title: string; parts: string[] }>): string {
+  const filesOf = (parts: string[]) =>
+    parts.slice(0, MAX_NUDGE_FILES).map(oneLine).join("; ") +
+    (parts.length > MAX_NUDGE_FILES ? `; +${parts.length - MAX_NUDGE_FILES} more files` : "");
+  const what = candidates.length === 1
+    ? filesOf(candidates[0]!.parts)
+    : candidates.slice(0, MAX_NUDGE_PLANS).map((plan) => `"${plan.title || "untitled plan"}": ${filesOf(plan.parts)}`).join(" | ") +
+      (candidates.length > MAX_NUDGE_PLANS ? ` | +${candidates.length - MAX_NUDGE_PLANS} more plans` : "");
+  return what.length <= MAX_NUDGE_WHAT_CHARS ? what : `${what.slice(0, MAX_NUDGE_WHAT_CHARS - 1)}…`;
+}
 
 /** Runs the hook and exits the process. Never returns, never throws. */
 export function runStopHook(stdin: string = "", now: number = Date.now()): never {
   const projectRoot = resolveHookProjectRoot();
-  function exit(code: number, reason: string, mutate?: (state: Record<string, unknown>) => void): never {
+  function exit(code: number, reason: string): never {
     appendHookFire(hookStatePath(projectRoot), {
       at: new Date().toISOString(),
       hook: HOOK_NAME,
       exitCode: code,
       reason,
-    }, mutate);
+    });
     process.exit(code);
   }
 
@@ -202,36 +219,40 @@ export function runStopHook(stdin: string = "", now: number = Date.now()): never
     // (or propose) before wrapping up — and since it fires at most once per
     // approval, the debrief nag simply returns on the next Stop.
     try {
-      const statePath = hookStatePath(projectRoot);
-      const nudged = peekNudged(statePath);
-      const fired: Array<{ key: string; title: string; parts: string[] }> = [];
+      const legacyPath = hookStatePath(projectRoot);
+      const claimPath = path.join(path.dirname(legacyPath), DRIFT_NUDGED_FILE);
+      const nudged = new Set([...peekNudged(legacyPath), ...peekNudged(claimPath)]);
+      const candidates: Array<{ key: string; title: string; parts: string[] }> = [];
       const seenKeys = new Set<string>();
       for (const plan of driftCandidates) {
         const key = driftNudgeKey(plan);
-        if (nudged.includes(key) || seenKeys.has(key)) continue;
+        if (nudged.has(key) || seenKeys.has(key)) continue;
         seenKeys.add(key);
         const scope = readSkeletonScopeFile(projectRoot, String(plan.id));
         const root = scope?.workspaceRoot || resolveHookRoots().workspaceRoot;
         const parts = exteriorDriftParts(checkSkeletonExteriorDrift(plan.content, { root }));
-        if (parts.length > 0) fired.push({ key, title: oneLine((plan as { title?: unknown }).title), parts });
+        if (parts.length > 0) {
+          const title = typeof plan.title === "string" ? oneLine(plan.title.slice(0, 60)).slice(0, 60) : "";
+          candidates.push({ key, title, parts });
+        }
       }
-      if (fired.length > 0) {
-        // Bounded: at most 3 plans and 3 files per plan, the whole line capped.
-        const filesOf = (parts: string[]) =>
-          parts.slice(0, MAX_NUDGE_FILES).join("; ") + (parts.length > MAX_NUDGE_FILES ? `; +${parts.length - MAX_NUDGE_FILES} more files` : "");
-        let what = fired.length === 1
-          ? filesOf(fired[0]!.parts)
-          : fired.slice(0, MAX_NUDGE_PLANS).map((f) => `"${f.title || "untitled plan"}": ${filesOf(f.parts)}`).join(" | ") +
-            (fired.length > MAX_NUDGE_PLANS ? ` | +${fired.length - MAX_NUDGE_PLANS} more plans` : "");
-        if (what.length > MAX_NUDGE_WHAT_CHARS) what = `${what.slice(0, MAX_NUDGE_WHAT_CHARS - 1)}…`;
-        process.stderr.write(
-          `deepPairing: skeleton exterior drift since approval: ${what} — changes outside the fences are skeleton changes; propose them and revise_artifact the plan\n`,
-        );
-        exit(0, "skeleton drift " + fired.map((f) => f.key).join(", "), (state) => {
-          const list = Array.isArray(state[DRIFT_NUDGED_KEY]) ? (state[DRIFT_NUDGED_KEY] as unknown[]) : [];
-          for (const f of fired) if (!list.includes(f.key)) list.push(f.key);
-          state[DRIFT_NUDGED_KEY] = list.slice(-DRIFT_NUDGED_CAP);
-        });
+      if (candidates.length > 0) {
+        // The unlocked peek only avoids rereads. Recheck the claim under the
+        // dedicated lock and persist it before writing the warning.
+        let claimed: typeof candidates = [];
+        const saved = mutateHookState(claimPath, (state) => {
+          const keys = nudgeKeys(state);
+          const seen = new Set([...peekNudged(legacyPath), ...keys]);
+          claimed = candidates.filter((candidate) => !seen.has(candidate.key));
+          if (claimed.length === 0) return false;
+          state[DRIFT_NUDGED_KEY] = [...keys, ...claimed.map(({ key }) => key)].slice(-DRIFT_NUDGED_CAP);
+        }, { requireLock: true });
+        if (saved) {
+          process.stderr.write(
+            `deepPairing: skeleton exterior drift since approval: ${describeDrift(claimed)} — changes outside the fences are skeleton changes; propose them and revise_artifact the plan\n`,
+          );
+          exit(0, "skeleton drift " + claimed.map(({ key }) => key).join(", "));
+        }
       }
     } catch {
       /* drift is best effort: fall through to the debrief nag */

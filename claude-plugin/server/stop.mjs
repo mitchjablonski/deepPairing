@@ -267,20 +267,23 @@ function appendHookFire(statePath, fire, mutate) {
 function mutateHookState(statePath, mutate, opts = {}) {
   try {
     if (opts.createDir === false) {
-      if (!fs2.statSync(path3.dirname(statePath)).isDirectory()) return;
+      if (!fs2.statSync(path3.dirname(statePath)).isDirectory()) return false;
     } else {
       fs2.mkdirSync(path3.dirname(statePath), { recursive: true });
     }
     const lock = acquireHookStateLock(statePath);
+    if (opts.requireLock && !lock) return false;
     try {
       const state = readHookState(statePath);
       state.version = 1;
-      mutate(state);
+      if (mutate(state) === false) return false;
       writeHookStateAtomic(statePath, state);
+      return true;
     } finally {
       releaseHookStateLock(lock);
     }
   } catch {
+    return false;
   }
 }
 function hookStatePath(projectRoot) {
@@ -800,6 +803,7 @@ function isDeniedPath(rel) {
   return ruleForRelPath(rel.toLowerCase())?.category === "secrets";
 }
 var O_NOFOLLOW = fs5.constants.O_NOFOLLOW ?? 0;
+var O_NONBLOCK = fs5.constants.O_NONBLOCK ?? 0;
 function readConfined(root, rel, limits) {
   if (isDeniedPath(rel)) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let realRoot;
@@ -818,7 +822,7 @@ function readConfined(root, rel, limits) {
   if (isDeniedPath(path6.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let fd;
   try {
-    fd = fs5.openSync(realAbs, fs5.constants.O_RDONLY | O_NOFOLLOW);
+    fd = fs5.openSync(realAbs, fs5.constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   } catch {
     return { ok: false, reason: "unreadable" };
   }
@@ -935,6 +939,7 @@ function checkSkeletonExteriorDrift(content, opts = {}) {
 var HOOK_NAME = "stop";
 var MAX_AGE_MS = 30 * 60 * 1e3;
 var BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "page"];
+var DRIFT_NUDGED_FILE = "skeleton-drift-nudges.json";
 var DRIFT_NUDGED_KEY = "skeletonDriftNudged";
 var DRIFT_NUDGED_CAP = 50;
 var MAX_NUDGE_PLANS = 3;
@@ -964,25 +969,35 @@ function driftBaselines(raw, now) {
     return isSkeletonDriftBaseline(a, artifacts);
   });
 }
+function nudgeKeys(state) {
+  const keys = state[DRIFT_NUDGED_KEY];
+  return Array.isArray(keys) ? keys.filter((key2) => typeof key2 === "string") : [];
+}
 function peekNudged(statePath) {
   try {
     const parsed = JSON.parse(fs6.readFileSync(statePath, "utf-8"));
-    const list = isObj(parsed) ? parsed[DRIFT_NUDGED_KEY] : void 0;
-    return Array.isArray(list) ? list : [];
+    return isObj(parsed) ? nudgeKeys(parsed) : [];
   } catch {
     return [];
   }
 }
-var oneLine = (t) => String(t ?? "").replace(/[\r\n\u2028\u2029]+/g, " ").slice(0, 60);
+function oneLine(text) {
+  return text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (char) => `\\u{${char.codePointAt(0).toString(16)}}`);
+}
+function describeDrift(candidates) {
+  const filesOf = (parts) => parts.slice(0, MAX_NUDGE_FILES).map(oneLine).join("; ") + (parts.length > MAX_NUDGE_FILES ? `; +${parts.length - MAX_NUDGE_FILES} more files` : "");
+  const what = candidates.length === 1 ? filesOf(candidates[0].parts) : candidates.slice(0, MAX_NUDGE_PLANS).map((plan) => `"${plan.title || "untitled plan"}": ${filesOf(plan.parts)}`).join(" | ") + (candidates.length > MAX_NUDGE_PLANS ? ` | +${candidates.length - MAX_NUDGE_PLANS} more plans` : "");
+  return what.length <= MAX_NUDGE_WHAT_CHARS ? what : `${what.slice(0, MAX_NUDGE_WHAT_CHARS - 1)}\u2026`;
+}
 function runStopHook(stdin2 = "", now = Date.now()) {
   const projectRoot = resolveHookProjectRoot();
-  function exit(code, reason, mutate) {
+  function exit(code, reason) {
     appendHookFire(hookStatePath(projectRoot), {
       at: (/* @__PURE__ */ new Date()).toISOString(),
       hook: HOOK_NAME,
       exitCode: code,
       reason
-    }, mutate);
+    });
     process.exit(code);
   }
   try {
@@ -1042,32 +1057,39 @@ function runStopHook(stdin2 = "", now = Date.now()) {
       }
     }
     try {
-      const statePath = hookStatePath(projectRoot);
-      const nudged = peekNudged(statePath);
-      const fired = [];
+      const legacyPath = hookStatePath(projectRoot);
+      const claimPath = path7.join(path7.dirname(legacyPath), DRIFT_NUDGED_FILE);
+      const nudged = /* @__PURE__ */ new Set([...peekNudged(legacyPath), ...peekNudged(claimPath)]);
+      const candidates = [];
       const seenKeys = /* @__PURE__ */ new Set();
       for (const plan of driftCandidates) {
         const key2 = driftNudgeKey(plan);
-        if (nudged.includes(key2) || seenKeys.has(key2)) continue;
+        if (nudged.has(key2) || seenKeys.has(key2)) continue;
         seenKeys.add(key2);
         const scope = readSkeletonScopeFile(projectRoot, String(plan.id));
         const root = scope?.workspaceRoot || resolveHookRoots().workspaceRoot;
         const parts = exteriorDriftParts(checkSkeletonExteriorDrift(plan.content, { root }));
-        if (parts.length > 0) fired.push({ key: key2, title: oneLine(plan.title), parts });
+        if (parts.length > 0) {
+          const title = typeof plan.title === "string" ? oneLine(plan.title.slice(0, 60)).slice(0, 60) : "";
+          candidates.push({ key: key2, title, parts });
+        }
       }
-      if (fired.length > 0) {
-        const filesOf = (parts) => parts.slice(0, MAX_NUDGE_FILES).join("; ") + (parts.length > MAX_NUDGE_FILES ? `; +${parts.length - MAX_NUDGE_FILES} more files` : "");
-        let what = fired.length === 1 ? filesOf(fired[0].parts) : fired.slice(0, MAX_NUDGE_PLANS).map((f) => `"${f.title || "untitled plan"}": ${filesOf(f.parts)}`).join(" | ") + (fired.length > MAX_NUDGE_PLANS ? ` | +${fired.length - MAX_NUDGE_PLANS} more plans` : "");
-        if (what.length > MAX_NUDGE_WHAT_CHARS) what = `${what.slice(0, MAX_NUDGE_WHAT_CHARS - 1)}\u2026`;
-        process.stderr.write(
-          `deepPairing: skeleton exterior drift since approval: ${what} \u2014 changes outside the fences are skeleton changes; propose them and revise_artifact the plan
+      if (candidates.length > 0) {
+        let claimed = [];
+        const saved = mutateHookState(claimPath, (state) => {
+          const keys = nudgeKeys(state);
+          const seen = /* @__PURE__ */ new Set([...peekNudged(legacyPath), ...keys]);
+          claimed = candidates.filter((candidate) => !seen.has(candidate.key));
+          if (claimed.length === 0) return false;
+          state[DRIFT_NUDGED_KEY] = [...keys, ...claimed.map(({ key: key2 }) => key2)].slice(-DRIFT_NUDGED_CAP);
+        }, { requireLock: true });
+        if (saved) {
+          process.stderr.write(
+            `deepPairing: skeleton exterior drift since approval: ${describeDrift(claimed)} \u2014 changes outside the fences are skeleton changes; propose them and revise_artifact the plan
 `
-        );
-        exit(0, "skeleton drift " + fired.map((f) => f.key).join(", "), (state) => {
-          const list = Array.isArray(state[DRIFT_NUDGED_KEY]) ? state[DRIFT_NUDGED_KEY] : [];
-          for (const f of fired) if (!list.includes(f.key)) list.push(f.key);
-          state[DRIFT_NUDGED_KEY] = list.slice(-DRIFT_NUDGED_CAP);
-        });
+          );
+          exit(0, "skeleton drift " + claimed.map(({ key: key2 }) => key2).join(", "));
+        }
       }
     } catch {
     }

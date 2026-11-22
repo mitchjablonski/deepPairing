@@ -659,20 +659,23 @@ function appendHookFire(statePath, fire, mutate) {
 function mutateHookState(statePath, mutate, opts = {}) {
   try {
     if (opts.createDir === false) {
-      if (!fs2.statSync(path3.dirname(statePath)).isDirectory()) return;
+      if (!fs2.statSync(path3.dirname(statePath)).isDirectory()) return false;
     } else {
       fs2.mkdirSync(path3.dirname(statePath), { recursive: true });
     }
     const lock = acquireHookStateLock(statePath);
+    if (opts.requireLock && !lock) return false;
     try {
       const state = readHookState(statePath);
       state.version = 1;
-      mutate(state);
+      if (mutate(state) === false) return false;
       writeHookStateAtomic(statePath, state);
+      return true;
     } finally {
       releaseHookStateLock(lock);
     }
   } catch {
+    return false;
   }
 }
 function hookStatePath(projectRoot) {
