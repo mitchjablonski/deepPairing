@@ -232,28 +232,24 @@ export function writeHookStateAtomic(statePath: string, state: unknown): void {
  * read-modify-write with the fire — a second lock/RMW pair would reintroduce
  * exactly the lost-update the lock exists to prevent.
  *
- * Returning false from mutate skips the append. Callers making a durable
- * claim can require the lock and check whether the write succeeded.
  * Never throws: recording must not fail the hook itself.
  */
 export function appendHookFire(
   statePath: string,
   fire: Record<string, unknown>,
-  mutate?: (state: Record<string, unknown>) => void | false,
-  opts: { requireLock?: boolean } = {},
-): boolean {
-  return mutateHookState(statePath, (state) => {
-    if (mutate?.(state) === false) return false;
+  mutate?: (state: Record<string, unknown>) => void,
+): void {
+  mutateHookState(statePath, (state) => {
     const fires = Array.isArray(state.fires) ? (state.fires as unknown[]) : [];
     fires.push(fire);
     state.fires = fires.slice(-FIRE_LOG_CAP);
-  }, opts);
+    mutate?.(state);
+  });
 }
 
 /**
- * One locked read-modify-write of hooks-state.json — the primitive under
- * appendHookFire, also used by the #546 preflight failure diagnostics, which
- * update their own top-level field without appending a fire.
+ * Read-modify-write a hook state file. Returning false from mutate skips the
+ * write. Claims can require the lock and check that the write succeeded.
  *
  * `createDir: false` refuses to create `.deeppairing/` — a diagnostic about a
  * hook that ran in a directory deepPairing never initialised must not plant a

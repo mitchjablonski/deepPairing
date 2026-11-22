@@ -27,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sessionOwesDebrief } from "../debrief-gate.js";
 import { deriveSessionId } from "../session-id.js";
-import { appendHookFire, hookErrorMessage, hookStatePath, resolveHookProjectRoot } from "./hook-state.js";
+import { appendHookFire, hookErrorMessage, hookStatePath, mutateHookState, resolveHookProjectRoot } from "./hook-state.js";
 import { exteriorDriftParts, isSkeletonDriftBaseline, isSkeletonApprovedVisualId } from "../mcp/skeleton-drift.js";
 import { checkSkeletonExteriorDrift } from "../mcp/skeleton-read.js";
 import { SKELETON_SCOPE_MAX_AGE_MS, readSkeletonScopeFile } from "../skeleton-scope.js";
@@ -54,7 +54,8 @@ type StopArtifact = {
   content?: unknown;
 };
 
-/** #686 P2c — hooks-state field: drift nudges already sent (dedupe keys). */
+/** Drift claims have their own file so best-effort telemetry can't overwrite them. */
+const DRIFT_NUDGED_FILE = "skeleton-drift-nudges.json";
 const DRIFT_NUDGED_KEY = "skeletonDriftNudged";
 const DRIFT_NUDGED_CAP = 50;
 /** The nudge line's bounds: plans named, files per plan, and the drift phrase's length. */
@@ -101,13 +102,16 @@ function driftBaselines(raw: unknown[], now: number): StopArtifact[] {
   });
 }
 
-/** The nudge keys already sent, read WITHOUT readHookState's salvage copy
- *  (a corrupt file is backed up once, by the locked write at exit). */
-function peekNudged(statePath: string): unknown[] {
+function nudgeKeys(state: Record<string, unknown>): string[] {
+  const keys = state[DRIFT_NUDGED_KEY];
+  return Array.isArray(keys) ? keys.filter((key): key is string => typeof key === "string") : [];
+}
+
+/** The nudge keys already sent, read without writing a salvage copy. */
+function peekNudged(statePath: string): string[] {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-    const list = isObj(parsed) ? parsed[DRIFT_NUDGED_KEY] : undefined;
-    return Array.isArray(list) ? list : [];
+    return isObj(parsed) ? nudgeKeys(parsed) : [];
   } catch {
     return [];
   }
@@ -215,13 +219,14 @@ export function runStopHook(stdin: string = "", now: number = Date.now()): never
     // (or propose) before wrapping up — and since it fires at most once per
     // approval, the debrief nag simply returns on the next Stop.
     try {
-      const statePath = hookStatePath(projectRoot);
-      const nudged = peekNudged(statePath);
+      const legacyPath = hookStatePath(projectRoot);
+      const claimPath = path.join(path.dirname(legacyPath), DRIFT_NUDGED_FILE);
+      const nudged = new Set([...peekNudged(legacyPath), ...peekNudged(claimPath)]);
       const candidates: Array<{ key: string; title: string; parts: string[] }> = [];
       const seenKeys = new Set<string>();
       for (const plan of driftCandidates) {
         const key = driftNudgeKey(plan);
-        if (nudged.includes(key) || seenKeys.has(key)) continue;
+        if (nudged.has(key) || seenKeys.has(key)) continue;
         seenKeys.add(key);
         const scope = readSkeletonScopeFile(projectRoot, String(plan.id));
         const root = scope?.workspaceRoot || resolveHookRoots().workspaceRoot;
@@ -233,22 +238,20 @@ export function runStopHook(stdin: string = "", now: number = Date.now()): never
       }
       if (candidates.length > 0) {
         // The unlocked peek only avoids rereads. Recheck the claim under the
-        // lock and persist it with the fire before writing the warning.
+        // dedicated lock and persist it before writing the warning.
         let claimed: typeof candidates = [];
-        const fire = { at: new Date().toISOString(), hook: HOOK_NAME, exitCode: 0, reason: "" };
-        const saved = appendHookFire(statePath, fire, (state) => {
-          const keys = Array.isArray(state[DRIFT_NUDGED_KEY]) ? (state[DRIFT_NUDGED_KEY] as unknown[]) : [];
-          claimed = candidates.filter((candidate) => !keys.includes(candidate.key));
+        const saved = mutateHookState(claimPath, (state) => {
+          const keys = nudgeKeys(state);
+          const seen = new Set([...peekNudged(legacyPath), ...keys]);
+          claimed = candidates.filter((candidate) => !seen.has(candidate.key));
           if (claimed.length === 0) return false;
-          const newKeys = claimed.map(({ key }) => key);
-          state[DRIFT_NUDGED_KEY] = [...keys, ...newKeys].slice(-DRIFT_NUDGED_CAP);
-          fire.reason = "skeleton drift " + newKeys.join(", ");
+          state[DRIFT_NUDGED_KEY] = [...keys, ...claimed.map(({ key }) => key)].slice(-DRIFT_NUDGED_CAP);
         }, { requireLock: true });
         if (saved) {
           process.stderr.write(
             `deepPairing: skeleton exterior drift since approval: ${describeDrift(claimed)} — changes outside the fences are skeleton changes; propose them and revise_artifact the plan\n`,
           );
-          process.exit(0);
+          exit(0, "skeleton drift " + claimed.map(({ key }) => key).join(", "));
         }
       }
     } catch {
