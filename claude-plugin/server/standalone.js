@@ -25760,6 +25760,14 @@ var ArtifactSchema = external_exports.object({
    * absent → the stored JSON is byte-identical to before.
    */
   briefRef: external_exports.unknown().optional(),
+  /**
+   * #680 slice 3 — on a file-backed `page`: what the daemon's file watch did
+   * (a version recorded from the file, or a save it refused). Shape:
+   * PageFileWatchSchema (page-file-watch.ts). Deliberately `unknown` on read,
+   * like briefRef, so a malformed record never fails the artifact load; read it
+   * with `readFileWatch`. Optional; absent on every other artifact.
+   */
+  fileWatch: external_exports.unknown().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -26180,6 +26188,86 @@ var AgentEventSchema = external_exports.discriminatedUnion("type", [
   CommentUpdatedEventSchema,
   PlanReviewRequestEventSchema
 ]);
+
+// ../shared/dist/schemas/page-file-watch.js
+var PAGE_FILE_WATCH_LIMITS = {
+  orphans: 50,
+  quote: 280,
+  locator: 512,
+  message: 2e3
+};
+var PageFileWatchOrphanSchema = external_exports.object({
+  commentId: external_exports.string(),
+  kind: external_exports.string().max(32),
+  quote: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.quote),
+  locator: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.locator),
+  /** The page version the comment's anchor was made on. */
+  version: external_exports.number().int().positive().optional()
+});
+var PageFileWatchRecordedSchema = external_exports.object({
+  at: external_exports.string(),
+  sourcePath: external_exports.string(),
+  /** The version this one replaced (now `superseded`). */
+  fromArtifactId: external_exports.string(),
+  fromVersion: external_exports.number().int().positive(),
+  /** Page comments whose quoted text is still in the new HTML. */
+  carriedCount: external_exports.number().int().nonnegative(),
+  /** Page comments whose quoted text is gone from the new HTML. */
+  orphaned: external_exports.array(PageFileWatchOrphanSchema).max(PAGE_FILE_WATCH_LIMITS.orphans),
+  /** More orphans than the stored list holds. */
+  orphanedOverflow: external_exports.number().int().nonnegative().optional(),
+  delivered: external_exports.boolean().optional()
+});
+var PageFileWatchRefusedSchema = external_exports.object({
+  at: external_exports.string(),
+  sourcePath: external_exports.string(),
+  cause: external_exports.enum(["gate", "unreadable"]),
+  /** For `gate`: the stored rejection reason, as the gate words it. For
+   *  `unreadable`: why the file could not be read. */
+  message: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.message),
+  /** For `gate`: the matched concept, when the stance names one. */
+  concept: external_exports.string().max(200).optional(),
+  digest: external_exports.string(),
+  delivered: external_exports.boolean().optional()
+});
+var PageFileWatchSchema = external_exports.object({
+  recorded: PageFileWatchRecordedSchema.optional(),
+  refused: PageFileWatchRefusedSchema.optional()
+});
+function readFileWatch(fw) {
+  const parsed = PageFileWatchSchema.safeParse(fw);
+  return parsed.success ? parsed.data : {};
+}
+function undeliveredFileWatch(fw) {
+  const parsed = PageFileWatchSchema.safeParse(fw);
+  if (!parsed.success)
+    return {};
+  const out = {};
+  if (parsed.data.recorded && !parsed.data.recorded.delivered)
+    out.recorded = parsed.data.recorded;
+  if (parsed.data.refused && !parsed.data.refused.delivered)
+    out.refused = parsed.data.refused;
+  return out;
+}
+function fileWatchNoticeKey(r) {
+  return [r.artifactId, r.recordedAt ?? "", r.refusedAt ?? "", r.refusedDigest ?? ""].join("|");
+}
+function undeliveredFileWatchRefs(artifacts) {
+  const out = [];
+  for (const a of artifacts) {
+    if (a.fileWatch === void 0)
+      continue;
+    const { recorded, refused } = undeliveredFileWatch(a.fileWatch);
+    if (!recorded && !refused)
+      continue;
+    out.push({
+      artifactId: a.id,
+      ...recorded ? { recordedAt: recorded.at } : {},
+      ...refused ? { refusedAt: refused.at, refusedDigest: refused.digest } : {}
+    });
+  }
+  return out;
+}
 
 // ../shared/dist/schemas/coerce-content.js
 var isObj = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2);
@@ -31784,6 +31872,10 @@ var ERROR_CODES = {
   /** #521 — a confidence AUTO-approval reached the daemon after the autonomy level
    *  (or the artifact) no longer permitted it. 409, no state change. */
   auto_approve_not_permitted: "auto_approve_not_permitted",
+  /** #680 slice 3 — a supersede-create lost the race: its parent was already
+   *  replaced (the page file watch or another revise recorded a version). 409,
+   *  nothing created; the body names the successor. */
+  parent_superseded: "parent_superseded",
   /** A review verdict raced a change to the artifact content being reviewed. */
   session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
@@ -32579,7 +32671,7 @@ var PresentPageInputSchema = external_exports.object({
   title: external_exports.string().min(1).describe("The page's title (e.g. 'Session cache: three invalidation strategies')"),
   summary: external_exports.string().optional().describe("One or two sentences TO your pair: what the page shows and what you want from them. Rendered above the page."),
   html: external_exports.string().min(1).optional().describe("The page as inline, self-contained HTML (inline CSS/JS; no network: the frame blocks it). Give `html` OR `path`, not both."),
-  path: external_exports.string().min(1).optional().describe("A UTF-8 HTML file inside the project root (relative or absolute), read once at present time. Give `html` OR `path`, not both."),
+  path: external_exports.string().min(1).optional().describe("A UTF-8 HTML file inside the project root (relative or absolute), read at present time and again on each save while the page is under review. Give `html` OR `path`, not both."),
   concept: external_exports.union([external_exports.string().min(1), DecisionOptionConceptSchema]).optional().describe("The named pattern this page proposes, if any (e.g. 'write-through cache purge'). A reject records it, and the gate matches future proposals against it.")
 });
 function pageError(toolName, message, code = "INPUT_VALIDATION_FAILED") {
@@ -36153,6 +36245,86 @@ function formatWorkerStops(stops) {
 ${stops.map((s) => `- ${stopSentence(s)}`).join("\n")}`;
 }
 
+// src/mcp/tools/page-watch-feedback.ts
+function clip(s, n) {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > n ? `${t.slice(0, n - 1)}\u2026` : t;
+}
+function recordedLine(a, r) {
+  const orphanCount = r.orphaned.length + (r.orphanedOverflow ?? 0);
+  let line = `- ${a.id} (v${a.version}) "${a.title}" was recorded automatically from ${r.sourcePath} after your save; it supersedes ${r.fromArtifactId} (v${r.fromVersion}) and is the draft under review now.`;
+  if (orphanCount === 0) {
+    line += r.carriedCount > 0 ? ` All ${r.carriedCount} page comment(s) still point at text on the page.` : "";
+    return line;
+  }
+  line += ` ${orphanCount} page comment(s) are ORPHANED \u2014 the text they point at is gone from the new version (they stay visible to your pair, marked "not found in this version"):`;
+  for (const o of r.orphaned) {
+    const quote = o.quote.trim() ? `"${clip(o.quote, 100)}"` : `\`${clip(o.locator, 100)}\``;
+    line += `
+    \u2022 ${o.commentId}: ${o.kind} ${quote}${o.version ? ` (made on v${o.version})` : ""}`;
+  }
+  if (r.orphanedOverflow) line += `
+    \u2022 \u2026and ${r.orphanedOverflow} more`;
+  if (r.carriedCount > 0) line += `
+  ${r.carriedCount} other page comment(s) still point at text on the page.`;
+  return line;
+}
+function refusedLine(a, r) {
+  if (r.cause === "gate") {
+    return `- \u26D4 A save to ${r.sourcePath} was NOT recorded as a new version of ${a.id} "${a.title}": ${r.message}. Your pair still sees v${a.version}. Change the page so it no longer proposes that approach (the next save is checked again), or ask your pair.`;
+  }
+  return `- \u26A0 A save to ${r.sourcePath} could not be recorded for ${a.id} "${a.title}": ${r.message}. Your pair still sees v${a.version}.`;
+}
+function collectPageWatchNotices(artifacts, refs) {
+  const byId = new Map(artifacts.map((a) => [a.id, a]));
+  const out = [];
+  const lines = [];
+  const structured = [];
+  for (const ref of refs) {
+    const a = byId.get(ref.artifactId);
+    if (!a || a.type !== "page") continue;
+    const fw = readFileWatch(a.fileWatch);
+    const recorded = fw.recorded && !fw.recorded.delivered && fw.recorded.at === ref.recordedAt ? fw.recorded : void 0;
+    const refusedLive = fw.refused && !fw.refused.delivered && fw.refused.at === ref.refusedAt && fw.refused.digest === ref.refusedDigest ? fw.refused : void 0;
+    if (!recorded && !refusedLive) continue;
+    out.push({
+      artifactId: a.id,
+      ...recorded ? { recordedAt: recorded.at } : {},
+      ...refusedLive ? { refusedAt: refusedLive.at, refusedDigest: refusedLive.digest } : {}
+    });
+    const refused = refusedLive && !isClosedArtifactStatus(a.status) ? refusedLive : void 0;
+    if (recorded) {
+      lines.push(recordedLine(a, recorded));
+      structured.push({
+        kind: "recorded",
+        artifactId: a.id,
+        version: a.version,
+        sourcePath: recorded.sourcePath,
+        fromArtifactId: recorded.fromArtifactId,
+        fromVersion: recorded.fromVersion,
+        carriedCount: recorded.carriedCount,
+        orphaned: recorded.orphaned,
+        ...recorded.orphanedOverflow ? { orphanedOverflow: recorded.orphanedOverflow } : {}
+      });
+    }
+    if (refused) {
+      lines.push(refusedLine(a, refused));
+      structured.push({
+        kind: "refused",
+        artifactId: a.id,
+        version: a.version,
+        sourcePath: refused.sourcePath,
+        cause: refused.cause,
+        message: refused.message,
+        ...refused.concept ? { concept: refused.concept } : {}
+      });
+    }
+  }
+  const prose = lines.length > 0 ? `\u{1F4C4} Page file watch (${lines.length}):
+${lines.join("\n")}` : "";
+  return { refs: out, prose, structured };
+}
+
 // src/debrief-gate.ts
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
 var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
@@ -36233,6 +36405,8 @@ var PendingAcks = class {
   renderFailures = [];
   /** #569 pilot task A — worker-stop ids to mark delivered. */
   workerStops = [];
+  /** #680 slice 3 — page artifacts whose file-watch notices were reported. */
+  fileWatchNotices = [];
   /** Flush every lane; a failing lane does not stop the others. Returns the
    *  errors (an un-flushed lane simply re-delivers next poll). */
   async flush(store) {
@@ -36249,6 +36423,7 @@ var PendingAcks = class {
     if (this.statusChanges.length > 0) await run2(() => store.acknowledgeStatusChanges(this.statusChanges));
     if (this.renderFailures.length > 0) await run2(() => store.acknowledgeRenderFailures?.(this.renderFailures));
     if (this.workerStops.length > 0) await run2(() => store.markWorkerStopsDelivered?.(this.workerStops));
+    if (this.fileWatchNotices.length > 0) await run2(() => store.acknowledgeFileWatchNotices?.(this.fileWatchNotices));
     return errors;
   }
 };
@@ -36302,7 +36477,7 @@ function feedbackStoreView(store, opts) {
         const heldBy = owner(artifactOf(x));
         if (heldBy !== null) {
           if (heldBy) {
-            const t = held[heldBy] ??= { comments: /* @__PURE__ */ new Set(), decisions: /* @__PURE__ */ new Set(), statusChanges: /* @__PURE__ */ new Set(), renderFailures: /* @__PURE__ */ new Set() };
+            const t = held[heldBy] ??= { comments: /* @__PURE__ */ new Set(), decisions: /* @__PURE__ */ new Set(), statusChanges: /* @__PURE__ */ new Set(), renderFailures: /* @__PURE__ */ new Set(), fileWatch: /* @__PURE__ */ new Set() };
             t[lane].add(idOf(x));
           }
           continue;
@@ -36330,6 +36505,7 @@ function feedbackStoreView(store, opts) {
     claim2
   );
   const overrides = {
+    selectFileWatchNotices: (artifacts, o) => consumable("fileWatch", () => undeliveredFileWatchRefs(artifacts), (r) => r.artifactId, fileWatchNoticeKey, !o?.peek)(),
     getUnacknowledgedComments: commentsLane(true),
     getResolvedDecisions: decisionsLane(true),
     getUnacknowledgedStatusChanges: statusLane(true)
@@ -36363,6 +36539,9 @@ function feedbackStoreView(store, opts) {
     overrides.acknowledgeComments = (ids) => void pending.comments.push(...ids);
     overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
     overrides.acknowledgeStatusChanges = (ids) => void pending.statusChanges.push(...ids);
+    if (typeof store.acknowledgeFileWatchNotices === "function") {
+      overrides.acknowledgeFileWatchNotices = (refs) => void pending.fileWatchNotices.push(...refs);
+    }
     if (typeof store.acknowledgeRenderFailures === "function") {
       overrides.acknowledgeRenderFailures = (refs) => void pending.renderFailures.push(...refs);
     }
@@ -36436,7 +36615,8 @@ function describeHeld(t) {
   add(t.comments.size, "comment", "comments");
   add(t.statusChanges.size, "status change", "status changes");
   add(t.renderFailures.size, "render failure", "render failures");
-  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size;
+  add(t.fileWatch?.size ?? 0, "page file-watch notice", "page file-watch notices");
+  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size + (t.fileWatch?.size ?? 0);
   return { total, text: parts.join(", ") };
 }
 
@@ -36656,12 +36836,13 @@ async function assembleCheckFeedback(ctx, args) {
   const decidedAny = allArtsForScope.filter(
     (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected"
   );
+  const pageWatchAtGate = store.selectFileWatchNotices ? await store.selectFileWatchNotices(allArtsForScope, { peek: true }) : undeliveredFileWatchRefs(allArtsForScope);
   const hasImmediate = scopeHasSignal(waitForScope, {
     comments: unackComments.length,
     decisions: resolvedDecs.length,
     decidedPlans: decidedPlans.length,
     decidedAny: decidedAny.length
-  }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0;
+  }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0 || collectPageWatchNotices(allArtsForScope, pageWatchAtGate).prose !== "";
   if (!hasImmediate) {
     const allArts = allArtsForScope;
     const hasDrafts = allArts.some(
@@ -37042,6 +37223,10 @@ ${lines.join("\n")}
 Fix the Mermaid source and re-present the affected visual (revise_artifact).`
     );
   }
+  const pageWatchRefs = store.selectFileWatchNotices ? await store.selectFileWatchNotices(postWakeArtifacts) : undeliveredFileWatchRefs(postWakeArtifacts);
+  const pageWatch = collectPageWatchNotices(postWakeArtifacts, pageWatchRefs);
+  if (pageWatch.prose) parts.push(pageWatch.prose);
+  if (pageWatch.refs.length > 0) await store.acknowledgeFileWatchNotices?.(pageWatch.refs);
   const workerStops = postWakeWorkerStops.stops;
   if (workerStops.length > 0) {
     parts.push(formatWorkerStops(workerStops));
@@ -37287,6 +37472,8 @@ Suggested action: ${suggestedAction}`);
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {},
+    // #680 slice 3 — spread ONLY when the page file watch has news.
+    ...pageWatch.structured.length > 0 ? { pageFileWatch: pageWatch.structured } : {},
     // #569 pilot task A — spread `workerStops` ONLY when a worker was newly
     // stopped, so the healthy payload's key set stays byte-for-byte.
     ...workerStops.length > 0 ? {
@@ -38784,6 +38971,330 @@ function retirementFailure(outcome) {
   return `REFUSED \u2014 ${counts.join(" and ")}. Call check_feedback and address the feedback first; retirement must never dodge review.`;
 }
 
+// src/github/pr-reference.ts
+function validRepoOwner(value) {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(value);
+}
+function validRepoName(value) {
+  return /^(?!\.{1,2}$)[a-z0-9_.-]+$/i.test(value);
+}
+function parsePrReference(ref) {
+  const value = ref.trim();
+  const bare = /^#?(\d+)$/.exec(value);
+  if (bare) {
+    const number5 = Number(bare[1]);
+    return Number.isSafeInteger(number5) && number5 > 0 ? { number: number5 } : null;
+  }
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/(?:files|commits|checks))?\/?(?:[?#][^\s]*)?$/i.exec(value);
+  if (!match) return null;
+  const [, owner, repo, digits] = match;
+  const number4 = Number(digits);
+  if (!owner || !repo || !validRepoOwner(owner) || !validRepoName(repo) || !Number.isSafeInteger(number4) || number4 < 1) return null;
+  return { owner, repo, number: number4 };
+}
+
+// src/store/posted-reviews.ts
+function samePrTarget(record3, ref) {
+  const parsed = parsePrNumber(ref);
+  if (parsed === null || parsed.number !== record3.prNumber) return false;
+  if (parsed.owner && parsed.repo && record3.owner && record3.repo) {
+    return parsed.owner.toLowerCase() === record3.owner.toLowerCase() && parsed.repo.toLowerCase() === record3.repo.toLowerCase();
+  }
+  return true;
+}
+function parsePrNumber(ref) {
+  return parsePrReference(ref);
+}
+
+// src/store/review-post-journal.ts
+import { createHash as createHash5, randomUUID } from "node:crypto";
+var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
+var timestampSchema = external_exports.iso.datetime();
+var reviewPostResultSchema = external_exports.object({
+  id: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  htmlUrl: external_exports.string(),
+  state: external_exports.enum(["COMMENTED", "CHANGES_REQUESTED", "APPROVED"]),
+  commitId: external_exports.string().regex(/^[0-9a-f]{40}$/).optional()
+}).strict();
+var resultSchema = reviewPostResultSchema;
+var reviewPostLeaseSchema = external_exports.object({ operationId: external_exports.uuid(), token: external_exports.uuid() }).strict();
+var reviewPostIdentitySchema = external_exports.object({
+  target: external_exports.string(),
+  event: eventSchema,
+  reviewedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/).optional(),
+  payloadDigest: digestSchema,
+  authorizationDigest: digestSchema
+}).strict().superRefine((value, ctx) => {
+  if (canonicalReviewTarget(value.target) !== value.target) {
+    ctx.addIssue({ code: "custom", message: "Expected a canonical GitHub PR target" });
+  }
+  if (value.event === "APPROVE" && !value.reviewedHeadSha) {
+    ctx.addIssue({ code: "custom", message: "Approval requires reviewed commit identity" });
+  }
+});
+var operationSchema = external_exports.object({
+  id: external_exports.uuid(),
+  tokenDigest: digestSchema,
+  sessionId: external_exports.string().min(1),
+  identity: reviewPostIdentitySchema,
+  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown", "abandoned"]),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  result: resultSchema.optional(),
+  operatorAcknowledgement: external_exports.object({
+    acknowledgedAt: timestampSchema,
+    priorState: external_exports.enum(["sending", "unknown"]),
+    operationDigest: digestSchema
+  }).strict().optional(),
+  /** Recorded when the live coordinator released its own never-sent attempt.
+   * `priorState: "sending"` is the interesting case: the operation had written
+   * its durable sending marker, and the coordinator holding its lease attests
+   * it never reached its POST call. That attestation is the coordinator's, not
+   * the journal's — `sending` alone never implies non-delivery. */
+  unsentRelease: external_exports.object({
+    releasedAt: timestampSchema,
+    priorState: external_exports.enum(["reserved", "sending"])
+  }).strict().optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.state === "abandoned" && !value.operatorAcknowledgement) {
+    ctx.addIssue({ code: "custom", message: "Operator-abandoned uncertainty requires its acknowledgement audit" });
+  }
+  if (value.operatorAcknowledgement && !["abandoned", "succeeded"].includes(value.state)) {
+    ctx.addIssue({ code: "custom", message: "Only abandoned or reconciled-success history carries an operator acknowledgement" });
+  }
+  if (value.unsentRelease && value.state !== "failed") {
+    ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
+  }
+  if (value.state === "succeeded" !== (value.result !== void 0)) {
+    ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
+  }
+  if (value.result && !resultMatches(value.identity, value.result)) {
+    ctx.addIssue({ code: "custom", message: "Remote review identity does not match the operation" });
+  }
+});
+var journalSchema = external_exports.object({
+  version: external_exports.literal(1),
+  operations: external_exports.array(operationSchema).max(4096)
+}).strict();
+var ReviewPostJournalError = class extends Error {
+  constructor(reason, message) {
+    super(message);
+    this.reason = reason;
+    this.name = "ReviewPostJournalError";
+  }
+  reason;
+};
+function canonicalReviewTarget(ref) {
+  const parsed = parsePrReference(ref);
+  return parsed?.owner && parsed.repo ? `https://github.com/${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}/pull/${parsed.number}` : null;
+}
+function reviewPostDigest(value) {
+  const stable = (v2) => {
+    if (Array.isArray(v2)) return v2.map(stable);
+    if (v2 && typeof v2 === "object") {
+      return Object.fromEntries(Object.keys(v2).sort().map((k) => [k, stable(v2[k])]));
+    }
+    return v2;
+  };
+  return createHash5("sha256").update(JSON.stringify(stable(value))).digest("hex");
+}
+function resultMatches(identity, result) {
+  const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
+  return result.state === states[identity.event] && (!identity.reviewedHeadSha || result.commitId === identity.reviewedHeadSha) && result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
+}
+function validateReviewPostResult(identity, result) {
+  const parsed = resultSchema.parse(result);
+  if (!resultMatches(identity, parsed)) {
+    throw new ReviewPostJournalError("invalid", "Remote review identity does not match the attempted post");
+  }
+  return parsed;
+}
+
+// src/store/stance-add.ts
+var STANCE_CONCEPT_MIN = 3;
+var STANCE_CONCEPT_MAX = 120;
+var STANCE_REASON_MIN = 3;
+var STANCE_REASON_MAX = 280;
+var STANCE_USAGE = "<what to avoid> -- <why>";
+var MAX_PROJECT_STANCES = 200;
+function isPublishableStance(addedVia, requestedBy) {
+  return addedVia !== "mcp" && requestedBy !== "unknown";
+}
+var RECOVERY_PROBES = [
+  "deeppairing doctor --fix",
+  "/deeppairing:doctor",
+  "/deeppairing:stance",
+  "/deeppairing:reject",
+  "deeppairing stance allow",
+  "deeppairing stance exceptions revoke",
+  "deeppairing stance add",
+  "deeppairing philosophy remove",
+  "deeppairing philosophy publish off",
+  "Allow this proposal once",
+  "Retire this stance",
+  "check_feedback",
+  "record_stance",
+  ".deeppairing/preferences.json",
+  ".deeppairing/team.json"
+];
+var HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
+function tidy(s) {
+  return s.replace(/\s+/g, " ").trim();
+}
+function parseStanceArguments(raw) {
+  if (Array.isArray(raw)) {
+    const at = raw.indexOf("--");
+    if (at >= 0) return { what: raw.slice(0, at).join(" "), why: raw.slice(at + 1).join(" ") };
+    return parseStanceArguments(raw.join(" "));
+  }
+  const m = /^([\s\S]*?)\s--(?:\s+|$)([\s\S]*)$/.exec(` ${raw}`);
+  if (!m) return { what: raw, why: "" };
+  return { what: m[1].slice(1), why: m[2] };
+}
+function validateStanceInput(input) {
+  if (typeof input.what !== "string" || typeof input.why !== "string") {
+    return { ok: false, error: `Both what to avoid and why are required, as text: ${STANCE_USAGE}.` };
+  }
+  const visible = (s) => s.replace(/[\t\n\r]/g, " ");
+  if (HIDDEN_CHARS.test(visible(input.what)) || HIDDEN_CHARS.test(visible(input.why))) {
+    return { ok: false, error: "The stance contains control or invisible characters. Type it again as plain text." };
+  }
+  const concept = tidy(input.what);
+  const reason = tidy(input.why);
+  if (!concept) return { ok: false, error: `Say what to avoid: ${STANCE_USAGE}.` };
+  if (!reason) {
+    return { ok: false, error: `A reason is required after " -- ": ${STANCE_USAGE}. It is quoted back whenever the stance fires.` };
+  }
+  if (concept.length < STANCE_CONCEPT_MIN) return { ok: false, error: `What to avoid is too short (at least ${STANCE_CONCEPT_MIN} characters).` };
+  if (concept.length > STANCE_CONCEPT_MAX) {
+    return { ok: false, error: `What to avoid is ${concept.length} characters; keep it to a short phrase (at most ${STANCE_CONCEPT_MAX}). The gate matches words, so name the approach in the words the agent would use.` };
+  }
+  if (reason.length < STANCE_REASON_MIN) return { ok: false, error: `The reason is too short (at least ${STANCE_REASON_MIN} characters).` };
+  if (reason.length > STANCE_REASON_MAX) return { ok: false, error: `The reason is ${reason.length} characters; keep it to ${STANCE_REASON_MAX} or fewer.` };
+  if (scanForSecrets(concept).length > 0 || scanForSecrets(reason).length > 0) {
+    return { ok: false, error: "The stance looks like it contains a secret (a key or token shape). Describe the approach without it." };
+  }
+  if (meaningfulTokens(concept).length === 0) {
+    return { ok: false, error: `"${concept}" has no word the gate can match on (only short or common words). Name the approach, e.g. "global mutable state for config".` };
+  }
+  if (concept.includes(":")) {
+    const specific = concept.split(":").slice(1).join(":").trim();
+    if (meaningfulTokens(specific).length === 0) {
+      return { ok: false, error: `The part after the colon, "${specific}", has no word the gate can match on (only short or common words). The gate matches that part on its own, so name the approach there, e.g. "Cache backend: Redis".` };
+    }
+  }
+  const recovery = findRejectedApproachMatch([...RECOVERY_PROBES], [{ description: concept, concept }]);
+  if (recovery) {
+    return { ok: false, error: `"${concept}" would also match deepPairing's own recovery path ("${recovery.proposal}"), which a stance must never block. Name the approach more specifically.` };
+  }
+  return { ok: true, concept, reason };
+}
+function describeStanceCoverage(concept) {
+  const lower = concept.toLowerCase();
+  const specific = lower.includes(":") ? lower.split(":").slice(1).join(":").trim() : "";
+  const tokens = [...new Set(meaningfulTokens(concept))];
+  const lines = [
+    `Catches: a present_* proposal, or an Edit/Write/MultiEdit, whose text contains the phrase "${concept}" (whole words, any case). A present_* proposal is refused; a direct edit pauses for your answer.`
+  ];
+  if (specific) lines.push(`Catches: the part after the colon, "${specific}", on its own (the part before it is treated as a category).`);
+  if (containmentBlockAllowed(concept)) {
+    lines.push(`Catches: text containing all of these words in any order, with simple word forms (state/states): ${tokens.join(", ")}.`);
+  } else {
+    lines.push("Single-word stance: only the word itself, or a proposal naming exactly this concept, is caught.");
+  }
+  lines.push("Also caught: a short proposal field (a title or option name) made only of words from this phrase, in order.");
+  lines.push("Won't catch: rewordings that use different words (this is word matching, not meaning), Bash commands, or notebook edits. If the hook errors or can't read the stance file, the edit proceeds (fail-open).");
+  return lines;
+}
+async function recordStance(store, input) {
+  const v2 = validateStanceInput(input);
+  if (!v2.ok) return { status: "invalid", error: v2.error };
+  const result = await store.addStance({
+    concept: v2.concept,
+    reason: v2.reason,
+    addedVia: input.addedVia,
+    requestedBy: input.requestedBy,
+    maxRows: MAX_PROJECT_STANCES
+  });
+  if (result.status === "cap_reached") {
+    return {
+      status: "invalid",
+      error: `This project already has ${result.count} stances (from every source); an add is refused once it has ${MAX_PROJECT_STANCES}, because more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`
+    };
+  }
+  if (result.status === "recorded") {
+    return { status: "recorded", row: result.row, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
+  }
+  return { status: result.status, row: result.row };
+}
+function stanceProvenance(r) {
+  const who = r.requestedBy === "user" ? "user (self-reported)" : "unknown";
+  if (r.addedVia === "cli") return `added with \`deeppairing stance add\`, requested by: ${who}`;
+  if (r.addedVia === "mcp") return `added with /deeppairing:reject (record_stance), requested by: ${who}`;
+  if (r.sourceArtifactId) return `rejected in the companion (${r.sourceArtifactId})`;
+  return "rejected in the companion";
+}
+function formatRecordStanceOutcome(outcome, scope) {
+  if (outcome.status === "invalid") return { ok: false, text: `Nothing was recorded. ${outcome.error}` };
+  const row = outcome.row;
+  const name = row.concept ?? row.description;
+  if (outcome.status === "reason_added") {
+    return {
+      ok: true,
+      text: `${scope} already had the stance "${name}" with no reason recorded. Added yours: "${row.reason}". Nothing else about it changed.`
+    };
+  }
+  if (outcome.status === "exists") {
+    return {
+      ok: true,
+      text: `Nothing changed: ${scope} already has the stance "${name}"` + (row.reason ? ` (reason: "${row.reason}")` : " (no reason recorded)") + `, ${stanceProvenance(row)}. An existing stance is never rewritten here; to change it, retire it ("Retire this stance" in the companion's gate log) and add it again.`
+    };
+  }
+  return {
+    ok: true,
+    text: [
+      "Stance recorded.",
+      `  Concept: "${name}"`,
+      `  Reason:  "${row.reason ?? ""}" (quoted back whenever it fires)`,
+      `  Scope:   ${scope} only (.deeppairing/preferences.json). ` + (outcome.publishable ? "Other projects see it only as an advisory nudge, and only if this project publishes to the cross-project ledger." : "It is not published to the cross-project ledger, even if this project publishes, because who asked for it can't be verified."),
+      ...describeStanceCoverage(name).map((l) => `  ${l}`),
+      `To correct or remove it: "Retire this stance" in the companion's gate log when it fires, or delete its row from .deeppairing/preferences.json yourself (an agent edit there always asks).`
+    ].join("\n")
+  };
+}
+
+// src/store/file-store.ts
+var RetirementCommentFields = external_exports.object({
+  id: external_exports.string().min(1),
+  sessionId: external_exports.string(),
+  target: external_exports.object({ artifactId: external_exports.string().min(1) }).passthrough(),
+  parentCommentId: external_exports.string().nullable().optional(),
+  author: external_exports.enum(["human", "agent"]),
+  intent: external_exports.enum(["comment", "question", "suggestion"]).optional(),
+  createdAt: external_exports.string().datetime(),
+  acknowledged: external_exports.boolean(),
+  answeredByCommentId: external_exports.string().nullable().optional(),
+  humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  suggestion: external_exports.object({ state: external_exports.enum(["pending", "countered", "applied", "insisted"]) }).passthrough().optional()
+}).passthrough();
+var MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
+var ParentSupersededError = class extends Error {
+  constructor(parentId, successorId, successorVersion, successorFromFile) {
+    super(`${parentId} was already replaced${successorId ? ` by ${successorId}${successorVersion ? ` (v${successorVersion})` : ""}` : ""}; nothing was created.`);
+    this.parentId = parentId;
+    this.successorId = successorId;
+    this.successorVersion = successorVersion;
+    this.successorFromFile = successorFromFile;
+    this.name = "ParentSupersededError";
+  }
+  parentId;
+  successorId;
+  successorVersion;
+  successorFromFile;
+  code = "parent_superseded";
+};
+
 // src/mcp/skeleton-reshape.ts
 function writeReshapeScope(args) {
   try {
@@ -38905,6 +39416,25 @@ var SUPERSEDE_VALIDATORS = {
   page: validateRevisePageInput,
   reasoning: validateLogReasoningInput
 };
+function parentSupersededInfo(err) {
+  if (err instanceof ParentSupersededError) return { successorId: err.successorId, successorVersion: err.successorVersion, successorFromFile: err.successorFromFile };
+  const e = err;
+  if (e?.code !== "parent_superseded") return null;
+  const b = e.body && typeof e.body === "object" ? e.body : {};
+  return {
+    ...typeof b.successorId === "string" ? { successorId: b.successorId } : {},
+    ...typeof b.successorVersion === "number" ? { successorVersion: b.successorVersion } : {},
+    successorFromFile: b.successorFromFile === true
+  };
+}
+function pageChangedUnderYou(artifactId, successorId, successorVersion, fromFile) {
+  const winner = successorId ? `${successorId}${successorVersion ? ` (v${successorVersion})` : ""}` : "a newer version";
+  const how = fromFile ? `the page file watch auto-recorded ${winner} from the page's source file` : `${winner} was recorded first`;
+  return {
+    content: [{ type: "text", text: `revise_artifact: ${artifactId} changed under you \u2014 ${how}. Nothing was created. Revise from ${successorId ?? "the newest version"} instead (and for a file-backed page, either edit the file OR call revise_artifact, not both).` }],
+    isError: true
+  };
+}
 async function handleReviseArtifact(ctx, args) {
   const { store, server, broadcast } = ctx;
   const artifactId = String(args?.artifactId ?? "").trim();
@@ -38939,6 +39469,8 @@ async function handleReviseArtifact(ctx, args) {
       };
     }
     if (["superseded", "retracted", "rejected", "obsolete"].includes(old.status)) {
+      const fileSuccessor = old.status === "superseded" ? all.find((a) => a.parentId === old.id) : void 0;
+      if (fileSuccessor && readFileWatch(fileSuccessor.fileWatch).recorded?.fromArtifactId === old.id) return pageChangedUnderYou(artifactId, fileSuccessor.id, fileSuccessor.version, true);
       return {
         content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${old.status} \u2014 a closed artifact can't be superseded. Present a new artifact instead.` }],
         isError: true
@@ -38988,35 +39520,47 @@ async function handleReviseArtifact(ctx, args) {
     if (decisionContent && Array.isArray(decisionContent.options)) {
       decisionContent.decisionId = `dec_${nanoid3(10)}`;
     }
-    const newArtifact = await store.createArtifact({
-      id: newId,
-      type: old.type,
-      title,
-      content: skeletonSnap.content,
-      agentReasoning: reason,
-      parentId: old.id,
-      version: old.version + 1,
-      // Bug4 — carry the old version's relatedArtifactIds onto v2 so the
-      // reference graph doesn't dangle at the SOURCE when v1 is superseded
-      // (belt-and-suspenders with the client-side resolveToLiveId in the flow
-      // sidebar). Optional field; only set when the old artifact had refs.
-      ...old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {},
-      // #206 (I1) — carry the feature tag onto v2 so a superseded artifact's
-      // successor stays in the same feature group by its OWN tag, not only via
-      // the parentId chain. The store re-normalizes (idempotent on a slug).
-      ...old.featureId ? { feature: old.featureId } : {},
-      // #533 — the successor keeps its presenter, so a subagent filtering
-      // check_feedback by presentedBy still owns the feedback on v2.
-      ...old.presentedBy ? { presentedBy: old.presentedBy } : {},
-      // #572 slice A — a supersede (a decision "tune") CARRIES the exact brief
-      // pin: content replacement never erases it, and it is never moved to a
-      // newer brief (no implicit latest lookup). Re-briefing = a new card.
-      // The admitted path carries the same pin via reviseSnapshot, bound by
-      // reviseInheritedHash.
-      // #572 B1 — a debrief revision with an explicit, admitted pin saves
-      // that pin; otherwise the exact predecessor pin carries as above.
-      ...debriefPin?.ref ? { briefRef: debriefPin.ref } : carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
-    });
+    let newArtifact;
+    try {
+      newArtifact = await store.createArtifact({
+        id: newId,
+        // #680 slice 3 (review P2-2) — the supersede compare-and-swap: if the
+        // page file watch (or another revise) versioned `old` while this call
+        // was in flight, nothing is created and the agent is told to revise the
+        // winner instead of minting a second v(N+1) on the same parent.
+        requireUnsupersededParent: true,
+        type: old.type,
+        title,
+        content: skeletonSnap.content,
+        agentReasoning: reason,
+        parentId: old.id,
+        version: old.version + 1,
+        // Bug4 — carry the old version's relatedArtifactIds onto v2 so the
+        // reference graph doesn't dangle at the SOURCE when v1 is superseded
+        // (belt-and-suspenders with the client-side resolveToLiveId in the flow
+        // sidebar). Optional field; only set when the old artifact had refs.
+        ...old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {},
+        // #206 (I1) — carry the feature tag onto v2 so a superseded artifact's
+        // successor stays in the same feature group by its OWN tag, not only via
+        // the parentId chain. The store re-normalizes (idempotent on a slug).
+        ...old.featureId ? { feature: old.featureId } : {},
+        // #533 — the successor keeps its presenter, so a subagent filtering
+        // check_feedback by presentedBy still owns the feedback on v2.
+        ...old.presentedBy ? { presentedBy: old.presentedBy } : {},
+        // #572 slice A — a supersede (a decision "tune") CARRIES the exact brief
+        // pin: content replacement never erases it, and it is never moved to a
+        // newer brief (no implicit latest lookup). Re-briefing = a new card.
+        // The admitted path carries the same pin via reviseSnapshot, bound by
+        // reviseInheritedHash.
+        // #572 B1 — a debrief revision with an explicit, admitted pin saves
+        // that pin; otherwise the exact predecessor pin carries as above.
+        ...debriefPin?.ref ? { briefRef: debriefPin.ref } : carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
+      });
+    } catch (err) {
+      const lost = parentSupersededInfo(err);
+      if (lost) return pageChangedUnderYou(artifactId, lost.successorId, lost.successorVersion, lost.successorFromFile);
+      throw err;
+    }
     if (old.type === "plan") {
       writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id: old.id, status: oldStatusAtRevise, content: old.content }, newId, newTitle: title, newContent: skeletonSnap.content });
     }
@@ -39124,28 +39668,6 @@ async function handleWithdrawArtifact(ctx, args) {
       text: `Withdrew ${artifactId} \u2014 "${reason}". It's off the human's review queue and recorded as retracted (not built). Nothing was written to the ledger. Call check_feedback for feedback still owed; withdrawal did not acknowledge or answer it.${outcome.warning ? ` ${outcome.warning}` : ""}${taskWarning}`
     }]
   };
-}
-
-// src/github/pr-reference.ts
-function validRepoOwner(value) {
-  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(value);
-}
-function validRepoName(value) {
-  return /^(?!\.{1,2}$)[a-z0-9_.-]+$/i.test(value);
-}
-function parsePrReference(ref) {
-  const value = ref.trim();
-  const bare = /^#?(\d+)$/.exec(value);
-  if (bare) {
-    const number5 = Number(bare[1]);
-    return Number.isSafeInteger(number5) && number5 > 0 ? { number: number5 } : null;
-  }
-  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/(?:files|commits|checks))?\/?(?:[?#][^\s]*)?$/i.exec(value);
-  if (!match) return null;
-  const [, owner, repo, digits] = match;
-  const number4 = Number(digits);
-  if (!owner || !repo || !validRepoOwner(owner) || !validRepoName(repo) || !Number.isSafeInteger(number4) || number4 < 1) return null;
-  return { owner, repo, number: number4 };
 }
 
 // src/github/read-review.ts
@@ -39373,19 +39895,6 @@ async function postPreparedPrReview(opts) {
   } catch (err) {
     throw new Error(`Posted, but could not parse gh response: ${errorMessage(err)}`);
   }
-}
-
-// src/store/posted-reviews.ts
-function samePrTarget(record3, ref) {
-  const parsed = parsePrNumber(ref);
-  if (parsed === null || parsed.number !== record3.prNumber) return false;
-  if (parsed.owner && parsed.repo && record3.owner && record3.repo) {
-    return parsed.owner.toLowerCase() === record3.owner.toLowerCase() && parsed.repo.toLowerCase() === record3.repo.toLowerCase();
-  }
-  return true;
-}
-function parsePrNumber(ref) {
-  return parsePrReference(ref);
 }
 
 // src/github/review-authorization.ts
@@ -39657,111 +40166,6 @@ function authorizeReviewPost(state, opts) {
     event,
     ...reviewedHead.headSha ? { reviewedHeadSha: reviewedHead.headSha } : {}
   };
-}
-
-// src/store/review-post-journal.ts
-import { createHash as createHash5, randomUUID } from "node:crypto";
-var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
-var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
-var timestampSchema = external_exports.iso.datetime();
-var reviewPostResultSchema = external_exports.object({
-  id: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  htmlUrl: external_exports.string(),
-  state: external_exports.enum(["COMMENTED", "CHANGES_REQUESTED", "APPROVED"]),
-  commitId: external_exports.string().regex(/^[0-9a-f]{40}$/).optional()
-}).strict();
-var resultSchema = reviewPostResultSchema;
-var reviewPostLeaseSchema = external_exports.object({ operationId: external_exports.uuid(), token: external_exports.uuid() }).strict();
-var reviewPostIdentitySchema = external_exports.object({
-  target: external_exports.string(),
-  event: eventSchema,
-  reviewedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/).optional(),
-  payloadDigest: digestSchema,
-  authorizationDigest: digestSchema
-}).strict().superRefine((value, ctx) => {
-  if (canonicalReviewTarget(value.target) !== value.target) {
-    ctx.addIssue({ code: "custom", message: "Expected a canonical GitHub PR target" });
-  }
-  if (value.event === "APPROVE" && !value.reviewedHeadSha) {
-    ctx.addIssue({ code: "custom", message: "Approval requires reviewed commit identity" });
-  }
-});
-var operationSchema = external_exports.object({
-  id: external_exports.uuid(),
-  tokenDigest: digestSchema,
-  sessionId: external_exports.string().min(1),
-  identity: reviewPostIdentitySchema,
-  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown", "abandoned"]),
-  createdAt: timestampSchema,
-  updatedAt: timestampSchema,
-  result: resultSchema.optional(),
-  operatorAcknowledgement: external_exports.object({
-    acknowledgedAt: timestampSchema,
-    priorState: external_exports.enum(["sending", "unknown"]),
-    operationDigest: digestSchema
-  }).strict().optional(),
-  /** Recorded when the live coordinator released its own never-sent attempt.
-   * `priorState: "sending"` is the interesting case: the operation had written
-   * its durable sending marker, and the coordinator holding its lease attests
-   * it never reached its POST call. That attestation is the coordinator's, not
-   * the journal's — `sending` alone never implies non-delivery. */
-  unsentRelease: external_exports.object({
-    releasedAt: timestampSchema,
-    priorState: external_exports.enum(["reserved", "sending"])
-  }).strict().optional()
-}).strict().superRefine((value, ctx) => {
-  if (value.state === "abandoned" && !value.operatorAcknowledgement) {
-    ctx.addIssue({ code: "custom", message: "Operator-abandoned uncertainty requires its acknowledgement audit" });
-  }
-  if (value.operatorAcknowledgement && !["abandoned", "succeeded"].includes(value.state)) {
-    ctx.addIssue({ code: "custom", message: "Only abandoned or reconciled-success history carries an operator acknowledgement" });
-  }
-  if (value.unsentRelease && value.state !== "failed") {
-    ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
-  }
-  if (value.state === "succeeded" !== (value.result !== void 0)) {
-    ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
-  }
-  if (value.result && !resultMatches(value.identity, value.result)) {
-    ctx.addIssue({ code: "custom", message: "Remote review identity does not match the operation" });
-  }
-});
-var journalSchema = external_exports.object({
-  version: external_exports.literal(1),
-  operations: external_exports.array(operationSchema).max(4096)
-}).strict();
-var ReviewPostJournalError = class extends Error {
-  constructor(reason, message) {
-    super(message);
-    this.reason = reason;
-    this.name = "ReviewPostJournalError";
-  }
-  reason;
-};
-function canonicalReviewTarget(ref) {
-  const parsed = parsePrReference(ref);
-  return parsed?.owner && parsed.repo ? `https://github.com/${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}/pull/${parsed.number}` : null;
-}
-function reviewPostDigest(value) {
-  const stable = (v2) => {
-    if (Array.isArray(v2)) return v2.map(stable);
-    if (v2 && typeof v2 === "object") {
-      return Object.fromEntries(Object.keys(v2).sort().map((k) => [k, stable(v2[k])]));
-    }
-    return v2;
-  };
-  return createHash5("sha256").update(JSON.stringify(stable(value))).digest("hex");
-}
-function resultMatches(identity, result) {
-  const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
-  return result.state === states[identity.event] && (!identity.reviewedHeadSha || result.commitId === identity.reviewedHeadSha) && result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
-}
-function validateReviewPostResult(identity, result) {
-  const parsed = resultSchema.parse(result);
-  if (!resultMatches(identity, parsed)) {
-    throw new ReviewPostJournalError("invalid", "Remote review identity does not match the attempted post");
-  }
-  return parsed;
 }
 
 // src/github/authorized-durable-review.ts
@@ -40620,168 +41024,16 @@ async function presentPage(ctx, args, opts = {}) {
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "page", input.title, id);
   const from = sourcePath ? ` from ${sourcePath}` : "";
+  const watchNote = sourcePath ? ` While it is under review, saving ${sourcePath} records a new version automatically (after ~2s of quiet, at most one per 10s); check_feedback tells you when, and which page comments lost their spot.` : "";
   return {
     content: [{
       type: "text",
-      text: `Page "${artifact.title}" presented for review (${id})${from}. Your pair reviews it at localhost:${reviewPort}, in a sandboxed frame with no network; scripts run only when they click Run. Call check_feedback for their verdict and comments.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Page "${artifact.title}" presented for review (${id})${from}. Your pair reviews it at localhost:${reviewPort}, in a sandboxed frame with no network; scripts run only when they click Run. Call check_feedback for their verdict and comments.${watchNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
 function handlePresentPage(ctx, args) {
   return presentPage(ctx, args);
-}
-
-// src/store/stance-add.ts
-var STANCE_CONCEPT_MIN = 3;
-var STANCE_CONCEPT_MAX = 120;
-var STANCE_REASON_MIN = 3;
-var STANCE_REASON_MAX = 280;
-var STANCE_USAGE = "<what to avoid> -- <why>";
-var MAX_PROJECT_STANCES = 200;
-function isPublishableStance(addedVia, requestedBy) {
-  return addedVia !== "mcp" && requestedBy !== "unknown";
-}
-var RECOVERY_PROBES = [
-  "deeppairing doctor --fix",
-  "/deeppairing:doctor",
-  "/deeppairing:stance",
-  "/deeppairing:reject",
-  "deeppairing stance allow",
-  "deeppairing stance exceptions revoke",
-  "deeppairing stance add",
-  "deeppairing philosophy remove",
-  "deeppairing philosophy publish off",
-  "Allow this proposal once",
-  "Retire this stance",
-  "check_feedback",
-  "record_stance",
-  ".deeppairing/preferences.json",
-  ".deeppairing/team.json"
-];
-var HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
-function tidy(s) {
-  return s.replace(/\s+/g, " ").trim();
-}
-function parseStanceArguments(raw) {
-  if (Array.isArray(raw)) {
-    const at = raw.indexOf("--");
-    if (at >= 0) return { what: raw.slice(0, at).join(" "), why: raw.slice(at + 1).join(" ") };
-    return parseStanceArguments(raw.join(" "));
-  }
-  const m = /^([\s\S]*?)\s--(?:\s+|$)([\s\S]*)$/.exec(` ${raw}`);
-  if (!m) return { what: raw, why: "" };
-  return { what: m[1].slice(1), why: m[2] };
-}
-function validateStanceInput(input) {
-  if (typeof input.what !== "string" || typeof input.why !== "string") {
-    return { ok: false, error: `Both what to avoid and why are required, as text: ${STANCE_USAGE}.` };
-  }
-  const visible = (s) => s.replace(/[\t\n\r]/g, " ");
-  if (HIDDEN_CHARS.test(visible(input.what)) || HIDDEN_CHARS.test(visible(input.why))) {
-    return { ok: false, error: "The stance contains control or invisible characters. Type it again as plain text." };
-  }
-  const concept = tidy(input.what);
-  const reason = tidy(input.why);
-  if (!concept) return { ok: false, error: `Say what to avoid: ${STANCE_USAGE}.` };
-  if (!reason) {
-    return { ok: false, error: `A reason is required after " -- ": ${STANCE_USAGE}. It is quoted back whenever the stance fires.` };
-  }
-  if (concept.length < STANCE_CONCEPT_MIN) return { ok: false, error: `What to avoid is too short (at least ${STANCE_CONCEPT_MIN} characters).` };
-  if (concept.length > STANCE_CONCEPT_MAX) {
-    return { ok: false, error: `What to avoid is ${concept.length} characters; keep it to a short phrase (at most ${STANCE_CONCEPT_MAX}). The gate matches words, so name the approach in the words the agent would use.` };
-  }
-  if (reason.length < STANCE_REASON_MIN) return { ok: false, error: `The reason is too short (at least ${STANCE_REASON_MIN} characters).` };
-  if (reason.length > STANCE_REASON_MAX) return { ok: false, error: `The reason is ${reason.length} characters; keep it to ${STANCE_REASON_MAX} or fewer.` };
-  if (scanForSecrets(concept).length > 0 || scanForSecrets(reason).length > 0) {
-    return { ok: false, error: "The stance looks like it contains a secret (a key or token shape). Describe the approach without it." };
-  }
-  if (meaningfulTokens(concept).length === 0) {
-    return { ok: false, error: `"${concept}" has no word the gate can match on (only short or common words). Name the approach, e.g. "global mutable state for config".` };
-  }
-  if (concept.includes(":")) {
-    const specific = concept.split(":").slice(1).join(":").trim();
-    if (meaningfulTokens(specific).length === 0) {
-      return { ok: false, error: `The part after the colon, "${specific}", has no word the gate can match on (only short or common words). The gate matches that part on its own, so name the approach there, e.g. "Cache backend: Redis".` };
-    }
-  }
-  const recovery = findRejectedApproachMatch([...RECOVERY_PROBES], [{ description: concept, concept }]);
-  if (recovery) {
-    return { ok: false, error: `"${concept}" would also match deepPairing's own recovery path ("${recovery.proposal}"), which a stance must never block. Name the approach more specifically.` };
-  }
-  return { ok: true, concept, reason };
-}
-function describeStanceCoverage(concept) {
-  const lower = concept.toLowerCase();
-  const specific = lower.includes(":") ? lower.split(":").slice(1).join(":").trim() : "";
-  const tokens = [...new Set(meaningfulTokens(concept))];
-  const lines = [
-    `Catches: a present_* proposal, or an Edit/Write/MultiEdit, whose text contains the phrase "${concept}" (whole words, any case). A present_* proposal is refused; a direct edit pauses for your answer.`
-  ];
-  if (specific) lines.push(`Catches: the part after the colon, "${specific}", on its own (the part before it is treated as a category).`);
-  if (containmentBlockAllowed(concept)) {
-    lines.push(`Catches: text containing all of these words in any order, with simple word forms (state/states): ${tokens.join(", ")}.`);
-  } else {
-    lines.push("Single-word stance: only the word itself, or a proposal naming exactly this concept, is caught.");
-  }
-  lines.push("Also caught: a short proposal field (a title or option name) made only of words from this phrase, in order.");
-  lines.push("Won't catch: rewordings that use different words (this is word matching, not meaning), Bash commands, or notebook edits. If the hook errors or can't read the stance file, the edit proceeds (fail-open).");
-  return lines;
-}
-async function recordStance(store, input) {
-  const v2 = validateStanceInput(input);
-  if (!v2.ok) return { status: "invalid", error: v2.error };
-  const result = await store.addStance({
-    concept: v2.concept,
-    reason: v2.reason,
-    addedVia: input.addedVia,
-    requestedBy: input.requestedBy,
-    maxRows: MAX_PROJECT_STANCES
-  });
-  if (result.status === "cap_reached") {
-    return {
-      status: "invalid",
-      error: `This project already has ${result.count} stances (from every source); an add is refused once it has ${MAX_PROJECT_STANCES}, because more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`
-    };
-  }
-  if (result.status === "recorded") {
-    return { status: "recorded", row: result.row, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
-  }
-  return { status: result.status, row: result.row };
-}
-function stanceProvenance(r) {
-  const who = r.requestedBy === "user" ? "user (self-reported)" : "unknown";
-  if (r.addedVia === "cli") return `added with \`deeppairing stance add\`, requested by: ${who}`;
-  if (r.addedVia === "mcp") return `added with /deeppairing:reject (record_stance), requested by: ${who}`;
-  if (r.sourceArtifactId) return `rejected in the companion (${r.sourceArtifactId})`;
-  return "rejected in the companion";
-}
-function formatRecordStanceOutcome(outcome, scope) {
-  if (outcome.status === "invalid") return { ok: false, text: `Nothing was recorded. ${outcome.error}` };
-  const row = outcome.row;
-  const name = row.concept ?? row.description;
-  if (outcome.status === "reason_added") {
-    return {
-      ok: true,
-      text: `${scope} already had the stance "${name}" with no reason recorded. Added yours: "${row.reason}". Nothing else about it changed.`
-    };
-  }
-  if (outcome.status === "exists") {
-    return {
-      ok: true,
-      text: `Nothing changed: ${scope} already has the stance "${name}"` + (row.reason ? ` (reason: "${row.reason}")` : " (no reason recorded)") + `, ${stanceProvenance(row)}. An existing stance is never rewritten here; to change it, retire it ("Retire this stance" in the companion's gate log) and add it again.`
-    };
-  }
-  return {
-    ok: true,
-    text: [
-      "Stance recorded.",
-      `  Concept: "${name}"`,
-      `  Reason:  "${row.reason ?? ""}" (quoted back whenever it fires)`,
-      `  Scope:   ${scope} only (.deeppairing/preferences.json). ` + (outcome.publishable ? "Other projects see it only as an advisory nudge, and only if this project publishes to the cross-project ledger." : "It is not published to the cross-project ledger, even if this project publishes, because who asked for it can't be verified."),
-      ...describeStanceCoverage(name).map((l) => `  ${l}`),
-      `To correct or remove it: "Retire this stance" in the companion's gate log when it fires, or delete its row from .deeppairing/preferences.json yourself (an agent edit there always asks).`
-    ].join("\n")
-  };
 }
 
 // src/mcp/tools/recall.ts
@@ -41393,7 +41645,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_page",
         annotations: { title: "Present page", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present an HTML PAGE you wrote for your pair to review: a comparison table, a mock-up, a diagram-heavy proposal, a one-page design: anything that reads best as a page. Give a `title`, then EITHER the page inline as `html` OR a `path` to an HTML file inside the project (read once, up to 2 MB; paths outside the project root, including through symlinks, are refused). Optional `summary` (one or two sentences TO your pair: what the page shows and what you want from them) and `concept` (the named pattern the page proposes, so a reject is remembered against it).\n\nRendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, fonts or images; inline everything, data: URIs are fine). Its scripts run only when your pair clicks Run, so the page must read well without them.\n\nThe rejection gate applies: the page's visible text, title, summary and concept are checked against the approaches your pair has rejected, exactly like the other present_* tools, and a match is refused with their stored reason (REJECTED_APPROACH_BLOCKED). Rework the approach; don't reword the page to slip past it.\n\nWorkflow: it is a reviewable draft like present_plan or present_findings: your pair approves, requests changes or rejects with a reason. Non-blocking: it records and returns immediately; call check_feedback for the verdict and comments. To ship a new version, revise_artifact with mode 'supersede' and the new page as inline `html`. Prefer the structured tools when the review needs per-line, per-option or per-file marks (present_changeset, present_options).",
+        description: "Present an HTML PAGE you wrote for your pair to review: a comparison table, a mock-up, a diagram-heavy proposal, a one-page design: anything that reads best as a page. Give a `title`, then EITHER the page inline as `html` OR a `path` to an HTML file inside the project (up to 2 MB; paths outside the project root, including through symlinks, are refused). A `path` page is WATCHED: while it is under review, saving the file records a new version automatically (after ~2s of quiet, at most one per 10s), re-checked against rejection memory; check_feedback reports the new version and any page comments whose text is gone. For such a page, edit the file OR call revise_artifact, not both. Optional `summary` (one or two sentences TO your pair: what the page shows and what you want from them) and `concept` (the named pattern the page proposes, so a reject is remembered against it).\n\nRendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, fonts or images; inline everything, data: URIs are fine). Its scripts run only when your pair clicks Run, so the page must read well without them.\n\nThe rejection gate applies: the page's visible text, title, summary and concept are checked against the approaches your pair has rejected, exactly like the other present_* tools, and a match is refused with their stored reason (REJECTED_APPROACH_BLOCKED). Rework the approach; don't reword the page to slip past it.\n\nWorkflow: it is a reviewable draft like present_plan or present_findings: your pair approves, requests changes or rejects with a reason. Non-blocking: it records and returns immediately; call check_feedback for the verdict and comments. To ship a new version, revise_artifact with mode 'supersede' and the new page as inline `html`. Prefer the structured tools when the review needs per-line, per-option or per-file marks (present_changeset, present_options).",
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_page)
       },
       {
@@ -42871,6 +43123,11 @@ var DaemonClient = class {
   }
   async acknowledgeStatusChanges(ids) {
     await this.post("/artifacts/status-changes/acknowledge", { ids });
+  }
+  // #680 slice 3 — proxy the file-watch notice acknowledgement (the notices
+  // ride on the artifacts, read through getArtifacts).
+  async acknowledgeFileWatchNotices(refs) {
+    await this.post("/artifacts/file-watch/acknowledge", { refs });
   }
   // #176 (Option A) — proxy the render-failure DRAIN to the daemon's FileStore.
   // In daemon mode check_feedback runs against THIS client, so without these the

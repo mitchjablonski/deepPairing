@@ -4,7 +4,7 @@
  */
 import { decisionCanAcceptAnswer, type DecisionNonAnswerableStatus } from "@deeppairing/shared";
 import type { DecisionResolveOutcome, RecordedResolution, ResolutionAnnouncement } from "../store/decision-resolve-guard.js";
-import type { Artifact, ArtifactStatus, Comment, TeamPreference, PreflightTrace } from "@deeppairing/shared";
+import type { Artifact, ArtifactStatus, FileWatchNoticeRef, Comment, TeamPreference, PreflightTrace } from "@deeppairing/shared";
 import type {
   IStore,
   DecisionRecord,
@@ -518,6 +518,12 @@ export class DaemonClient implements IStore {
 
   async acknowledgeStatusChanges(ids: string[]): Promise<void> {
     await this.post("/artifacts/status-changes/acknowledge", { ids });
+  }
+
+  // #680 slice 3 — proxy the file-watch notice acknowledgement (the notices
+  // ride on the artifacts, read through getArtifacts).
+  async acknowledgeFileWatchNotices(refs: FileWatchNoticeRef[]): Promise<void> {
+    await this.post("/artifacts/file-watch/acknowledge", { refs });
   }
 
   // #176 (Option A) — proxy the render-failure DRAIN to the daemon's FileStore.

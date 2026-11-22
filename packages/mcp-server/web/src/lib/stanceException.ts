@@ -55,6 +55,8 @@ export function ineligibleText(reason: string | undefined): string {
     // #544 — a raw Edit/Write the hook asked about: the terminal answers it.
     case "hook_ask": return "You answer this one in the terminal: allowing it there lets this one change through.";
     case "hook_deny": return "This edit was stopped before it ran. Nothing was written.";
+    // #680 slice 3 — the page file watch refused a save; there is no call to allow.
+    case "file_watch": return "This came from a file save, so there's nothing to allow once. The page wasn't updated: edit the file again, or call revise_artifact.";
     default: return "This block can't be allowed once.";
   }
 }

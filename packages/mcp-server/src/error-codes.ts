@@ -54,6 +54,10 @@ export const ERROR_CODES = {
   /** #521 — a confidence AUTO-approval reached the daemon after the autonomy level
    *  (or the artifact) no longer permitted it. 409, no state change. */
   auto_approve_not_permitted: "auto_approve_not_permitted",
+  /** #680 slice 3 — a supersede-create lost the race: its parent was already
+   *  replaced (the page file watch or another revise recorded a version). 409,
+   *  nothing created; the body names the successor. */
+  parent_superseded: "parent_superseded",
   /** A review verdict raced a change to the artifact content being reviewed. */
   session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
