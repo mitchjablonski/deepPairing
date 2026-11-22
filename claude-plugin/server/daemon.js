@@ -4362,8 +4362,8 @@ var serve = (options, listeningListener) => {
 
 // src/daemon/index.ts
 import crypto6 from "node:crypto";
-import fs25 from "node:fs";
-import path25 from "node:path";
+import fs26 from "node:fs";
+import path26 from "node:path";
 
 // src/hooks/stance-allow-ask.ts
 var STANCE_ALLOW_ASK_REASON = "The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.";
@@ -5246,10 +5246,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path26) {
-  if (!path26)
+function getElementAtPath(obj2, path27) {
+  if (!path27)
     return obj2;
-  return path26.reduce((acc, key) => acc?.[key], obj2);
+  return path27.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -5658,11 +5658,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path26, issues) {
+function prefixIssues(path27, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path26);
+    iss.path.unshift(path27);
     return iss;
   });
 }
@@ -5809,16 +5809,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path26 = []) => {
+  const processError = (error52, path27 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path26, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path27, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path26, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path27, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path26, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path27, ...issue2.path]);
       } else {
-        const fullpath = [...path26, ...issue2.path];
+        const fullpath = [...path27, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -5845,17 +5845,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path26 = []) => {
+  const processError = (error52, path27 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path26, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path27, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path26, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path27, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path26, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path27, ...issue2.path]);
       } else {
-        const fullpath = [...path26, ...issue2.path];
+        const fullpath = [...path27, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -5887,8 +5887,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path26 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path26) {
+  const path27 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path27) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -18580,13 +18580,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path26 = ref.slice(1).split("/").filter(Boolean);
-  if (path26.length === 0) {
+  const path27 = ref.slice(1).split("/").filter(Boolean);
+  if (path27.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path26[0] === defsKey) {
-    const key = path26[1];
+  if (path27[0] === defsKey) {
+    const key = path27[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -22622,26 +22622,26 @@ var handleParsingNestedValues = (form, key, value) => {
 };
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/utils/url.js
-var splitPath = (path26) => {
-  const paths = path26.split("/");
+var splitPath = (path27) => {
+  const paths = path27.split("/");
   if (paths[0] === "") {
     paths.shift();
   }
   return paths;
 };
 var splitRoutingPath = (routePath) => {
-  const { groups, path: path26 } = extractGroupsFromPath(routePath);
-  const paths = splitPath(path26);
+  const { groups, path: path27 } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path27);
   return replaceGroupMarks(paths, groups);
 };
-var extractGroupsFromPath = (path26) => {
+var extractGroupsFromPath = (path27) => {
   const groups = [];
-  path26 = path26.replace(/\{[^}]+\}/g, (match2, index) => {
+  path27 = path27.replace(/\{[^}]+\}/g, (match2, index) => {
     const mark = `@${index}`;
     groups.push([mark, match2]);
     return mark;
   });
-  return { groups, path: path26 };
+  return { groups, path: path27 };
 };
 var replaceGroupMarks = (paths, groups) => {
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -22698,8 +22698,8 @@ var getPath = (request) => {
       const queryIndex = url2.indexOf("?", i);
       const hashIndex = url2.indexOf("#", i);
       const end = queryIndex === -1 ? hashIndex === -1 ? void 0 : hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
-      const path26 = url2.slice(start, end);
-      return tryDecodeURI(path26.includes("%25") ? path26.replace(/%25/g, "%2525") : path26);
+      const path27 = url2.slice(start, end);
+      return tryDecodeURI(path27.includes("%25") ? path27.replace(/%25/g, "%2525") : path27);
     } else if (charCode === 63 || charCode === 35) {
       break;
     }
@@ -22716,11 +22716,11 @@ var mergePath = (base, sub, ...rest) => {
   }
   return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
 };
-var checkOptionalParameter = (path26) => {
-  if (path26.charCodeAt(path26.length - 1) !== 63 || !path26.includes(":")) {
+var checkOptionalParameter = (path27) => {
+  if (path27.charCodeAt(path27.length - 1) !== 63 || !path27.includes(":")) {
     return null;
   }
-  const segments = path26.split("/");
+  const segments = path27.split("/");
   const results = [];
   let basePath = "";
   segments.forEach((segment) => {
@@ -22861,9 +22861,9 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path26 = "/", matchResult = [[]]) {
+  constructor(request, path27 = "/", matchResult = [[]]) {
     this.raw = request;
-    this.path = path26;
+    this.path = path27;
     this.#matchResult = matchResult;
     this.#validatedData = {};
   }
@@ -23615,8 +23615,8 @@ var Hono = class _Hono {
         return this;
       };
     });
-    this.on = (method, path26, ...handlers) => {
-      for (const p of [path26].flat()) {
+    this.on = (method, path27, ...handlers) => {
+      for (const p of [path27].flat()) {
         this.#path = p;
         for (const m of [method].flat()) {
           handlers.map((handler) => {
@@ -23673,8 +23673,8 @@ var Hono = class _Hono {
    * app.route("/api", app2) // GET /api/user
    * ```
    */
-  route(path26, app) {
-    const subApp = this.basePath(path26);
+  route(path27, app) {
+    const subApp = this.basePath(path27);
     app.routes.map((r) => {
       let handler;
       if (app.errorHandler === errorHandler) {
@@ -23700,9 +23700,9 @@ var Hono = class _Hono {
    * const api = new Hono().basePath('/api')
    * ```
    */
-  basePath(path26) {
+  basePath(path27) {
     const subApp = this.#clone();
-    subApp._basePath = mergePath(this._basePath, path26);
+    subApp._basePath = mergePath(this._basePath, path27);
     return subApp;
   }
   /**
@@ -23776,7 +23776,7 @@ var Hono = class _Hono {
    * })
    * ```
    */
-  mount(path26, applicationHandler, options) {
+  mount(path27, applicationHandler, options) {
     let replaceRequest;
     let optionHandler;
     if (options) {
@@ -23803,7 +23803,7 @@ var Hono = class _Hono {
       return [c.env, executionContext];
     };
     replaceRequest ||= (() => {
-      const mergedPath = mergePath(this._basePath, path26);
+      const mergedPath = mergePath(this._basePath, path27);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
       return (request) => {
         const url2 = new URL(request.url);
@@ -23818,19 +23818,19 @@ var Hono = class _Hono {
       }
       await next();
     };
-    this.#addRoute(METHOD_NAME_ALL, mergePath(path26, "*"), handler);
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path27, "*"), handler);
     return this;
   }
-  #addRoute(method, path26, handler, baseRoutePath) {
+  #addRoute(method, path27, handler, baseRoutePath) {
     method = method.toUpperCase();
-    path26 = mergePath(this._basePath, path26);
+    path27 = mergePath(this._basePath, path27);
     const r = {
       basePath: baseRoutePath !== void 0 ? mergePath(this._basePath, baseRoutePath) : this._basePath,
-      path: path26,
+      path: path27,
       method,
       handler
     };
-    this.router.add(method, path26, [handler, r]);
+    this.router.add(method, path27, [handler, r]);
     this.routes.push(r);
   }
   #handleError(err, c) {
@@ -23843,10 +23843,10 @@ var Hono = class _Hono {
     if (method === "HEAD") {
       return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
     }
-    const path26 = this.getPath(request, { env });
-    const matchResult = this.router.match(method, path26);
+    const path27 = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path27);
     const c = new Context(request, {
-      path: path26,
+      path: path27,
       matchResult,
       env,
       executionCtx,
@@ -23946,15 +23946,15 @@ var Hono = class _Hono {
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
-function match(method, path26) {
+function match(method, path27) {
   const matchers = this.buildAllMatchers();
-  const match2 = ((method2, path27) => {
+  const match2 = ((method2, path28) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
-    const staticMatch = matcher[2][path27];
+    const staticMatch = matcher[2][path28];
     if (staticMatch) {
       return staticMatch;
     }
-    const match3 = path27.match(matcher[0]);
+    const match3 = path28.match(matcher[0]);
     if (!match3) {
       return [[], emptyParam];
     }
@@ -23962,7 +23962,7 @@ function match(method, path26) {
     return [matcher[1][index], match3];
   });
   this.match = match2;
-  return match2(method, path26);
+  return match2(method, path27);
 }
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/node.js
@@ -24077,12 +24077,12 @@ var Node = class _Node {
 var Trie = class {
   #context = { varIndex: 0 };
   #root = new Node();
-  insert(path26, index, pathErrorCheckOnly) {
+  insert(path27, index, pathErrorCheckOnly) {
     const paramAssoc = [];
     const groups = [];
     for (let i = 0; ; ) {
       let replaced = false;
-      path26 = path26.replace(/\{[^}]+\}/g, (m) => {
+      path27 = path27.replace(/\{[^}]+\}/g, (m) => {
         const mark = `@\\${i}`;
         groups[i] = [mark, m];
         i++;
@@ -24093,7 +24093,7 @@ var Trie = class {
         break;
       }
     }
-    const tokens = path26.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    const tokens = path27.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const [mark] = groups[i];
       for (let j = tokens.length - 1; j >= 0; j--) {
@@ -24132,9 +24132,9 @@ var Trie = class {
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/router.js
 var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
 var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
-function buildWildcardRegExp(path26) {
-  return wildcardRegExpCache[path26] ??= new RegExp(
-    path26 === "*" ? "" : `^${path26.replace(
+function buildWildcardRegExp(path27) {
+  return wildcardRegExpCache[path27] ??= new RegExp(
+    path27 === "*" ? "" : `^${path27.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -24156,17 +24156,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path26, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path27, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path26] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path27] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path26, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path27, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path26) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path27) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -24200,12 +24200,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path26) {
+function findMiddleware(middleware, path27) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path26)) {
+    if (buildWildcardRegExp(k).test(path27)) {
       return [...middleware[k]];
     }
   }
@@ -24219,7 +24219,7 @@ var RegExpRouter = class {
     this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
     this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
   }
-  add(method, path26, handler) {
+  add(method, path27, handler) {
     const middleware = this.#middleware;
     const routes = this.#routes;
     if (!middleware || !routes) {
@@ -24234,18 +24234,18 @@ var RegExpRouter = class {
         });
       });
     }
-    if (path26 === "/*") {
-      path26 = "*";
+    if (path27 === "/*") {
+      path27 = "*";
     }
-    const paramCount = (path26.match(/\/:/g) || []).length;
-    if (/\*$/.test(path26)) {
-      const re = buildWildcardRegExp(path26);
+    const paramCount = (path27.match(/\/:/g) || []).length;
+    if (/\*$/.test(path27)) {
+      const re = buildWildcardRegExp(path27);
       if (method === METHOD_NAME_ALL) {
         Object.keys(middleware).forEach((m) => {
-          middleware[m][path26] ||= findMiddleware(middleware[m], path26) || findMiddleware(middleware[METHOD_NAME_ALL], path26) || [];
+          middleware[m][path27] ||= findMiddleware(middleware[m], path27) || findMiddleware(middleware[METHOD_NAME_ALL], path27) || [];
         });
       } else {
-        middleware[method][path26] ||= findMiddleware(middleware[method], path26) || findMiddleware(middleware[METHOD_NAME_ALL], path26) || [];
+        middleware[method][path27] ||= findMiddleware(middleware[method], path27) || findMiddleware(middleware[METHOD_NAME_ALL], path27) || [];
       }
       Object.keys(middleware).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
@@ -24263,15 +24263,15 @@ var RegExpRouter = class {
       });
       return;
     }
-    const paths = checkOptionalParameter(path26) || [path26];
+    const paths = checkOptionalParameter(path27) || [path27];
     for (let i = 0, len = paths.length; i < len; i++) {
-      const path27 = paths[i];
+      const path28 = paths[i];
       Object.keys(routes).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
-          routes[m][path27] ||= [
-            ...findMiddleware(middleware[m], path27) || findMiddleware(middleware[METHOD_NAME_ALL], path27) || []
+          routes[m][path28] ||= [
+            ...findMiddleware(middleware[m], path28) || findMiddleware(middleware[METHOD_NAME_ALL], path28) || []
           ];
-          routes[m][path27].push([handler, paramCount - len + i + 1]);
+          routes[m][path28].push([handler, paramCount - len + i + 1]);
         }
       });
     }
@@ -24290,13 +24290,13 @@ var RegExpRouter = class {
     const routes = [];
     let hasOwnRoute = method === METHOD_NAME_ALL;
     [this.#middleware, this.#routes].forEach((r) => {
-      const ownRoute = r[method] ? Object.keys(r[method]).map((path26) => [path26, r[method][path26]]) : [];
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path27) => [path27, r[method][path27]]) : [];
       if (ownRoute.length !== 0) {
         hasOwnRoute ||= true;
         routes.push(...ownRoute);
       } else if (method !== METHOD_NAME_ALL) {
         routes.push(
-          ...Object.keys(r[METHOD_NAME_ALL]).map((path26) => [path26, r[METHOD_NAME_ALL][path26]])
+          ...Object.keys(r[METHOD_NAME_ALL]).map((path27) => [path27, r[METHOD_NAME_ALL][path27]])
         );
       }
     });
@@ -24316,13 +24316,13 @@ var SmartRouter = class {
   constructor(init) {
     this.#routers = init.routers;
   }
-  add(method, path26, handler) {
+  add(method, path27, handler) {
     if (!this.#routes) {
       throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
     }
-    this.#routes.push([method, path26, handler]);
+    this.#routes.push([method, path27, handler]);
   }
-  match(method, path26) {
+  match(method, path27) {
     if (!this.#routes) {
       throw new Error("Fatal error");
     }
@@ -24337,7 +24337,7 @@ var SmartRouter = class {
         for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
           router.add(...routes[i2]);
         }
-        res = router.match(method, path26);
+        res = router.match(method, path27);
       } catch (e) {
         if (e instanceof UnsupportedPathError) {
           continue;
@@ -24387,10 +24387,10 @@ var Node2 = class _Node2 {
     }
     this.#patterns = [];
   }
-  insert(method, path26, handler) {
+  insert(method, path27, handler) {
     this.#order = ++this.#order;
     let curNode = this;
-    const parts = splitRoutingPath(path26);
+    const parts = splitRoutingPath(path27);
     const possibleKeys = [];
     for (let i = 0, len = parts.length; i < len; i++) {
       const p = parts[i];
@@ -24439,12 +24439,12 @@ var Node2 = class _Node2 {
       }
     }
   }
-  search(method, path26) {
+  search(method, path27) {
     const handlerSets = [];
     this.#params = emptyParams;
     const curNode = this;
     let curNodes = [curNode];
-    const parts = splitPath(path26);
+    const parts = splitPath(path27);
     const curNodesQueue = [];
     const len = parts.length;
     let partOffsets = null;
@@ -24486,13 +24486,13 @@ var Node2 = class _Node2 {
           if (matcher instanceof RegExp) {
             if (partOffsets === null) {
               partOffsets = new Array(len);
-              let offset = path26[0] === "/" ? 1 : 0;
+              let offset = path27[0] === "/" ? 1 : 0;
               for (let p = 0; p < len; p++) {
                 partOffsets[p] = offset;
                 offset += parts[p].length + 1;
               }
             }
-            const restPathString = path26.substring(partOffsets[i]);
+            const restPathString = path27.substring(partOffsets[i]);
             const m = matcher.exec(restPathString);
             if (m) {
               params[name] = m[0];
@@ -24545,18 +24545,18 @@ var TrieRouter = class {
   constructor() {
     this.#node = new Node2();
   }
-  add(method, path26, handler) {
-    const results = checkOptionalParameter(path26);
+  add(method, path27, handler) {
+    const results = checkOptionalParameter(path27);
     if (results) {
       for (let i = 0, len = results.length; i < len; i++) {
         this.#node.insert(method, results[i], handler);
       }
       return;
     }
-    this.#node.insert(method, path26, handler);
+    this.#node.insert(method, path27, handler);
   }
-  match(method, path26) {
-    return this.#node.search(method, path26);
+  match(method, path27) {
+    return this.#node.search(method, path27);
   }
 };
 
@@ -24669,8 +24669,8 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/daemon/create-daemon.ts
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-import fs24 from "node:fs";
-import path24 from "node:path";
+import fs25 from "node:fs";
+import path25 from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes as randomBytes4 } from "node:crypto";
 
@@ -30993,7 +30993,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path26 = sanitizePath(file2.path, projectRoot2);
+  const path27 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -31010,7 +31010,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path26)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path27)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -31129,9 +31129,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path26 = sanitizePath(e.filePath, projectRoot2);
+    const path27 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path26 ? `<p class="anchor"><code>${esc2(path26 + range)}</code></p>` : "";
+    let anchor = path27 ? `<p class="anchor"><code>${esc2(path27 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -31288,9 +31288,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path26 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path27 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path26)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path27)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -35425,6 +35425,10 @@ function mountStaticUi(app, opts) {
   });
 }
 
+// src/daemon/routes.ts
+import fs23 from "node:fs";
+import path22 from "node:path";
+
 // src/store/store-interface.ts
 function validateSuggestionTransition(current, update) {
   if (update.state === "countered") {
@@ -35559,7 +35563,21 @@ function applyTopLevelGuards(app, opts) {
   });
 }
 
+// src/standalone-session-id.ts
+var REVIEW_SESSION = /^review_[0-9a-f]{8}_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+var prefixFor = (projectRoot2) => `review_${projectHashOf(projectRoot2)}_`;
+function isStandaloneSessionId(id) {
+  return REVIEW_SESSION.test(id);
+}
+function isStandaloneSessionForProject(id, projectRoot2) {
+  return isStandaloneSessionId(id) && id.startsWith(prefixFor(projectRoot2));
+}
+
 // src/daemon/routes.ts
+var OpenStandaloneReviewBody = external_exports.object({
+  mode: external_exports.enum(["open", "resume"]),
+  expectedProjectRoot: external_exports.string().min(1)
+}).strict();
 var RetirementBody = external_exports.object({
   artifactId: external_exports.string().min(1),
   expectedVersion: external_exports.number().int().positive(),
@@ -35730,7 +35748,7 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
   });
   return app;
 }
-function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions, stanceExceptions) {
+function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions, stanceExceptions, refreshCompanionLink) {
   const log2 = logFn ?? (() => {
   });
   const app = new Hono2();
@@ -35762,7 +35780,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   const AGENT_ACTIVITY_THROTTLE_MS = 5e3;
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    if (c.res.status >= 400) return;
+    if (c.res.status >= 400 || c.req.path.endsWith("/open-review")) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
     const sid = m?.[1];
     if (!sid) return;
@@ -35790,6 +35808,41 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     }
     return { ok: true, store };
   }
+  function installSession(sessionId, meta3) {
+    let store = sessions.get(sessionId);
+    if (!store) {
+      store = createSession(sessionId);
+      sessions.set(sessionId, store);
+    }
+    sessionMeta.set(sessionId, {
+      title: meta3.title ?? sessionId,
+      project: meta3.project ?? "",
+      registeredAt: (/* @__PURE__ */ new Date()).toISOString(),
+      lastActivity: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    return store;
+  }
+  if (authToken && daemonProjectRoot && refreshCompanionLink) {
+    app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
+      const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
+      if (!parsed.ok) return parsed.res;
+      const sessionId = c.req.param("sessionId");
+      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+      }
+      const dir = path22.join(daemonProjectRoot, ".deeppairing", "sessions", sessionId);
+      const existing = fs23.lstatSync(dir, { throwIfNoEntry: false });
+      if (parsed.data.mode === "resume" && !existing?.isDirectory()) {
+        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+      }
+      if (parsed.data.mode === "open" && (existing || sessions.has(sessionId))) {
+        return c.json({ error: "Standalone session already exists. Resume it instead." }, 409);
+      }
+      if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
+      refreshCompanionLink();
+      return c.json({ sessionId });
+    });
+  }
   app.post("/api/internal/sessions/:sessionId/register", async (c) => {
     const sessionId = c.req.param("sessionId");
     const parsedReg = await readJsonObject(c, { allowEmpty: true });
@@ -35808,17 +35861,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         403
       );
     }
-    let store = sessions.get(sessionId);
-    if (!store) {
-      store = createSession(sessionId);
-      sessions.set(sessionId, store);
-    }
-    sessionMeta.set(sessionId, {
-      title: body.title ?? sessionId,
-      project: body.project ?? "",
-      registeredAt: (/* @__PURE__ */ new Date()).toISOString(),
-      lastActivity: (/* @__PURE__ */ new Date()).toISOString()
-    });
+    const store = installSession(sessionId, body);
     activeSessions?.add(sessionId);
     const registration = stanceExceptions?.register(sessionId, { split: body.splitMode === true });
     return c.json({
@@ -36762,29 +36805,29 @@ async function sendPing(url2, payload) {
 }
 
 // src/daemon/token.ts
-import fs23 from "node:fs";
+import fs24 from "node:fs";
 import os5 from "node:os";
-import path22 from "node:path";
+import path23 from "node:path";
 function fsHonorsPosixMode(dir) {
   let probe = null;
   try {
-    fs23.mkdirSync(dir, { recursive: true });
-    probe = path22.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
-    const fd = fs23.openSync(probe, "w", 384);
-    fs23.closeSync(fd);
+    fs24.mkdirSync(dir, { recursive: true });
+    probe = path23.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
+    const fd = fs24.openSync(probe, "w", 384);
+    fs24.closeSync(fd);
     try {
-      fs23.chmodSync(probe, 384);
+      fs24.chmodSync(probe, 384);
     } catch {
       return false;
     }
-    const mode = fs23.statSync(probe).mode & 511;
+    const mode = fs24.statSync(probe).mode & 511;
     return (mode & 63) === 0;
   } catch {
     return false;
   } finally {
     if (probe) {
       try {
-        fs23.unlinkSync(probe);
+        fs24.unlinkSync(probe);
       } catch {
       }
     }
@@ -36796,53 +36839,53 @@ function tokenPlacement(opts) {
 }
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path22.isAbsolute(xdg)) {
+  if (xdg && path23.isAbsolute(xdg)) {
     try {
-      if (fs23.statSync(xdg).isDirectory()) return path22.join(xdg, "deeppairing");
+      if (fs24.statSync(xdg).isDirectory()) return path23.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path22.join(os5.tmpdir(), "deeppairing");
+  return path23.join(os5.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path22.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path23.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function writeTokenSidecar(projectRoot2, payload) {
   const file2 = tokenSidecarPath(projectRoot2);
-  const dir = path22.dirname(file2);
-  fs23.mkdirSync(dir, { recursive: true, mode: 448 });
+  const dir = path23.dirname(file2);
+  fs24.mkdirSync(dir, { recursive: true, mode: 448 });
   try {
-    fs23.chmodSync(dir, 448);
+    fs24.chmodSync(dir, 448);
   } catch {
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   try {
-    const dstat = fs23.lstatSync(dir);
+    const dstat = fs24.lstatSync(dir);
     if (dstat.isSymbolicLink() || uid !== void 0 && dstat.uid !== uid) {
       return { path: file2, mode: dstat.mode & 511, honored: false, refused: true };
     }
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
-  const O_NOFOLLOW = fs23.constants.O_NOFOLLOW ?? 0;
+  const O_NOFOLLOW = fs24.constants.O_NOFOLLOW ?? 0;
   let fd;
   try {
-    fd = fs23.openSync(file2, fs23.constants.O_WRONLY | fs23.constants.O_CREAT | fs23.constants.O_TRUNC | O_NOFOLLOW, 384);
+    fd = fs24.openSync(file2, fs24.constants.O_WRONLY | fs24.constants.O_CREAT | fs24.constants.O_TRUNC | O_NOFOLLOW, 384);
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
   try {
-    fs23.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
+    fs24.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
   } finally {
-    fs23.closeSync(fd);
+    fs24.closeSync(fd);
   }
   try {
-    fs23.chmodSync(file2, 384);
+    fs24.chmodSync(file2, 384);
   } catch {
   }
   let mode = 511;
   try {
-    mode = fs23.statSync(file2).mode & 511;
+    mode = fs24.statSync(file2).mode & 511;
   } catch {
   }
   return { path: file2, mode, honored: (mode & 63) === 0 };
@@ -36850,15 +36893,15 @@ function writeTokenSidecar(projectRoot2, payload) {
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs23.existsSync(file2)) return null;
-    return JSON.parse(fs23.readFileSync(file2, "utf-8"));
+    if (!fs24.existsSync(file2)) return null;
+    return JSON.parse(fs24.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 function unlinkTokenSidecar(projectRoot2) {
   try {
-    fs23.unlinkSync(tokenSidecarPath(projectRoot2));
+    fs24.unlinkSync(tokenSidecarPath(projectRoot2));
   } catch {
   }
 }
@@ -36910,9 +36953,9 @@ function shouldAutoOpenBrowser(env) {
 }
 
 // src/daemon/lifecycle.ts
-import path23 from "node:path";
+import path24 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-var __thisDir2 = path23.dirname(fileURLToPath3(import.meta.url));
+var __thisDir2 = path24.dirname(fileURLToPath3(import.meta.url));
 async function probeDaemonIdentity(port, timeoutMs = 1500) {
   try {
     const controller = new AbortController();
@@ -36969,7 +37012,7 @@ function createDaemon(deps) {
     env = process.env,
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
-    watch = (dir, listener) => fs24.watch(dir, listener),
+    watch = (dir, listener) => fs25.watch(dir, listener),
     heartbeatIntervalMs = 3e4,
     hooksPollIntervalMs = 750,
     stanceExceptionClock,
@@ -36978,8 +37021,8 @@ function createDaemon(deps) {
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
-  const dpDir2 = path24.join(projectRoot2, ".deeppairing");
-  const daemonInfoFile = path24.join(dpDir2, "daemon.json");
+  const dpDir2 = path25.join(projectRoot2, ".deeppairing");
+  const daemonInfoFile = path25.join(dpDir2, "daemon.json");
   const instanceId = randomBytes4(12).toString("hex");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
@@ -37130,7 +37173,22 @@ function createDaemon(deps) {
     origin: (origin) => corsAllowedOrigin(origin)
   }));
   applyTopLevelGuards(app, { maxBodyBytes: 64 * 1024 });
-  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log2, projectRoot2, daemonAuthToken2, activeSessions, stanceExceptions);
+  const daemonRoutes = createDaemonRoutes(
+    sessions,
+    sessionMeta,
+    createSession,
+    broadcast,
+    log2,
+    projectRoot2,
+    daemonAuthToken2,
+    activeSessions,
+    stanceExceptions,
+    () => {
+      if (shutdownTimer) clearTimeout(shutdownTimer);
+      shutdownTimer = null;
+      checkAutoShutdown();
+    }
+  );
   app.route("/", daemonRoutes);
   const publicRoutes = createHttpRoutes(
     (sessionId) => {
@@ -37265,11 +37323,11 @@ function createDaemon(deps) {
     return c.json({ status: "evicting", pid: process.pid });
   });
   app.get("/api/skill-status", (c) => {
-    const claudeMdPath = path24.join(projectRoot2, "CLAUDE.md");
+    const claudeMdPath = path25.join(projectRoot2, "CLAUDE.md");
     let claudeMdHasMarker = false;
     try {
-      if (fs24.existsSync(claudeMdPath)) {
-        claudeMdHasMarker = fs24.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+      if (fs25.existsSync(claudeMdPath)) {
+        claudeMdHasMarker = fs25.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
       }
     } catch {
     }
@@ -37305,17 +37363,17 @@ function createDaemon(deps) {
       return c.json({ error: "Demo requests must come from the companion UI." }, 403);
     }
     const MAX_DEMO_SESSIONS = 5;
-    const sessionRoot = path24.resolve(dpDir2, "sessions");
-    const diskIds = fs24.existsSync(sessionRoot) ? fs24.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
+    const sessionRoot = path25.resolve(dpDir2, "sessions");
+    const diskIds = fs25.existsSync(sessionRoot) ? fs25.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
     const demoIds = [.../* @__PURE__ */ new Set([...diskIds, ...Array.from(sessions.keys()).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id))])].sort();
     while (demoIds.length >= MAX_DEMO_SESSIONS) {
       const oldest = demoIds.shift();
       demoRuns.get(oldest)?.();
       demoRuns.delete(oldest);
       sessions.get(oldest)?.dispose();
-      const demoDir = path24.resolve(sessionRoot, oldest);
-      if (path24.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
-      fs24.rmSync(demoDir, { recursive: true, force: true });
+      const demoDir = path25.resolve(sessionRoot, oldest);
+      if (path25.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
+      fs25.rmSync(demoDir, { recursive: true, force: true });
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
@@ -37333,10 +37391,10 @@ function createDaemon(deps) {
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
   app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2, { epoch: revisionEpoch, counts: sessionRevisions }));
-  const __thisDir3 = path24.dirname(fileURLToPath4(import.meta.url));
-  const monorepoWebDist = path24.join(__thisDir3, "../../dist/web");
-  const webDistCandidates = [monorepoWebDist, path24.join(__thisDir3, "web")];
-  const webDistPath = webDistCandidates.find((p) => fs24.existsSync(p)) ?? monorepoWebDist;
+  const __thisDir3 = path25.dirname(fileURLToPath4(import.meta.url));
+  const monorepoWebDist = path25.join(__thisDir3, "../../dist/web");
+  const webDistCandidates = [monorepoWebDist, path25.join(__thisDir3, "web")];
+  const webDistPath = webDistCandidates.find((p) => fs25.existsSync(p)) ?? monorepoWebDist;
   mountStaticUi(app, {
     webDistPath,
     authToken: daemonAuthToken2,
@@ -37352,8 +37410,8 @@ function createDaemon(deps) {
       }
     }
     try {
-      const info = JSON.parse(fs24.readFileSync(daemonInfoFile, "utf-8"));
-      if (info?.pid === process.pid && info?.instanceId === instanceId) fs24.unlinkSync(daemonInfoFile);
+      const info = JSON.parse(fs25.readFileSync(daemonInfoFile, "utf-8"));
+      if (info?.pid === process.pid && info?.instanceId === instanceId) fs25.unlinkSync(daemonInfoFile);
     } catch {
     }
     try {
@@ -37377,7 +37435,7 @@ function createDaemon(deps) {
   function writeDaemonInfo(port) {
     const discovery = { pid: process.pid, instanceId, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
     try {
-      fs24.mkdirSync(dpDir2, { recursive: true });
+      fs25.mkdirSync(dpDir2, { recursive: true });
       if (resolveTokenPlacement() === "in-repo") {
         writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken2 });
         return;
@@ -37625,11 +37683,11 @@ function createDaemon(deps) {
         gateFiresSeen.delete(oldest);
       }
     };
-    const hooksStatePath = path24.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const hooksStatePath = path25.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
-        if (!fs24.existsSync(hooksStatePath)) return;
-        const raw2 = JSON.parse(fs24.readFileSync(hooksStatePath, "utf-8"));
+        if (!fs25.existsSync(hooksStatePath)) return;
+        const raw2 = JSON.parse(fs25.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           if (f?.gate && typeof f.id === "string" && !gateFiresSeen.has(f.id)) {
@@ -37679,8 +37737,8 @@ function createDaemon(deps) {
       }
     };
     try {
-      if (fs24.existsSync(hooksStatePath)) {
-        const raw2 = JSON.parse(fs24.readFileSync(hooksStatePath, "utf-8"));
+      if (fs25.existsSync(hooksStatePath)) {
+        const raw2 = JSON.parse(fs25.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           if (f?.gate && typeof f.id === "string") noteGateSeen(f.id);
@@ -37691,10 +37749,10 @@ function createDaemon(deps) {
     } catch {
     }
     try {
-      const hooksDir = path24.dirname(hooksStatePath);
-      fs24.mkdirSync(hooksDir, { recursive: true });
+      const hooksDir = path25.dirname(hooksStatePath);
+      fs25.mkdirSync(hooksDir, { recursive: true });
       const watcher = watch(hooksDir, (_event, filename) => {
-        if (filename === "hooks-state.json" || filename === path24.basename(hooksStatePath)) {
+        if (filename === "hooks-state.json" || filename === path25.basename(hooksStatePath)) {
           broadcastNewFires();
         }
       });
@@ -37706,13 +37764,13 @@ function createDaemon(deps) {
     if (hooksPollIntervalMs > 0 && !hooksPollTimer) {
       let lastStat = "";
       try {
-        const st = fs24.statSync(hooksStatePath);
+        const st = fs25.statSync(hooksStatePath);
         lastStat = `${st.mtimeMs}:${st.size}`;
       } catch {
       }
       hooksPollTimer = setInterval(() => {
         try {
-          const st = fs24.statSync(hooksStatePath);
+          const st = fs25.statSync(hooksStatePath);
           const sig = `${st.mtimeMs}:${st.size}`;
           if (sig === lastStat) return;
           lastStat = sig;
@@ -37764,11 +37822,11 @@ function createDaemon(deps) {
     const pingDecision = decidePing(env);
     if (pingDecision.shouldSend) {
       pingTimer = setTimeout(() => {
-        const claudeMdPath = path24.join(projectRoot2, "CLAUDE.md");
+        const claudeMdPath = path25.join(projectRoot2, "CLAUDE.md");
         let claudeMdHasMarker = false;
         try {
-          if (fs24.existsSync(claudeMdPath)) {
-            claudeMdHasMarker = fs24.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          if (fs25.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs25.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
           }
         } catch {
         }
@@ -37866,21 +37924,21 @@ function createDaemon(deps) {
 // src/daemon/index.ts
 var MAX_PORT_ATTEMPTS = 10;
 var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? canonicalProjectDir(process.cwd()).projectRoot;
-var dpDir = path25.join(projectRoot, ".deeppairing");
-var logFile = path25.join(dpDir, "daemon.log");
+var dpDir = path26.join(projectRoot, ".deeppairing");
+var logFile = path26.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
 var daemonAuthToken = crypto6.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
   try {
-    const stat = fs25.statSync(logFile);
+    const stat = fs26.statSync(logFile);
     if (stat.size < LOG_MAX_BYTES) return;
     for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
       const dst = `${logFile}.${i}`;
       try {
-        if (fs25.existsSync(src)) fs25.renameSync(src, dst);
+        if (fs26.existsSync(src)) fs26.renameSync(src, dst);
       } catch {
       }
     }
@@ -37891,9 +37949,9 @@ function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [daemon] ${msg}
 `;
   try {
-    fs25.mkdirSync(path25.dirname(logFile), { recursive: true });
+    fs26.mkdirSync(path26.dirname(logFile), { recursive: true });
     maybeRotateLog();
-    fs25.appendFileSync(logFile, line);
+    fs26.appendFileSync(logFile, line);
   } catch {
   }
 }

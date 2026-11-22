@@ -22,6 +22,7 @@ import { readSessionCeremony } from "../../cli/preflight-hook-core.js";
 import type { AddressInfo } from "node:net";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
 import { projectHashOf } from "../../project-root.js";
+import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 interface Harness {
@@ -170,6 +171,41 @@ describe("#168 demo idle grace", () => {
     vi.advanceTimersByTime(60_000);
     expect(exits).toEqual([0]);
   });
+});
+
+it("standalone review links reset the existing idle deadline without registering a wrapper", async () => {
+  vi.useFakeTimers();
+  const { daemon, exits, tmpDir } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const route = `http://localhost/api/internal/sessions/${sessionId}/open-review`;
+  const headers = {
+    Host: "localhost", Authorization: "Bearer test-token", "Content-Type": "application/json",
+    "X-Project-Hash": projectHashOf(tmpDir),
+  };
+  const requestLink = (mode: "open" | "resume", expectedProjectRoot = tmpDir) => daemon.app.request(route, {
+    method: "POST", headers, body: JSON.stringify({ mode, expectedProjectRoot }),
+  });
+
+  daemon.checkAutoShutdown();
+  vi.advanceTimersByTime(59_000);
+  expect((await daemon.app.request(route, { method: "POST", headers: { Host: "localhost" } })).status).toBe(401);
+  expect((await requestLink("resume")).status).toBe(404);
+  expect((await requestLink("open", "/other-project")).status).toBe(403);
+  expect(daemon.sessions.has(sessionId)).toBe(false);
+  const opened = await requestLink("open");
+  expect(opened.status).toBe(200);
+  expect(daemon.sessions.has(sessionId)).toBe(true);
+  expect(daemon.activeSessions.size).toBe(0);
+
+  // Ignore the open receipt, as if the caller disconnected before reading it.
+  vi.advanceTimersByTime(59_000);
+  expect(exits).toEqual([]);
+  expect(await (await requestLink("resume")).json()).toEqual({ sessionId });
+  expect(daemon.activeSessions.size).toBe(0);
+  vi.advanceTimersByTime(59_999);
+  expect(exits).toEqual([]);
+  vi.advanceTimersByTime(1);
+  expect(exits).toEqual([0]);
 });
 
 describe("#168 money-shot replay", () => {
