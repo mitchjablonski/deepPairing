@@ -2,16 +2,17 @@
  * #686 P2c — the Stop hook's skeleton drift nudge (warn-only). Runs the REAL
  * generated stop script (esbuild output, Node built-ins only) against a temp
  * project seeded with an approved skeleton plan, and reads stderr plus
- * hooks-state.json. One nudge per approved version; blocking drafts first;
+ * the drift claims and hooks-state.json. One nudge per approved version; blocking drafts first;
  * drift before the debrief nag; never file content.
  */
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { STOP_HOOK_SCRIPT } from "../../cli/hook-scripts.generated.js";
 import { buildSkeletonSnapshot } from "../../mcp/skeleton-snapshot.js";
+import { acquireHookStateLock, hookStatePath, releaseHookStateLock } from "../hook-state.js";
 
 const SRC = `export function smooth(raw: number[]): number[] {
   // SKEL[1] drop duplicates
@@ -59,10 +60,32 @@ function seed(artifacts: Art[]): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify(artifacts));
 }
-function stop(input = ""): { stderr: string; status: number | null; reason: string; state: Record<string, unknown> } {
-  const res = spawnSync("node", [script], { input, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: "" } });
-  const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "hooks-state.json"), "utf-8"));
-  return { stderr: res.stderr, status: res.status, reason: String(state.fires.at(-1)?.reason ?? ""), state };
+const stopOptions = () => ({
+  encoding: "utf-8" as const,
+  env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: "" },
+  timeout: 5_000,
+});
+const claimPath = () => path.join(root, ".deeppairing", "skeleton-drift-nudges.json");
+function readClaims(): string[] | undefined {
+  const file = claimPath();
+  if (!fs.existsSync(file)) return undefined;
+  const state = JSON.parse(fs.readFileSync(file, "utf-8")) as { skeletonDriftNudged?: string[] };
+  return state.skeletonDriftNudged;
+}
+function stop(input = "") {
+  const res = spawnSync(process.execPath, [script], { ...stopOptions(), input });
+  if (res.error) throw res.error;
+  const state = JSON.parse(fs.readFileSync(hookStatePath(root), "utf-8"));
+  return { stderr: res.stderr, status: res.status, reason: String(state.fires.at(-1)?.reason ?? ""), state, claims: readClaims() };
+}
+function parallelStop(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(process.execPath, [script], stopOptions(), (error, _stdout, stderr) => {
+      if (error) reject(error);
+      else resolve(stderr);
+    });
+    child.stdin?.end();
+  });
 }
 const write = (text: string) => fs.writeFileSync(path.join(root, "a.ts"), text);
 
@@ -77,10 +100,86 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
       "deepPairing: skeleton exterior drift since approval: a.ts line 1 — changes outside the fences are skeleton changes; propose them and revise_artifact the plan\n",
     );
     expect(first.reason).toMatch(/^skeleton drift plan1@v1@/);
-    expect(first.state.skeletonDriftNudged).toHaveLength(1);
+    expect(first.claims).toHaveLength(1);
     const second = stop();
     expect(second.stderr).toBe("");
     expect(second.reason).toBe("pass: no blocking drafts");
+  });
+
+  it("concurrent Stop invocations warn only once for the same approval", async () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    const results = await Promise.all([parallelStop(), parallelStop()]);
+    expect(results.filter((stderr) => stderr.includes("skeleton exterior drift"))).toHaveLength(1);
+    expect(readClaims()).toHaveLength(1);
+  });
+
+  it("leaves the warning available for retry when another Stop owns the claim lock", () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    const lock = acquireHookStateLock(claimPath());
+    if (!lock) throw new Error("Test could not acquire its drift claim lock");
+    try {
+      const blocked = stop();
+      expect(blocked.status).toBe(0);
+      expect(blocked.stderr).toBe("");
+      expect(blocked.claims).toBeUndefined();
+      expect(fs.existsSync(lock)).toBe(true);
+    } finally {
+      releaseHookStateLock(lock);
+    }
+    expect(stop().stderr).toContain("skeleton exterior drift");
+  });
+
+  it("keeps the warning claimed if contended telemetry overwrites its own state", () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    const telemetryPath = hookStatePath(root);
+    const staleTelemetry = JSON.stringify({ version: 1, fires: [] });
+    fs.writeFileSync(telemetryPath, staleTelemetry);
+    const lock = acquireHookStateLock(telemetryPath);
+    if (!lock) throw new Error("Test could not acquire its telemetry lock");
+    try {
+      const result = stop();
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("skeleton exterior drift");
+      expect(result.claims).toHaveLength(1);
+      expect(result.state.skeletonDriftNudged).toBeUndefined();
+      // Model a pending unrelated telemetry update ending with an older
+      // snapshot, including the existing unlocked fallback.
+      fs.writeFileSync(telemetryPath, staleTelemetry);
+    } finally {
+      releaseHookStateLock(lock);
+    }
+    expect(stop().stderr).toBe("");
+    expect(readClaims()).toHaveLength(1);
+  });
+
+  it.skipIf(process.platform === "win32")("stays quiet when an approved source file is replaced by a FIFO", () => {
+    seed([approvedPlan()]);
+    const target = path.join(root, "a.ts");
+    fs.unlinkSync(target);
+    const fifo = spawnSync("mkfifo", [target], { timeout: 2_000 });
+    if (fifo.error) throw fifo.error;
+    expect(fifo.status).toBe(0);
+    const result = stop();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.claims).toBeUndefined();
+  }, 12_000);
+
+  it.skipIf(process.platform === "win32")("prints a single warning line for a source path with a line break", () => {
+    const file = "part\nname.ts";
+    const target = path.join(root, file);
+    fs.writeFileSync(target, SRC);
+    const steps = [{ ...STEPS[0]!, files: [file] }];
+    const visuals = buildSkeletonSnapshot({ steps, root, recordExterior: true }).visuals;
+    seed([approvedPlan({ content: { steps, visuals } })]);
+    fs.writeFileSync(target, `// header\n${SRC}`);
+    const result = stop();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("part\\u{a}name.ts line 1");
+    expect(result.stderr.trimEnd()).not.toContain("\n");
   });
 
   it("a new approval (or version) re-arms the nudge", () => {
@@ -101,7 +200,7 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     write(FILLED);
     const res = stop();
     expect(res.stderr).toBe("");
-    expect(res.state.skeletonDriftNudged).toBeUndefined();
+    expect(res.claims).toBeUndefined();
   });
 
   it("a blocking draft takes precedence: one message per Stop", () => {
@@ -109,7 +208,7 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     write(`// header\n${SRC}`);
     const res = stop();
     expect(res.stderr).toBe("deepPairing: pending artifacts need review — call check_feedback\n");
-    expect(res.state.skeletonDriftNudged).toBeUndefined();
+    expect(res.claims).toBeUndefined();
   });
 
   it("drift comes before the debrief nag, which returns on the next Stop", () => {
@@ -173,7 +272,7 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     const res = stop();
     expect(res.stderr).toContain("skeleton exterior drift since approval: a.ts line 1");
     expect(res.stderr).not.toContain("b.ts");
-    expect(res.state.skeletonDriftNudged).toEqual([expect.stringMatching(/^planA@v1@/)]);
+    expect(res.claims).toEqual([expect.stringMatching(/^planA@v1@/)]);
     // Both drift: one line naming both plans; A is not repeated.
     fs.writeFileSync(path.join(root, "b.ts"), `// header\n${SRC.replace(/SKEL\[1\]/g, "SKEL[2]")}`);
     const both = stop();
@@ -181,7 +280,7 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     seed([{ ...planA, version: 2 }, { ...planB, version: 2 }]);
     const two = stop();
     expect(two.stderr).toContain('"Plan A": a.ts line 1 | "Plan B": b.ts line 1');
-    expect((two.state.skeletonDriftNudged as string[]).filter((k) => k.includes("@v2@"))).toHaveLength(2);
+    expect(two.claims?.filter((key) => key.includes("@v2@"))).toHaveLength(2);
   });
 
   it("five drifting plans: three named, then +2 more plans, all recorded, line under ~400 chars", () => {
@@ -200,7 +299,7 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     expect(res.stderr.match(/"Plan number/g)).toHaveLength(3);
     expect(res.stderr.length).toBeLessThan(400);
     expect(res.stderr.endsWith("revise_artifact the plan\n")).toBe(true);
-    expect(res.state.skeletonDriftNudged).toHaveLength(5);
+    expect(res.claims).toHaveLength(5);
   });
 
   it("a corrupt hooks-state.json gets one salvage copy per Stop, not two", () => {
@@ -228,14 +327,26 @@ describe("Stop hook — skeleton exterior drift nudge (#686 P2c)", () => {
     expect(res.stderr).toBe("");
   });
 
-  it("a non-array skeletonDriftNudged is treated as empty and repaired", () => {
+  it("ignores a malformed legacy claim list and writes the new claim separately", () => {
     seed([approvedPlan()]);
     write(`// header\n${SRC}`);
     fs.writeFileSync(path.join(root, ".deeppairing", "hooks-state.json"), JSON.stringify({ version: 1, skeletonDriftNudged: { x: 1 } }));
     const res = stop();
     expect(res.stderr).toContain("skeleton exterior drift");
-    expect(Array.isArray(res.state.skeletonDriftNudged)).toBe(true);
+    expect(res.state.skeletonDriftNudged).toEqual({ x: 1 });
+    expect(res.claims).toHaveLength(1);
     expect(stop().stderr).toBe("");
+  });
+
+  it("honors existing legacy claims without rewriting them", () => {
+    seed([approvedPlan()]);
+    write(`// header\n${SRC}`);
+    const legacy = [`plan1@v1@${recent(90_000)}`];
+    fs.writeFileSync(hookStatePath(root), JSON.stringify({ version: 1, skeletonDriftNudged: legacy }));
+    const result = stop();
+    expect(result.stderr).toBe("");
+    expect(result.state.skeletonDriftNudged).toEqual(legacy);
+    expect(result.claims).toBeUndefined();
   });
 
   it("a path-traversal visual id never reads outside the project and stays quiet", () => {

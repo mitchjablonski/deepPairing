@@ -248,9 +248,8 @@ export function appendHookFire(
 }
 
 /**
- * One locked read-modify-write of hooks-state.json — the primitive under
- * appendHookFire, also used by the #546 preflight failure diagnostics, which
- * update their own top-level field without appending a fire.
+ * Read-modify-write a hook state file. Returning false from mutate skips the
+ * write. Claims can require the lock and check that the write succeeded.
  *
  * `createDir: false` refuses to create `.deeppairing/` — a diagnostic about a
  * hook that ran in a directory deepPairing never initialised must not plant a
@@ -258,27 +257,30 @@ export function appendHookFire(
  */
 export function mutateHookState(
   statePath: string,
-  mutate: (state: Record<string, unknown>) => void,
-  opts: { createDir?: boolean } = {},
-): void {
+  mutate: (state: Record<string, unknown>) => void | false,
+  opts: { createDir?: boolean; requireLock?: boolean } = {},
+): boolean {
   try {
     if (opts.createDir === false) {
-      if (!fs.statSync(path.dirname(statePath)).isDirectory()) return;
+      if (!fs.statSync(path.dirname(statePath)).isDirectory()) return false;
     } else {
       // Before the lock — O_EXCL needs the directory to exist.
       fs.mkdirSync(path.dirname(statePath), { recursive: true });
     }
     const lock = acquireHookStateLock(statePath);
+    if (opts.requireLock && !lock) return false;
     try {
       const state = readHookState(statePath);
       state.version = 1;
-      mutate(state);
+      if (mutate(state) === false) return false;
       writeHookStateAtomic(statePath, state);
+      return true;
     } finally {
       releaseHookStateLock(lock);
     }
   } catch {
     /* recording must never fail the hook itself */
+    return false;
   }
 }
 

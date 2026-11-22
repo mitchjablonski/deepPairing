@@ -38030,6 +38030,7 @@ function isDeniedPath(rel) {
   return ruleForRelPath(rel.toLowerCase())?.category === "secrets";
 }
 var O_NOFOLLOW = fs12.constants.O_NOFOLLOW ?? 0;
+var O_NONBLOCK = fs12.constants.O_NONBLOCK ?? 0;
 function readConfined(root, rel, limits) {
   if (isDeniedPath(rel)) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let realRoot;
@@ -38048,7 +38049,7 @@ function readConfined(root, rel, limits) {
   if (isDeniedPath(path13.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let fd;
   try {
-    fd = fs12.openSync(realAbs, fs12.constants.O_RDONLY | O_NOFOLLOW);
+    fd = fs12.openSync(realAbs, fs12.constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   } catch {
     return { ok: false, reason: "unreadable" };
   }
@@ -40434,10 +40435,10 @@ function readPageSource(projectRoot2, requested) {
   if (!isWithin(rootReal, real)) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
   }
-  const { O_RDONLY, O_NOFOLLOW: O_NOFOLLOW2, O_NONBLOCK } = fs14.constants;
+  const { O_RDONLY, O_NOFOLLOW: O_NOFOLLOW2, O_NONBLOCK: O_NONBLOCK2 } = fs14.constants;
   let fd;
   try {
-    fd = fs14.openSync(real, O_RDONLY | (O_NOFOLLOW2 ?? 0) | (O_NONBLOCK ?? 0));
+    fd = fs14.openSync(real, O_RDONLY | (O_NOFOLLOW2 ?? 0) | (O_NONBLOCK2 ?? 0));
   } catch {
     return refuse(`\`path\` "${requested}" could not be opened.`);
   }
