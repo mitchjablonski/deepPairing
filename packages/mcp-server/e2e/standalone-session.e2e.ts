@@ -240,9 +240,8 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     expect(await fs.readdir(project)).not.toContain(".mcp.json");
 
     await page.goto(reopened.companionUrl);
-    const revisedRow = page.getByRole("button", { name: /^Choose a replay backend Draft/ });
-    await revisedRow.click();
-    await expect(page.locator(`[data-artifact-id="${changed.artifactId}"]`)
+    await page.locator(`button[data-artifact-item="${changed.artifactId}"]`).click();
+    await expect(page.locator(`[data-dp-pane][data-artifact-id="${changed.artifactId}"]:not([inert])`)
       .getByRole("button", { name: "Select SQLite", exact: true })).toBeVisible();
   } finally {
     await page.close();
