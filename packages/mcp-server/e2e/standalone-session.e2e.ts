@@ -243,6 +243,19 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     await page.locator(`button[data-artifact-item="${changed.artifactId}"]`).click();
     await expect(page.locator(`[data-dp-pane][data-artifact-id="${changed.artifactId}"]:not([inert])`)
       .getByRole("button", { name: "Select SQLite", exact: true })).toBeVisible();
+
+    // #679/#680 — an HTML page from a project file goes through the same
+    // daemon route and replays on a retried request ID.
+    await fs.mkdir(path.join(project, "review"));
+    await fs.writeFile(path.join(project, "review", "page.html"), "<h1>Replay plan</h1><p>Keep a local replay file.</p>");
+    const pageId = randomUUID();
+    const runPage = () => run(project, "present", "page", "--session-id", resumed.sessionId, "--request-id", pageId,
+      "--path", "review/page.html", "--title", "Replay plan page");
+    const presentedPage = JSON.parse((await runPage()).stdout);
+    expect(presentedPage).toMatchObject({
+      sessionId: resumed.sessionId, requestId: pageId, artifactId: expect.stringMatching(/^art_/), sourcePath: "review/page.html",
+    });
+    expect(JSON.parse((await runPage()).stdout)).toEqual({ ...presentedPage, replayed: true });
   } finally {
     await page.close();
     await stopProjectDaemon(project);

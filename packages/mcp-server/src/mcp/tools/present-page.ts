@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import { PAGE_HTML_MAX_BYTES, type PageContent } from "@deeppairing/shared";
+import { PAGE_HTML_MAX_BYTES, type Artifact, type PageContent } from "@deeppairing/shared";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentPageInput, pageTooLargeError, type ToolErrorResponse } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { resolveProjectRoot } from "../../project-root.js";
 import { TOOL_ERROR_CODES, TOOL_ERROR_RETRYABLE } from "../../error-codes.js";
+import type { CreateArtifactParams } from "../../store/store-interface.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -34,7 +35,21 @@ export interface PresentPageOptions {
   /** The project root a `path` must stay inside. Defaults to the resolved
    *  project root (CLAUDE_PROJECT_DIR → DEEPPAIRING_PROJECT_ROOT → cwd). */
   projectRoot?: string;
+  /** #679 — the daemon's standalone (CLI) path owns the id and the write, so a
+   *  request-ID retry can replay the same artifact instead of creating a twin. */
+  standalone?: StandalonePageWrite;
 }
+
+/** The daemon's standalone persistence path for a page. */
+export interface StandalonePageWrite {
+  artifactId: string;
+  persist(artifact: CreateArtifactParams): { artifact: Artifact } | { replay: ToolResult };
+}
+
+/** The MCP server passes its full ToolContext; the daemon's standalone path has no MCP server. */
+export type PresentPageContext = Pick<ToolContext, "store" | "port" | "broadcast" | "helpers"> & {
+  server?: ToolContext["server"];
+};
 
 type PageSource =
   | { ok: true; html: string; sourcePath: string }
@@ -142,7 +157,7 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
 
 /** The reusable present-page handler (MCP today, CLI #679 next). */
 export async function presentPage(
-  ctx: ToolContext,
+  ctx: PresentPageContext,
   args: Record<string, unknown> | null | undefined,
   opts: PresentPageOptions = {},
 ): Promise<ToolResult> {
@@ -183,19 +198,26 @@ export async function presentPage(
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
-  const id = `art_${nanoid(10)}`;
+  const id = opts.standalone?.artifactId ?? `art_${nanoid(10)}`;
   let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
   try {
     // #162 parity — the secret scan runs inside createArtifact; a page can
     // inline config samples like any other prose surface.
-    artifact = await ctx.store.createArtifact({
+    const createInput: CreateArtifactParams = {
       id,
       type: "page",
       title: input.title,
       content,
       feature: typeof args?.feature === "string" ? args.feature : undefined,
       presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : undefined,
-    });
+    };
+    if (opts.standalone) {
+      const write = opts.standalone.persist(createInput);
+      if ("replay" in write) return write.replay;
+      artifact = write.artifact;
+    } else {
+      artifact = await ctx.store.createArtifact(createInput);
+    }
   } catch (e) {
     dedup.abort?.();
     throw e;
@@ -213,7 +235,7 @@ export async function presentPage(
     });
   }
   notifyResourcesListChanged(ctx.server);
-  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  if (ctx.server) await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
   const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
 

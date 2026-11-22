@@ -12,7 +12,7 @@ import { z } from "zod";
 import { ParentSupersededError, type FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import type { PreflightTrace } from "@deeppairing/shared";
-import { AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
+import { AutonomyLevelSchema, DetailDensitySchema, PAGE_HTML_MAX_BYTES, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
 import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
@@ -23,6 +23,7 @@ import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing
 import type { RetirementInput } from "../store/retirement.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
+import { presentStandalonePage } from "./standalone-page.js";
 import { decisionFeedback, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
 
 const OpenStandaloneReviewBody = z.object({
@@ -33,6 +34,22 @@ const PresentStandaloneOptionsBody = z.object({
   operationId: z.string().uuid().transform((id) => id.toLowerCase()),
   expectedProjectRoot: z.string().min(1),
   args: z.record(z.string(), z.unknown()),
+}).strict();
+/** Inline HTML travels base64-encoded so the measured body cap is a fixed
+ *  function of the 2 MiB page cap (JSON string escaping can grow HTML up to
+ *  six-fold; base64 is exactly 4/3). Exactly one of htmlBase64 / path. */
+const PresentStandalonePageBody = z.object({
+  operationId: z.string().uuid().transform((id) => id.toLowerCase()),
+  expectedProjectRoot: z.string().min(1),
+  args: z.object({
+    title: z.string().optional(),
+    summary: z.string().optional(),
+    concept: z.string().optional(),
+    htmlBase64: z.string().min(1).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/).optional(),
+    path: z.string().min(1).optional(),
+  }).strict().refine((a) => (a.htmlBase64 === undefined) !== (a.path === undefined), {
+    message: "Give exactly one of htmlBase64 or path.",
+  }),
 }).strict();
 const ReadStandaloneDecisionBody = z.object({
   expectedProjectRoot: z.string().min(1),
@@ -532,6 +549,9 @@ export function createDaemonRoutes(
       }
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
+      // A resumed standalone review re-arms the file watch for its live
+      // file-backed pages (e.g. after a daemon restart). No wrapper lease.
+      try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks the link */ }
       return c.json({ sessionId });
     });
     app.post("/api/internal/sessions/:sessionId/present-options", async (c) => {
@@ -548,6 +568,34 @@ export function createDaemonRoutes(
       const port = refreshCompanionLink();
       const result = await presentStandaloneOptions(daemonProjectRoot, store, parsed.data.operationId, parsed.data.args, port,
         (event) => broadcast(sessionId, event));
+      return c.json(result);
+    });
+    app.post("/api/internal/sessions/:sessionId/present-page", async (c) => {
+      const parsed = await parseJsonBody(c, PresentStandalonePageBody);
+      if (!parsed.ok) return parsed.res;
+      const sessionId = c.req.param("sessionId");
+      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+      }
+      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+      }
+      const { htmlBase64, ...rest } = parsed.data.args;
+      let html: string | undefined;
+      if (htmlBase64 !== undefined) {
+        const bytes = Buffer.from(htmlBase64, "base64");
+        if (bytes.length > PAGE_HTML_MAX_BYTES) {
+          return c.json({
+            error: `The page is ${bytes.length} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
+            code: ERROR_CODES.body_too_large,
+          }, 413);
+        }
+        html = bytes.toString("utf8");
+      }
+      const store = sessions.get(sessionId) ?? installSession(sessionId, {});
+      const port = refreshCompanionLink();
+      const result = await presentStandalonePage(daemonProjectRoot, store, parsed.data.operationId,
+        { ...rest, ...(html !== undefined ? { html } : {}) }, port, (event) => broadcast(sessionId, event));
       return c.json(result);
     });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {

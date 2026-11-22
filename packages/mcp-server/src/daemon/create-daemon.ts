@@ -74,6 +74,7 @@ import { isSessionReviewConflictError } from "../store/session-records.js";
 // lifecycle.ts broke the plugin bundle's module initialisation order).
 import { probeDaemonIdentity } from "./lifecycle.js";
 import { PageWatcher, type PageWatchDeps } from "./page-watch.js";
+import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -281,7 +282,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     projectRoot,
     getStore: (sessionId) => sessions.get(sessionId),
     broadcast: (sessionId, event) => broadcast(sessionId, event),
-    isSessionLive: (sessionId) => activeSessions.has(sessionId),
+    // #679 — a standalone (CLI) review has no wrapper lease; its pages are
+    // watched while the daemon holds the session, like a live wrapper's.
+    isSessionLive: (sessionId) => activeSessions.has(sessionId) ||
+      (isStandaloneSessionForProject(sessionId, projectRoot) && sessions.has(sessionId)),
     log,
     ...(pageWatchOverrides ?? {}),
   });

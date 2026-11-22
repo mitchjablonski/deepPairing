@@ -1,17 +1,23 @@
-import fs from "node:fs";
 import path from "node:path";
 import { DecisionRequestSchema } from "@deeppairing/shared";
 import { z } from "zod";
 import { ERROR_CODES } from "../error-codes.js";
-import { callFingerprint, sha256Hex, stableStringify, wireForm } from "../mcp/proposal-resolution.js";
+import { callFingerprint } from "../mcp/proposal-resolution.js";
 import { preflightRejectedApproaches } from "../mcp/tool-helpers.js";
 import { handlePresentOptions } from "../mcp/tools/present-options.js";
 import type { BroadcastFn, ToolResult } from "../mcp/tools/types.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { withFileLock } from "../store/file-lock.js";
 import type { FileStore } from "../store/file-store.js";
+import {
+  operationDigest as digest,
+  readJsonFile as readJson,
+  readSessionRecord as readRecord,
+  receiptDigestSchema as digestSchema,
+  standaloneOperationConflict,
+  standaloneOperationKey,
+} from "./standalone-receipts.js";
 
-const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const receiptSchema = z.object({
   version: z.literal(1),
   fingerprint: digestSchema,
@@ -19,28 +25,6 @@ const receiptSchema = z.object({
   decisionDigest: digestSchema.optional(),
   committed: z.literal(true).optional(),
 }).strict();
-
-function readJson(file: string): unknown {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (err) {
-    if (err instanceof Error && "code" in err && err.code === "ENOENT") return undefined;
-    throw err;
-  }
-}
-
-/** Read only the two durable records owned by this operation. */
-function readRecord(dir: string, file: string, key: string, id: string): Record<string, unknown> | undefined {
-  const raw = readJson(path.join(dir, file));
-  if (raw === undefined) return undefined;
-  const rows = z.array(z.record(z.string(), z.unknown())).parse(raw).filter((row) => row[key] === id);
-  if (rows.length > 1) throw new Error("Standalone review history has conflicting records.");
-  return rows[0];
-}
-
-function digest(value: unknown): string {
-  return sha256Hex(stableStringify(wireForm(value)));
-}
 
 /** The route validates the project, standalone session and operation id before entering here. */
 export async function presentStandaloneOptions(
@@ -55,7 +39,7 @@ export async function presentStandaloneOptions(
   const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
   const receiptPath = path.join(dir, `present-options-${operationId}.json`);
   const fingerprint = callFingerprint("present_options", args);
-  const key = digest([projectRoot, sessionId, "present_options", operationId]).slice(0, 32);
+  const key = standaloneOperationKey(projectRoot, sessionId, "present_options", operationId);
   const artifactId = `art_${key}`;
   const decisionId = `dec_${key}`;
 
@@ -66,11 +50,7 @@ export async function presentStandaloneOptions(
     content: [{ type: "text", text: `This operation already presented artifact ${artifactId} and decision ${decisionId}.` }],
     structuredContent: { artifactId, decisionId, replayed: true },
   });
-  const conflict = (): ToolResult => ({
-    content: [{ type: "text", text: "This request ID is already bound to different options input. Retry with the original input or use a new UUID for changed input." }],
-    isError: true,
-    structuredContent: { code: ERROR_CODES.standalone_operation_conflict },
-  });
+  const conflict = (): ToolResult => standaloneOperationConflict("options input");
 
   function recover(receipt: z.infer<typeof receiptSchema>, verifyOnly = false): ToolResult | null {
     const diskArtifact = readRecord(dir, "artifacts.json", "id", artifactId);
