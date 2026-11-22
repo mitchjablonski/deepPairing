@@ -15702,6 +15702,14 @@ var ArtifactSchema = external_exports.object({
    * absent → the stored JSON is byte-identical to before.
    */
   briefRef: external_exports.unknown().optional(),
+  /**
+   * #680 slice 3 — on a file-backed `page`: what the daemon's file watch did
+   * (a version recorded from the file, or a save it refused). Shape:
+   * PageFileWatchSchema (page-file-watch.ts). Deliberately `unknown` on read,
+   * like briefRef, so a malformed record never fails the artifact load; read it
+   * with `readFileWatch`. Optional; absent on every other artifact.
+   */
+  fileWatch: external_exports.unknown().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -16115,6 +16123,52 @@ var AgentEventSchema = external_exports.discriminatedUnion("type", [
   CommentUpdatedEventSchema,
   PlanReviewRequestEventSchema
 ]);
+
+// ../shared/dist/schemas/page-file-watch.js
+var PAGE_FILE_WATCH_LIMITS = {
+  orphans: 50,
+  quote: 280,
+  locator: 512,
+  message: 2e3
+};
+var PageFileWatchOrphanSchema = external_exports.object({
+  commentId: external_exports.string(),
+  kind: external_exports.string().max(32),
+  quote: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.quote),
+  locator: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.locator),
+  /** The page version the comment's anchor was made on. */
+  version: external_exports.number().int().positive().optional()
+});
+var PageFileWatchRecordedSchema = external_exports.object({
+  at: external_exports.string(),
+  sourcePath: external_exports.string(),
+  /** The version this one replaced (now `superseded`). */
+  fromArtifactId: external_exports.string(),
+  fromVersion: external_exports.number().int().positive(),
+  /** Page comments whose quoted text is still in the new HTML. */
+  carriedCount: external_exports.number().int().nonnegative(),
+  /** Page comments whose quoted text is gone from the new HTML. */
+  orphaned: external_exports.array(PageFileWatchOrphanSchema).max(PAGE_FILE_WATCH_LIMITS.orphans),
+  /** More orphans than the stored list holds. */
+  orphanedOverflow: external_exports.number().int().nonnegative().optional(),
+  delivered: external_exports.boolean().optional()
+});
+var PageFileWatchRefusedSchema = external_exports.object({
+  at: external_exports.string(),
+  sourcePath: external_exports.string(),
+  cause: external_exports.enum(["gate", "unreadable"]),
+  /** For `gate`: the stored rejection reason, as the gate words it. For
+   *  `unreadable`: why the file could not be read. */
+  message: external_exports.string().max(PAGE_FILE_WATCH_LIMITS.message),
+  /** For `gate`: the matched concept, when the stance names one. */
+  concept: external_exports.string().max(200).optional(),
+  digest: external_exports.string(),
+  delivered: external_exports.boolean().optional()
+});
+var PageFileWatchSchema = external_exports.object({
+  recorded: PageFileWatchRecordedSchema.optional(),
+  refused: PageFileWatchRefusedSchema.optional()
+});
 
 // ../shared/dist/schemas/request.js
 var RequestIntentSchema = external_exports.enum(["explain", "plan", "status"]);
