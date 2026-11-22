@@ -309,10 +309,23 @@ export async function buildFirstCallHint(
 
   const memory = await store.getSessionMemory();
   const memoryParts: string[] = [];
-  if (memory.rejectedApproaches.length > 0) {
+  // #680 slice 4 — a page "Rule this out" stance is scoped to page text (the
+  // gate matches it only against a page's body), so it gets its own
+  // page-specific lane instead of the across-every-tool NEVER below. Ordinary
+  // stances keep the existing wording exactly.
+  const ordinaryRejections = memory.rejectedApproaches.filter((a) => a.origin !== "page_rule_out");
+  const pageRuleOuts = memory.rejectedApproaches.filter((a) => a.origin === "page_rule_out");
+  if (ordinaryRejections.length > 0) {
     memoryParts.push(
-      `Rejected approaches (NEVER propose these — present_* tools will refuse):\n${memory.rejectedApproaches
+      `Rejected approaches (NEVER propose these — present_* tools will refuse):\n${ordinaryRejections
         .map((a) => `  - ${a.description}${a.reason ? ` — reason: ${a.reason}` : ""}`)
+        .join("\n")}`,
+    );
+  }
+  if (pageRuleOuts.length > 0) {
+    memoryParts.push(
+      `Ruled out on pages (don't present a page whose text still contains these — present_page, a page revise and a watched-file save will refuse; other tools are not affected):\n${pageRuleOuts
+        .map((a) => `  - "${a.description}"${a.reason ? ` — reason: ${a.reason}` : ""}`)
         .join("\n")}`,
     );
   }

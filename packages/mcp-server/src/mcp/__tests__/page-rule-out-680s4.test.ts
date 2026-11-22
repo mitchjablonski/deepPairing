@@ -16,6 +16,7 @@ import { getGlobalStore } from "../../store/global-store.js";
 import { findRejectedApproachMatch } from "../preflight-validator.js";
 import { readRejectedApproachEntries } from "../../cli/preflight-hook-core.js";
 import { recordStance, formatRecordStanceOutcome } from "../../store/stance-add.js";
+import { buildFirstCallHint } from "../first-call-hint.js";
 import { createHttpRoutes } from "../../http/routes.js";
 import { withHash } from "../../http/__tests__/routes.harness.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
@@ -454,6 +455,43 @@ describe("#680 slice 4 — review follow-ups", () => {
   });
 });
 
+describe("#680 slice 4 — agent-facing copy describes the page scope (mixed memory)", () => {
+  it("first-call hint: each stance in its own lane; ordinary wording unchanged; page refusal and feedback say page-only", async () => {
+    const id = await presentPage();
+    store.recordRejectedApproach({ description: "Kafka topic fanout", reason: "too heavy" });
+    expect((await ruleOut(id, { htmlAnchor: cellAnchor, reason: "sixty seconds is too stale" })).status).toBe(200);
+
+    const hint = await buildFirstCallHint(store, 4000);
+    // Ordinary lane: the exact existing wording, and only the ordinary row.
+    const ordinaryHeader = "Rejected approaches (NEVER propose these — present_* tools will refuse):\n  - Kafka topic fanout — reason: too heavy";
+    expect(hint).toContain(ordinaryHeader);
+    const ordinaryLane = hint.slice(hint.indexOf("Rejected approaches (NEVER"), hint.indexOf("Ruled out on pages"));
+    expect(ordinaryLane).not.toContain("Up to 60s");
+    // Page lane: page-specific wording.
+    expect(hint).toContain(
+      "Ruled out on pages (don't present a page whose text still contains these — present_page, a page revise and a watched-file save will refuse; other tools are not affected):\n  - \"Up to 60s\" — reason: sixty seconds is too stale",
+    );
+
+    // Refusal copy for the page row names the page scope; the ordinary row's is unchanged.
+    const pageRefusal = await callTool("present_page", { title: "Take two", html: "<p>Up to 60s stale</p>" });
+    expect(pageRefusal.isError).toBe(true);
+    expect(pageRefusal.text).toContain(`this page's text still contains "Up to 60s"`);
+    expect(pageRefusal.text).toContain("This stance applies only to pages");
+    expect(pageRefusal.text).toContain('Prior rejection reason: "sixty seconds is too stale"');
+    const ordinaryRefusal = await callTool("present_page", { title: "Queues", html: "<p>Use a Kafka topic fanout.</p>" });
+    expect(ordinaryRefusal.isError).toBe(true);
+    expect(ordinaryRefusal.text).toContain("your proposal contains");
+    expect(ordinaryRefusal.text).toContain('which the user previously rejected ("Kafka topic fanout")');
+    expect(ordinaryRefusal.text).not.toContain("applies only to pages");
+
+    // Feedback copy for the rule-out comment names the page scope.
+    const fb = await callTool("check_feedback");
+    expect(fb.text).toContain('RULED OUT: recorded as a page-only rejected stance ("Up to 60s")');
+    expect(fb.text).toContain("A page whose text still contains it");
+    expect(fb.text).toContain("Other tools are not affected.");
+  });
+});
+
 describe("#680 slice 4 — a plain note and a rule-out never dedupe onto each other", () => {
   const postNote = (id: string, content: string) =>
     app.request("/api/comments", {
@@ -473,7 +511,7 @@ describe("#680 slice 4 — a plain note and a rule-out never dedupe onto each ot
     expect(comments).toHaveLength(2);
     expect(comments.filter((c) => c.ruleOut)).toHaveLength(1);
     const fb = await callTool("check_feedback");
-    expect(fb.text).toContain('RULED OUT: recorded as a rejected stance ("Up to 60s")');
+    expect(fb.text).toContain('RULED OUT: recorded as a page-only rejected stance ("Up to 60s")');
     expect((fb.structuredContent as any).comments.filter((c: any) => c.ruleOut)).toHaveLength(1);
   });
 
@@ -495,7 +533,7 @@ describe("#680 slice 4 — check_feedback surfaces it in the page comment lane",
     const res = await callTool("check_feedback");
     expect(res.text).toContain("🚫");
     expect(res.text).toContain("sixty seconds of stale sessions");
-    expect(res.text).toContain('RULED OUT: recorded as a rejected stance ("Up to 60s")');
+    expect(res.text).toContain('RULED OUT: recorded as a page-only rejected stance ("Up to 60s")');
     expect(res.text).toContain('on page cell "Up to 60s"');
     const c = (res.structuredContent as any).comments.find((x: any) => x.ruleOut);
     expect(c).toMatchObject({ artifactId: id, content: "sixty seconds of stale sessions", ruleOut: { description: "Up to 60s" }, htmlAnchor: cellAnchor });

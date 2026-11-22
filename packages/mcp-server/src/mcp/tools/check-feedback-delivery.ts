@@ -573,7 +573,7 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
   // someone commented. Spread only when present: every other comment is
   // byte-for-byte unchanged.
   const ruleOutNote = c.ruleOut
-    ? ` → RULED OUT: recorded as a rejected stance ("${clipProse(c.ruleOut.description, 120)}"). A page containing it is now refused by the gate with this reason; take it out of the page and don't propose it again.`
+    ? ` → RULED OUT: recorded as a page-only rejected stance ("${clipProse(c.ruleOut.description, 120)}"). A page whose text still contains it (present_page, a page revise, a watched-file save) is now refused with this reason; take it out of this page. Other tools are not affected.`
     : "";
   return {
     bucket: "comment",

@@ -818,7 +818,16 @@ export function runPreflight(input: PreflightInput): PreflightResult {
           ? `\nMatched on underlying concept: "${match.rejected.concept}". ` +
             `A paraphrased proposal still counts — the user has rejected this kind of approach.`
           : "";
-      const message =
+      // #680 slice 4 — a page rule-out is scoped to page text, so its refusal
+      // says so (and doesn't steer the agent away from the phrase elsewhere).
+      const message = match.rejected.origin === "page_rule_out"
+        ? `REJECTED_APPROACH_BLOCKED: ${toolName} refused — this page's text still contains "${match.rejected.description}", ` +
+          `which the user ruled out on a page (in the block "${match.proposal}").${reasonLine}\n\n` +
+          `Take that text out of the page and present it again. This stance applies only to pages (present_page, a page revise, ` +
+          `a watched-file save); other tools are not affected. If this is a false positive or conditions have changed, ask the ` +
+          `human to allow this proposal once or retire the stance from the companion UI's gate log before retrying. ` +
+          `The artifact was NOT created.`
+        :
         `REJECTED_APPROACH_BLOCKED: ${toolName} refused — your proposal contains "${match.proposal}" ` +
         `which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}\n\n` +
         `Do NOT retry with this approach. Propose an alternative. If this is a false positive or ` +
