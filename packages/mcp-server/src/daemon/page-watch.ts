@@ -79,6 +79,10 @@ export interface PageWatchDeps {
   /** The rejection gate. Default preflightRejectedApproaches; tests pass a
    *  fake that can hold the check open (stop-during-gate regression). */
   gate?: typeof preflightRejectedApproaches;
+  /** The file's change signature for the stat poll. Default: mtime, ctime,
+   *  size, inode. Tests pass a coarse fake (a filesystem whose timestamps
+   *  don't move) to prove nothing correctness-critical relies on it. */
+  statSig?: (absPath: string) => string;
 }
 
 interface Entry {
@@ -102,7 +106,9 @@ interface Entry {
 function statSig(p: string): string {
   try {
     const st = fs.statSync(p);
-    return `${st.mtimeMs}:${st.size}:${st.ino}`;
+    // ctime too: a same-size rewrite whose mtime was preserved (or landed in
+    // the same coarse mtime tick) still moves ctime, so the poll notices it.
+    return `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
   } catch {
     return "missing";
   }
@@ -151,6 +157,10 @@ export class PageWatcher {
     this.quietMs = deps.quietMs ?? PAGE_WATCH_QUIET_MS;
     this.minIntervalMs = deps.minIntervalMs ?? PAGE_WATCH_MIN_INTERVAL_MS;
     this.pollMs = deps.pollIntervalMs ?? PAGE_WATCH_POLL_MS;
+  }
+
+  private sig(p: string): string {
+    return (this.deps.statSig ?? statSig)(p);
   }
 
   private log(msg: string): void {
@@ -242,7 +252,7 @@ export class PageWatcher {
       watcher: null,
       poll: null,
       quiet: null,
-      lastSig: statSig(absPath),
+      lastSig: this.sig(absPath),
       lastRecordAt: 0,
       dirty: false,
       gen: 0,
@@ -276,7 +286,7 @@ export class PageWatcher {
     this.arm(entry, this.quietMs);
     if (this.pollMs > 0) {
       entry.poll = setInterval(() => {
-        const sig = statSig(entry.absPath);
+        const sig = this.sig(entry.absPath);
         if (sig === entry.lastSig) return;
         entry.lastSig = sig;
         this.onChange(entry);
@@ -297,7 +307,7 @@ export class PageWatcher {
 
   private onChange(entry: Entry): void {
     if (entry.stopped) return;
-    entry.lastSig = statSig(entry.absPath);
+    entry.lastSig = this.sig(entry.absPath);
     entry.dirty = true;
     entry.gen++;
     // A read in flight reschedules itself when it finishes (dirty).
@@ -351,8 +361,6 @@ export class PageWatcher {
     // dangling symlink counts as present and gets the reader's refusal.
     try { fs.lstatSync(entry.absPath); } catch { return; }
 
-    // The file's identity at read time, for the side-effect boundary below.
-    const readSig = statSig(entry.absPath);
     const source = readPageSource(this.rootReal, entry.sourcePath);
     if (!source.ok) {
       const message = readerReason(source.error.content[0]?.text ?? "the file could not be read");
@@ -407,12 +415,12 @@ export class PageWatcher {
 
     // Codex review (stat-poll path) — the side-effect boundary. Where fs.watch
     // never fires (WSL /mnt/c), a newer save can already be on disk before the
-    // next poll tick bumps `gen`. Re-check the file itself: if its stat moved
-    // and its content is no longer what this read saw, the read is stale. No
+    // next poll tick bumps `gen`. Re-read the file itself (whatever its stat says): if
+    // its content is no longer what this read saw, the read is stale. No
     // side effect, no rate-limit window; mark the entry dirty and bump `gen` so
     // the completion handler re-arms the quiet timer for the newer save.
     // Everything from here to the writes is synchronous.
-    if (this.overtaken(entry, readSig, html)) return;
+    if (this.overtaken(entry, html)) return;
 
     if (!pre.ok) {
       const match = pre.event.match ?? {};
@@ -429,11 +437,14 @@ export class PageWatcher {
     this.record(store, entry, cur, content, pre.trace);
   }
 
-  /** Has the file moved on from the snapshot this read saw? A stat change
-   *  alone (an mtime-only touch) is not enough: the content must differ. */
-  private overtaken(entry: Entry, readSig: string, html: string): boolean {
-    const sig = statSig(entry.absPath);
-    if (sig === readSig) return false;
+  /** Has the file moved on from the snapshot this read saw? Decided by the
+   *  content (and resolved path), never by the stat: an mtime-only touch is
+   *  not stale, and a same-stat rewrite is. */
+  private overtaken(entry: Entry, html: string): boolean {
+    // Always re-read (bounded: pages are capped, and this runs once per
+    // recorded version). An equal stat proves nothing: a same-size write in
+    // the same coarse mtime tick, or with its mtime restored, looks identical.
+    const sig = this.sig(entry.absPath);
     const again = readPageSource(this.rootReal, entry.sourcePath);
     if (again.ok && again.sourcePath === entry.sourcePath && again.html === html) return false;
     entry.lastSig = sig;
