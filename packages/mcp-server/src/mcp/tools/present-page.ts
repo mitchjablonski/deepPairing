@@ -70,7 +70,14 @@ function refuse(message: string): { ok: false; error: ToolErrorResponse } {
 /** Inside `root` (or equal to it — callers reject the root itself separately)? */
 function isWithin(root: string, target: string): boolean {
   const rel = path.relative(root, target);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  // Segment check, not a string prefix: `..foo.html` is a name inside the root.
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/** Inside the root's `.deeppairing/` (the daemon's own state, incl. its bearer token)? */
+function isInDaemonDir(root: string, target: string): boolean {
+  const first = path.relative(root, target).split(path.sep)[0] ?? "";
+  return first.toLowerCase() === ".deeppairing";
 }
 
 /**
@@ -93,6 +100,9 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
   if (!isWithin(projectRoot, lexical) && !isWithin(rootReal, lexical)) {
     return refuse(`\`path\` "${requested}" is outside the project root. Write the page inside the project, or pass it inline as \`html\`.`);
   }
+  if (isInDaemonDir(projectRoot, lexical) || isInDaemonDir(rootReal, lexical)) {
+    return refuse(`\`path\` "${requested}" is inside .deeppairing/, deepPairing's own state directory. Write the page elsewhere in the project.`);
+  }
   let real: string;
   try {
     real = fs.realpathSync(lexical);
@@ -102,6 +112,9 @@ export function readPageSource(projectRoot: string, requested: string): PageSour
   // Symlink check: the RESOLVED target must also be inside the real root.
   if (!isWithin(rootReal, real)) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) outside the project root.`);
+  }
+  if (isInDaemonDir(rootReal, real)) {
+    return refuse(`\`path\` "${requested}" resolves (through a symlink) into .deeppairing/, deepPairing's own state directory.`);
   }
   // Open once and work from the descriptor. O_NOFOLLOW refuses a symlink
   // swapped in for the FINAL component since the realpath above, and

@@ -159,8 +159,21 @@ describe("authenticated standalone page", () => {
       expect(symlink).toMatchObject({ isError: true, _meta: { code: "INPUT_VALIDATION_FAILED" } });
       expect(symlink.content[0].text).toContain("through a symlink");
 
+      fs.mkdirSync(path.join(f.root, ".deeppairing", "pages"), { recursive: true });
+      fs.writeFileSync(path.join(f.root, ".deeppairing", "pages", "p.html"), "<p>state dir</p>");
+      const stateDir = await (await f.present(daemon, randomUUID(), { title: "State", path: ".deeppairing/daemon.json" })).json();
+      expect(stateDir).toMatchObject({ isError: true, _meta: { code: "INPUT_VALIDATION_FAILED" } });
+      expect(stateDir.content[0].text).toContain(".deeppairing/");
+      const statePage = await (await f.present(daemon, randomUUID(), { title: "State", path: ".deeppairing/pages/p.html" })).json();
+      expect(statePage.content[0].text).toContain(".deeppairing/");
+
       expect(store.getArtifacts()).toHaveLength(0);
       expect(f.watchers).toHaveLength(0);
+
+      // A name that only starts with ".." is inside the root.
+      fs.writeFileSync(path.join(f.root, "..draft.html"), "<p>dot-dot name</p>");
+      const dotDot = await (await f.present(daemon, randomUUID(), { title: "Dot dot", path: "..draft.html" })).json();
+      expect(dotDot.structuredContent).toMatchObject({ sourcePath: "..draft.html" });
     } finally {
       fs.rmSync(outside, { recursive: true, force: true });
       f.dispose();
@@ -178,6 +191,10 @@ describe("authenticated standalone page", () => {
 
       expect((await f.request(daemon, "present-page", { operationId: randomUUID(), args: page(atCap) }, { authenticated: false })).status).toBe(401);
       expect(store.getArtifacts()).toHaveLength(0);
+
+      const malformed = await f.present(daemon, randomUUID(), { title: "Bad", htmlBase64: "not base64!" });
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toEqual({ error: "htmlBase64 must be canonical base64.", code: "validation_error" });
 
       const over = await f.present(daemon, randomUUID(), page(atCap + "x"));
       expect(over.status).toBe(413);
@@ -257,10 +274,14 @@ describe("authenticated standalone page", () => {
       expect(v2).toMatchObject({ version: 2, content: { html: "<p>two</p>", sourcePath: "docs/plan.html" } });
       expect(readFileWatch(v2.fileWatch).recorded?.fromArtifactId).toBe(artifactId);
 
-      // A retry of the original call replays v1; the file's later save is not "changed input".
-      expect(await (await f.present(daemon, op, input)).json()).toMatchObject({
-        structuredContent: { artifactId, sourcePath: "docs/plan.html", replayed: true },
+      // A retry of the original call replays v1 (the file's later save is not
+      // "changed input"), but says truthfully that the page has moved on.
+      const replay = await (await f.present(daemon, op, input)).json();
+      expect(replay.structuredContent).toEqual({
+        artifactId, sourcePath: "docs/plan.html", replayed: true,
+        status: "superseded", currentArtifactId: v2.id, currentVersion: 2, currentStatus: "draft",
       });
+      expect(replay.content[0].text).toContain(`moved to v2 (${v2.id}`);
       expect(store.getArtifacts()).toHaveLength(2);
     } finally {
       f.dispose();

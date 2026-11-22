@@ -92,12 +92,34 @@ export async function presentStandalonePage(
   const save = (receipt: Receipt) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 0o600 });
   const lock = <T>(run: () => T) => withFileLock(path.join(dir, ".standalone-page.lock"), run);
   const conflict = () => standaloneOperationConflict("page input");
-  const reply = (content: unknown): ToolResult => {
-    const saved = PageContentSchema.safeParse(content);
+  const reply = (disk: Record<string, unknown>): ToolResult => {
+    const saved = PageContentSchema.safeParse(disk.content);
     const sourcePath = saved.success ? saved.data.sourcePath : undefined;
+    // Report the truth about what the replayed id is now: a file-backed page
+    // may have moved on (watcher saves, revisions) or been closed since.
+    const artifacts = store.getArtifacts();
+    const backing = artifacts.find((a) => a.id === artifactId);
+    let latest = backing;
+    const seen = new Set<string>([artifactId]);
+    while (latest) {
+      const next = artifacts.find((a) => a.parentId === latest!.id && !seen.has(a.id));
+      if (!next) break;
+      seen.add(next.id);
+      latest = next;
+    }
+    const version = backing?.version ?? (typeof disk.version === "number" ? disk.version : 1);
+    const hasSuccessor = !!latest && latest !== backing;
+    const status = hasSuccessor ? "superseded" : String(backing?.status ?? disk.status ?? "draft");
+    const live = status === "draft" || status === "reviewing";
+    const current = !live && latest
+      ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status }
+      : undefined;
+    const moved = current && hasSuccessor
+      ? ` The page has since moved to v${current.currentVersion} (${current.currentArtifactId}, ${current.currentStatus}).`
+      : current ? ` It is ${status}.` : "";
     return {
-      content: [{ type: "text", text: `This operation already presented page artifact ${artifactId}.` }],
-      structuredContent: { artifactId, ...(sourcePath ? { sourcePath } : {}), replayed: true },
+      content: [{ type: "text", text: `This operation already presented page artifact ${artifactId} (v${version}).${moved}` }],
+      structuredContent: { artifactId, ...(sourcePath ? { sourcePath } : {}), replayed: true, status, ...(current ?? {}) },
     };
   };
 
@@ -113,7 +135,7 @@ export async function presentStandalonePage(
         }
         save({ ...receipt, committed: true });
       }
-      return reply(disk.content);
+      return reply(disk);
     }
     if (receipt.committed || verifyOnly) throw new Error("Standalone page operation is missing its durable artifact.");
     const buffered = store.getArtifacts().find((row) => row.id === artifactId);

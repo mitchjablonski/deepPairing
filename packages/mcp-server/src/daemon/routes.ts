@@ -45,7 +45,8 @@ const PresentStandalonePageBody = z.object({
     title: z.string().optional(),
     summary: z.string().optional(),
     concept: z.string().optional(),
-    htmlBase64: z.string().min(1).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/).optional(),
+    htmlBase64: z.string().min(1, "htmlBase64 must not be empty.")
+      .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, "htmlBase64 must be canonical base64.").optional(),
     path: z.string().min(1).optional(),
   }).strict().refine((a) => (a.htmlBase64 === undefined) !== (a.path === undefined), {
     message: "Give exactly one of htmlBase64 or path.",

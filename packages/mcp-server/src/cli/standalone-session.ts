@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { errorMessage, PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
@@ -11,14 +11,17 @@ import { readSessionDirectories } from "./session-selection.js";
 
 const SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const PRESENT_OPTIONS_USAGE = "Usage: deeppairing present options --session-id ID --request-id UUID --file options.json";
-const PRESENT_PAGE_USAGE = "Usage: deeppairing present page --session-id ID --request-id UUID (--file page.html | --path project/relative/page.html) --title T [--summary S] [--concept C]";
+const PRESENT_PAGE_USAGE = "Usage: deeppairing present page --session-id ID --request-id UUID (--file page.html | --path page-inside-project.html) --title T [--summary S] [--concept C]";
 const PRESENT_USAGE = `${PRESENT_OPTIONS_USAGE}\n       ${PRESENT_PAGE_USAGE.replace(/^Usage: /, "")}`;
 const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --decision-id ID";
 const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
 
 type PresentPageReceipt = { sessionId: string; requestId: string } & (
-  | { artifactId: string; companionUrl: string; sourcePath?: string; replayed?: true; isError?: never }
+  | {
+    artifactId: string; companionUrl: string; sourcePath?: string; replayed?: true;
+    status?: string; currentArtifactId?: string; currentVersion?: number; note?: string; isError?: never;
+  }
   | { isError: true; code: string; reason?: string; message: string }
 );
 
@@ -128,6 +131,28 @@ export async function standalonePresent(projectRoot: string, args: string[]): Pr
 }
 
 /**
+ * Resolve `--path` against the CLI's cwd and express it relative to the
+ * project root (the daemon accepts only project-relative paths and re-checks
+ * containment itself). Refuses a path that lands outside the root.
+ */
+function projectRelativePath(projectRoot: string, requested: string): string {
+  if (!requested) throw new Error(PRESENT_PAGE_USAGE);
+  const target = path.resolve(process.cwd(), requested);
+  const inside = (root: string) => {
+    const rel = path.relative(root, target);
+    return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel) ? rel : undefined;
+  };
+  let rel = inside(projectRoot);
+  if (rel === undefined) {
+    try { rel = inside(realpathSync(projectRoot)); } catch { /* keep the lexical answer */ }
+  }
+  if (rel === undefined) {
+    throw new Error(`--path ${requested} is outside the project root (${projectRoot}). Use --file to present a page from elsewhere.`);
+  }
+  return rel.split(path.sep).join("/");
+}
+
+/**
  * #679/#680 — present an HTML page without MCP. `--file` sends the page inline
  * (any readable file; not watched). `--path` names a file inside the project:
  * the daemon reads it through presentPage's own contained reader, and the page
@@ -160,10 +185,7 @@ async function standalonePresentPage(projectRoot: string, args: string[]): Promi
     if (!html.toString("utf8").trim()) throw new Error("The page file is empty.");
     page = { htmlBase64: html.toString("base64") };
   } else {
-    if (!pagePath || path.isAbsolute(pagePath) || path.win32.isAbsolute(pagePath)) {
-      throw new Error("--path must be relative to the project root. Use --file to present a page from elsewhere.");
-    }
-    page = { path: pagePath };
+    page = { path: projectRelativePath(projectRoot, pagePath ?? "") };
   }
 
   const { client, companionUrl } = await connectStandaloneSession(projectRoot, sessionId);
@@ -190,11 +212,19 @@ async function standalonePresentPage(projectRoot: string, args: string[]): Promi
       message: code === ERROR_CODES.standalone_operation_conflict ? message : `${message} ${PRESENT_OPTIONS_RETRY}`,
     };
   }
-  const { artifactId, sourcePath, replayed } = result.structuredContent ?? {};
+  const { artifactId, sourcePath, replayed, status, currentArtifactId, currentVersion } = result.structuredContent ?? {};
   if (typeof artifactId !== "string") throw new Error("The daemon did not confirm the page presentation. If retrying, use the same --request-id and page input.");
+  const moved = typeof currentArtifactId === "string" && typeof currentVersion === "number";
   return {
     ...receipt, artifactId, companionUrl,
     ...(typeof sourcePath === "string" ? { sourcePath } : {}),
     ...(replayed === true ? { replayed: true as const } : {}),
+    ...(typeof status === "string" ? { status } : {}),
+    ...(moved ? { currentArtifactId, currentVersion } : {}),
+    ...(replayed === true && moved && currentArtifactId !== artifactId
+      ? { note: `replayed; the page has since moved to v${currentVersion} (${currentArtifactId})` }
+      : replayed === true && typeof status === "string" && status !== "draft" && status !== "reviewing"
+        ? { note: `replayed; the page is ${status}` }
+        : {}),
   };
 }

@@ -1433,11 +1433,12 @@ ${helpInvocations}
     dp present options --session-id ID --request-id UUID --file options.json
                                            Present options from a JSON object. Reuse the request ID for unchanged input.
                                            Use a new UUID if you change the input.
-    dp present page --session-id ID --request-id UUID (--file page.html | --path rel/page.html) --title T
+    dp present page --session-id ID --request-id UUID (--file page.html | --path page.html) --title T
                     [--summary S] [--concept C]
                                            Present an HTML page for review. --file sends any file inline (not watched);
-                                           --path names a file inside the project, which is watched while under review
-                                           (each save records a new version). Same request-ID rules as options.
+                                           --path names a file inside the project (resolved from the current directory,
+                                           sent project-relative), watched while under review: each save records a new
+                                           version. Same request-ID rules as options.
     dp read-decision --session-id ID --decision-id ID
                                            Read a saved choice and linked rejection reasons without consuming feedback.
     dp list                                List every live deepPairing daemon (project ↔ URL)
