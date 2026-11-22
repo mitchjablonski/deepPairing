@@ -24,6 +24,7 @@ import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 import type { WorkerStop, WorkerStopBatch } from "../store/worker-stop-notices.js";
 import type { RetirementInput, RetirementOutcome } from "../store/retirement.js";
 import type { ToolResult } from "../mcp/tools/types.js";
+import type { StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
 // Static on purpose (was a dynamic import): a dynamic import made esbuild wrap
 // lifecycle.ts and its whole dependency graph (including zod) in lazy __esm
 // initialisers, and the MCP SDK's top-level zod calls then ran before zod was
@@ -470,6 +471,26 @@ export class DaemonClient implements IStore {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedProjectRoot, operationId, args }),
     }, true); // Never auto-register an agent wrapper on a route or transport error.
+  }
+
+  async readStandaloneDecision(expectedProjectRoot: string, decisionId: string, signal: AbortSignal): Promise<StandaloneDecisionRead> {
+    let result: StandaloneDecisionRead;
+    try {
+      result = await this.request("/read-decision", {
+        method: "POST", signal, redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot, decisionId }),
+      }, true);
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support reading standalone decisions. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
+    if (result?.sessionId !== this.sessionId || result.decisionId !== decisionId) {
+      throw new Error("The daemon did not confirm the requested standalone session and decision.");
+    }
+    return result;
   }
 
   // --- Artifacts ---

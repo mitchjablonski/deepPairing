@@ -1433,6 +1433,8 @@ ${helpInvocations}
     dp present options --session-id ID --request-id UUID --file options.json
                                            Present options from a JSON object. Reuse the request ID for unchanged input.
                                            Use a new UUID if you change the input.
+    dp read-decision --session-id ID --decision-id ID
+                                           Read a saved choice and linked rejection reasons without consuming feedback.
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
@@ -1545,6 +1547,14 @@ ${helpInvocations}
     const result = await standalonePresent(cwd, args.slice(1));
     console.log(JSON.stringify(result));
     if (result.isError) process.exitCode = 1;
+  } catch (err) {
+    console.error(`deepPairing: ${errorMessage(err)}`);
+    process.exitCode = 1;
+  }
+} else if (cmd === "read-decision") {
+  try {
+    const { standaloneReadDecision } = await import("./standalone-session.js");
+    console.log(JSON.stringify(await standaloneReadDecision(cwd, args.slice(1))));
   } catch (err) {
     console.error(`deepPairing: ${errorMessage(err)}`);
     process.exitCode = 1;

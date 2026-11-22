@@ -24,7 +24,7 @@ async function stopProjectDaemon(projectRoot: string): Promise<void> {
   await waitForPortRelease(info.port, info.pid, { expectedProjectRoot: projectRoot });
 }
 
-test("standalone CLI opens and resumes the exact session across processes and daemon restart", async ({ page }) => {
+test("standalone CLI resumes the exact session and reads browser feedback without consuming it", async ({ page }) => {
   test.setTimeout(60_000);
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dp-cli-review-")));
   const home = path.join(root, "home");
@@ -83,9 +83,8 @@ test("standalone CLI opens and resumes the exact session across processes and da
     const info = readDaemonInfo(project);
     if (!info?.authToken) throw new Error("Test daemon did not publish its authentication token");
     const sibling = new DaemonClient(info.port, resumed.sessionId, project, info.authToken);
-    const activeSessions = new URL("/api/active-sessions", resumed.companionUrl);
-    const readCatalog = async () => {
-      const response = await fetch(activeSessions, {
+    const readCatalog = async (companionUrl = resumed.companionUrl) => {
+      const response = await fetch(new URL("/api/active-sessions", companionUrl), {
         headers: daemonAuthHeaders(project), signal: AbortSignal.timeout(5_000),
       });
       expect(response.ok).toBe(true);
@@ -135,15 +134,80 @@ test("standalone CLI opens and resumes the exact session across processes and da
     });
     expect(JSON.parse((await runPresent(requestId)).stdout)).toEqual({ ...presented, replayed: true });
 
-    // Seed the exact same project rejection memory the normal handler reads.
+    const runRead = (sessionId: string) => run(project, "read-decision",
+      "--session-id", sessionId, "--decision-id", presented.decisionId);
+    const readDecision = async () => JSON.parse((await runRead(resumed.sessionId)).stdout);
+    expect(await readDecision()).toEqual({
+      sessionId: resumed.sessionId,
+      decisionId: presented.decisionId,
+      artifactId: presented.artifactId,
+      context: input.context,
+      artifactStatus: "draft",
+      recordedRejections: [],
+    });
+    await expect(runRead(second.sessionId)).rejects.toMatchObject({
+      code: 1, stdout: "", stderr: expect.stringContaining("Decision does not exist in this standalone session."),
+    });
+
+    await page.goto(resumed.companionUrl);
+    const pane = page.locator(`[data-artifact-id="${presented.artifactId}"]`);
+    await pane.getByRole("button", { name: "Select Local file", exact: true }).click();
+    await expect(pane.getByText("Decision Made", { exact: true })).toBeVisible();
+    await pane.getByRole("button", { name: "Never suggest Redis Streams", exact: true }).click();
     const reason = "No operators for this dependency.";
-    await sibling.recordRejectedApproach({ description: "Redis Streams", concept: "Redis Streams", reason });
+    const rejection = pane.getByRole("group", { name: "Never suggest Redis Streams" });
+    await rejection.getByRole("textbox").fill(reason);
+    await rejection.getByRole("button", { name: "Remember as rejected", exact: true }).click();
+    await expect(rejection).toHaveCount(0);
+
+    const commentId = "cmt_passive_decision_read";
+    await sibling.addComment({ id: commentId, artifactId: presented.artifactId, author: "human", content: "Please document the replay procedure." });
+    const pendingDecisions = await sibling.getResolvedDecisions();
+    const pendingComments = await sibling.getUnacknowledgedComments();
+    const approvedPatterns = (await sibling.getSessionMemory()).approvedPatterns;
+    expect(pendingDecisions.map((d) => d.decisionId)).toEqual([presented.decisionId]);
+    expect(pendingComments.map((comment) => comment.id)).toContain(commentId);
+
+    const result = await readDecision();
+    expect(result).toEqual({
+      sessionId: resumed.sessionId,
+      decisionId: presented.decisionId,
+      artifactId: presented.artifactId,
+      context: input.context,
+      artifactStatus: "approved",
+      selectedOptionId: "local",
+      selectedTitle: "Local file",
+      recordedRejections: [{ description: "Choose a replay backend: Redis Streams", reason }],
+    });
+    await sibling.forceFlush();
+    // Disconnect the browser before restarting so only CLI commands can load the review.
+    await page.goto("about:blank");
+    await stopProjectDaemon(project);
+    await expect(runRead(resumed.sessionId)).rejects.toMatchObject({
+      code: 1,
+      stdout: "",
+      stderr: expect.stringContaining(`deeppairing resume ${resumed.sessionId}`),
+    });
+    const restarted = readDaemonInfo(project);
+    if (!restarted?.authToken) throw new Error("Restarted test daemon did not publish its authentication token");
+    const restartedUrl = `http://localhost:${restarted.port}`;
+    expect(await readCatalog(restartedUrl)).toEqual({ sessions: [] });
+
+    const reopened = await receipt("resume", resumed.sessionId);
+    expect(reopened.sessionId).toBe(resumed.sessionId);
+    expect(await readDecision()).toEqual(result);
+    expect(await readDecision()).toEqual(result);
+    const resumedClient = new DaemonClient(restarted.port, resumed.sessionId, project, restarted.authToken);
+    expect(await resumedClient.getResolvedDecisions()).toEqual(pendingDecisions);
+    expect(await resumedClient.getUnacknowledgedComments()).toEqual(pendingComments);
+    expect((await resumedClient.getSessionMemory()).approvedPatterns).toEqual(approvedPatterns);
+
     const deniedId = randomUUID();
     expect(await readRefusal(deniedId)).toMatchObject({
       sessionId: resumed.sessionId, requestId: deniedId, isError: true, code: "rejected_approach_blocked", reason,
       message: expect.stringContaining("Use a new UUID if you change the input."),
     });
-    expect(await readCatalog()).toMatchObject({
+    expect(await readCatalog(reopened.companionUrl)).toMatchObject({
       sessions: expect.arrayContaining([expect.objectContaining({ sessionId: resumed.sessionId, live: false, artifactCount: 1 })]),
     });
 
@@ -170,19 +234,15 @@ test("standalone CLI opens and resumes the exact session across processes and da
     const changed = JSON.parse((await runPresent(changedId)).stdout);
     expect(changed).toMatchObject({ sessionId: resumed.sessionId, requestId: changedId, artifactId: expect.stringMatching(/^art_/) });
     expect(changed.artifactId).not.toBe(presented.artifactId);
-    expect(await readCatalog()).toMatchObject({
+    expect(await readCatalog(reopened.companionUrl)).toMatchObject({
       sessions: expect.arrayContaining([expect.objectContaining({ sessionId: resumed.sessionId, live: false, artifactCount: 2 })]),
     });
     expect(await fs.readdir(project)).not.toContain(".mcp.json");
 
-    await page.goto(resumed.companionUrl);
-    await expect.poll(() => page.evaluate(() => {
-      const store = (window as Window & { __dpConnectionStore?: {
-        getState(): { sessionId: string; hydrated: boolean };
-      } }).__dpConnectionStore;
-      const state = store?.getState();
-      return state?.hydrated ? state.sessionId : null;
-    })).toBe(resumed.sessionId);
+    await page.goto(reopened.companionUrl);
+    await page.locator(`button[data-artifact-item="${changed.artifactId}"]`).click();
+    await expect(page.locator(`[data-dp-pane][data-artifact-id="${changed.artifactId}"]:not([inert])`)
+      .getByRole("button", { name: "Select SQLite", exact: true })).toBeVisible();
   } finally {
     await page.close();
     await stopProjectDaemon(project);

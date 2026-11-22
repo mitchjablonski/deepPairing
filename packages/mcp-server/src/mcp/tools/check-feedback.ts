@@ -2,6 +2,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES } from "./types.js";
 import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
+import { decisionFeedback } from "./decision-feedback.js";
 import { SERVER_VERSION } from "../../version.js";
 import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage, undeliveredFileWatchRefs } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
@@ -883,13 +884,13 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
         continue;
       }
       recordedIds.push(d.decisionId);
-      const option = d.options.find((o) => o.id === d.response?.optionId);
+      const feedback = decisionFeedback(d);
       const decisionLabel = d.title?.trim() || d.context;
       // #549 — the unchosen options as NON-ENFORCING context: the human didn't
       // pick them this time, and that is all it says. No stance is recorded and
       // the gate won't block them; worded so it can't read as a rejection.
       const notChosen = d.options.filter((o) => o.id !== d.response?.optionId).map((o) => `"${o.title}"`);
-      const notChosenNote = option && notChosen.length > 0
+      const notChosenNote = feedback.selectedTitle !== undefined && notChosen.length > 0
         ? `\n    Not picked this time: ${notChosen.join(", ")}. This is context only, not a rejection — no stance was recorded and they stay open to propose later.`
         : "";
       // #572 slice A — the brief pin, read from the SAVED decision artifact
@@ -898,16 +899,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       // choice is still delivered. Context only: it authorizes nothing.
       const brief = briefEchoOf(postWakeArtifacts.find((a) => a.id === d.artifactId && a.type === "decision"), postWakeArtifacts);
       const briefNote = brief ? `\n    ${brief.line} (the link saved on this card; context, not an acceptance).` : "";
-      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}${briefNote}`);
-      structuredDecisions.push({
-        decisionId: d.decisionId,
-        artifactId: d.artifactId,
-        context: d.context,
-        selectedOptionId: d.response?.optionId,
-        selectedTitle: option?.title,
-        reasoning: d.response?.reasoning,
-        ...(brief ? { briefRef: brief.echo } : {}),
-      });
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${feedback.selectedTitle ?? feedback.selectedOptionId}"${feedback.reasoning ? ` (reasoning: ${feedback.reasoning})` : ""}${notChosenNote}${briefNote}`);
+      structuredDecisions.push({ ...feedback, ...(brief ? { briefRef: brief.echo } : {}) });
     }
     if (recordedIds.length > 0) await store.acknowledgeDecisions(recordedIds);
     if (formattedDecisions.length > 0) parts.push(`Decision selections:\n${formattedDecisions.join("\n")}`);
