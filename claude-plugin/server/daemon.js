@@ -38892,6 +38892,20 @@ async function presentStandaloneOptions(projectRoot2, store, operationId, args, 
   return result;
 }
 
+// src/mcp/tools/decision-feedback.ts
+function decisionFeedback(decision) {
+  const selectedOptionId = decision.response?.optionId;
+  const option = decision.options.find((candidate) => candidate.id === selectedOptionId);
+  return {
+    decisionId: decision.decisionId,
+    artifactId: decision.artifactId,
+    context: decision.context,
+    selectedOptionId,
+    selectedTitle: option?.title,
+    reasoning: decision.response?.reasoning
+  };
+}
+
 // src/daemon/routes.ts
 var OpenStandaloneReviewBody = external_exports.object({
   mode: external_exports.enum(["open", "resume"]),
@@ -38901,6 +38915,10 @@ var PresentStandaloneOptionsBody = external_exports.object({
   operationId: external_exports.string().uuid().transform((id) => id.toLowerCase()),
   expectedProjectRoot: external_exports.string().min(1),
   args: external_exports.record(external_exports.string(), external_exports.unknown())
+}).strict();
+var ReadStandaloneDecisionBody = external_exports.object({
+  expectedProjectRoot: external_exports.string().min(1),
+  decisionId: external_exports.string().min(1)
 }).strict();
 var RetirementBody = external_exports.object({
   artifactId: external_exports.string().min(1),
@@ -39104,7 +39122,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   const AGENT_ACTIVITY_THROTTLE_MS = 5e3;
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    if (c.res.status >= 400 || c.req.path.endsWith("/open-review")) return;
+    if (c.res.status >= 400 || c.req.path.endsWith("/open-review") || c.req.path.endsWith("/read-decision")) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
     const sid = m?.[1];
     if (!sid) return;
@@ -39192,6 +39210,39 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         (event) => broadcast(sessionId, event)
       );
       return c.json(result);
+    });
+    app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
+      const parsed = await parseJsonBody(c, ReadStandaloneDecisionBody);
+      if (!parsed.ok) return parsed.res;
+      const { expectedProjectRoot, decisionId } = parsed.data;
+      const sessionId = c.req.param("sessionId");
+      if (expectedProjectRoot !== projectRoot2 || !isStandaloneSessionForProject(sessionId, projectRoot2)) {
+        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+      }
+      if (!fs24.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+      }
+      const store = sessions.get(sessionId);
+      if (!store) {
+        return c.json({
+          error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry read-decision.`,
+          code: ERROR_CODES.session_not_registered
+        }, 404);
+      }
+      return withDecisionResolveLock(store, async () => {
+        const decision = store.getDecision(decisionId);
+        const artifact = decision && store.getArtifacts().find((a) => a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
+        if (!decision || !artifact) {
+          return c.json({ error: "Decision does not exist in this standalone session.", code: ERROR_CODES.decision_not_in_session }, 404);
+        }
+        const result = {
+          ...decisionFeedback(decision),
+          sessionId,
+          artifactStatus: artifact.status,
+          recordedRejections: store.getSessionMemory().rejectedApproaches.filter((entry) => entry.sourceArtifactId === artifact.id).map(({ description, reason }) => ({ description, reason }))
+        };
+        return c.json(result);
+      });
     });
   }
   app.post("/api/internal/sessions/:sessionId/register", async (c) => {

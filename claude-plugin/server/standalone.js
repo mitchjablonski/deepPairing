@@ -36224,6 +36224,20 @@ async function handlePresentOptions(ctx, args, standalone) {
   };
 }
 
+// src/mcp/tools/decision-feedback.ts
+function decisionFeedback(decision) {
+  const selectedOptionId = decision.response?.optionId;
+  const option = decision.options.find((candidate) => candidate.id === selectedOptionId);
+  return {
+    decisionId: decision.decisionId,
+    artifactId: decision.artifactId,
+    context: decision.context,
+    selectedOptionId,
+    selectedTitle: option?.title,
+    reasoning: decision.response?.reasoning
+  };
+}
+
 // src/store/preflight-block-log.ts
 var MAX_BLOCKS = 50;
 
@@ -37119,24 +37133,16 @@ ${lines.join("\n")}`
         continue;
       }
       recordedIds.push(d.decisionId);
-      const option = d.options.find((o) => o.id === d.response?.optionId);
+      const feedback = decisionFeedback(d);
       const decisionLabel = d.title?.trim() || d.context;
       const notChosen = d.options.filter((o) => o.id !== d.response?.optionId).map((o) => `"${o.title}"`);
-      const notChosenNote = option && notChosen.length > 0 ? `
+      const notChosenNote = feedback.selectedTitle !== void 0 && notChosen.length > 0 ? `
     Not picked this time: ${notChosen.join(", ")}. This is context only, not a rejection \u2014 no stance was recorded and they stay open to propose later.` : "";
       const brief = briefEchoOf(postWakeArtifacts.find((a) => a.id === d.artifactId && a.type === "decision"), postWakeArtifacts);
       const briefNote = brief ? `
     ${brief.line} (the link saved on this card; context, not an acceptance).` : "";
-      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}${briefNote}`);
-      structuredDecisions.push({
-        decisionId: d.decisionId,
-        artifactId: d.artifactId,
-        context: d.context,
-        selectedOptionId: d.response?.optionId,
-        selectedTitle: option?.title,
-        reasoning: d.response?.reasoning,
-        ...brief ? { briefRef: brief.echo } : {}
-      });
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${feedback.selectedTitle ?? feedback.selectedOptionId}"${feedback.reasoning ? ` (reasoning: ${feedback.reasoning})` : ""}${notChosenNote}${briefNote}`);
+      structuredDecisions.push({ ...feedback, ...brief ? { briefRef: brief.echo } : {} });
     }
     if (recordedIds.length > 0) await store.acknowledgeDecisions(recordedIds);
     if (formattedDecisions.length > 0) parts.push(`Decision selections:
@@ -43105,6 +43111,27 @@ var DaemonClient = class {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedProjectRoot, operationId, args })
     }, true);
+  }
+  async readStandaloneDecision(expectedProjectRoot, decisionId, signal) {
+    let result;
+    try {
+      result = await this.request("/read-decision", {
+        method: "POST",
+        signal,
+        redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot, decisionId })
+      }, true);
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support reading standalone decisions. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
+    if (result?.sessionId !== this.sessionId || result.decisionId !== decisionId) {
+      throw new Error("The daemon did not confirm the requested standalone session and decision.");
+    }
+    return result;
   }
   // --- Artifacts ---
   async createArtifact(params) {
