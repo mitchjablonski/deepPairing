@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DecisionRequestSchema } from "@deeppairing/shared";
 import { z } from "zod";
+import { ERROR_CODES } from "../error-codes.js";
 import { callFingerprint, sha256Hex, stableStringify, wireForm } from "../mcp/proposal-resolution.js";
 import { preflightRejectedApproaches } from "../mcp/tool-helpers.js";
 import { handlePresentOptions } from "../mcp/tools/present-options.js";
@@ -68,7 +69,7 @@ export async function presentStandaloneOptions(
   const conflict = (): ToolResult => ({
     content: [{ type: "text", text: "This request ID is already bound to different options input. Retry with the original input or use a new UUID for changed input." }],
     isError: true,
-    structuredContent: { code: "standalone_operation_conflict" },
+    structuredContent: { code: ERROR_CODES.standalone_operation_conflict },
   });
 
   function recover(receipt: z.infer<typeof receiptSchema>, verifyOnly = false): ToolResult | null {
@@ -177,7 +178,7 @@ export async function presentStandaloneOptions(
     }),
   });
   if (result.isError && refusalReason !== undefined) {
-    return { ...result, structuredContent: { ...result.structuredContent, code: "rejected_approach_blocked", reason: refusalReason } };
+    return { ...result, structuredContent: { ...result.structuredContent, code: ERROR_CODES.rejected_approach_blocked, reason: refusalReason } };
   }
   return result;
 }

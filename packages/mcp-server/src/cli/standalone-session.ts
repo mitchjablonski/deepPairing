@@ -4,6 +4,7 @@ import { errorMessage } from "@deeppairing/shared";
 import { z } from "zod";
 import { DaemonClient } from "../daemon/client.js";
 import { ensureDaemon } from "../daemon/lifecycle.js";
+import { ERROR_CODES } from "../error-codes.js";
 import { createStandaloneSessionId, isStandaloneSessionForProject, isStandaloneSessionId } from "../standalone-session-id.js";
 import { readSessionDirectories } from "./session-selection.js";
 
@@ -96,7 +97,7 @@ export async function standalonePresent(projectRoot: string, args: string[]): Pr
       isError: true,
       code,
       ...(typeof reason === "string" ? { reason } : {}),
-      message: code === "standalone_operation_conflict" ? message : `${message} ${PRESENT_OPTIONS_RETRY}`,
+      message: code === ERROR_CODES.standalone_operation_conflict ? message : `${message} ${PRESENT_OPTIONS_RETRY}`,
     };
   }
   const { artifactId, decisionId, replayed } = result.structuredContent ?? {};
