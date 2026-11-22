@@ -2,6 +2,8 @@
  * Internal API routes for daemon ↔ MCP wrapper communication.
  * These are called by DaemonClient, not by the web UI.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { staleResolveBody, closedResolveBody, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
@@ -19,6 +21,12 @@ import { isSessionReviewConflictError } from "../store/session-records.js";
 import { REGISTRATION_HEADER, type StanceExceptionRegistry } from "./stance-exceptions.js";
 import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing/shared";
 import type { RetirementInput } from "../store/retirement.js";
+import { isStandaloneSessionForProject } from "../standalone-session-id.js";
+
+const OpenStandaloneReviewBody = z.object({
+  mode: z.enum(["open", "resume"]),
+  expectedProjectRoot: z.string().min(1),
+}).strict();
 
 const RetirementBody = z.object({
   artifactId: z.string().min(1), expectedVersion: z.number().int().positive(),
@@ -382,6 +390,7 @@ export function createDaemonRoutes(
    * them can grant (A1 — granting is the public human route's job alone).
    */
   stanceExceptions?: StanceExceptionRegistry,
+  refreshCompanionLink?: () => void,
 ) {
   // U0.6 — same diagnostic seam as routes.ts. Wrapper-side mutations log
   // here; we want both UI clicks and agent-driven status updates in one log.
@@ -428,7 +437,8 @@ export function createDaemonRoutes(
   const AGENT_ACTIVITY_THROTTLE_MS = 5_000;
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    if (c.res.status >= 400) return;
+    // Preparing a browser link is not wrapper activity.
+    if (c.res.status >= 400 || c.req.path.endsWith("/open-review")) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
     const sid = m?.[1];
     if (!sid) return;
@@ -467,6 +477,45 @@ export function createDaemonRoutes(
 
   // --- Session lifecycle ---
 
+  function installSession(sessionId: string, meta: { title?: string; project?: string }): FileStore {
+    let store = sessions.get(sessionId);
+    if (!store) {
+      store = createSession(sessionId);
+      sessions.set(sessionId, store);
+    }
+    sessionMeta.set(sessionId, {
+      title: meta.title ?? sessionId,
+      project: meta.project ?? "",
+      registeredAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+    return store;
+  }
+
+  // A shell command can disappear before it receives its response. Give it a
+  // browser link without leaving a wrapper registered or granting stance authority.
+  if (authToken && daemonProjectRoot && refreshCompanionLink) {
+    app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
+      const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
+      if (!parsed.ok) return parsed.res;
+      const sessionId = c.req.param("sessionId");
+      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+      }
+      const dir = path.join(daemonProjectRoot, ".deeppairing", "sessions", sessionId);
+      const existing = fs.lstatSync(dir, { throwIfNoEntry: false });
+      if (parsed.data.mode === "resume" && !existing?.isDirectory()) {
+        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+      }
+      if (parsed.data.mode === "open" && (existing || sessions.has(sessionId))) {
+        return c.json({ error: "Standalone session already exists. Resume it instead." }, 409);
+      }
+      if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
+      refreshCompanionLink();
+      return c.json({ sessionId });
+    });
+  }
+
   app.post("/api/internal/sessions/:sessionId/register", async (c) => {
     const sessionId = c.req.param("sessionId");
     // H2-2 review — /register is the one route that legitimately accepts an
@@ -499,20 +548,7 @@ export function createDaemonRoutes(
         403,
       );
     }
-    // /register is the ONLY legitimate session creator. Either adopt an
-    // already-registered store (re-register from a re-spawned wrapper is
-    // fine) or mint a new one explicitly here.
-    let store = sessions.get(sessionId);
-    if (!store) {
-      store = createSession(sessionId);
-      sessions.set(sessionId, store);
-    }
-    sessionMeta.set(sessionId, {
-      title: body.title ?? sessionId,
-      project: body.project ?? "",
-      registeredAt: new Date().toISOString(),
-      lastActivity: new Date().toISOString(),
-    });
+    const store = installSession(sessionId, body);
     // C-3 — mark this session's wrapper as live so idle-shutdown holds off.
     activeSessions?.add(sessionId);
     // #470 (§5) — the daemon ISSUES the registration: an id embedding its

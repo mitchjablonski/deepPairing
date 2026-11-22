@@ -444,6 +444,24 @@ export class DaemonClient implements IStore {
     await this.post("/unregister");
   }
 
+  /** Prepare a browser link without creating a live wrapper registration. */
+  async openStandaloneReview(mode: "open" | "resume", expectedProjectRoot: string, signal: AbortSignal): Promise<void> {
+    let receipt: { sessionId: string };
+    try {
+      receipt = await this.request("/open-review", {
+        method: "POST", signal, redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, expectedProjectRoot }),
+      }, true);
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support standalone reviews. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
+    if (receipt?.sessionId !== this.sessionId) throw new Error("The daemon did not confirm the requested standalone session.");
+  }
+
   // --- Artifacts ---
 
   async createArtifact(params: CreateArtifactParams): Promise<Artifact> {

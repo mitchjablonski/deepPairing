@@ -11,6 +11,7 @@ import type {
   PlanVisualDocSection,
   PlanVisualAnnotation,
   SkeletonCodeSnapshot,
+  SkeletonExteriorDigest,
   SkeletonFenceView,
   SpecContent,
   SpecRequirement,
@@ -335,6 +336,25 @@ function coerceSkeletonSnapshot(o: Record<string, unknown>): SkeletonCodeSnapsho
   if (typeof o.withheld === "string" && o.withheld) out.withheld = o.withheld;
   if (typeof o.takenAt === "string" && o.takenAt) out.takenAt = o.takenAt;
   if (typeof o.readAt === "number" && Number.isFinite(o.readAt)) out.readAt = o.readAt;
+  const digest = (d: unknown): SkeletonExteriorDigest | null => {
+    if (!isObj(d) || typeof d.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(d.sha256)) return null;
+    if (typeof d.lines !== "number" || !Number.isInteger(d.lines) || d.lines < 0) return null;
+    const out: SkeletonExteriorDigest = { sha256: d.sha256, lines: d.lines };
+    if (Array.isArray(d.fenceIds)) out.fenceIds = d.fenceIds.filter((id): id is string => typeof id === "string" && id.length > 0);
+    return out;
+  };
+  const ext = digest(o.exterior);
+  if (ext) out.exterior = ext;
+  if (Array.isArray(o.omitted)) {
+    const omitted = o.omitted
+      .filter(isObj)
+      .filter((e) => typeof e.path === "string" && e.path.length > 0)
+      .map((e) => {
+        const d = digest(e.exterior);
+        return { path: e.path as string, ...(d ? { exterior: d } : {}) };
+      });
+    if (omitted.length > 0) out.omitted = omitted;
+  }
   return out;
 }
 

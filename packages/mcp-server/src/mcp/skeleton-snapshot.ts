@@ -1,11 +1,23 @@
-import fs from "node:fs";
 import path from "node:path";
 import { isSkeletonApprovedVisualId, liveVisualIdFor, type PlanVisual, type SkeletonCodeSnapshot, type SkeletonFenceView } from "@deeppairing/shared";
 import { isSkeletonVisualId, skeletonVisualId, stripSkeletonVisuals } from "./skeleton-line.js";
 import { planDeclaredFiles, scanSkeletonFences, scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
-import { ruleForRelPath } from "../guardrail-rules.js";
 import { resolveProjectRoot } from "../project-root.js";
 import { scanForSecrets } from "../secret-scan.js";
+import { skeletonExteriorDigest } from "./skeleton-drift.js";
+import { SKELETON_SNAPSHOT_LIMITS, normalizeSkeletonPath, readConfined, type SkeletonSnapshotLimits } from "./skeleton-read.js";
+
+// #686 P2c — the confined reader and the drift check live in skeleton-read.ts
+// (Node built-ins only, so the bundled Stop hook can use them).
+export {
+  SKELETON_SNAPSHOT_LIMITS,
+  checkSkeletonExteriorDrift,
+  isDeniedPath,
+  isDeniedSegment,
+  normalizeSkeletonPath,
+  type SkeletonSnapshotLimits,
+} from "./skeleton-read.js";
+import type { SkeletonExteriorDigest } from "@deeppairing/shared";
 
 export {
   SKELETON_VISUAL_PREFIX,
@@ -46,24 +58,13 @@ export {
  * throws: a fault leaves the plan exactly as the agent presented it.
  */
 
-export interface SkeletonSnapshotLimits {
-  maxFiles: number;
-  maxFileBytes: number;
-  maxTotalBytes: number;
-  /** Files larger than this are not read at all (the scanner's own ceiling). */
-  maxReadBytes: number;
-}
-
-export const SKELETON_SNAPSHOT_LIMITS: SkeletonSnapshotLimits = {
-  maxFiles: 12,
-  maxFileBytes: 48 * 1024,
-  maxTotalBytes: 192 * 1024,
-  maxReadBytes: 1_000_000,
-};
-
 /** The path-only list of unfenced skeleton files. */
 export const UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
 
+/** #686 P1b — at most this many past-the-cap files get an exterior digest. */
+const MAX_OMITTED_DIGESTS = 64;
+/** #686 P1b — total bytes read for past-the-cap digests at one present. */
+const MAX_OMITTED_BYTES = 8 * 1024 * 1024;
 /** Below this much remaining budget a file is omitted rather than shown as a stub. */
 const MIN_USEFUL_BYTES = 512;
 
@@ -78,112 +79,6 @@ export interface SkeletonSnapshotResult {
   scan?: ScanResult;
   /** resnapshotSkeleton only: this read's monotonic stamp. */
   readAt?: number;
-}
-
-type ReadOutcome = { ok: true; text: string } | { ok: false; reason: string };
-
-function within(dir: string, abs: string): boolean {
-  const rel = path.relative(dir, abs);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-/** Normalize an agent-written path to a repo-relative POSIX path, or null when
- *  it can't name a file inside `root` lexically. */
-export function normalizeSkeletonPath(root: string, raw: string): string | null {
-  if (typeof raw !== "string" || !raw.trim() || raw.includes("\0")) return null;
-  const spelled = raw.trim().replace(/\\/g, "/");
-  const abs = path.resolve(root, spelled);
-  if (!within(root, abs) || abs === path.resolve(root)) return null;
-  return path.relative(root, abs).split(path.sep).join("/");
-}
-
-/** One path segment, lower-cased, that must never be snapshotted. */
-export function isDeniedSegment(segment: string): boolean {
-  const s = segment.toLowerCase();
-  return (
-    s.startsWith(".env") ||
-    s === ".git" ||
-    s === ".ssh" ||
-    s === ".deeppairing" ||
-    s === ".npmrc" ||
-    s === ".netrc" ||
-    s === ".pypirc" ||
-    s.startsWith("id_rsa") ||
-    s.startsWith("id_ed25519") ||
-    s.startsWith("credentials") ||
-    s.endsWith(".pem") ||
-    s.endsWith(".key") ||
-    s.endsWith(".p12")
-  );
-}
-
-/** Case-insensitive denylist over every segment, plus the guardrail secrets
- *  class on the lower-cased path. */
-export function isDeniedPath(rel: string): boolean {
-  const segs = rel.split(/[\\/]+/).filter(Boolean);
-  if (segs.some(isDeniedSegment)) return true;
-  return ruleForRelPath(rel.toLowerCase())?.category === "secrets";
-}
-
-const O_NOFOLLOW = (fs.constants as Record<string, number | undefined>).O_NOFOLLOW ?? 0;
-
-/** Read one fenced file for the snapshot — confined, denylisted, size- and
- *  type-checked on the opened handle, text only. */
-function readConfined(root: string, rel: string, limits: SkeletonSnapshotLimits): ReadOutcome {
-  if (isDeniedPath(rel)) return { ok: false, reason: "a protected path — never snapshotted" };
-  let realRoot: string;
-  let realAbs: string;
-  try {
-    realRoot = fs.realpathSync(root);
-  } catch {
-    return { ok: false, reason: "the project root is unreadable" };
-  }
-  try {
-    realAbs = fs.realpathSync(path.resolve(root, rel));
-  } catch {
-    return { ok: false, reason: "not on disk" };
-  }
-  if (!within(realRoot, realAbs)) return { ok: false, reason: "it resolves outside the project (symlink)" };
-  // The REAL path is checked too: an in-root symlink to `.env` is still `.env`.
-  if (isDeniedPath(path.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path — never snapshotted" };
-
-  let fd: number;
-  try {
-    fd = fs.openSync(realAbs, fs.constants.O_RDONLY | O_NOFOLLOW);
-  } catch {
-    return { ok: false, reason: "unreadable" };
-  }
-  try {
-    const st = fs.fstatSync(fd);
-    if (!st.isFile()) return { ok: false, reason: "not a regular file" };
-    // The handle must be the file the realpath named (narrows a swap between
-    // the realpath and the open to "nothing changed").
-    try {
-      const named = fs.statSync(realAbs);
-      if (named.dev !== st.dev || named.ino !== st.ino) return { ok: false, reason: "it changed while being read" };
-    } catch {
-      return { ok: false, reason: "it changed while being read" };
-    }
-    if (st.size > limits.maxReadBytes) return { ok: false, reason: `too large to snapshot (${st.size} bytes)` };
-    const buf = Buffer.alloc(st.size);
-    let off = 0;
-    while (off < st.size) {
-      const n = fs.readSync(fd, buf, off, st.size - off, off);
-      if (n <= 0) break;
-      off += n;
-    }
-    const data = buf.subarray(0, off);
-    if (data.subarray(0, 8192).includes(0)) return { ok: false, reason: "binary — not shown" };
-    return { ok: true, text: data.toString("utf-8") };
-  } catch {
-    return { ok: false, reason: "unreadable" };
-  } finally {
-    try {
-      fs.closeSync(fd);
-    } catch {
-      /* already closed */
-    }
-  }
 }
 
 /** Cut `text` at a line boundary so it fits `budget` bytes. */
@@ -223,6 +118,9 @@ export function buildSkeletonSnapshot(args: {
   visuals?: unknown;
   root: string;
   limits?: SkeletonSnapshotLimits;
+  /** #686 P1b — record content-free exterior digests (present / revise only;
+   *  the progress re-read never needs them). */
+  recordExterior?: boolean;
 }): SkeletonSnapshotResult {
   const limits = args.limits ?? SKELETON_SNAPSHOT_LIMITS;
   const steps = Array.isArray(args.steps) ? (args.steps as Array<{ skelId?: unknown }>) : [];
@@ -264,6 +162,17 @@ export function buildSkeletonSnapshot(args: {
 
   const visuals: PlanVisual[] = [];
   const omitted: string[] = [];
+  /** #686 P1b — content-free exterior digests of the files past the cap. */
+  const omittedDigests: Array<{ path: string; exterior?: SkeletonExteriorDigest }> = [];
+  let omittedBytes = 0;
+  const digestOf = (text: string, rel: string): SkeletonExteriorDigest | undefined => {
+    if (!args.recordExterior) return undefined;
+    try {
+      return skeletonExteriorDigest(text, rel);
+    } catch {
+      return undefined;
+    }
+  };
   const withheld: string[] = [];
   let used = 0;
   for (const rel of fenced) {
@@ -271,6 +180,21 @@ export function buildSkeletonSnapshot(args: {
     // L3 — once the count or byte budget is spent, nothing else is opened.
     if (visuals.length >= limits.maxFiles || remaining < Math.min(MIN_USEFUL_BYTES, limits.maxTotalBytes)) {
       omitted.push(rel);
+      // #686 P1b — read (same confinement, nothing stored but a digest) so
+      // drift on a file the card can't show is still caught. Bounded.
+      // Past the count or byte budget the file is still listed (no digest),
+      // so the drift check names it "not checked" rather than forgetting it.
+      if (args.recordExterior) {
+        let d: SkeletonExteriorDigest | undefined;
+        if (omittedDigests.length < MAX_OMITTED_DIGESTS && omittedBytes < MAX_OMITTED_BYTES) {
+          const r = readConfined(root, rel, limits);
+          if (r.ok) {
+            omittedBytes += Buffer.byteLength(r.text, "utf-8");
+            d = digestOf(r.text, rel);
+          }
+        }
+        omittedDigests.push({ path: rel, ...(d ? { exterior: d } : {}) });
+      }
       continue;
     }
     const read = readConfined(root, rel, limits);
@@ -308,6 +232,10 @@ export function buildSkeletonSnapshot(args: {
           fences: fences.map((f) => ({ id: f.id, openLine: f.openLine, closeLine: f.closeLine, status: f.status })),
           withheld: `possible secret detected (${what})`,
           takenAt: new Date().toISOString(),
+          ...(() => {
+            const d = digestOf(read.text, rel);
+            return d ? { exterior: d } : {};
+          })(),
         },
       });
       continue;
@@ -316,10 +244,12 @@ export function buildSkeletonSnapshot(args: {
     const cut = truncateToBytes(read.text, Math.min(limits.maxFileBytes, remaining));
     const code = cut ? cut.code : read.text.replace(/\n$/, "");
     used += Buffer.byteLength(code, "utf-8");
+    const exterior = digestOf(read.text, rel);
     const skeleton: SkeletonCodeSnapshot = {
       fences: fenceViews(fences, cut ? cut.shownLines : null),
       ...(cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {}),
       takenAt: new Date().toISOString(),
+      ...(exterior ? { exterior } : {}),
     };
     const n = skeleton.fences.length;
     const captionParts = [
@@ -341,6 +271,7 @@ export function buildSkeletonSnapshot(args: {
   if (omitted.length > 0 && visuals.length > 0) {
     const last = visuals[visuals.length - 1]!;
     last.caption = `${last.caption ?? ""} Not shown (snapshot cap): ${omitted.join(", ")}.`.trim();
+    if (omittedDigests.length > 0 && last.skeleton) last.skeleton = { ...last.skeleton, omitted: omittedDigests };
   }
   if (unfenced.length > 0) {
     visuals.push({
@@ -386,7 +317,7 @@ export function attachSkeletonSnapshot<T extends Record<string, unknown>>(
         const r = resolveProjectRoot();
         return r.worktree?.workspaceRoot ?? r.projectRoot;
       })();
-      snap = buildSkeletonSnapshot({ steps, visuals: kept, root, ...(opts.limits ? { limits: opts.limits } : {}) });
+      snap = buildSkeletonSnapshot({ steps, visuals: kept, root, recordExterior: true, ...(opts.limits ? { limits: opts.limits } : {}) });
     }
     const nextVisuals = [...kept, ...snap.visuals];
     const next: Record<string, unknown> = { ...content };

@@ -19,9 +19,9 @@ var __export = (target, all) => {
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    for (let key2 of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key2) && key2 !== except)
+        __defProp(to, key2, { get: () => from[key2], enumerable: !(desc = __getOwnPropDesc(from, key2)) || desc.enumerable });
   }
   return to;
 };
@@ -170,15 +170,15 @@ var require_code = __commonJS({
       return JSON.stringify(x).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
     }
     exports.safeStringify = safeStringify;
-    function getProperty(key) {
-      return typeof key == "string" && exports.IDENTIFIER.test(key) ? new _Code(`.${key}`) : _`[${key}]`;
+    function getProperty(key2) {
+      return typeof key2 == "string" && exports.IDENTIFIER.test(key2) ? new _Code(`.${key2}`) : _`[${key2}]`;
     }
     exports.getProperty = getProperty;
-    function getEsmExportName(key) {
-      if (typeof key == "string" && exports.IDENTIFIER.test(key)) {
-        return new _Code(`${key}`);
+    function getEsmExportName(key2) {
+      if (typeof key2 == "string" && exports.IDENTIFIER.test(key2)) {
+        return new _Code(`${key2}`);
       }
-      throw new Error(`CodeGen: invalid export name: ${key}, use explicit $id name mapping`);
+      throw new Error(`CodeGen: invalid export name: ${key2}, use explicit $id name mapping`);
     }
     exports.getEsmExportName = getEsmExportName;
     function regexpCode(rx) {
@@ -805,11 +805,11 @@ var require_codegen = __commonJS({
       // returns code for object literal for the passed argument list of key-value pairs
       object(...keyValues) {
         const code = ["{"];
-        for (const [key, value] of keyValues) {
+        for (const [key2, value] of keyValues) {
           if (code.length > 1)
             code.push(",");
-          code.push(key);
-          if (key !== value || this.opts.es5) {
+          code.push(key2);
+          if (key2 !== value || this.opts.es5) {
             code.push(":");
             (0, code_1.addCodeArg)(code, value);
           }
@@ -1084,17 +1084,17 @@ var require_util = __commonJS({
       if (typeof schema === "boolean")
         return;
       const rules = self2.RULES.keywords;
-      for (const key in schema) {
-        if (!rules[key])
-          checkStrictMode(it, `unknown keyword: "${key}"`);
+      for (const key2 in schema) {
+        if (!rules[key2])
+          checkStrictMode(it, `unknown keyword: "${key2}"`);
       }
     }
     exports.checkUnknownRules = checkUnknownRules;
     function schemaHasRules(schema, rules) {
       if (typeof schema == "boolean")
         return !schema;
-      for (const key in schema)
-        if (rules[key])
+      for (const key2 in schema)
+        if (rules[key2])
           return true;
       return false;
     }
@@ -1102,8 +1102,8 @@ var require_util = __commonJS({
     function schemaHasRulesButRef(schema, RULES) {
       if (typeof schema == "boolean")
         return !schema;
-      for (const key in schema)
-        if (key !== "$ref" && RULES.all[key])
+      for (const key2 in schema)
+        if (key2 !== "$ref" && RULES.all[key2])
           return true;
       return false;
     }
@@ -1681,8 +1681,8 @@ var require_defaults = __commonJS({
     function assignDefaults(it, ty) {
       const { properties, items } = it.schema;
       if (ty === "object" && properties) {
-        for (const key in properties) {
-          assignDefault(it, key, properties[key].default);
+        for (const key2 in properties) {
+          assignDefault(it, key2, properties[key2].default);
         }
       } else if (ty === "array" && Array.isArray(items)) {
         items.forEach((sch, i) => assignDefault(it, i, sch.default));
@@ -2066,8 +2066,8 @@ var require_fast_deep_equal = __commonJS({
         for (i = length; i-- !== 0; )
           if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
         for (i = length; i-- !== 0; ) {
-          var key = keys[i];
-          if (!equal(a[key], b[key])) return false;
+          var key2 = keys[i];
+          if (!equal(a[key2], b[key2])) return false;
         }
         return true;
       }
@@ -2139,20 +2139,20 @@ var require_json_schema_traverse = __commonJS({
     function _traverse(opts, pre, post, schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex) {
       if (schema && typeof schema == "object" && !Array.isArray(schema)) {
         pre(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
-        for (var key in schema) {
-          var sch = schema[key];
+        for (var key2 in schema) {
+          var sch = schema[key2];
           if (Array.isArray(sch)) {
-            if (key in traverse.arrayKeywords) {
+            if (key2 in traverse.arrayKeywords) {
               for (var i = 0; i < sch.length; i++)
-                _traverse(opts, pre, post, sch[i], jsonPtr + "/" + key + "/" + i, rootSchema, jsonPtr, key, schema, i);
+                _traverse(opts, pre, post, sch[i], jsonPtr + "/" + key2 + "/" + i, rootSchema, jsonPtr, key2, schema, i);
             }
-          } else if (key in traverse.propsKeywords) {
+          } else if (key2 in traverse.propsKeywords) {
             if (sch && typeof sch == "object") {
               for (var prop2 in sch)
-                _traverse(opts, pre, post, sch[prop2], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop2), rootSchema, jsonPtr, key, schema, prop2);
+                _traverse(opts, pre, post, sch[prop2], jsonPtr + "/" + key2 + "/" + escapeJsonPtr(prop2), rootSchema, jsonPtr, key2, schema, prop2);
             }
-          } else if (key in traverse.keywords || opts.allKeys && !(key in traverse.skipKeywords)) {
-            _traverse(opts, pre, post, sch, jsonPtr + "/" + key, rootSchema, jsonPtr, key, schema);
+          } else if (key2 in traverse.keywords || opts.allKeys && !(key2 in traverse.skipKeywords)) {
+            _traverse(opts, pre, post, sch, jsonPtr + "/" + key2, rootSchema, jsonPtr, key2, schema);
           }
         }
         post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
@@ -2209,10 +2209,10 @@ var require_resolve = __commonJS({
       "$dynamicAnchor"
     ]);
     function hasRef(schema) {
-      for (const key in schema) {
-        if (REF_KEYWORDS.has(key))
+      for (const key2 in schema) {
+        if (REF_KEYWORDS.has(key2))
           return true;
-        const sch = schema[key];
+        const sch = schema[key2];
         if (Array.isArray(sch) && sch.some(hasRef))
           return true;
         if (typeof sch == "object" && hasRef(sch))
@@ -2222,14 +2222,14 @@ var require_resolve = __commonJS({
     }
     function countKeys(schema) {
       let count2 = 0;
-      for (const key in schema) {
-        if (key === "$ref")
+      for (const key2 in schema) {
+        if (key2 === "$ref")
           return Infinity;
         count2++;
-        if (SIMPLE_INLINED.has(key))
+        if (SIMPLE_INLINED.has(key2))
           continue;
-        if (typeof schema[key] == "object") {
-          (0, util_1.eachItem)(schema[key], (sch) => count2 += countKeys(sch));
+        if (typeof schema[key2] == "object") {
+          (0, util_1.eachItem)(schema[key2], (sch) => count2 += countKeys(sch));
         }
         if (count2 === Infinity)
           return Infinity;
@@ -2418,8 +2418,8 @@ var require_validate = __commonJS({
     function schemaCxtHasRules({ schema, self: self2 }) {
       if (typeof schema == "boolean")
         return !schema;
-      for (const key in schema)
-        if (self2.RULES.all[key])
+      for (const key2 in schema)
+        if (self2.RULES.all[key2])
           return true;
       return false;
     }
@@ -3227,8 +3227,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path22) {
-      let input = path22;
+    function removeDotSegments(path23) {
+      let input = path23;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3427,8 +3427,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path22, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path22 && path22 !== "/" ? path22 : void 0;
+        const [path23, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path23 && path23 !== "/" ? path23 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -4061,7 +4061,7 @@ var require_core = __commonJS({
         }
       }
       // Adds schema to the instance
-      addSchema(schema, key, _meta, _validateSchema = this.opts.validateSchema) {
+      addSchema(schema, key2, _meta, _validateSchema = this.opts.validateSchema) {
         if (Array.isArray(schema)) {
           for (const sch of schema)
             this.addSchema(sch, void 0, _meta, _validateSchema);
@@ -4075,15 +4075,15 @@ var require_core = __commonJS({
             throw new Error(`schema ${schemaId} must be string`);
           }
         }
-        key = (0, resolve_1.normalizeId)(key || id);
-        this._checkUnique(key);
-        this.schemas[key] = this._addSchema(schema, _meta, key, _validateSchema, true);
+        key2 = (0, resolve_1.normalizeId)(key2 || id);
+        this._checkUnique(key2);
+        this.schemas[key2] = this._addSchema(schema, _meta, key2, _validateSchema, true);
         return this;
       }
       // Add schema that will be used to validate other schemas
       // options in META_IGNORE_OPTIONS are alway set to false
-      addMetaSchema(schema, key, _validateSchema = this.opts.validateSchema) {
-        this.addSchema(schema, key, true, _validateSchema);
+      addMetaSchema(schema, key2, _validateSchema = this.opts.validateSchema) {
+        this.addSchema(schema, key2, true, _validateSchema);
         return this;
       }
       //  Validate schema against its meta-schema
@@ -4239,14 +4239,14 @@ var require_core = __commonJS({
           let keywords = metaSchema;
           for (const seg of segments)
             keywords = keywords[seg];
-          for (const key in rules) {
-            const rule = rules[key];
+          for (const key2 in rules) {
+            const rule = rules[key2];
             if (typeof rule != "object")
               continue;
             const { $data } = rule.definition;
-            const schema = keywords[key];
+            const schema = keywords[key2];
             if ($data && schema)
-              keywords[key] = schemaOrData(schema);
+              keywords[key2] = schemaOrData(schema);
           }
         }
         return metaSchema;
@@ -4319,10 +4319,10 @@ var require_core = __commonJS({
     Ajv2.MissingRefError = ref_error_1.default;
     exports.default = Ajv2;
     function checkOptions(checkOpts, options, msg, log2 = "error") {
-      for (const key in checkOpts) {
-        const opt = key;
+      for (const key2 in checkOpts) {
+        const opt = key2;
         if (opt in options)
-          this.logger[log2](`${msg}: option ${key}. ${checkOpts[opt]}`);
+          this.logger[log2](`${msg}: option ${key2}. ${checkOpts[opt]}`);
       }
     }
     function getSchEnv(keyRef) {
@@ -4336,8 +4336,8 @@ var require_core = __commonJS({
       if (Array.isArray(optsSchemas))
         this.addSchema(optsSchemas);
       else
-        for (const key in optsSchemas)
-          this.addSchema(optsSchemas[key], key);
+        for (const key2 in optsSchemas)
+          this.addSchema(optsSchemas[key2], key2);
     }
     function addInitialFormats() {
       for (const name in this.opts.formats) {
@@ -5385,11 +5385,11 @@ var require_dependencies = __commonJS({
     function splitDependencies({ schema }) {
       const propertyDeps = {};
       const schemaDeps = {};
-      for (const key in schema) {
-        if (key === "__proto__")
+      for (const key2 in schema) {
+        if (key2 === "__proto__")
           continue;
-        const deps = Array.isArray(schema[key]) ? propertyDeps : schemaDeps;
-        deps[key] = schema[key];
+        const deps = Array.isArray(schema[key2]) ? propertyDeps : schemaDeps;
+        deps[key2] = schema[key2];
       }
       return [propertyDeps, schemaDeps];
     }
@@ -5466,13 +5466,13 @@ var require_propertyNames = __commonJS({
         if ((0, util_1.alwaysValidSchema)(it, schema))
           return;
         const valid = gen.name("valid");
-        gen.forIn("key", data, (key) => {
-          cxt.setParams({ propertyName: key });
+        gen.forIn("key", data, (key2) => {
+          cxt.setParams({ propertyName: key2 });
           cxt.subschema({
             keyword: "propertyNames",
-            data: key,
+            data: key2,
             dataTypes: ["string"],
-            propertyName: key,
+            propertyName: key2,
             compositeRule: true
           }, valid);
           gen.if((0, codegen_1.not)(valid), () => {
@@ -5521,38 +5521,38 @@ var require_additionalProperties = __commonJS({
         checkAdditionalProperties();
         cxt.ok((0, codegen_1._)`${errsCount} === ${names_1.default.errors}`);
         function checkAdditionalProperties() {
-          gen.forIn("key", data, (key) => {
+          gen.forIn("key", data, (key2) => {
             if (!props.length && !patProps.length)
-              additionalPropertyCode(key);
+              additionalPropertyCode(key2);
             else
-              gen.if(isAdditional(key), () => additionalPropertyCode(key));
+              gen.if(isAdditional(key2), () => additionalPropertyCode(key2));
           });
         }
-        function isAdditional(key) {
+        function isAdditional(key2) {
           let definedProp;
           if (props.length > 8) {
             const propsSchema = (0, util_1.schemaRefOrVal)(it, parentSchema.properties, "properties");
-            definedProp = (0, code_1.isOwnProperty)(gen, propsSchema, key);
+            definedProp = (0, code_1.isOwnProperty)(gen, propsSchema, key2);
           } else if (props.length) {
-            definedProp = (0, codegen_1.or)(...props.map((p) => (0, codegen_1._)`${key} === ${p}`));
+            definedProp = (0, codegen_1.or)(...props.map((p) => (0, codegen_1._)`${key2} === ${p}`));
           } else {
             definedProp = codegen_1.nil;
           }
           if (patProps.length) {
-            definedProp = (0, codegen_1.or)(definedProp, ...patProps.map((p) => (0, codegen_1._)`${(0, code_1.usePattern)(cxt, p)}.test(${key})`));
+            definedProp = (0, codegen_1.or)(definedProp, ...patProps.map((p) => (0, codegen_1._)`${(0, code_1.usePattern)(cxt, p)}.test(${key2})`));
           }
           return (0, codegen_1.not)(definedProp);
         }
-        function deleteAdditional(key) {
-          gen.code((0, codegen_1._)`delete ${data}[${key}]`);
+        function deleteAdditional(key2) {
+          gen.code((0, codegen_1._)`delete ${data}[${key2}]`);
         }
-        function additionalPropertyCode(key) {
+        function additionalPropertyCode(key2) {
           if (opts.removeAdditional === "all" || opts.removeAdditional && schema === false) {
-            deleteAdditional(key);
+            deleteAdditional(key2);
             return;
           }
           if (schema === false) {
-            cxt.setParams({ additionalProperty: key });
+            cxt.setParams({ additionalProperty: key2 });
             cxt.error();
             if (!allErrors)
               gen.break();
@@ -5561,22 +5561,22 @@ var require_additionalProperties = __commonJS({
           if (typeof schema == "object" && !(0, util_1.alwaysValidSchema)(it, schema)) {
             const valid = gen.name("valid");
             if (opts.removeAdditional === "failing") {
-              applyAdditionalSchema(key, valid, false);
+              applyAdditionalSchema(key2, valid, false);
               gen.if((0, codegen_1.not)(valid), () => {
                 cxt.reset();
-                deleteAdditional(key);
+                deleteAdditional(key2);
               });
             } else {
-              applyAdditionalSchema(key, valid);
+              applyAdditionalSchema(key2, valid);
               if (!allErrors)
                 gen.if((0, codegen_1.not)(valid), () => gen.break());
             }
           }
         }
-        function applyAdditionalSchema(key, valid, errors) {
+        function applyAdditionalSchema(key2, valid, errors) {
           const subschema = {
             keyword: "additionalProperties",
-            dataProp: key,
+            dataProp: key2,
             dataPropType: util_1.Type.Str
           };
           if (errors === false) {
@@ -5701,19 +5701,19 @@ var require_patternProperties = __commonJS({
           }
         }
         function validateProperties(pat) {
-          gen.forIn("key", data, (key) => {
-            gen.if((0, codegen_1._)`${(0, code_1.usePattern)(cxt, pat)}.test(${key})`, () => {
+          gen.forIn("key", data, (key2) => {
+            gen.if((0, codegen_1._)`${(0, code_1.usePattern)(cxt, pat)}.test(${key2})`, () => {
               const alwaysValid = alwaysValidPatterns.includes(pat);
               if (!alwaysValid) {
                 cxt.subschema({
                   keyword: "patternProperties",
                   schemaProp: pat,
-                  dataProp: key,
+                  dataProp: key2,
                   dataPropType: util_2.Type.Str
                 }, valid);
               }
               if (it.opts.unevaluated && props !== true) {
-                gen.assign((0, codegen_1._)`${props}[${key}]`, true);
+                gen.assign((0, codegen_1._)`${props}[${key2}]`, true);
               } else if (!alwaysValid && !it.allErrors) {
                 gen.if((0, codegen_1.not)(valid), () => gen.break());
               }
@@ -6730,7 +6730,7 @@ var require_limit = __commonJS({
             code: opts.code.formats
           });
           const fmt = gen.const("fmt", (0, codegen_1._)`${fmts}[${fCxt.schemaCode}]`);
-          cxt.fail$data((0, codegen_1.or)((0, codegen_1._)`typeof ${fmt} != "object"`, (0, codegen_1._)`${fmt} instanceof RegExp`, (0, codegen_1._)`typeof ${fmt}.compare != "function"`, compareCode(fmt)));
+          cxt.fail$data((0, codegen_1.or)((0, codegen_1._)`typeof ${fmt} != "object"`, (0, codegen_1._)`${fmt} instanceof RegExp`, (0, codegen_1._)`typeof ${fmt}.compare != "function"`, compareCode2(fmt)));
         }
         function validateFormat() {
           const format = fCxt.schema;
@@ -6745,9 +6745,9 @@ var require_limit = __commonJS({
             ref: fmtDef,
             code: opts.code.formats ? (0, codegen_1._)`${opts.code.formats}${(0, codegen_1.getProperty)(format)}` : void 0
           });
-          cxt.fail$data(compareCode(fmt));
+          cxt.fail$data(compareCode2(fmt));
         }
-        function compareCode(fmt) {
+        function compareCode2(fmt) {
           return (0, codegen_1._)`${fmt}.compare(${data}, ${schemaCode}) ${KWDs[keyword].fail} 0`;
         }
       },
@@ -7282,9 +7282,9 @@ function floatSafeRemainder(val, step) {
   return ratio - roundedRatio;
 }
 var EVALUATING = /* @__PURE__ */ Symbol("evaluating");
-function defineLazy(object3, key, getter) {
+function defineLazy(object3, key2, getter) {
   let value = void 0;
-  Object.defineProperty(object3, key, {
+  Object.defineProperty(object3, key2, {
     get() {
       if (value === EVALUATING) {
         return void 0;
@@ -7296,7 +7296,7 @@ function defineLazy(object3, key, getter) {
       return value;
     },
     set(v2) {
-      Object.defineProperty(object3, key, {
+      Object.defineProperty(object3, key2, {
         value: v2
         // configurable: true,
       });
@@ -7326,14 +7326,14 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path22) {
-  if (!path22)
+function getElementAtPath(obj2, path23) {
+  if (!path23)
     return obj2;
-  return path22.reduce((acc, key) => acc?.[key], obj2);
+  return path23.reduce((acc, key2) => acc?.[key2], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
-  const promises = keys.map((key) => promisesObj[key]);
+  const promises = keys.map((key2) => promisesObj[key2]);
   return Promise.all(promises).then((results) => {
     const resolvedObj = {};
     for (let i = 0; i < keys.length; i++) {
@@ -7405,8 +7405,8 @@ function shallowClone(o) {
 }
 function numKeys(data) {
   let keyCount = 0;
-  for (const key in data) {
-    if (Object.prototype.hasOwnProperty.call(data, key)) {
+  for (const key2 in data) {
+    if (Object.prototype.hasOwnProperty.call(data, key2)) {
       keyCount++;
     }
   }
@@ -7556,13 +7556,13 @@ function pick(schema, mask) {
   const def = mergeDefs(schema._zod.def, {
     get shape() {
       const newShape = {};
-      for (const key in mask) {
-        if (!(key in currDef.shape)) {
-          throw new Error(`Unrecognized key: "${key}"`);
+      for (const key2 in mask) {
+        if (!(key2 in currDef.shape)) {
+          throw new Error(`Unrecognized key: "${key2}"`);
         }
-        if (!mask[key])
+        if (!mask[key2])
           continue;
-        newShape[key] = currDef.shape[key];
+        newShape[key2] = currDef.shape[key2];
       }
       assignProp(this, "shape", newShape);
       return newShape;
@@ -7581,13 +7581,13 @@ function omit(schema, mask) {
   const def = mergeDefs(schema._zod.def, {
     get shape() {
       const newShape = { ...schema._zod.def.shape };
-      for (const key in mask) {
-        if (!(key in currDef.shape)) {
-          throw new Error(`Unrecognized key: "${key}"`);
+      for (const key2 in mask) {
+        if (!(key2 in currDef.shape)) {
+          throw new Error(`Unrecognized key: "${key2}"`);
         }
-        if (!mask[key])
+        if (!mask[key2])
           continue;
-        delete newShape[key];
+        delete newShape[key2];
       }
       assignProp(this, "shape", newShape);
       return newShape;
@@ -7604,8 +7604,8 @@ function extend(schema, shape) {
   const hasChecks = checks && checks.length > 0;
   if (hasChecks) {
     const existingShape = schema._zod.def.shape;
-    for (const key in shape) {
-      if (Object.getOwnPropertyDescriptor(existingShape, key) !== void 0) {
+    for (const key2 in shape) {
+      if (Object.getOwnPropertyDescriptor(existingShape, key2) !== void 0) {
         throw new Error("Cannot overwrite keys on object schemas containing refinements. Use `.safeExtend()` instead.");
       }
     }
@@ -7661,23 +7661,23 @@ function partial(Class2, schema, mask) {
       const oldShape = schema._zod.def.shape;
       const shape = { ...oldShape };
       if (mask) {
-        for (const key in mask) {
-          if (!(key in oldShape)) {
-            throw new Error(`Unrecognized key: "${key}"`);
+        for (const key2 in mask) {
+          if (!(key2 in oldShape)) {
+            throw new Error(`Unrecognized key: "${key2}"`);
           }
-          if (!mask[key])
+          if (!mask[key2])
             continue;
-          shape[key] = Class2 ? new Class2({
+          shape[key2] = Class2 ? new Class2({
             type: "optional",
-            innerType: oldShape[key]
-          }) : oldShape[key];
+            innerType: oldShape[key2]
+          }) : oldShape[key2];
         }
       } else {
-        for (const key in oldShape) {
-          shape[key] = Class2 ? new Class2({
+        for (const key2 in oldShape) {
+          shape[key2] = Class2 ? new Class2({
             type: "optional",
-            innerType: oldShape[key]
-          }) : oldShape[key];
+            innerType: oldShape[key2]
+          }) : oldShape[key2];
         }
       }
       assignProp(this, "shape", shape);
@@ -7693,22 +7693,22 @@ function required(Class2, schema, mask) {
       const oldShape = schema._zod.def.shape;
       const shape = { ...oldShape };
       if (mask) {
-        for (const key in mask) {
-          if (!(key in shape)) {
-            throw new Error(`Unrecognized key: "${key}"`);
+        for (const key2 in mask) {
+          if (!(key2 in shape)) {
+            throw new Error(`Unrecognized key: "${key2}"`);
           }
-          if (!mask[key])
+          if (!mask[key2])
             continue;
-          shape[key] = new Class2({
+          shape[key2] = new Class2({
             type: "nonoptional",
-            innerType: oldShape[key]
+            innerType: oldShape[key2]
           });
         }
       } else {
-        for (const key in oldShape) {
-          shape[key] = new Class2({
+        for (const key2 in oldShape) {
+          shape[key2] = new Class2({
             type: "nonoptional",
-            innerType: oldShape[key]
+            innerType: oldShape[key2]
           });
         }
       }
@@ -7738,11 +7738,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path22, issues) {
+function prefixIssues(path23, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path22);
+    iss.path.unshift(path23);
     return iss;
   });
 }
@@ -7889,16 +7889,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path22 = []) => {
+  const processError = (error52, path23 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7925,17 +7925,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path22 = []) => {
+  const processError = (error52, path23 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -7967,8 +7967,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path22 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path22) {
+  const path23 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path23) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -9489,13 +9489,13 @@ var $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
     return payload;
   };
 });
-function handlePropertyResult(result, final, key, input, isOptionalIn, isOptionalOut) {
-  const isPresent = key in input;
+function handlePropertyResult(result, final, key2, input, isOptionalIn, isOptionalOut) {
+  const isPresent = key2 in input;
   if (result.issues.length) {
     if (isOptionalIn && isOptionalOut && !isPresent) {
       return;
     }
-    final.issues.push(...prefixIssues(key, result.issues));
+    final.issues.push(...prefixIssues(key2, result.issues));
   }
   if (!isPresent && !isOptionalIn) {
     if (!result.issues.length) {
@@ -9503,17 +9503,17 @@ function handlePropertyResult(result, final, key, input, isOptionalIn, isOptiona
         code: "invalid_type",
         expected: "nonoptional",
         input: void 0,
-        path: [key]
+        path: [key2]
       });
     }
     return;
   }
   if (result.value === void 0) {
     if (isPresent) {
-      final.value[key] = void 0;
+      final.value[key2] = void 0;
     }
   } else {
-    final.value[key] = result.value;
+    final.value[key2] = result.value;
   }
 }
 function normalizeDef(def) {
@@ -9539,20 +9539,20 @@ function handleCatchall(proms, input, payload, ctx, def, inst) {
   const t = _catchall.def.type;
   const isOptionalIn = _catchall.optin === "optional";
   const isOptionalOut = _catchall.optout === "optional";
-  for (const key in input) {
-    if (key === "__proto__")
+  for (const key2 in input) {
+    if (key2 === "__proto__")
       continue;
-    if (keySet.has(key))
+    if (keySet.has(key2))
       continue;
     if (t === "never") {
-      unrecognized.push(key);
+      unrecognized.push(key2);
       continue;
     }
-    const r = _catchall.run({ value: input[key], issues: [] }, ctx);
+    const r = _catchall.run({ value: input[key2], issues: [] }, ctx);
     if (r instanceof Promise) {
-      proms.push(r.then((r2) => handlePropertyResult(r2, payload, key, input, isOptionalIn, isOptionalOut)));
+      proms.push(r.then((r2) => handlePropertyResult(r2, payload, key2, input, isOptionalIn, isOptionalOut)));
     } else {
-      handlePropertyResult(r, payload, key, input, isOptionalIn, isOptionalOut);
+      handlePropertyResult(r, payload, key2, input, isOptionalIn, isOptionalOut);
     }
   }
   if (unrecognized.length) {
@@ -9588,12 +9588,12 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   defineLazy(inst._zod, "propValues", () => {
     const shape = def.shape;
     const propValues = {};
-    for (const key in shape) {
-      const field2 = shape[key]._zod;
+    for (const key2 in shape) {
+      const field2 = shape[key2]._zod;
       if (field2.values) {
-        propValues[key] ?? (propValues[key] = /* @__PURE__ */ new Set());
+        propValues[key2] ?? (propValues[key2] = /* @__PURE__ */ new Set());
         for (const v2 of field2.values)
-          propValues[key].add(v2);
+          propValues[key2].add(v2);
       }
     }
     return propValues;
@@ -9616,15 +9616,15 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     payload.value = {};
     const proms = [];
     const shape = value.shape;
-    for (const key of value.keys) {
-      const el = shape[key];
+    for (const key2 of value.keys) {
+      const el = shape[key2];
       const isOptionalIn = el._zod.optin === "optional";
       const isOptionalOut = el._zod.optout === "optional";
-      const r = el._zod.run({ value: input[key], issues: [] }, ctx);
+      const r = el._zod.run({ value: input[key2], issues: [] }, ctx);
       if (r instanceof Promise) {
-        proms.push(r.then((r2) => handlePropertyResult(r2, payload, key, input, isOptionalIn, isOptionalOut)));
+        proms.push(r.then((r2) => handlePropertyResult(r2, payload, key2, input, isOptionalIn, isOptionalOut)));
       } else {
-        handlePropertyResult(r, payload, key, input, isOptionalIn, isOptionalOut);
+        handlePropertyResult(r, payload, key2, input, isOptionalIn, isOptionalOut);
       }
     }
     if (!catchall) {
@@ -9640,24 +9640,24 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   const generateFastpass = (shape) => {
     const doc = new Doc(["shape", "payload", "ctx"]);
     const normalized = _normalized.value;
-    const parseStr = (key) => {
-      const k = esc(key);
+    const parseStr = (key2) => {
+      const k = esc(key2);
       return `shape[${k}]._zod.run({ value: input[${k}], issues: [] }, ctx)`;
     };
     doc.write(`const input = payload.value;`);
     const ids = /* @__PURE__ */ Object.create(null);
     let counter = 0;
-    for (const key of normalized.keys) {
-      ids[key] = `key_${counter++}`;
+    for (const key2 of normalized.keys) {
+      ids[key2] = `key_${counter++}`;
     }
     doc.write(`const newResult = {};`);
-    for (const key of normalized.keys) {
-      const id = ids[key];
-      const k = esc(key);
-      const schema = shape[key];
+    for (const key2 of normalized.keys) {
+      const id = ids[key2];
+      const k = esc(key2);
+      const schema = shape[key2];
       const isOptionalIn = schema?._zod?.optin === "optional";
       const isOptionalOut = schema?._zod?.optout === "optional";
-      doc.write(`const ${id} = ${parseStr(key)};`);
+      doc.write(`const ${id} = ${parseStr(key2)};`);
       if (isOptionalIn && isOptionalOut) {
         doc.write(`
         if (${id}.issues.length) {
@@ -9969,17 +9969,17 @@ function mergeValues(a, b) {
   }
   if (isPlainObject(a) && isPlainObject(b)) {
     const bKeys = Object.keys(b);
-    const sharedKeys = Object.keys(a).filter((key) => bKeys.indexOf(key) !== -1);
+    const sharedKeys = Object.keys(a).filter((key2) => bKeys.indexOf(key2) !== -1);
     const newObj = { ...a, ...b };
-    for (const key of sharedKeys) {
-      const sharedValue = mergeValues(a[key], b[key]);
+    for (const key2 of sharedKeys) {
+      const sharedValue = mergeValues(a[key2], b[key2]);
       if (!sharedValue.valid) {
         return {
           valid: false,
-          mergeErrorPath: [key, ...sharedValue.mergeErrorPath]
+          mergeErrorPath: [key2, ...sharedValue.mergeErrorPath]
         };
       }
-      newObj[key] = sharedValue.data;
+      newObj[key2] = sharedValue.data;
     }
     return { valid: true, data: newObj };
   }
@@ -10114,9 +10114,9 @@ var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
     return handleTupleResults(itemResults, payload, items, input, optoutStart);
   };
 });
-function getTupleOptStart(items, key) {
+function getTupleOptStart(items, key2) {
   for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i]._zod[key] !== "optional")
+    if (items[i]._zod[key2] !== "optional")
       return i + 1;
   }
   return 0;
@@ -10167,10 +10167,10 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
     if (values) {
       payload.value = {};
       const recordKeys = /* @__PURE__ */ new Set();
-      for (const key of values) {
-        if (typeof key === "string" || typeof key === "number" || typeof key === "symbol") {
-          recordKeys.add(typeof key === "number" ? key.toString() : key);
-          const keyResult = def.keyType._zod.run({ value: key, issues: [] }, ctx);
+      for (const key2 of values) {
+        if (typeof key2 === "string" || typeof key2 === "number" || typeof key2 === "symbol") {
+          recordKeys.add(typeof key2 === "number" ? key2.toString() : key2);
+          const keyResult = def.keyType._zod.run({ value: key2, issues: [] }, ctx);
           if (keyResult instanceof Promise) {
             throw new Error("Async schemas not supported in object keys currently");
           }
@@ -10179,34 +10179,34 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
               code: "invalid_key",
               origin: "record",
               issues: keyResult.issues.map((iss) => finalizeIssue(iss, ctx, config())),
-              input: key,
-              path: [key],
+              input: key2,
+              path: [key2],
               inst
             });
             continue;
           }
           const outKey = keyResult.value;
-          const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
+          const result = def.valueType._zod.run({ value: input[key2], issues: [] }, ctx);
           if (result instanceof Promise) {
             proms.push(result.then((result2) => {
               if (result2.issues.length) {
-                payload.issues.push(...prefixIssues(key, result2.issues));
+                payload.issues.push(...prefixIssues(key2, result2.issues));
               }
               payload.value[outKey] = result2.value;
             }));
           } else {
             if (result.issues.length) {
-              payload.issues.push(...prefixIssues(key, result.issues));
+              payload.issues.push(...prefixIssues(key2, result.issues));
             }
             payload.value[outKey] = result.value;
           }
         }
       }
       let unrecognized;
-      for (const key in input) {
-        if (!recordKeys.has(key)) {
+      for (const key2 in input) {
+        if (!recordKeys.has(key2)) {
           unrecognized = unrecognized ?? [];
-          unrecognized.push(key);
+          unrecognized.push(key2);
         }
       }
       if (unrecognized && unrecognized.length > 0) {
@@ -10219,18 +10219,18 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
       }
     } else {
       payload.value = {};
-      for (const key of Reflect.ownKeys(input)) {
-        if (key === "__proto__")
+      for (const key2 of Reflect.ownKeys(input)) {
+        if (key2 === "__proto__")
           continue;
-        if (!Object.prototype.propertyIsEnumerable.call(input, key))
+        if (!Object.prototype.propertyIsEnumerable.call(input, key2))
           continue;
-        let keyResult = def.keyType._zod.run({ value: key, issues: [] }, ctx);
+        let keyResult = def.keyType._zod.run({ value: key2, issues: [] }, ctx);
         if (keyResult instanceof Promise) {
           throw new Error("Async schemas not supported in object keys currently");
         }
-        const checkNumericKey = typeof key === "string" && number.test(key) && keyResult.issues.length;
+        const checkNumericKey = typeof key2 === "string" && number.test(key2) && keyResult.issues.length;
         if (checkNumericKey) {
-          const retryResult = def.keyType._zod.run({ value: Number(key), issues: [] }, ctx);
+          const retryResult = def.keyType._zod.run({ value: Number(key2), issues: [] }, ctx);
           if (retryResult instanceof Promise) {
             throw new Error("Async schemas not supported in object keys currently");
           }
@@ -10240,30 +10240,30 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
         }
         if (keyResult.issues.length) {
           if (def.mode === "loose") {
-            payload.value[key] = input[key];
+            payload.value[key2] = input[key2];
           } else {
             payload.issues.push({
               code: "invalid_key",
               origin: "record",
               issues: keyResult.issues.map((iss) => finalizeIssue(iss, ctx, config())),
-              input: key,
-              path: [key],
+              input: key2,
+              path: [key2],
               inst
             });
           }
           continue;
         }
-        const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
+        const result = def.valueType._zod.run({ value: input[key2], issues: [] }, ctx);
         if (result instanceof Promise) {
           proms.push(result.then((result2) => {
             if (result2.issues.length) {
-              payload.issues.push(...prefixIssues(key, result2.issues));
+              payload.issues.push(...prefixIssues(key2, result2.issues));
             }
             payload.value[keyResult.value] = result2.value;
           }));
         } else {
           if (result.issues.length) {
-            payload.issues.push(...prefixIssues(key, result.issues));
+            payload.issues.push(...prefixIssues(key2, result.issues));
           }
           payload.value[keyResult.value] = result.value;
         }
@@ -10290,15 +10290,15 @@ var $ZodMap = /* @__PURE__ */ $constructor("$ZodMap", (inst, def) => {
     }
     const proms = [];
     payload.value = /* @__PURE__ */ new Map();
-    for (const [key, value] of input) {
-      const keyResult = def.keyType._zod.run({ value: key, issues: [] }, ctx);
+    for (const [key2, value] of input) {
+      const keyResult = def.keyType._zod.run({ value: key2, issues: [] }, ctx);
       const valueResult = def.valueType._zod.run({ value, issues: [] }, ctx);
       if (keyResult instanceof Promise || valueResult instanceof Promise) {
         proms.push(Promise.all([keyResult, valueResult]).then(([keyResult2, valueResult2]) => {
-          handleMapResult(keyResult2, valueResult2, payload, key, input, inst, ctx);
+          handleMapResult(keyResult2, valueResult2, payload, key2, input, inst, ctx);
         }));
       } else {
-        handleMapResult(keyResult, valueResult, payload, key, input, inst, ctx);
+        handleMapResult(keyResult, valueResult, payload, key2, input, inst, ctx);
       }
     }
     if (proms.length)
@@ -10306,10 +10306,10 @@ var $ZodMap = /* @__PURE__ */ $constructor("$ZodMap", (inst, def) => {
     return payload;
   };
 });
-function handleMapResult(keyResult, valueResult, final, key, input, inst, ctx) {
+function handleMapResult(keyResult, valueResult, final, key2, input, inst, ctx) {
   if (keyResult.issues.length) {
-    if (propertyKeyTypes.has(typeof key)) {
-      final.issues.push(...prefixIssues(key, keyResult.issues));
+    if (propertyKeyTypes.has(typeof key2)) {
+      final.issues.push(...prefixIssues(key2, keyResult.issues));
     } else {
       final.issues.push({
         code: "invalid_key",
@@ -10321,15 +10321,15 @@ function handleMapResult(keyResult, valueResult, final, key, input, inst, ctx) {
     }
   }
   if (valueResult.issues.length) {
-    if (propertyKeyTypes.has(typeof key)) {
-      final.issues.push(...prefixIssues(key, valueResult.issues));
+    if (propertyKeyTypes.has(typeof key2)) {
+      final.issues.push(...prefixIssues(key2, valueResult.issues));
     } else {
       final.issues.push({
         origin: "map",
         code: "invalid_element",
         input,
         inst,
-        key,
+        key: key2,
         issues: valueResult.issues.map((iss) => finalizeIssue(iss, ctx, config()))
       });
     }
@@ -18090,8 +18090,8 @@ function extractDefs(ctx, schema) {
     if (defId)
       seen.defId = defId;
     const schema2 = seen.schema;
-    for (const key in schema2) {
-      delete schema2[key];
+    for (const key2 in schema2) {
+      delete schema2[key2];
     }
     schema2.$ref = ref;
   };
@@ -18160,20 +18160,20 @@ function finalize(ctx, schema) {
       Object.assign(schema2, _cached);
       const isParentRef = zodSchema._zod.parent === ref;
       if (isParentRef) {
-        for (const key in schema2) {
-          if (key === "$ref" || key === "allOf")
+        for (const key2 in schema2) {
+          if (key2 === "$ref" || key2 === "allOf")
             continue;
-          if (!(key in _cached)) {
-            delete schema2[key];
+          if (!(key2 in _cached)) {
+            delete schema2[key2];
           }
         }
       }
       if (refSchema.$ref && refSeen.def) {
-        for (const key in schema2) {
-          if (key === "$ref" || key === "allOf")
+        for (const key2 in schema2) {
+          if (key2 === "$ref" || key2 === "allOf")
             continue;
-          if (key in refSeen.def && JSON.stringify(schema2[key]) === JSON.stringify(refSeen.def[key])) {
-            delete schema2[key];
+          if (key2 in refSeen.def && JSON.stringify(schema2[key2]) === JSON.stringify(refSeen.def[key2])) {
+            delete schema2[key2];
           }
         }
       }
@@ -18185,11 +18185,11 @@ function finalize(ctx, schema) {
       if (parentSeen?.schema.$ref) {
         schema2.$ref = parentSeen.schema.$ref;
         if (parentSeen.def) {
-          for (const key in schema2) {
-            if (key === "$ref" || key === "allOf")
+          for (const key2 in schema2) {
+            if (key2 === "$ref" || key2 === "allOf")
               continue;
-            if (key in parentSeen.def && JSON.stringify(schema2[key]) === JSON.stringify(parentSeen.def[key])) {
-              delete schema2[key];
+            if (key2 in parentSeen.def && JSON.stringify(schema2[key2]) === JSON.stringify(parentSeen.def[key2])) {
+              delete schema2[key2];
             }
           }
         }
@@ -18290,8 +18290,8 @@ function isTransforming(_schema, _ctx) {
     return isTransforming(def.in, ctx) || isTransforming(def.out, ctx);
   }
   if (def.type === "object") {
-    for (const key in def.shape) {
-      if (isTransforming(def.shape[key], ctx))
+    for (const key2 in def.shape) {
+      if (isTransforming(def.shape[key2], ctx))
         return true;
     }
     return false;
@@ -18580,15 +18580,15 @@ var objectProcessor = (schema, ctx, _json, params) => {
   json2.type = "object";
   json2.properties = {};
   const shape = def.shape;
-  for (const key in shape) {
-    json2.properties[key] = process2(shape[key], ctx, {
+  for (const key2 in shape) {
+    json2.properties[key2] = process2(shape[key2], ctx, {
       ...params,
-      path: [...params.path, "properties", key]
+      path: [...params.path, "properties", key2]
     });
   }
   const allKeys = new Set(Object.keys(shape));
-  const requiredKeys = new Set([...allKeys].filter((key) => {
-    const v2 = def.shape[key]._zod;
+  const requiredKeys = new Set([...allKeys].filter((key2) => {
+    const v2 = def.shape[key2]._zod;
     if (ctx.io === "input") {
       return v2.optin === void 0;
     } else {
@@ -18854,9 +18854,9 @@ function toJSONSchema(input, params) {
     };
     ctx2.external = external;
     for (const entry of registry2._idmap.entries()) {
-      const [key, schema] = entry;
+      const [key2, schema] = entry;
       extractDefs(ctx2, schema);
-      schemas[key] = finalize(ctx2, schema);
+      schemas[key2] = finalize(ctx2, schema);
     }
     if (Object.keys(defs).length > 0) {
       const defsSegment = ctx2.target === "draft-2020-12" ? "$defs" : "definitions";
@@ -19568,14 +19568,14 @@ function _installLazyMethods(inst, group, methods) {
   if (installed.has(group))
     return;
   installed.add(group);
-  for (const key in methods) {
-    const fn = methods[key];
-    Object.defineProperty(proto, key, {
+  for (const key2 in methods) {
+    const fn = methods[key2];
+    Object.defineProperty(proto, key2, {
       configurable: true,
       enumerable: false,
       get() {
         const bound = fn.bind(this);
-        Object.defineProperty(this, key, {
+        Object.defineProperty(this, key2, {
           configurable: true,
           writable: true,
           enumerable: true,
@@ -19584,7 +19584,7 @@ function _installLazyMethods(inst, group, methods) {
         return bound;
       },
       set(v2) {
-        Object.defineProperty(this, key, {
+        Object.defineProperty(this, key2, {
           configurable: true,
           writable: true,
           enumerable: true,
@@ -20966,17 +20966,17 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path22 = ref.slice(1).split("/").filter(Boolean);
-  if (path22.length === 0) {
+  const path23 = ref.slice(1).split("/").filter(Boolean);
+  if (path23.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path22[0] === defsKey) {
-    const key = path22[1];
-    if (!key || !ctx.defs[key]) {
+  if (path23[0] === defsKey) {
+    const key2 = path23[1];
+    if (!key2 || !ctx.defs[key2]) {
       throw new Error(`Reference not found: ${ref}`);
     }
-    return ctx.defs[key];
+    return ctx.defs[key2];
   }
   throw new Error(`Reference not found: ${ref}`);
 }
@@ -21162,9 +21162,9 @@ function convertBaseSchema(schema, ctx) {
       const shape = {};
       const properties = schema.properties || {};
       const requiredSet = new Set(schema.required || []);
-      for (const [key, propSchema] of Object.entries(properties)) {
+      for (const [key2, propSchema] of Object.entries(properties)) {
         const propZodSchema = convertSchema(propSchema, ctx);
-        shape[key] = requiredSet.has(key) ? propZodSchema : propZodSchema.optional();
+        shape[key2] = requiredSet.has(key2) ? propZodSchema : propZodSchema.optional();
       }
       if (schema.propertyNames) {
         const keySchema = convertSchema(schema.propertyNames, ctx);
@@ -21305,20 +21305,20 @@ function convertSchema(schema, ctx) {
   }
   const extraMeta = {};
   const coreMetadataKeys = ["$id", "id", "$comment", "$anchor", "$vocabulary", "$dynamicRef", "$dynamicAnchor"];
-  for (const key of coreMetadataKeys) {
-    if (key in schema) {
-      extraMeta[key] = schema[key];
+  for (const key2 of coreMetadataKeys) {
+    if (key2 in schema) {
+      extraMeta[key2] = schema[key2];
     }
   }
   const contentMetadataKeys = ["contentEncoding", "contentMediaType", "contentSchema"];
-  for (const key of contentMetadataKeys) {
-    if (key in schema) {
-      extraMeta[key] = schema[key];
+  for (const key2 of contentMetadataKeys) {
+    if (key2 in schema) {
+      extraMeta[key2] = schema[key2];
     }
   }
-  for (const key of Object.keys(schema)) {
-    if (!RECOGNIZED_KEYS.has(key)) {
-      extraMeta[key] = schema[key];
+  for (const key2 of Object.keys(schema)) {
+    if (!RECOGNIZED_KEYS.has(key2)) {
+      extraMeta[key2] = schema[key2];
     }
   }
   if (Object.keys(extraMeta).length > 0) {
@@ -23867,8 +23867,8 @@ function isPlainObject2(value) {
 }
 function mergeCapabilities(base, additional) {
   const result = { ...base };
-  for (const key in additional) {
-    const k = key;
+  for (const key2 in additional) {
+    const k = key2;
     const addValue = additional[k];
     if (addValue === void 0)
       continue;
@@ -24958,8 +24958,8 @@ function readRequirementClaims(raw) {
   }
   return { kind: "unreadable" };
 }
-function decodeClaimSectionKey(key) {
-  return key.replace(/%([0-9A-F]{4})/g, (_m, hex3) => String.fromCharCode(parseInt(hex3, 16)));
+function decodeClaimSectionKey(key2) {
+  return key2.replace(/%([0-9A-F]{4})/g, (_m, hex3) => String.fromCharCode(parseInt(hex3, 16)));
 }
 function resolveDebriefPin(rawRef, artifacts, sessionId) {
   const read = readBriefRef(rawRef);
@@ -25147,6 +25147,13 @@ var SkeletonFenceViewSchema = external_exports.object({
   closeLine: external_exports.number(),
   status: external_exports.enum(["todo", "filled"])
 });
+var SkeletonExteriorDigestSchema = external_exports.object({
+  sha256: external_exports.string(),
+  lines: external_exports.number().int().nonnegative(),
+  /** The file's fence ids at snapshot time (ids only), so a later check can
+   *  tell stripped markers from a changed exterior. */
+  fenceIds: external_exports.array(external_exports.string()).optional()
+});
 var SkeletonCodeSnapshotSchema = external_exports.object({
   fences: external_exports.array(SkeletonFenceViewSchema),
   /** An unfenced skeleton file (a file_map "create" entry with no fences). */
@@ -25164,7 +25171,13 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   takenAt: external_exports.string().optional(),
   /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
    *  the newest read, so concurrent progress calls can't regress the view. */
-  readAt: external_exports.number().optional()
+  readAt: external_exports.number().optional(),
+  /** #686 P1b — this file's exterior digest at snapshot time. */
+  exterior: SkeletonExteriorDigestSchema.optional(),
+  /** #686 P1b — fenced files past the snapshot cap (no visual of their own):
+   *  path and exterior digest only, never content. No digest = past the
+   *  digest budget too (listed so it reads as "not checked"). */
+  omitted: external_exports.array(external_exports.object({ path: external_exports.string(), exterior: SkeletonExteriorDigestSchema.optional() })).optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()
@@ -26360,6 +26373,27 @@ function coerceSkeletonSnapshot(o) {
     out.takenAt = o.takenAt;
   if (typeof o.readAt === "number" && Number.isFinite(o.readAt))
     out.readAt = o.readAt;
+  const digest = (d) => {
+    if (!isObj(d) || typeof d.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(d.sha256))
+      return null;
+    if (typeof d.lines !== "number" || !Number.isInteger(d.lines) || d.lines < 0)
+      return null;
+    const out2 = { sha256: d.sha256, lines: d.lines };
+    if (Array.isArray(d.fenceIds))
+      out2.fenceIds = d.fenceIds.filter((id) => typeof id === "string" && id.length > 0);
+    return out2;
+  };
+  const ext = digest(o.exterior);
+  if (ext)
+    out.exterior = ext;
+  if (Array.isArray(o.omitted)) {
+    const omitted = o.omitted.filter(isObj).filter((e) => typeof e.path === "string" && e.path.length > 0).map((e) => {
+      const d = digest(e.exterior);
+      return { path: e.path, ...d ? { exterior: d } : {} };
+    });
+    if (omitted.length > 0)
+      out.omitted = omitted;
+  }
   return out;
 }
 function coerceRequirement(v2) {
@@ -26402,12 +26436,12 @@ function coerceEdgePath(v2) {
 function findSpecEdgePath(edgePaths, sectionId) {
   if (!Array.isArray(edgePaths) || !sectionId.startsWith("spec:edge-path:"))
     return void 0;
-  const key = sectionId.slice("spec:edge-path:".length);
-  const byId = edgePaths.findIndex((e) => e && typeof e === "object" && e.id === key);
+  const key2 = sectionId.slice("spec:edge-path:".length);
+  const byId = edgePaths.findIndex((e) => e && typeof e === "object" && e.id === key2);
   if (byId >= 0)
     return { edgePath: edgePaths[byId], index: byId };
-  if (/^\d+$/.test(key)) {
-    const i = Number(key);
+  if (/^\d+$/.test(key2)) {
+    const i = Number(key2);
     const e = edgePaths[i];
     if (e && typeof e === "object" && !(typeof e.id === "string" && e.id.length > 0))
       return { edgePath: e, index: i };
@@ -28120,12 +28154,12 @@ var undefinedCoinage = {
       const label = m[0];
       if (common.has(label.toLowerCase()))
         continue;
-      const key = label.toLowerCase();
-      const existing = candidates[key];
+      const key2 = label.toLowerCase();
+      const existing = candidates[key2];
       if (existing)
         existing.count += 1;
       else
-        candidates[key] = { label, first: m.index, firstEnd: m.index + label.length, count: 1 };
+        candidates[key2] = { label, first: m.index, firstEnd: m.index + label.length, count: 1 };
     }
     const out = [];
     for (const c of Object.values(candidates)) {
@@ -28367,18 +28401,18 @@ function resolvePath(node, segments, prefix) {
   const head = segments[0] ?? "";
   const rest = segments.slice(1);
   const isArray = head.endsWith("[]");
-  const key = isArray ? head.slice(0, -2) : head;
+  const key2 = isArray ? head.slice(0, -2) : head;
   let next = node;
-  if (key.length > 0) {
+  if (key2.length > 0) {
     if (typeof node !== "object" || Array.isArray(node))
       return [];
-    next = node[key];
+    next = node[key2];
   }
   if (!isArray)
-    return resolvePath(next, rest, prefix ? `${prefix}.${key}` : key);
+    return resolvePath(next, rest, prefix ? `${prefix}.${key2}` : key2);
   if (!Array.isArray(next))
     return [];
-  const base = prefix ? `${prefix}.${key}` : key;
+  const base = prefix ? `${prefix}.${key2}` : key2;
   const out = [];
   next.forEach((item, i) => {
     out.push(...resolvePath(item, rest, `${base}[${i}]`));
@@ -28666,8 +28700,8 @@ function breakDeadLock(lockPath) {
   return { broken: false, state };
 }
 function withFileLock(lockPath, run2, opts = {}) {
-  const key = path.resolve(lockPath);
-  if (opts.reentrant && heldLocks.has(key)) return run2();
+  const key2 = path.resolve(lockPath);
+  if (opts.reentrant && heldLocks.has(key2)) return run2();
   const label = opts.label ?? "File lock";
   const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
   const waitArray = new Int32Array(new SharedArrayBuffer(4));
@@ -28691,7 +28725,7 @@ function withFileLock(lockPath, run2, opts = {}) {
     }
     Atomics.wait(waitArray, 0, 0, 10);
   }
-  heldLocks.add(key);
+  heldLocks.add(key2);
   let result;
   let failed = false;
   let failure;
@@ -28701,7 +28735,7 @@ function withFileLock(lockPath, run2, opts = {}) {
     failed = true;
     failure = err;
   }
-  heldLocks.delete(key);
+  heldLocks.delete(key2);
   try {
     release(lockPath, body, label);
   } catch (err) {
@@ -28853,16 +28887,16 @@ var GlobalStore = class _GlobalStore {
     });
     if (instances.length === 0) return { entry: null, reconstructed: false };
     let reconstructed = false;
-    const key = typeof e.key === "string" && e.key.length > 0 ? e.key : mapKey;
-    if (key !== e.key) reconstructed = true;
-    const concept = typeof e.concept === "string" && e.concept.length > 0 ? e.concept : key;
+    const key2 = typeof e.key === "string" && e.key.length > 0 ? e.key : mapKey;
+    if (key2 !== e.key) reconstructed = true;
+    const concept = typeof e.concept === "string" && e.concept.length > 0 ? e.concept : key2;
     if (concept !== e.concept) reconstructed = true;
     const ats = instances.map((i) => i.at).sort();
     const firstSeenAt = typeof e.firstSeenAt === "string" && e.firstSeenAt.length > 0 ? e.firstSeenAt : ats[0];
     if (firstSeenAt !== e.firstSeenAt) reconstructed = true;
     const lastSeenAt = typeof e.lastSeenAt === "string" && e.lastSeenAt.length > 0 ? e.lastSeenAt : ats[ats.length - 1];
     if (lastSeenAt !== e.lastSeenAt) reconstructed = true;
-    return { entry: { key, concept, instances, firstSeenAt, lastSeenAt }, reconstructed };
+    return { entry: { key: key2, concept, instances, firstSeenAt, lastSeenAt }, reconstructed };
   }
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
   read(snapshotCorrupt = true) {
@@ -28905,9 +28939,9 @@ var GlobalStore = class _GlobalStore {
     }
     const concepts = emptyConcepts();
     let dropped = 0;
-    for (const [key, rawEntry] of Object.entries(top.concepts)) {
-      const { entry } = _GlobalStore.salvageEntry(key, rawEntry);
-      if (entry) concepts[key] = entry;
+    for (const [key2, rawEntry] of Object.entries(top.concepts)) {
+      const { entry } = _GlobalStore.salvageEntry(key2, rawEntry);
+      if (entry) concepts[key2] = entry;
       else dropped++;
     }
     if (dropped > 0) {
@@ -28961,8 +28995,8 @@ var GlobalStore = class _GlobalStore {
       const out = {};
       for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"\s*:\s*(\d+)/g)) {
         try {
-          const key = JSON.parse(`"${m[1]}"`);
-          if (key !== "seq") out[key] = Number(m[2]);
+          const key2 = JSON.parse(`"${m[1]}"`);
+          if (key2 !== "seq") out[key2] = Number(m[2]);
         } catch {
         }
       }
@@ -29008,15 +29042,15 @@ var GlobalStore = class _GlobalStore {
   /** Called under the ledger lock (removeConcept), BEFORE the deletion.
    *  Throws if the tombstone can't be made durable — the removal then fails
    *  rather than acknowledging something a queued mirror could undo. */
-  recordRemoval(key) {
+  recordRemoval(key2) {
     const current = this.readRemovals();
     const seq = current.seq + 1;
     try {
       fs3.mkdirSync(path2.dirname(this.removalsPath()), { recursive: true });
-      writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
+      writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key2]: seq } });
     } catch (err) {
       throw new Error(
-        `could not record the removal of "${key}" durably (${this.removalsPath()}: ${err.message}); refusing to remove it, because a queued mirror could re-add it.`
+        `could not record the removal of "${key2}" durably (${this.removalsPath()}: ${err.message}); refusing to remove it, because a queued mirror could re-add it.`
       );
     }
   }
@@ -29072,7 +29106,7 @@ var GlobalStore = class _GlobalStore {
     return this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
   recordInstanceLocked(concept, instance, opts = {}) {
-    const key = normalizeKey(concept);
+    const key2 = normalizeKey(concept);
     const ledger = this.read();
     if (this.lastReadCorrupt) {
       this.write(ledger);
@@ -29081,9 +29115,9 @@ var GlobalStore = class _GlobalStore {
     if (opts.precondition && !opts.precondition()) return "ineligible";
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
-    const existing = ledger.concepts[key];
+    const existing = ledger.concepts[key2];
     if (opts.replayedFromSeq !== void 0) {
-      const removedSeq = this.readRemovals().removals[key];
+      const removedSeq = this.readRemovals().removals[key2];
       if (removedSeq !== void 0 && removedSeq > opts.replayedFromSeq) {
         console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
         return "removed";
@@ -29119,8 +29153,8 @@ var GlobalStore = class _GlobalStore {
       existing.instances.push(finalized);
       existing.lastSeenAt = now;
     } else {
-      ledger.concepts[key] = {
-        key,
+      ledger.concepts[key2] = {
+        key: key2,
         concept: concept.trim(),
         instances: [finalized],
         firstSeenAt: now,
@@ -29158,7 +29192,7 @@ var GlobalStore = class _GlobalStore {
     return this.transact(() => this.removeConceptLocked(concept));
   }
   removeConceptLocked(concept) {
-    const key = normalizeKey(concept);
+    const key2 = normalizeKey(concept);
     const ledger = this.read();
     if (this.lastReadCorrupt) {
       const snap = corruptSnapshots.get(this.ledgerPath);
@@ -29166,7 +29200,7 @@ var GlobalStore = class _GlobalStore {
         `the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable \u2014 refusing to modify it. ` + (snap ? `A backup of the corrupt file is at ${snap}. ` : "") + `Fix or remove the file, then retry.`
       );
     }
-    const entry = ledger.concepts[key];
+    const entry = ledger.concepts[key2];
     if (!entry) return null;
     const backupPath = this.snapshotLedger("removed");
     if (!backupPath) {
@@ -29174,8 +29208,8 @@ var GlobalStore = class _GlobalStore {
         `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
       );
     }
-    this.recordRemoval(key);
-    delete ledger.concepts[key];
+    this.recordRemoval(key2);
+    delete ledger.concepts[key2];
     if (!this.write(ledger)) {
       throw new Error(
         `could not write the ledger to remove "${entry.concept}" (${this.ledgerPath}); nothing was removed. Retry the removal.`
@@ -29246,10 +29280,10 @@ var GlobalStore = class _GlobalStore {
     let conceptsAdded = 0;
     let conceptsMerged = 0;
     let instancesAdded = 0;
-    for (const [key, inc] of Object.entries(parsed.concepts)) {
-      const existing = current.concepts[key];
+    for (const [key2, inc] of Object.entries(parsed.concepts)) {
+      const existing = current.concepts[key2];
       if (!existing) {
-        current.concepts[key] = inc;
+        current.concepts[key2] = inc;
         conceptsAdded += 1;
         instancesAdded += inc.instances.length;
         continue;
@@ -29482,12 +29516,12 @@ function debriefItemTitle(art, lane, i) {
   return typeof what === "string" && what.trim().length > 0 ? what.trim() : void 0;
 }
 function describeDebriefSection(sectionId, art) {
-  const key = sectionId.slice("debrief:".length);
-  if (key.startsWith("claim:")) return `requirement claim ${JSON.stringify(decodeClaimSectionKey(key.slice("claim:".length)))} (the agent's account)`;
-  if (key === "claims") return "requirement claims (the agent's account)";
-  const numeric = /^(?:section:)?(\d+)$/.exec(key);
+  const key2 = sectionId.slice("debrief:".length);
+  if (key2.startsWith("claim:")) return `requirement claim ${JSON.stringify(decodeClaimSectionKey(key2.slice("claim:".length)))} (the agent's account)`;
+  if (key2 === "claims") return "requirement claims (the agent's account)";
+  const numeric = /^(?:section:)?(\d+)$/.exec(key2);
   if (numeric) return `section #${Number(numeric[1]) + 1}`;
-  const item = /^([a-z][a-z-]*):(\d+)$/.exec(key);
+  const item = /^([a-z][a-z-]*):(\d+)$/.exec(key2);
   if (item) {
     const lane = item[1];
     const i = Number(item[2]);
@@ -29495,13 +29529,13 @@ function describeDebriefSection(sectionId, art) {
     const title = debriefItemTitle(art, lane, i);
     return title ? `${laneWords} item #${i + 1}: ${title}` : `${laneWords} item #${i + 1}`;
   }
-  return key.replace(/-/g, " ");
+  return key2.replace(/-/g, " ");
 }
 function describeExplainerSection(sectionId) {
-  const key = sectionId.slice("explainer:".length);
-  const m = /^(?:section:)?(\d+)$/.exec(key);
+  const key2 = sectionId.slice("explainer:".length);
+  const m = /^(?:section:)?(\d+)$/.exec(key2);
   if (m) return `section #${Number(m[1]) + 1}`;
-  return key.replace(/-/g, " ");
+  return key2.replace(/-/g, " ");
 }
 function describeSpecEdgePath(sectionId, art) {
   const edgePaths = art?.content?.edgePaths;
@@ -30544,8 +30578,8 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   }
   try {
     const fs20 = await import("node:fs");
-    const path22 = await import("node:path");
-    const claudeMd = path22.join(process.cwd(), "CLAUDE.md");
+    const path23 = await import("node:path");
+    const claudeMd = path23.join(process.cwd(), "CLAUDE.md");
     if (fs20.existsSync(claudeMd)) {
       const content = fs20.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
@@ -30744,8 +30778,8 @@ function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
 }
 function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConcepts) {
   if (!storedConcept?.trim()) return false;
-  const key = normalizeConceptKey2(storedConcept);
-  if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey2(pc) === key)) return true;
+  const key2 = normalizeConceptKey2(storedConcept);
+  if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey2(pc) === key2)) return true;
   if (containmentBlockAllowed(storedConcept)) {
     const texts = [...proposalStrings, ...proposalConcepts];
     if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
@@ -31457,7 +31491,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path22, v: v2 }) => `- ${path22}: ${v2.message}`);
+  const lines = shown.map(({ path: path23, v: v2 }) => `- ${path23}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function formatProseStyleWarnings(label, text, mode = "strict") {
@@ -31471,7 +31505,7 @@ function formatProseStyleWarnings(label, text, mode = "strict") {
   const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  return styleBlock(result.score, shown.map(({ path: path22, v: v2 }) => `- ${path22}: ${v2.message}`), rest);
+  return styleBlock(result.score, shown.map(({ path: path23, v: v2 }) => `- ${path23}: ${v2.message}`), rest);
 }
 function styleBlock(score, lines, rest) {
   const tail = rest > 0 ? ` (+${rest} more)` : "";
@@ -31493,11 +31527,11 @@ var PresentIdempotencyRegistry = class {
     return this.entries.size;
   }
   async begin(store, toolName, contentHash) {
-    const key = `${toolName}::${contentHash}`;
+    const key2 = `${toolName}::${contentHash}`;
     this.sweep(this.now());
     for (; ; ) {
       const now = this.now();
-      const existing = this.entries.get(key);
+      const existing = this.entries.get(key2);
       if (existing && now - existing.at < this.windowMs) {
         const settled = await existing.promise;
         if (settled) {
@@ -31506,23 +31540,23 @@ var PresentIdempotencyRegistry = class {
             return { duplicate: { artifactId: art.id, type: art.type } };
           }
         }
-        if (this.entries.get(key) === existing) {
-          return this.reserve(key, now);
+        if (this.entries.get(key2) === existing) {
+          return this.reserve(key2, now);
         }
         continue;
       }
-      return this.reserve(key, now);
+      return this.reserve(key2, now);
     }
   }
   /** Create + register a fresh owner reservation for `key`. Synchronous, so a
    *  fresh-key get->reserve pair in begin() is atomic w.r.t. concurrent callers. */
-  reserve(key, now) {
+  reserve(key2, now) {
     let resolve;
     const promise2 = new Promise((r) => {
       resolve = r;
     });
     const entry = { at: now, promise: promise2, settled: false };
-    this.entries.set(key, entry);
+    this.entries.set(key2, entry);
     let done = false;
     return {
       commit: (artifactId) => {
@@ -31536,7 +31570,7 @@ var PresentIdempotencyRegistry = class {
         done = true;
         entry.settled = true;
         resolve(null);
-        if (this.entries.get(key) === entry) this.entries.delete(key);
+        if (this.entries.get(key2) === entry) this.entries.delete(key2);
       }
     };
   }
@@ -31870,9 +31904,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path22) {
+function receivedSize(input, path23) {
   let cur = input;
-  for (const seg of path22) {
+  for (const seg of path23) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -31895,8 +31929,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path22) {
-  return path22.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path23) {
+  return path23.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -31915,16 +31949,16 @@ function formatValidationError(toolName, err, example, input) {
   const ordered = [...cardinality, ...rest];
   const groups = /* @__PURE__ */ new Map();
   for (const i of ordered) {
-    const key = `${collapsePath(i.path)}||${i.message}`;
-    const g = groups.get(key);
+    const key2 = `${collapsePath(i.path)}||${i.message}`;
+    const g = groups.get(key2);
     if (g) g.count++;
-    else groups.set(key, { first: i, count: 1 });
+    else groups.set(key2, { first: i, count: 1 });
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path22 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path23 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path22}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path23}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -32144,7 +32178,7 @@ var EXAMPLE_EXPLAINER = `{
   "relatedArtifactIds": ["art_xxxxxxxxxx"],
   "suggestedQuestions": ["Where does the session get created in the first place?"]
 }`;
-var prop = (v2, key) => v2 && typeof v2 === "object" ? v2[key] : void 0;
+var prop = (v2, key2) => v2 && typeof v2 === "object" ? v2[key2] : void 0;
 var normEcho = (v2) => typeof v2 === "string" ? v2.trim().toLowerCase() : "";
 var pluckSet = (v2, listKey, field2) => {
   const list2 = prop(v2, listKey);
@@ -33227,7 +33261,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path22 = sanitizePath(file2.path, projectRoot2);
+  const path23 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -33244,7 +33278,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path23)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -33363,9 +33397,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path22 = sanitizePath(e.filePath, projectRoot2);
+    const path23 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path22 ? `<p class="anchor"><code>${esc2(path22 + range)}</code></p>` : "";
+    let anchor = path23 ? `<p class="anchor"><code>${esc2(path23 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -33522,9 +33556,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path22 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path23 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path23)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -34930,10 +34964,10 @@ function formatPrComments(state) {
   for (const entry of allFindings) {
     const evidence = entry.finding.evidence;
     const firstPath = Array.isArray(evidence) && evidence[0] && typeof evidence[0] === "object" ? evidence[0].filePath : void 0;
-    const key = firstPath ?? "General";
-    const list2 = byFile.get(key) ?? [];
+    const key2 = firstPath ?? "General";
+    const list2 = byFile.get(key2) ?? [];
     list2.push(entry);
-    byFile.set(key, list2);
+    byFile.set(key2, list2);
   }
   for (const [filePath, entries] of byFile.entries()) {
     sections.push(`### ${filePath}`);
@@ -34999,15 +35033,15 @@ function formatLearnings(state) {
     const content = coerceReasoningContent(a.content);
     const concept = content.concept;
     if (!concept?.name) continue;
-    const key = normalizeConceptKey(concept.name);
-    if (!key) continue;
-    const existing = conceptCounts.get(key);
+    const key2 = normalizeConceptKey(concept.name);
+    if (!key2) continue;
+    const existing = conceptCounts.get(key2);
     const action = content.action || null;
     if (existing) {
       existing.count += 1;
       if (action && !existing.actions.includes(action)) existing.actions.push(action);
     } else {
-      conceptCounts.set(key, {
+      conceptCounts.set(key2, {
         name: String(concept.name).trim(),
         explanation: concept.oneLineExplanation ? String(concept.oneLineExplanation) : void 0,
         count: 1,
@@ -35040,9 +35074,9 @@ function formatLearnings(state) {
   const rows = [];
   if (rejectedApproaches) {
     for (const r of rejectedApproaches) {
-      const key = r.description;
-      if (seenReasons.has(key)) continue;
-      seenReasons.add(key);
+      const key2 = r.description;
+      if (seenReasons.has(key2)) continue;
+      seenReasons.add(key2);
       rows.push(
         `- **${r.description}**${r.concept ? ` _(concept: ${r.concept})_` : ""}${r.reason ? ` \u2014 "${r.reason}"` : ""}`
       );
@@ -35466,7 +35500,7 @@ function extractPageTextBlocks(html) {
 var record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 var list = (value) => Array.isArray(value) ? value : [];
 var strings = (values) => values.filter((v2) => typeof v2 === "string").map((v2) => v2.trim()).filter((v2) => v2.length > 0);
-var field = (values, key) => list(values).map((v2) => record2(v2)[key]);
+var field = (values, key2) => list(values).map((v2) => record2(v2)[key2]);
 function artifactProposal(type, title, value) {
   const c = record2(value);
   let text = [];
@@ -35708,11 +35742,11 @@ function frozenBriefRefOf(candidates) {
       if (!parsed.success) return { found: false };
       ref = parsed.data;
     }
-    const key = stableStringify(ref ?? null);
+    const key2 = stableStringify(ref ?? null);
     if (first === void 0) {
-      first = key;
+      first = key2;
       value = ref;
-    } else if (key !== first) return { found: false };
+    } else if (key2 !== first) return { found: false };
   }
   return value ? { found: true, ref: value } : { found: true };
 }
@@ -36085,15 +36119,15 @@ function consumerLabel(filter) {
   return `artifacts ${(filter.artifactIds ?? []).join(", ")}`;
 }
 function beginConsumer(state, filter, now = Date.now()) {
-  const key = consumerKey(filter);
+  const key2 = consumerKey(filter);
   state.liveConsumers ??= {};
-  const c = state.liveConsumers[key] ??= { filter, inflight: 0, lastAt: now };
+  const c = state.liveConsumers[key2] ??= { filter, inflight: 0, lastAt: now };
   c.inflight++;
   c.lastAt = now;
-  return key;
+  return key2;
 }
-function endConsumer(state, key, now = Date.now()) {
-  const c = state.liveConsumers?.[key];
+function endConsumer(state, key2, now = Date.now()) {
+  const c = state.liveConsumers?.[key2];
   if (!c) return;
   c.inflight = Math.max(0, c.inflight - 1);
   c.lastAt = now;
@@ -36191,12 +36225,12 @@ function feedbackStoreView(store, opts) {
           continue;
         }
       }
-      const key = `${lane}:${idOf(x)}`;
-      const by = claimTable.get(key);
+      const key2 = `${lane}:${idOf(x)}`;
+      const by = claimTable.get(key2);
       if (by && by !== token) continue;
       if (claim2 && !by) {
-        claimTable.set(key, token);
-        mine.push(key);
+        claimTable.set(key2, token);
+        mine.push(key2);
       }
       out.push(x);
     }
@@ -36225,12 +36259,12 @@ function feedbackStoreView(store, opts) {
     const batch = await store.getUndeliveredWorkerStops() ?? { stops: [] };
     const out = [];
     for (const x of batch.stops ?? []) {
-      const key = `workerStops:${x.id}`;
-      const by = claimTable.get(key);
+      const key2 = `workerStops:${x.id}`;
+      const by = claimTable.get(key2);
       if (by && by !== token) continue;
       if (claim2 && !by) {
-        claimTable.set(key, token);
-        mine.push(key);
+        claimTable.set(key2, token);
+        mine.push(key2);
       }
       out.push(x);
     }
@@ -36304,8 +36338,8 @@ function feedbackStoreView(store, opts) {
     store: view,
     held,
     release() {
-      for (const key of mine.splice(0)) {
-        if (claimTable.get(key) === token) claimTable.delete(key);
+      for (const key2 of mine.splice(0)) {
+        if (claimTable.get(key2) === token) claimTable.delete(key2);
       }
     }
   };
@@ -37680,6 +37714,290 @@ function selectSkeletonScope(scopes, args) {
 }
 
 // src/mcp/skeleton-snapshot.ts
+import path14 from "node:path";
+
+// src/mcp/skeleton-drift.ts
+import { createHash as createHash4 } from "node:crypto";
+var SKELETON_VISUAL_PREFIX2 = "skelcode:";
+var isSkeletonApprovedVisualId2 = (id) => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX2);
+var CLOSED_FOR_PROGRESS2 = /* @__PURE__ */ new Set(["superseded", "rejected", "retracted", "obsolete"]);
+function isLivePlanVersion2(art, artifacts) {
+  if (art.type !== "plan" || CLOSED_FOR_PROGRESS2.has(art.status)) return false;
+  return !artifacts.some((a) => !!a && typeof a === "object" && a.parentId === art.id);
+}
+var MAX_LINES_LISTED = 5;
+var MAX_APPROX_MORE = 20;
+var MAX_LCS_CELLS = 4e6;
+var normalizeSkeletonText = (text) => text.replace(/^﻿/, "").replace(/\r\n?/g, "\n").replace(/\n$/, "");
+var key = (line) => line.trimEnd();
+function exteriorWithGaps(lines, fences, keep) {
+  const out = [];
+  let n = 1;
+  for (const f of fences) {
+    for (; n < f.openLine; n++) out.push({ text: key(lines[n - 1]), line: n });
+    if (keep(f)) {
+      out.push({ text: key(lines[f.openLine - 1]), line: f.openLine });
+      out.push({ text: key(lines[f.closeLine - 1]), line: f.closeLine });
+    } else {
+      out.push(null);
+    }
+    n = f.closeLine + 1;
+  }
+  for (; n <= lines.length; n++) out.push({ text: key(lines[n - 1]), line: n });
+  return out;
+}
+function skeletonExteriorDigest(text, file2) {
+  const norm = normalizeSkeletonText(text);
+  const fences = scanSkeletonText(norm, file2);
+  const ext = exteriorWithGaps(norm.split("\n"), fences, () => true);
+  return {
+    sha256: createHash4("sha256").update(ext.map((l) => l.text).join("\n")).digest("hex"),
+    lines: ext.length,
+    fenceIds: [...new Set(fences.map((f) => f.id))]
+  };
+}
+function chunkMisfit(chunks, live) {
+  const matchesAt = (chunk, at) => {
+    let k = 0;
+    while (k < chunk.length && at + k < live.length && live[at + k].text === chunk[k].text) k++;
+    return k;
+  };
+  const lineAt = (i) => live[Math.min(Math.max(i, 0), live.length - 1)]?.line ?? 1;
+  const last = chunks.length - 1;
+  const top = chunks[0];
+  const topLen = matchesAt(top, 0);
+  if (topLen < top.length) return [lineAt(topLen)];
+  if (last === 0) return live.length > top.length ? [lineAt(top.length)] : [];
+  const bottom = chunks[last];
+  const bottomStart = live.length - bottom.length;
+  let pos = top.length;
+  if (bottomStart < pos) return [lineAt(live.length - 1)];
+  for (let k = bottom.length - 1; k >= 0; k--) {
+    if (live[bottomStart + k].text !== bottom[k].text) return [lineAt(bottomStart + k)];
+  }
+  for (let c = 1; c < last; c++) {
+    const chunk = chunks[c];
+    if (chunk.length === 0) continue;
+    let found = -1;
+    let best = { at: pos, len: -1 };
+    for (let at = pos; at + chunk.length <= bottomStart; at++) {
+      const len = matchesAt(chunk, at);
+      if (len === chunk.length) {
+        found = at;
+        break;
+      }
+      if (len > best.len) best = { at, len };
+    }
+    if (found < 0) return [lineAt(best.len > 0 ? best.at + best.len : pos)];
+    pos = found + chunk.length;
+  }
+  return [];
+}
+function changedLines(a, b) {
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre].text === b[pre].text) pre++;
+  let suf = 0;
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf].text === b[b.length - 1 - suf].text) suf++;
+  const am = a.slice(pre, a.length - suf);
+  const bm = b.slice(pre, b.length - suf);
+  const exact = (lines) => ({ lines, approximate: false });
+  if (am.length === 0 && bm.length === 0) return exact([]);
+  const removalAt = (bi) => b[bi]?.line ?? b[b.length - 1]?.line ?? 1;
+  if (bm.length === 0) return exact([removalAt(pre)]);
+  if (am.length === 0) return exact(bm.map((l) => l.line));
+  const out = /* @__PURE__ */ new Set();
+  if (am.length * bm.length > MAX_LCS_CELLS) {
+    for (let i2 = 0; i2 < bm.length; i2++) if (am[i2]?.text !== bm[i2].text) out.add(bm[i2].line);
+    if (out.size === 0) out.add(removalAt(pre + bm.length));
+    return { lines: [...out].sort((x, y) => x - y), approximate: true };
+  }
+  const n = am.length;
+  const m = bm.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i2 = n - 1; i2 >= 0; i2--) {
+    for (let j2 = m - 1; j2 >= 0; j2--) {
+      dp[i2][j2] = am[i2].text === bm[j2].text ? dp[i2 + 1][j2 + 1] + 1 : Math.max(dp[i2 + 1][j2], dp[i2][j2 + 1]);
+    }
+  }
+  let i = 0;
+  let j = 0;
+  let runInserted = false;
+  let runRemoved = false;
+  const closeRun = () => {
+    if (runRemoved && !runInserted) out.add(removalAt(pre + j));
+    runInserted = runRemoved = false;
+  };
+  while (i < n || j < m) {
+    if (i < n && j < m && am[i].text === bm[j].text) {
+      closeRun();
+      i++;
+      j++;
+    } else if (j < m && (i >= n || dp[i][j + 1] >= dp[i + 1][j])) {
+      out.add(bm[j].line);
+      runInserted = true;
+      j++;
+    } else {
+      runRemoved = true;
+      i++;
+    }
+  }
+  closeRun();
+  return exact([...out].sort((x, y) => x - y));
+}
+function compareCode(file2, code, liveText) {
+  const aNorm = normalizeSkeletonText(code);
+  const aLines = aNorm.split("\n");
+  let aFences;
+  try {
+    aFences = scanSkeletonText(aNorm, file2);
+  } catch {
+    return "unparsable-approved";
+  }
+  const bNorm = normalizeSkeletonText(liveText);
+  let bFences;
+  try {
+    bFences = scanSkeletonText(bNorm, file2);
+  } catch (err) {
+    const why = err instanceof Error ? err.message.replace(`${file2}:`, "line ") : String(err);
+    return { file: file2, lines: [], more: 0, note: `SKEL markers no longer parse (${why})` };
+  }
+  const bLines = bNorm.split("\n");
+  const liveIds = new Set(bFences.map((f) => f.id));
+  const stripped = aFences.filter((f) => !liveIds.has(f.id));
+  const liveExt = exteriorWithGaps(bLines, bFences, () => true);
+  if (stripped.length === 0) {
+    const approvedExt = exteriorWithGaps(aLines, aFences, () => true);
+    const { lines, approximate } = changedLines(approvedExt, liveExt);
+    if (lines.length === 0) return null;
+    const more = Math.max(0, lines.length - MAX_LINES_LISTED);
+    return { file: file2, lines: lines.slice(0, MAX_LINES_LISTED), more: approximate ? Math.min(more, MAX_APPROX_MORE) : more, ...approximate ? { approximate } : {} };
+  }
+  const withGaps = exteriorWithGaps(aLines, aFences, (f) => liveIds.has(f.id));
+  const chunks = [[]];
+  for (const l of withGaps) {
+    if (l === null) chunks.push([]);
+    else chunks[chunks.length - 1].push(l);
+  }
+  const misfit = chunkMisfit(chunks, liveExt);
+  if (misfit.length === 0) return null;
+  const which = stripped.length === aFences.length ? "markers stripped" : `markers of ${stripped.map((f) => `SKEL[${f.id}]`).join(", ")} stripped`;
+  return { file: file2, lines: misfit, more: 0, note: `${which}; the approved structure no longer matches near line ${misfit[0]}` };
+}
+function approvedSkeletonFiles(approvedVisuals) {
+  const out = [];
+  for (const v2 of approvedVisuals ?? []) {
+    if (!v2 || v2.kind !== "annotated_code" || !isSkeletonApprovedVisualId2(v2.id) || !v2.skeleton) continue;
+    const file2 = typeof v2.filePath === "string" && v2.filePath ? v2.filePath : v2.id.slice(SKELETON_VISUAL_PREFIX2.length);
+    const digest = v2.skeleton.exterior;
+    const fenceIds = digest?.fenceIds ?? v2.skeleton.fences.map((f) => f.id);
+    if (v2.skeleton.withheld || typeof v2.code !== "string") out.push({ file: file2, ...digest ? { digest } : {}, fenceIds, codeless: "withheld from the approved snapshot" });
+    else if (v2.skeleton.truncated) out.push({ file: file2, ...digest ? { digest } : {}, fenceIds, codeless: "the approved snapshot is truncated" });
+    else out.push({ file: file2, code: v2.code, ...digest ? { digest } : {} });
+    for (const o of v2.skeleton.omitted ?? []) {
+      if (out.some((f) => f.file === o.path)) continue;
+      out.push(o.exterior ? { file: o.path, digest: o.exterior, ...o.exterior.fenceIds ? { fenceIds: o.exterior.fenceIds } : {}, codeless: "past the snapshot cap" } : { file: o.path, codeless: "past the snapshot cap and its digest budget" });
+    }
+  }
+  return out;
+}
+function skeletonExteriorDrift(approvedVisuals, live) {
+  const result = { changed: [], deleted: [], notChecked: [] };
+  for (const a of approvedSkeletonFiles(approvedVisuals)) {
+    const { file: file2 } = a;
+    if (a.code === void 0 && !a.digest) {
+      result.notChecked.push({ file: file2, reason: a.codeless ?? "no approved record" });
+      continue;
+    }
+    const now = live[file2];
+    if (!now) {
+      result.notChecked.push({ file: file2, reason: "not read" });
+      continue;
+    }
+    if ("missing" in now) {
+      result.deleted.push(file2);
+      continue;
+    }
+    if ("unchecked" in now) {
+      result.notChecked.push({ file: file2, reason: now.unchecked });
+      continue;
+    }
+    if (a.code !== void 0) {
+      const c = compareCode(file2, a.code, now.text);
+      if (c === "unparsable-approved") result.notChecked.push({ file: file2, reason: "the approved snapshot's markers don't parse" });
+      else if (c) result.changed.push(c);
+      continue;
+    }
+    let liveDigest = null;
+    try {
+      liveDigest = skeletonExteriorDigest(now.text, file2);
+    } catch {
+      result.changed.push({ file: file2, lines: [], more: 0, note: "SKEL markers no longer parse" });
+      continue;
+    }
+    const liveIds = new Set(liveDigest.fenceIds ?? []);
+    if (liveIds.size === 0) {
+      result.notChecked.push({ file: file2, reason: `markers stripped; ${a.codeless}, so only a digest was kept` });
+      continue;
+    }
+    if (a.fenceIds && a.fenceIds.length > 0 && (a.fenceIds.some((id) => !liveIds.has(id)) || liveIds.size !== new Set(a.fenceIds).size)) {
+      result.changed.push({ file: file2, lines: [], more: 0, note: `fence set differs from approval \u2014 ${a.codeless}, so no line numbers` });
+      continue;
+    }
+    if (liveDigest.sha256 !== a.digest.sha256) {
+      result.changed.push({ file: file2, lines: [], more: 0, note: `changed \u2014 ${a.codeless}, so no line numbers` });
+    }
+  }
+  return result;
+}
+function formatNotChecked(drift) {
+  if (drift.notChecked.length === 0) return "";
+  return `
+Exterior drift not checked for: ${drift.notChecked.map((n) => `${n.file} (${n.reason})`).join(", ")} \u2014 review these by hand.`;
+}
+function formatExteriorDrift(drift) {
+  if (drift.changed.length === 0 && drift.deleted.length === 0) return "";
+  const parts = exteriorDriftParts(drift);
+  const unchecked = drift.notChecked.length > 0 ? ` Not checked: ${drift.notChecked.map((n) => `${n.file} (${n.reason})`).join(", ")}.` : "";
+  return `
+\u26A0 Exterior drift since approval: ${parts.join("; ")}. Changes outside the SKEL fences are skeleton changes: propose them and revise_artifact the plan (reason "Skeleton change: \u2026"), or restore the approved structure.${unchecked}`;
+}
+function exteriorDriftParts(drift) {
+  const renamedTo = new Map((drift.renamed ?? []).map((r) => [r.from, r.to]));
+  const parts = [
+    ...drift.changed.map((c) => {
+      if (c.lines.length === 0) return `${c.file} (${c.note ?? "changed"})`;
+      if (c.note) return `${c.file} (${c.note})`;
+      const plural2 = c.lines.length + c.more === 1 ? "" : "s";
+      const more = c.more > 0 ? ` (+${c.more}${c.approximate && c.more >= MAX_APPROX_MORE ? "+" : ""} more)` : "";
+      return `${c.file} line${plural2} ${c.lines.join(", ")}${more}${c.approximate ? " (approximate: file too large for an exact diff)" : ""}`;
+    }),
+    ...drift.deleted.map((f) => renamedTo.has(f) ? `${f} (deleted; its fences are now in ${renamedTo.get(f)} \u2014 renamed?)` : `${f} (deleted)`)
+  ];
+  return parts;
+}
+function isSkeletonDriftBaseline(art, artifacts) {
+  if (!art || typeof art !== "object" || art.type !== "plan") return false;
+  artifacts = artifacts.filter((a) => !!a && typeof a === "object");
+  if (art.status === "approved") return isLivePlanVersion2(art, artifacts);
+  if (art.status !== "superseded") return false;
+  const history = (Array.isArray(art.statusHistory) ? art.statusHistory : []).map((h) => h && typeof h === "object" ? h.status : void 0);
+  const beforeSupersede = history.slice(0, history.lastIndexOf("superseded")).filter((s) => s !== "superseded").at(-1);
+  if (beforeSupersede !== "approved") return false;
+  const descendants = [];
+  const queue = [art.id];
+  while (queue.length > 0) {
+    const id = queue.shift();
+    for (const a of artifacts) {
+      if (a.parentId === id && !descendants.includes(a)) {
+        descendants.push(a);
+        queue.push(a.id);
+      }
+    }
+  }
+  return descendants.length > 0 && descendants.every((d) => d.status === "rejected" || d.status === "retracted");
+}
+
+// src/mcp/skeleton-read.ts
 import fs12 from "node:fs";
 import path13 from "node:path";
 var SKELETON_SNAPSHOT_LIMITS = {
@@ -37688,8 +38006,9 @@ var SKELETON_SNAPSHOT_LIMITS = {
   maxTotalBytes: 192 * 1024,
   maxReadBytes: 1e6
 };
-var UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
-var MIN_USEFUL_BYTES = 512;
+var MAX_RENAME_FILE_BYTES = 256 * 1024;
+var MAX_RENAME_TOTAL_BYTES = 2 * 1024 * 1024;
+var MAX_RENAME_ENTRIES = 200;
 function within2(dir, abs) {
   const rel = path13.relative(dir, abs);
   return rel === "" || !rel.startsWith("..") && !path13.isAbsolute(rel);
@@ -37762,6 +38081,91 @@ function readConfined(root, rel, limits) {
     }
   }
 }
+function checkSkeletonExteriorDrift(content, opts = {}) {
+  const empty = { changed: [], deleted: [], notChecked: [] };
+  try {
+    const visuals = (Array.isArray(content?.visuals) ? content.visuals : []).filter((v2) => v2 && typeof v2 === "object" && v2.kind === "annotated_code" && isSkeletonApprovedVisualId2(v2.id) && v2.skeleton);
+    if (visuals.length === 0) return empty;
+    const root = path13.resolve(opts.root ?? (() => {
+      const r = resolveProjectRoot();
+      return r.worktree?.workspaceRoot ?? r.projectRoot;
+    })());
+    const limits = opts.limits ?? SKELETON_SNAPSHOT_LIMITS;
+    const live = {};
+    const approved = approvedSkeletonFiles(visuals);
+    for (const a of approved) {
+      if (a.code === void 0 && !a.digest) continue;
+      const rel = normalizeSkeletonPath(root, a.file);
+      if (!rel) {
+        live[a.file] = { unchecked: "outside the project" };
+        continue;
+      }
+      const read = readConfined(root, rel, limits);
+      live[a.file] = read.ok ? { text: read.text } : read.reason === "not on disk" ? { missing: true } : { unchecked: read.reason };
+    }
+    const drift = skeletonExteriorDrift(visuals, live);
+    if (drift.deleted.length > 0) {
+      const known = new Set(approved.map((a) => a.file));
+      const renamed = [];
+      let budget = MAX_RENAME_TOTAL_BYTES;
+      for (const from of drift.deleted) {
+        const fences0 = visuals.find((v2) => (v2.filePath ?? v2.id.slice(SKELETON_VISUAL_PREFIX2.length)) === from)?.skeleton?.fences ?? [];
+        if (fences0.length === 0) continue;
+        const want = new Map(fences0.map((f) => [f.id, f.title]));
+        const dir = path13.posix.dirname(from);
+        let names;
+        try {
+          names = fs12.readdirSync(path13.resolve(root, dir)).slice(0, MAX_RENAME_ENTRIES);
+        } catch {
+          continue;
+        }
+        for (const name of names) {
+          if (budget <= 0) break;
+          const rel = dir === "." ? name : `${dir}/${name}`;
+          if (known.has(rel)) continue;
+          let size;
+          try {
+            const st = fs12.statSync(path13.resolve(root, rel));
+            if (!st.isFile()) continue;
+            size = st.size;
+          } catch {
+            continue;
+          }
+          if (size > MAX_RENAME_FILE_BYTES || size > budget) continue;
+          budget -= size;
+          const read = readConfined(root, rel, limits);
+          if (!read.ok || !read.text.includes("SKEL[")) continue;
+          let fences;
+          try {
+            fences = scanSkeletonText(read.text, rel);
+          } catch {
+            continue;
+          }
+          const ids = new Set(fences.map((f) => f.id));
+          const sameIds = ids.size === want.size && [...want.keys()].every((id) => ids.has(id));
+          const sameTitles = fences.every((f) => {
+            const t = want.get(f.id);
+            return t === void 0 || t === f.title;
+          });
+          if (sameIds && sameTitles) {
+            renamed.push({ from, to: rel });
+            break;
+          }
+        }
+      }
+      if (renamed.length > 0) drift.renamed = renamed;
+    }
+    return drift;
+  } catch {
+    return empty;
+  }
+}
+
+// src/mcp/skeleton-snapshot.ts
+var UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
+var MAX_OMITTED_DIGESTS = 64;
+var MAX_OMITTED_BYTES = 8 * 1024 * 1024;
+var MIN_USEFUL_BYTES = 512;
 function truncateToBytes(text, budget) {
   const lines = text.split("\n");
   const totalLines = lines.length > 1 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
@@ -37790,7 +38194,7 @@ function buildSkeletonSnapshot(args) {
   const steps = Array.isArray(args.steps) ? args.steps : [];
   const skelIds = [...new Set(steps.map((s) => s?.skelId).filter((id) => typeof id === "string" && id.length > 0))];
   if (skelIds.length === 0) return { visuals: [], note: "" };
-  const root = path13.resolve(args.root);
+  const root = path14.resolve(args.root);
   const agentVisuals = Array.isArray(args.visuals) ? args.visuals : [];
   const scan = scanSkeletonFences(root, {
     files: planDeclaredFiles({
@@ -37819,12 +38223,33 @@ function buildSkeletonSnapshot(args) {
   }
   const visuals = [];
   const omitted = [];
+  const omittedDigests = [];
+  let omittedBytes = 0;
+  const digestOf = (text, rel) => {
+    if (!args.recordExterior) return void 0;
+    try {
+      return skeletonExteriorDigest(text, rel);
+    } catch {
+      return void 0;
+    }
+  };
   const withheld = [];
   let used = 0;
   for (const rel of fenced) {
     const remaining = limits.maxTotalBytes - used;
     if (visuals.length >= limits.maxFiles || remaining < Math.min(MIN_USEFUL_BYTES, limits.maxTotalBytes)) {
       omitted.push(rel);
+      if (args.recordExterior) {
+        let d;
+        if (omittedDigests.length < MAX_OMITTED_DIGESTS && omittedBytes < MAX_OMITTED_BYTES) {
+          const r = readConfined(root, rel, limits);
+          if (r.ok) {
+            omittedBytes += Buffer.byteLength(r.text, "utf-8");
+            d = digestOf(r.text, rel);
+          }
+        }
+        omittedDigests.push({ path: rel, ...d ? { exterior: d } : {} });
+      }
       continue;
     }
     const read = readConfined(root, rel, limits);
@@ -37858,7 +38283,11 @@ function buildSkeletonSnapshot(args) {
         skeleton: {
           fences: fences.map((f) => ({ id: f.id, openLine: f.openLine, closeLine: f.closeLine, status: f.status })),
           withheld: `possible secret detected (${what})`,
-          takenAt: (/* @__PURE__ */ new Date()).toISOString()
+          takenAt: (/* @__PURE__ */ new Date()).toISOString(),
+          ...(() => {
+            const d = digestOf(read.text, rel);
+            return d ? { exterior: d } : {};
+          })()
         }
       });
       continue;
@@ -37866,10 +38295,12 @@ function buildSkeletonSnapshot(args) {
     const cut = truncateToBytes(read.text, Math.min(limits.maxFileBytes, remaining));
     const code = cut ? cut.code : read.text.replace(/\n$/, "");
     used += Buffer.byteLength(code, "utf-8");
+    const exterior = digestOf(read.text, rel);
     const skeleton = {
       fences: fenceViews(fences, cut ? cut.shownLines : null),
       ...cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {},
-      takenAt: (/* @__PURE__ */ new Date()).toISOString()
+      takenAt: (/* @__PURE__ */ new Date()).toISOString(),
+      ...exterior ? { exterior } : {}
     };
     const n = skeleton.fences.length;
     const captionParts = [
@@ -37891,6 +38322,7 @@ function buildSkeletonSnapshot(args) {
   if (omitted.length > 0 && visuals.length > 0) {
     const last = visuals[visuals.length - 1];
     last.caption = `${last.caption ?? ""} Not shown (snapshot cap): ${omitted.join(", ")}.`.trim();
+    if (omittedDigests.length > 0 && last.skeleton) last.skeleton = { ...last.skeleton, omitted: omittedDigests };
   }
   if (unfenced.length > 0) {
     visuals.push({
@@ -37926,7 +38358,7 @@ function attachSkeletonSnapshot(content, opts = {}) {
         const r = resolveProjectRoot();
         return r.worktree?.workspaceRoot ?? r.projectRoot;
       })();
-      snap = buildSkeletonSnapshot({ steps, visuals: kept, root, ...opts.limits ? { limits: opts.limits } : {} });
+      snap = buildSkeletonSnapshot({ steps, visuals: kept, root, recordExterior: true, ...opts.limits ? { limits: opts.limits } : {} });
     }
     const nextVisuals = [...kept, ...snap.visuals];
     const next = { ...content };
@@ -37976,12 +38408,12 @@ function nextReadStamp() {
 
 // src/mcp/skeleton-finalize.ts
 import fs13 from "node:fs";
-import path14 from "node:path";
+import path15 from "node:path";
 var MAX_BYTES = 1e6;
 var MAX_LISTED = 20;
 function within3(dir, abs) {
-  const rel = path14.relative(dir, abs);
-  return rel === "" || !rel.startsWith("..") && !path14.isAbsolute(rel);
+  const rel = path15.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path15.isAbsolute(rel);
 }
 var PROSE_FILE2 = /\.(md|mdx|markdown|rst|txt)$/i;
 function skeletonLeftovers(root, content) {
@@ -38004,12 +38436,12 @@ function skeletonLeftovers(root, content) {
   }
   for (const rel of files) {
     try {
-      const abs = fs13.realpathSync(path14.resolve(root, rel));
+      const abs = fs13.realpathSync(path15.resolve(root, rel));
       if (!within3(realRoot, abs)) continue;
       const st = fs13.statSync(abs);
       if (!st.isFile() || st.size > MAX_BYTES) continue;
       const lines = fs13.readFileSync(abs, "utf-8").split("\n");
-      const shown = path14.relative(realRoot, abs).split(path14.sep).join("/");
+      const shown = path15.relative(realRoot, abs).split(path15.sep).join("/");
       lines.forEach((l, i) => {
         if (l.includes("SKEL_TODO")) out.push({ file: shown, line: i + 1, what: "SKEL_TODO" });
       });
@@ -38036,15 +38468,27 @@ function formatLeftovers(title, found) {
 function finalizeCheckNote(artifacts, root) {
   try {
     const current = artifacts.filter((a) => a.type === "plan" && a.status === "approved" && isLivePlanVersion(a, artifacts) && allSkeletonStepsDone(a.content)).sort((a, b) => a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0)[0];
-    if (!current) return "";
+    const restored = current ? void 0 : artifacts.filter((a) => a.type === "plan" && a.status === "superseded" && allSkeletonStepsDone(a.content) && isSkeletonDriftBaseline(a, artifacts)).sort((a, b) => a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0)[0];
+    if (!current && !restored) return "";
+    if (!current) {
+      const r2 = root ?? (() => {
+        const pr = resolveProjectRoot();
+        return pr.worktree?.workspaceRoot ?? pr.projectRoot;
+      })();
+      return finalizeDriftNote(checkSkeletonExteriorDrift(restored.content, { root: r2 }));
+    }
     const r = root ?? (() => {
       const pr = resolveProjectRoot();
       return pr.worktree?.workspaceRoot ?? pr.projectRoot;
     })();
-    return formatLeftovers(current.title, skeletonLeftovers(r, current.content));
+    return formatLeftovers(current.title, skeletonLeftovers(r, current.content)) + finalizeDriftNote(checkSkeletonExteriorDrift(current.content, { root: r }));
   } catch {
     return "";
   }
+}
+function finalizeDriftNote(drift) {
+  const line = formatExteriorDrift(drift);
+  return line || formatNotChecked(drift);
 }
 
 // src/mcp/tools/update-plan-progress.ts
@@ -38186,6 +38630,7 @@ async function handleUpdatePlanProgress(ctx, args) {
   }
   const isSkeleton = !isSpec && (c.steps ?? []).some((st) => typeof st.skelId === "string" && st.skelId);
   const reshapeNote = isSkeleton && artifact.status === "draft" && artifact.parentId ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused. Until your pair approves it, the preflight hook asks before any edit to this plan's files." : "";
+  const driftNote = isSkeleton && isSkeletonDriftBaseline(artifact, await store.getArtifacts()) ? formatExteriorDrift(checkSkeletonExteriorDrift(artifact.content)) : "";
   let finalizeNote = "";
   if (isSkeleton && artifact.status === "approved" && allSkeletonStepsDone(artifact.content) && updates.some((u) => u.status === "done" || u.status === "skipped")) {
     const root = resolveProjectRoot();
@@ -38195,7 +38640,7 @@ async function handleUpdatePlanProgress(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${completionNote}${reshapeNote}${finalizeNote}`
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${completionNote}${reshapeNote}${driftNote}${finalizeNote}`
     }]
   };
 }
@@ -39131,7 +39576,7 @@ function authorizeReviewPost(state, opts) {
 }
 
 // src/store/review-post-journal.ts
-import { createHash as createHash4, randomUUID } from "node:crypto";
+import { createHash as createHash5, randomUUID } from "node:crypto";
 var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
 var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 var timestampSchema = external_exports.iso.datetime();
@@ -39221,7 +39666,7 @@ function reviewPostDigest(value) {
     }
     return v2;
   };
-  return createHash4("sha256").update(JSON.stringify(stable(value))).digest("hex");
+  return createHash5("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
 function resultMatches(identity, result) {
   const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
@@ -39670,8 +40115,8 @@ async function handlePresentCodeChange(ctx, args) {
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   const allArtifacts = await ctx.store.getArtifacts();
   const { closeNote, changesetNudge } = codeChangeNotes(allArtifacts, id, filePath);
-  const changedLines = effectiveBefore.split("\n").length + after.split("\n").length;
-  const isSmallEdit = changedLines <= 20;
+  const changedLines2 = effectiveBefore.split("\n").length + after.split("\n").length;
+  const isSmallEdit = changedLines2 <= 20;
   const isConfident = (confidence ?? "").toLowerCase() !== "low";
   if (isSmallEdit && isConfident) {
     const elicitAction = await ctx.helpers.tryElicit(
@@ -39952,7 +40397,7 @@ async function handlePresentExplainer(ctx, args) {
 
 // src/mcp/tools/present-page.ts
 import fs14 from "node:fs";
-import path15 from "node:path";
+import path16 from "node:path";
 function refuse(message) {
   const code = TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED;
   return {
@@ -39965,8 +40410,8 @@ function refuse(message) {
   };
 }
 function isWithin(root, target) {
-  const rel = path15.relative(root, target);
-  return rel === "" || !rel.startsWith("..") && !path15.isAbsolute(rel);
+  const rel = path16.relative(root, target);
+  return rel === "" || !rel.startsWith("..") && !path16.isAbsolute(rel);
 }
 function readPageSource(projectRoot2, requested) {
   if (requested.includes("\0")) return refuse("`path` contains a NUL byte.");
@@ -39976,7 +40421,7 @@ function readPageSource(projectRoot2, requested) {
   } catch {
     return refuse("the project root could not be resolved, so `path` cannot be checked. Pass the page inline as `html`.");
   }
-  const lexical = path15.resolve(projectRoot2, requested);
+  const lexical = path16.resolve(projectRoot2, requested);
   if (!isWithin(projectRoot2, lexical) && !isWithin(rootReal, lexical)) {
     return refuse(`\`path\` "${requested}" is outside the project root. Write the page inside the project, or pass it inline as \`html\`.`);
   }
@@ -40028,7 +40473,7 @@ function readPageSource(projectRoot2, requested) {
     }
   }
   if (!html.trim()) return refuse(`the file at \`path\` "${requested}" is empty.`);
-  const sourcePath = path15.relative(rootReal, real).split(path15.sep).join("/");
+  const sourcePath = path16.relative(rootReal, real).split(path16.sep).join("/");
   return { ok: true, html, sourcePath };
 }
 async function presentPage(ctx, args, opts = {}) {
@@ -40495,11 +40940,11 @@ async function handleRecordStance(ctx, args) {
 
 // src/daemon/status.ts
 import fs15 from "node:fs";
-import path16 from "node:path";
+import path17 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path16.resolve(startDir);
+  let dir = path17.resolve(startDir);
   for (; ; ) {
-    const candidate = path16.join(dir, ".deeppairing", "daemon.json");
+    const candidate = path17.join(dir, ".deeppairing", "daemon.json");
     if (fs15.existsSync(candidate)) {
       try {
         const parsed = JSON.parse(fs15.readFileSync(candidate, "utf-8"));
@@ -40509,7 +40954,7 @@ function findDaemonJson(startDir) {
         return { dir, info: {} };
       }
     }
-    const parent = path16.dirname(dir);
+    const parent = path17.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -41470,25 +41915,25 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
 import { spawn as spawn2, execFileSync } from "node:child_process";
 import fs17 from "node:fs";
 import net from "node:net";
-import path18 from "node:path";
+import path19 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/daemon/token.ts
 import fs16 from "node:fs";
 import os3 from "node:os";
-import path17 from "node:path";
+import path18 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path17.isAbsolute(xdg)) {
+  if (xdg && path18.isAbsolute(xdg)) {
     try {
-      if (fs16.statSync(xdg).isDirectory()) return path17.join(xdg, "deeppairing");
+      if (fs16.statSync(xdg).isDirectory()) return path18.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path17.join(os3.tmpdir(), "deeppairing");
+  return path18.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path17.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path18.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
@@ -41501,7 +41946,7 @@ function readTokenSidecar(projectRoot2) {
 }
 
 // src/daemon/lifecycle.ts
-var __thisDir2 = path18.dirname(fileURLToPath3(import.meta.url));
+var __thisDir2 = path19.dirname(fileURLToPath3(import.meta.url));
 var DAEMON_FILE = "daemon.json";
 var MAX_PORT_ATTEMPTS = 10;
 function logStale(msg) {
@@ -41512,7 +41957,7 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path18.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path19.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
@@ -41666,7 +42111,7 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path18.join(projectRoot2, ".deeppairing", "daemon.log");
+  const logPath = path19.join(projectRoot2, ".deeppairing", "daemon.log");
   if (fs17.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
@@ -41709,8 +42154,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path18.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs17.existsSync(daemonScript) ? daemonScript : path18.join(__thisDir2, "daemon.js");
+  const daemonScript = path19.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs17.existsSync(daemonScript) ? daemonScript : path19.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -42086,8 +42531,8 @@ var DaemonClient = class {
     if (!this.projectRoot) return false;
     try {
       const fs20 = await import("node:fs");
-      const path22 = await import("node:path");
-      const infoPath = path22.join(this.projectRoot, ".deeppairing", "daemon.json");
+      const path23 = await import("node:path");
+      const infoPath = path23.join(this.projectRoot, ".deeppairing", "daemon.json");
       if (!fs20.existsSync(infoPath)) return false;
       const raw = fs20.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
@@ -42143,7 +42588,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path22, init, isRetry = false) {
+  async request(path23, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -42154,12 +42599,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path22}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path23}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path22, init, true);
+        if (recovered) return this.request(path23, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -42174,7 +42619,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path22, init, true);
+        return this.request(path23, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -42185,7 +42630,7 @@ var DaemonClient = class {
       }
       await this.register(this.lastRegisterMeta);
       void this.notifyRecovered();
-      return this.request(path22, init, true);
+      return this.request(path23, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -42206,15 +42651,15 @@ var DaemonClient = class {
       );
     }
   }
-  async post(path22, body) {
-    return this.request(path22, {
+  async post(path23, body) {
+    return this.request(path23, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path22) {
-    return this.request(path22, {});
+  async get(path23) {
+    return this.request(path23, {});
   }
   // --- Session lifecycle ---
   /**
@@ -42264,6 +42709,25 @@ var DaemonClient = class {
   }
   async unregister() {
     await this.post("/unregister");
+  }
+  /** Prepare a browser link without creating a live wrapper registration. */
+  async openStandaloneReview(mode, expectedProjectRoot, signal) {
+    let receipt;
+    try {
+      receipt = await this.request("/open-review", {
+        method: "POST",
+        signal,
+        redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, expectedProjectRoot })
+      }, true);
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support standalone reviews. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
+    if (receipt?.sessionId !== this.sessionId) throw new Error("The daemon did not confirm the requested standalone session.");
   }
   // --- Artifacts ---
   async createArtifact(params) {
@@ -42635,9 +43099,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path22) {
+  async requestPublic(path23) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path22}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path23}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -42684,10 +43148,10 @@ var DaemonClient = class {
 // src/store/project-registry.ts
 import fs18 from "node:fs";
 import os4 from "node:os";
-import path19 from "node:path";
+import path20 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path19.join(os4.homedir(), ".deeppairing", "projects.json");
+  return path20.join(os4.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {
@@ -42728,15 +43192,15 @@ function readFile() {
   }
   const projects = {};
   let dropped = 0;
-  for (const [key, value] of Object.entries(projectsRaw)) {
+  for (const [key2, value] of Object.entries(projectsRaw)) {
     const v2 = value;
     if (!v2 || typeof v2 !== "object" || typeof v2.projectRoot !== "string" || !v2.projectRoot) {
       dropped++;
       continue;
     }
-    projects[key] = {
+    projects[key2] = {
       projectRoot: v2.projectRoot,
-      name: typeof v2.name === "string" && v2.name ? v2.name : path19.basename(v2.projectRoot),
+      name: typeof v2.name === "string" && v2.name ? v2.name : path20.basename(v2.projectRoot),
       lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
@@ -42747,13 +43211,13 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
   try {
     const filePath = projectRegistryPath();
     const file2 = readFile();
-    const key = path19.resolve(projectRoot2);
-    file2.projects[key] = {
-      projectRoot: key,
-      name: path19.basename(key) || key,
+    const key2 = path20.resolve(projectRoot2);
+    file2.projects[key2] = {
+      projectRoot: key2,
+      name: path20.basename(key2) || key2,
       lastSeen: now.toISOString()
     };
-    fs18.mkdirSync(path19.dirname(filePath), { recursive: true });
+    fs18.mkdirSync(path20.dirname(filePath), { recursive: true });
     writeJsonAtomic(filePath, file2);
     return true;
   } catch (err) {
@@ -42765,9 +43229,9 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
 
 // src/session-id.ts
 import crypto4 from "node:crypto";
-import path20 from "node:path";
+import path21 from "node:path";
 function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
-  const projectName = path20.basename(projectRoot2);
+  const projectName = path21.basename(projectRoot2);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
   const base = `session_${safeProjectName}_${projectHash}`;
@@ -42780,15 +43244,15 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 
 // src/standalone.ts
 import fs19 from "node:fs";
-import path21 from "node:path";
+import path22 from "node:path";
 var { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
-var dpDir = path21.join(projectRoot, ".deeppairing");
-var logFile = path21.join(dpDir, "server.log");
+var dpDir = path22.join(projectRoot, ".deeppairing");
+var logFile = path22.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs19.mkdirSync(path21.dirname(logFile), { recursive: true });
+    fs19.mkdirSync(path22.dirname(logFile), { recursive: true });
     fs19.appendFileSync(logFile, line);
   } catch {
   }
@@ -42811,7 +43275,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path21.basename(projectRoot);
+  const projectName = path22.basename(projectRoot);
   const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
   const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
   const sessionId = derived.sessionId;
