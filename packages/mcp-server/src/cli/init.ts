@@ -1442,6 +1442,10 @@ ${helpInvocations}
     dp read-decision --session-id ID --decision-id ID [--wait-ms MS]
                                            Read a saved choice and linked rejection reasons without consuming feedback.
                                            Optionally wait 1–30000 ms for the choice.
+    dp read-page-feedback --session-id ID --artifact-id ID
+                                           Read pending anchored human comments for one page version as JSON.
+                                           Returns newest comments first, up to 50 comments and 64 KiB of JSON.
+                                           omittedComments counts entries that do not fit. Returned comments stay whole.
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
@@ -1558,10 +1562,11 @@ ${helpInvocations}
     console.error(`deepPairing: ${errorMessage(err)}`);
     process.exitCode = 1;
   }
-} else if (cmd === "read-decision") {
+} else if (cmd === "read-decision" || cmd === "read-page-feedback") {
   try {
-    const { standaloneReadDecision } = await import("./standalone-session.js");
-    console.log(JSON.stringify(await standaloneReadDecision(cwd, args.slice(1))));
+    const { standaloneReadDecision, standaloneReadPageFeedback } = await import("./standalone-session.js");
+    const read = cmd === "read-decision" ? standaloneReadDecision : standaloneReadPageFeedback;
+    console.log(JSON.stringify(await read(cwd, args.slice(1))));
   } catch (err) {
     console.error(`deepPairing: ${errorMessage(err)}`);
     process.exitCode = 1;

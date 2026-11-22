@@ -17,6 +17,7 @@ const PRESENT_OPTIONS_USAGE = "Usage: deeppairing present options --session-id I
 const PRESENT_PAGE_USAGE = "Usage: deeppairing present page --session-id ID --request-id UUID (--file page.html | --path page-inside-project.html) --title T [--summary S] [--concept C]";
 const PRESENT_USAGE = `${PRESENT_OPTIONS_USAGE}\n       ${PRESENT_PAGE_USAGE.replace(/^Usage: /, "")}`;
 const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --decision-id ID [--wait-ms MS]";
+const READ_PAGE_FEEDBACK_USAGE = "Usage: deeppairing read-page-feedback --session-id ID --artifact-id ID";
 const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
 
@@ -91,6 +92,18 @@ export async function standaloneReadDecision(projectRoot: string, args: string[]
   const { client } = await connectStandaloneSession(projectRoot, sessionId);
   return client.readStandaloneDecision(projectRoot, decisionId,
     AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS + (waitMs ?? 0)), waitMs);
+}
+
+export async function standaloneReadPageFeedback(projectRoot: string, args: string[]) {
+  const { values } = parseArgs({
+    args,
+    options: { "session-id": { type: "string" }, "artifact-id": { type: "string" } },
+  });
+  const { "session-id": sessionId, "artifact-id": artifactId } = values;
+  if (!sessionId || !artifactId?.trim()) throw new Error(READ_PAGE_FEEDBACK_USAGE);
+  requireStandaloneSession(projectRoot, sessionId);
+  const { client } = await connectStandaloneSession(projectRoot, sessionId);
+  return client.readStandalonePageFeedback(projectRoot, artifactId, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
 }
 
 export async function standalonePresent(projectRoot: string, args: string[]): Promise<PresentOptionsReceipt | PresentPageReceipt> {

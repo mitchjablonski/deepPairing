@@ -24,6 +24,7 @@ import type { RetirementInput } from "../store/retirement.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
 import { presentStandalonePage } from "./standalone-page.js";
+import { readPageFeedback } from "./page-feedback.js";
 import { decisionFeedback, MAX_DECISION_WAIT_MS, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
 
 const OpenStandaloneReviewBody = z.object({
@@ -56,6 +57,10 @@ const ReadStandaloneDecisionBody = z.object({
   expectedProjectRoot: z.string().min(1),
   decisionId: z.string().min(1),
   waitMs: z.number().int().min(1).max(MAX_DECISION_WAIT_MS).optional(),
+}).strict();
+const ReadStandalonePageFeedbackBody = z.object({
+  expectedProjectRoot: z.string().min(1),
+  artifactId: z.string().min(1),
 }).strict();
 
 const RetirementBody = z.object({
@@ -472,8 +477,9 @@ export function createDaemonRoutes(
   const AGENT_ACTIVITY_THROTTLE_MS = 5_000;
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    // Preparing a browser link and reading a decision are independent of wrapper activity.
-    if (c.res.status >= 400 || c.req.path.endsWith("/open-review") || c.req.path.endsWith("/read-decision")) return;
+    // Standalone links and reads do not signal wrapper activity.
+    if (c.res.status >= 400 || (c.req.method === "POST" &&
+      /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback)$/.test(c.req.path))) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
     const sid = m?.[1];
     if (!sid) return;
@@ -533,6 +539,26 @@ export function createDaemonRoutes(
     const projectRoot = daemonProjectRoot;
     function reviewDir(sessionId: string): string {
       return path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+    }
+    function requireWarmStandaloneStore(c: Context, expectedProjectRoot: string, sessionId: string, command: string): StoreLookup {
+      if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
+        return { ok: false, response: c.json({
+          error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch,
+        }, 403) };
+      }
+      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+        return { ok: false, response: c.json({
+          error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered,
+        }, 404) };
+      }
+      const store = sessions.get(sessionId);
+      if (!store) {
+        return { ok: false, response: c.json({
+          error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry ${command}.`,
+          code: ERROR_CODES.session_not_registered,
+        }, 404) };
+      }
+      return { ok: true, store };
     }
     app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
       const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
@@ -611,19 +637,9 @@ export function createDaemonRoutes(
       const { expectedProjectRoot, decisionId, waitMs } = parsed.data;
       const deadline = performance.now() + (waitMs ?? 0);
       const sessionId = c.req.param("sessionId");
-      if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
-        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
-      }
-      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
-      }
-      const store = sessions.get(sessionId);
-      if (!store) {
-        return c.json({
-          error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry read-decision.`,
-          code: ERROR_CODES.session_not_registered,
-        }, 404);
-      }
+      const lookup = requireWarmStandaloneStore(c, expectedProjectRoot, sessionId, "read-decision");
+      if (!lookup.ok) return lookup.response;
+      const { store } = lookup;
       let idleRefreshed = false;
       while (!signal.aborted) {
         // Inspect the choice after resolve/flush. Arm inside the lock so a
@@ -674,6 +690,21 @@ export function createDaemonRoutes(
         await read.wake;
       }
       return c.body(null, 408);
+    });
+    app.post("/api/internal/sessions/:sessionId/read-page-feedback", async (c) => {
+      const parsed = await parseJsonBody(c, ReadStandalonePageFeedbackBody);
+      if (!parsed.ok) return parsed.res;
+      const { expectedProjectRoot, artifactId } = parsed.data;
+      const lookup = requireWarmStandaloneStore(c, expectedProjectRoot, c.req.param("sessionId"), "read-page-feedback");
+      if (!lookup.ok) return lookup.response;
+      const result = readPageFeedback(lookup.store, artifactId);
+      if (!result) {
+        return c.json({ error: "Page does not exist in this standalone session.", code: ERROR_CODES.artifact_not_in_session }, 404);
+      }
+      if (result === "metadata_too_large") {
+        return c.json({ error: "Page feedback metadata exceeds the response cap.", code: ERROR_CODES.body_too_large }, 413);
+      }
+      return c.json(result);
     });
   }
 
