@@ -182,14 +182,40 @@ describe("setup-agent writes where the human is (git toplevel of cwd)", () => {
     initRepo(root);
     const wt = path.join(outside, "wt");
     git(root, "worktree", "add", "-q", wt);
-    expect(resolveSetupRoot(wt)).toBe(fs.realpathSync(wt));
+    expect(resolveSetupRoot(wt, cleanGitEnv())).toEqual({ root: fs.realpathSync(wt) });
     runSetupAgentCommand(wt, ["--agent", "codex"], GUIDE);
     expect(fs.existsSync(path.join(wt, "AGENTS.md"))).toBe(true);
     expect(fs.existsSync(path.join(root, "AGENTS.md"))).toBe(false);
   });
 
   it("outside a repo, falls back to the directory itself", () => {
-    expect(resolveSetupRoot(root)).toBe(path.resolve(root));
+    expect(resolveSetupRoot(root, cleanGitEnv())).toEqual({ root: path.resolve(root) });
+  });
+
+  it("refuses to run from inside .git", () => {
+    initRepo(root);
+    expect(() => runSetupAgentCommand(path.join(root, ".git"), ["--agent", "codex"], GUIDE, { env: cleanGitEnv() }))
+      .toThrow(/inside a \.git directory/);
+    expect(fs.existsSync(path.join(root, ".git", "AGENTS.md"))).toBe(false);
+  });
+
+  it("warns on stderr and falls back to cwd when git is not on PATH", () => {
+    initRepo(root);
+    const sub = path.join(root, "sub");
+    fs.mkdirSync(sub);
+    const noGit = path.join(outside, "empty-bin");
+    fs.mkdirSync(noGit);
+    const errors: string[] = [];
+    runSetupAgentCommand(sub, ["--agent", "codex"], GUIDE, { env: { ...cleanGitEnv(), PATH: noGit }, writeErr: (l) => errors.push(l) });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/warning: git is not on PATH; using the current directory/);
+    expect(fs.existsSync(path.join(sub, "AGENTS.md"))).toBe(true);
+  });
+
+  it("stays quiet outside a repository", () => {
+    const errors: string[] = [];
+    runSetupAgentCommand(root, ["--agent", "codex"], GUIDE, { env: cleanGitEnv(), writeErr: (l) => errors.push(l) });
+    expect(errors).toEqual([]);
   });
 
   it("the real CLI ignores CLAUDE_PROJECT_DIR / DEEPPAIRING_PROJECT_ROOT", () => {
@@ -235,15 +261,15 @@ describe("setup-agent file intent", () => {
     expect(backups("AGENTS.md")).toEqual([]);
   });
 
-  it("rewrites a hard-linked file in place so the links stay joined", () => {
+  it("refuses a hard-linked file, leaving both links untouched", () => {
     const file = path.join(root, "AGENTS.md");
     const twin = path.join(outside, "twin.md");
     fs.writeFileSync(file, "shared\n");
     fs.linkSync(file, twin);
-    setupAgent({ projectRoot: root, agent: "codex", guideCommand: GUIDE });
+    expect(() => setupAgent({ projectRoot: root, agent: "codex", guideCommand: GUIDE })).toThrow(/hard links/);
+    expect(fs.readFileSync(twin, "utf8")).toBe("shared\n");
     expect(fs.statSync(file).nlink).toBe(2);
-    expect(fs.readFileSync(twin, "utf8")).toBe(read("AGENTS.md"));
-    expect(read("AGENTS.md")).toContain(BLOCK_START);
+    expect(backups("AGENTS.md")).toEqual([]);
   });
 
   it("adds alwaysApply frontmatter to an existing Cursor rule that lacks it", () => {

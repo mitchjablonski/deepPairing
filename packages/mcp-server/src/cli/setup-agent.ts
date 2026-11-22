@@ -28,11 +28,11 @@
  * outside it is preserved byte for byte, line endings and BOM included); a
  * rerun replaces the block rather than adding a second one; an existing file
  * is backed up before it changes; non-UTF-8, read-only and non-regular files
- * are refused; a hard-linked file is rewritten in place so its links stay
- * joined; nothing is written through a symlink or outside the project root;
+ * are refused; hard-linked files are refused like symlinks; nothing is
+ * written through a symlink or outside the project root;
  * and `--dry-run` prints the diff and writes nothing.
  */
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -101,18 +101,40 @@ export function isSetupAgentName(value: string): value is SetupAgentName {
 /**
  * Where setup-agent writes: the Git toplevel of `cwd` (the worktree root in a
  * linked worktree), else `cwd` itself. Git env overrides are stripped so the
- * answer depends only on the directory, and project-root env vars are never read.
+ * answer depends only on the directory, and project-root env vars are never
+ * read. Refuses a cwd inside a `.git` directory. When git is missing or
+ * refuses the repository (e.g. dubious ownership), it falls back to `cwd` and
+ * says so in `warning`; a plain "not a repository" falls back silently.
  */
-export function resolveSetupRoot(cwd: string): string {
-  const env = { ...process.env };
+export function resolveSetupRoot(cwd: string, baseEnv: NodeJS.ProcessEnv = process.env): { root: string; warning?: string } {
+  const env = { ...baseEnv };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[key];
-  try {
-    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000,
-    }).trim();
-    if (top) return path.resolve(top);
-  } catch { /* not a repo, or no git: fall back to cwd */ }
-  return path.resolve(cwd);
+  const git = (...args: string[]) =>
+    spawnSync("git", ["rev-parse", ...args], { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 });
+  const fallback = path.resolve(cwd);
+  const failed = (run: ReturnType<typeof git>): { root: string; warning?: string } | null => {
+    if (run.error) {
+      const why = (run.error as NodeJS.ErrnoException).code === "ENOENT" ? "git is not on PATH" : `git failed (${run.error.message})`;
+      return { root: fallback, warning: `${why}; using the current directory (${fallback}) as the project root.` };
+    }
+    if (run.status === 0) return null;
+    const stderr = (run.stderr ?? "").trim();
+    if (/not a git repository/i.test(stderr)) return { root: fallback };
+    const first = stderr.split("\n").find((line) => line.trim()) ?? `exit ${run.status}`;
+    return { root: fallback, warning: `git refused this repository (${first.replace(/^fatal:\s*/, "")}); using the current directory (${fallback}) as the project root.` };
+  };
+
+  const inside = git("--is-inside-git-dir");
+  const insideFailure = failed(inside);
+  if (insideFailure) return insideFailure;
+  if (inside.stdout.trim() === "true") {
+    throw new Error("The current directory is inside a .git directory (or a bare repository). Run setup-agent from your working tree.");
+  }
+  const top = git("--show-toplevel");
+  const topFailure = failed(top);
+  if (topFailure) return topFailure;
+  const dir = top.stdout.trim();
+  return { root: dir ? path.resolve(dir) : fallback };
 }
 
 function isInside(root: string, target: string): boolean {
@@ -144,6 +166,11 @@ function resolveContainedTarget(projectRoot: string, rel: string): string {
     }
     if (isTarget ? !stat.isFile() : !stat.isDirectory()) {
       throw new Error(`${path.relative(root, current)} is not a ${isTarget ? "regular file" : "directory"}.`);
+    }
+    if (isTarget && stat.nlink > 1) {
+      // Another name for this file may live outside the project; editing it
+      // would change that file too, and a rename would split the links.
+      throw new Error(`${rel} has ${stat.nlink} hard links; refusing to edit it, since another link may live outside the project. Copy it to a standalone file or edit it by hand.`);
     }
   }
   return target;
@@ -270,12 +297,6 @@ export function setupAgent(opts: SetupAgentOptions): SetupAgentResult {
     const stamp = (opts.now?.() ?? new Date()).toISOString().replace(/[:.]/g, "-");
     backupPath = `${target}.deeppairing-backup-${stamp}`;
     fs.copyFileSync(target, backupPath, fs.constants.COPYFILE_EXCL);
-    if (stat.nlink > 1) {
-      // Rewrite in place: a rename would split the file from its other links.
-      resolveContainedTarget(opts.projectRoot, file);
-      fs.writeFileSync(target, bytes);
-      return { ...base, action, diff, backupPath };
-    }
   } else {
     makeParents(opts.projectRoot, file);
   }
@@ -297,7 +318,12 @@ export function setupAgent(opts: SetupAgentOptions): SetupAgentResult {
  * Parse argv (after `setup-agent`), run, and render the human-readable report.
  * `cwd` is the directory the command runs in; the root is resolved from it.
  */
-export function runSetupAgentCommand(cwd: string, args: string[], guideCommand: string): string {
+export function runSetupAgentCommand(
+  cwd: string,
+  args: string[],
+  guideCommand: string,
+  io: { writeErr?: (line: string) => void; env?: NodeJS.ProcessEnv } = {},
+): string {
   const { values } = parseArgs({
     args,
     options: { agent: { type: "string" }, "dry-run": { type: "boolean" } },
@@ -305,7 +331,9 @@ export function runSetupAgentCommand(cwd: string, args: string[], guideCommand: 
   });
   const agent = values.agent;
   if (!agent || !isSetupAgentName(agent)) throw new Error(SETUP_AGENT_USAGE);
-  const result = setupAgent({ projectRoot: resolveSetupRoot(cwd), agent, guideCommand, dryRun: values["dry-run"] === true });
+  const { root, warning } = resolveSetupRoot(cwd, io.env);
+  if (warning) (io.writeErr ?? ((line: string) => { process.stderr.write(`${line}\n`); }))(`deepPairing: warning: ${warning}`);
+  const result = setupAgent({ projectRoot: root, agent, guideCommand, dryRun: values["dry-run"] === true });
   const lines: string[] = [];
   if (result.action === "unchanged") {
     lines.push(`${result.absolutePath} already has the current deepPairing block. Nothing to do.`);
