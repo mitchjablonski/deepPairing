@@ -404,6 +404,14 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
   );
 
+  // #680 slice 3 (review P3-A) — the entry gate PEEKS the same claim lane the
+  // delivery uses (no claim taken): a notice held for a live subagent, or
+  // claimed by a concurrent poll, must not make this poll skip its wait and
+  // return empty-handed on every call.
+  const pageWatchAtGate = store.selectFileWatchNotices
+    ? await store.selectFileWatchNotices(allArtsForScope, { peek: true })
+    : undeliveredFileWatchRefs(allArtsForScope);
+
   // #188 — the scope→signal decision lives in the shared scopeHasSignal (see
   // its GH#152 note); here we feed it the PRE-poll snapshot counts.
   // #176 — a pending render failure satisfies EVERY scope (like a human
@@ -417,7 +425,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0
     // #680 slice 3 — a page version the file watch recorded (or a save it
     // refused) is news for the agent, so the poll returns it without waiting.
-    || collectPageWatchNotices(allArtsForScope, undeliveredFileWatchRefs(allArtsForScope)).prose !== "";
+    || collectPageWatchNotices(allArtsForScope, pageWatchAtGate).prose !== "";
 
   if (!hasImmediate) {
     // Check if there are draft artifacts — if so, wait for human action

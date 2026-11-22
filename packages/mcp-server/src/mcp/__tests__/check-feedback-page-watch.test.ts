@@ -4,9 +4,12 @@
  * orphaned), or a save it refused with the stored reason. Each notice is
  * reported once (acknowledged after the poll).
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readFileWatch } from "@deeppairing/shared";
-import type { FileStore } from "../../store/file-store.js";
+import { FileStore } from "../../store/file-store.js";
+import { handleCheckFeedback } from "../tools/check-feedback.js";
+import type { ToolContext } from "../tools/types.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { feedbackStoreView } from "../tools/feedback-ownership.js";
 
@@ -129,5 +132,80 @@ describe("revise_artifact — racing the page file watch (#680 slice 3, review P
     expect(res.text).toContain("Nothing was created");
     expect(store.getArtifacts().filter((a) => a.parentId === "art_p1").map((a) => a.id)).toEqual(["art_p2"]);
     expect(store.getArtifacts().find((a) => a.id === "art_p1")!.status).toBe("draft");
+  });
+});
+
+describe("check_feedback entry gate — page file-watch notices owned elsewhere (review P3-A)", () => {
+  /** A FileStore that records whether the long-poll wait ran (and returns
+   *  at once instead of sitting 30s). */
+  class WaitRecordingStore extends FileStore {
+    waited = 0;
+    override waitForFeedback(): Promise<void> {
+      this.waited++;
+      // The human writes while we wait (so a scoped wait has something of
+      // its own to wake for and ends promptly).
+      if (this.waited === 1) this.addComment({ id: "cmt_during_wait", artifactId: "__session__", content: "arrived during the wait", author: "human" });
+      return Promise.resolve();
+    }
+  }
+  let fx: GlobalStoreFixture;
+  beforeEach(() => {
+    fx = withGlobalStore("dp-cf-pagewatch-gate-");
+  });
+  afterEach(() => fx.dispose());
+
+  function directCtx(store: FileStore, state: Record<string, unknown> = {}): ToolContext {
+    return {
+      server: { notification: () => {} },
+      store,
+      broadcast: () => {},
+      port: 4000,
+      helpers: {} as ToolContext["helpers"],
+      state: { checkFeedbackPollCount: 0, reportedRejectedVerdicts: new Set<string>(), reportedPlanVerdicts: new Set<string>(), ...state },
+    } as unknown as ToolContext;
+  }
+
+  function seed(store: FileStore): void {
+    // A draft page (so an empty poll long-polls) owned by subagent B, with an
+    // undelivered auto-recorded notice.
+    store.createArtifact({ id: "art_b1", type: "page", title: "B page", content: { title: "B page", html: "<p>1</p>", sourcePath: "docs/b.html" }, presentedBy: "B" });
+    store.createArtifact({ id: "art_b2", type: "page", title: "B page", content: { title: "B page", html: "<p>2</p>", sourcePath: "docs/b.html" }, parentId: "art_b1", version: 2, presentedBy: "B" });
+    store.updateArtifactStatus("art_b1", "superseded", "agent_supersede");
+    store.setPageFileWatch("art_b2", "recorded", { at: new Date().toISOString(), sourcePath: "docs/b.html", fromArtifactId: "art_b1", fromVersion: 1, carriedCount: 0, orphaned: [] });
+  }
+
+  it("a notice held for live consumer B doesn't short-circuit A's long-poll", async () => {
+    const store = fx.track(new WaitRecordingStore(fx.dir, "gate_held"));
+    seed(store);
+    const res = await handleCheckFeedback(
+      directCtx(store, { liveConsumers: { b: { filter: { presentedBy: "B" }, inflight: 1, lastAt: Date.now() } } }),
+      {},
+    );
+    expect(store.waited).toBeGreaterThanOrEqual(1);
+    expect(res.content[0]!.text).toContain("arrived during the wait");
+    expect(res.content[0]!.text).not.toContain("Page file watch");
+    expect(readFileWatch(store.getArtifacts().find((a) => a.id === "art_b2")!.fileWatch).recorded!.delivered).toBeUndefined();
+  });
+
+  it("a notice claimed by a concurrent poll doesn't make a second poll return early", async () => {
+    const store = fx.track(new WaitRecordingStore(fx.dir, "gate_claimed"));
+    seed(store);
+    const first = feedbackStoreView(store, { filter: null, reservations: [], pending: null });
+    expect(await first.store.selectFileWatchNotices!(store.getArtifacts())).toHaveLength(1);
+    const res = await handleCheckFeedback(directCtx(store), {});
+    expect(store.waited).toBe(1);
+    expect(res.content[0]!.text).toContain("arrived during the wait");
+    expect(res.content[0]!.text).not.toContain("Page file watch");
+    first.release();
+    // Still there for whoever polls next.
+    expect(readFileWatch(store.getArtifacts().find((a) => a.id === "art_b2")!.fileWatch).recorded!.delivered).toBeUndefined();
+  });
+
+  it("an unowned, unclaimed notice still returns at once (control)", async () => {
+    const store = fx.track(new WaitRecordingStore(fx.dir, "gate_free"));
+    seed(store);
+    const res = await handleCheckFeedback(directCtx(store), {});
+    expect(store.waited).toBe(0);
+    expect(res.content[0]!.text).toContain("Page file watch");
   });
 });

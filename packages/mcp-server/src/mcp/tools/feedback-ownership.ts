@@ -318,8 +318,8 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
   // the lane reads the poll's own snapshot (no extra store read on the legacy
   // path) and claims / holds back like the other lanes.
   const overrides: Record<string, unknown> = {
-    selectFileWatchNotices: (artifacts: Artifact[]) =>
-      consumable<FileWatchNoticeRef>("fileWatch", () => undeliveredFileWatchRefs(artifacts), (r) => r.artifactId, fileWatchNoticeKey, true)(),
+    selectFileWatchNotices: (artifacts: Artifact[], o?: { peek?: boolean }) =>
+      consumable<FileWatchNoticeRef>("fileWatch", () => undeliveredFileWatchRefs(artifacts), (r) => r.artifactId, fileWatchNoticeKey, !o?.peek)(),
     getUnacknowledgedComments: commentsLane(true),
     getResolvedDecisions: decisionsLane(true),
     getUnacknowledgedStatusChanges: statusLane(true),

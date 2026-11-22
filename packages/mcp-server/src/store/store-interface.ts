@@ -476,9 +476,10 @@ export interface IStore {
    * feedbackStoreView (never by FileStore/DaemonClient): select, from this
    * poll's artifact snapshot, the file-watch notices this poll may deliver
    * (claimed against concurrent polls, held back for live subagent consumers).
+   * `peek` selects without claiming (the entry gate / wake checks).
    * Absent → check_feedback takes every undelivered notice in the snapshot.
    */
-  selectFileWatchNotices?(artifacts: Artifact[]): MaybePromise<FileWatchNoticeRef[]>;
+  selectFileWatchNotices?(artifacts: Artifact[], opts?: { peek?: boolean }): MaybePromise<FileWatchNoticeRef[]>;
 
   // Comments
   addComment(params: AddCommentParams): MaybePromise<Comment>;
