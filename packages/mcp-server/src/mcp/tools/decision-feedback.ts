@@ -20,7 +20,7 @@ export const MAX_DECISION_WAIT_MS = 30_000;
 export type StandaloneDecisionRead = ReturnType<typeof decisionFeedback> & {
   sessionId: string;
   artifactStatus: ArtifactStatus;
-  waitStatus?: "resolved" | "timed_out";
+  waitStatus?: "resolved" | "timed_out" | "closed";
   /** Current project stances sourced from this card, in their recorded form. */
   recordedRejections: Array<Pick<RejectedApproach, "description" | "reason">>;
 };

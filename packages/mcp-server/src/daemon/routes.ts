@@ -4,7 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { staleResolveBody, closedResolveBody, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
+import { staleResolveBody, closedResolveBody, classifyClosedDecision, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -12,7 +12,7 @@ import { z } from "zod";
 import { ParentSupersededError, type FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import type { PreflightTrace } from "@deeppairing/shared";
-import { AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
+import { AutonomyLevelSchema, decisionCanAcceptAnswer, DetailDensitySchema, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
 import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
@@ -578,18 +578,28 @@ export function createDaemonRoutes(
         const read = await withDecisionResolveLock(store, async () => {
           if (signal.aborted) return null;
           const decision = store.getDecision(decisionId);
-          const artifact = decision && store.getArtifacts().find((a) =>
+          const artifacts = decision ? store.getArtifacts() : [];
+          const artifact = decision && artifacts.find((a) =>
             a.type === "decision" && a.id === decision.artifactId &&
             (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
           if (!decision || !artifact) return null;
-          const remaining = deadline - performance.now();
-          if (waitMs !== undefined && !decision.response && remaining > 0) {
-            // Give an accepted wait a fresh idle interval without a wrapper lease.
-            if (!idleRefreshed) {
-              refreshCompanionLink();
-              idleRefreshed = true;
+          let waitStatus: StandaloneDecisionRead["waitStatus"];
+          if (waitMs !== undefined) {
+            const remaining = deadline - performance.now();
+            if (decision.response) {
+              waitStatus = "resolved";
+            } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
+              waitStatus = "closed";
+            } else if (remaining > 0) {
+              // Give an accepted wait a fresh idle interval without a wrapper lease.
+              if (!idleRefreshed) {
+                refreshCompanionLink();
+                idleRefreshed = true;
+              }
+              return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+            } else {
+              waitStatus = "timed_out";
             }
-            return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
           }
           const result: StandaloneDecisionRead = {
             ...decisionFeedback(decision),
@@ -598,7 +608,7 @@ export function createDaemonRoutes(
             recordedRejections: store.getSessionMemory().rejectedApproaches
               .filter((entry) => entry.sourceArtifactId === artifact.id)
               .map(({ description, reason }) => ({ description, reason })),
-            ...(waitMs === undefined ? {} : { waitStatus: decision.response ? "resolved" : "timed_out" }),
+            ...(waitStatus === undefined ? {} : { waitStatus }),
           };
           return { result };
         });

@@ -108,10 +108,11 @@ it("waits for the exact committed standalone choice and releases a disconnected 
     "X-Project-Hash": projectHashOf(tmpDir), "X-Session-Id": sessionId,
     "Content-Type": "application/json", Authorization: "Bearer test-token",
   };
-  const read = (signal: AbortSignal) => fetch(`http://127.0.0.1:${port}/api/internal/sessions/${sessionId}/read-decision`, {
-    method: "POST", signal, headers,
-    body: JSON.stringify({ expectedProjectRoot: tmpDir, decisionId: "d1", waitMs: 10_000 }),
-  });
+  const read = (signal: AbortSignal, args: { decisionId: string; waitMs?: number } = { decisionId: "d1", waitMs: 10_000 }) =>
+    fetch(`http://127.0.0.1:${port}/api/internal/sessions/${sessionId}/read-decision`, {
+      method: "POST", signal, headers,
+      body: JSON.stringify({ expectedProjectRoot: tmpDir, ...args }),
+    });
   const disconnect = new AbortController();
   const continueWait = new AbortController();
   try {
@@ -131,16 +132,51 @@ it("waits for the exact committed standalone choice and releases a disconnected 
       expect(waiters()).toHaveLength(1);
       expect(waiters()[0]).not.toBe(originalWaiter);
     });
-    const picked = await daemon.app.request("/api/decisions/d1/resolve", {
+    const picked = await daemon.app.request("/api/decisions/d1", {
       method: "POST", headers, body: JSON.stringify({ optionId: "o2", reasoning: "Simpler to run" }),
     });
-    expect(picked.status).toBe(200);
+    expect(picked.status, await picked.text()).toBe(200);
     const response = await pending;
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ waitStatus: "resolved", selectedOptionId: "o2", reasoning: "Simpler to run" });
     expect(waiters()).toHaveLength(0);
     expect(store.getResolvedDecisions()).toHaveLength(1);
     expect(store.getUnacknowledgedComments().map((comment) => comment.id)).toEqual(["note"]);
+
+    store.createArtifact({ id: "a2", type: "decision", title: "Which queue?", content: { decisionId: "d2" } });
+    store.recordDecisionRequest({ decisionId: "d2", artifactId: "a2", context: "Which queue?", options: OPTS });
+    const rejection = read(continueWait.signal, { decisionId: "d2", waitMs: 10_000 });
+    void rejection.catch(() => {});
+    await vi.waitFor(() => expect(waiters()).toHaveLength(1));
+    const reason = "This service does not need a queue.";
+    const rejected = await daemon.app.request("/api/artifacts/a2/status", {
+      method: "POST", headers, body: JSON.stringify({ status: "rejected", feedback: reason }),
+    });
+    expect(rejected.status, await rejected.text()).toBe(200);
+    const closedRead = await (await rejection).json();
+    expect(closedRead).toMatchObject({ waitStatus: "closed", artifactStatus: "rejected" });
+    expect(closedRead).not.toHaveProperty("selectedOptionId");
+    expect(waiters()).toHaveLength(0);
+    const fastPath = await read(continueWait.signal, { decisionId: "d2", waitMs: 10_000 });
+    expect(await fastPath.json()).toEqual(closedRead);
+    expect(waiters()).toHaveLength(0);
+    const immediate = await read(continueWait.signal, { decisionId: "d2" });
+    expect(await immediate.json()).not.toHaveProperty("waitStatus");
+    expect(store.getUnacknowledgedStatusChanges().map((artifact) => artifact.id)).toContain("a2");
+    expect(store.getUnacknowledgedComments().map((comment) => comment.content)).toContain(reason);
+
+    // Parent remains draft until the second half of revision marks it superseded.
+    store.createArtifact({ id: "a3", type: "decision", title: "Which backend?", content: { decisionId: "d3" } });
+    store.recordDecisionRequest({ decisionId: "d3", artifactId: "a3", context: "Which backend?", options: OPTS });
+    store.createArtifact({ id: "a4", type: "decision", title: "Which backend v2?", content: { decisionId: "d4" }, parentId: "a3", version: 2 });
+    const revised = await read(continueWait.signal, { decisionId: "d3", waitMs: 10_000 });
+    expect(await revised.json()).toMatchObject({ waitStatus: "closed", artifactStatus: "draft", artifactId: "a3" });
+    expect(waiters()).toHaveLength(0);
+
+    store.updateArtifactStatus("a1", "obsolete", "agent_obsolete");
+    const resolved = await read(continueWait.signal);
+    expect(await resolved.json()).toMatchObject({ waitStatus: "resolved", artifactStatus: "obsolete", selectedOptionId: "o2" });
+    expect(store.getResolvedDecisions().map((decision) => decision.decisionId)).toEqual(["d1"]);
   } finally {
     disconnect.abort();
     continueWait.abort();
