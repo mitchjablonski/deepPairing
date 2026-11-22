@@ -14,24 +14,27 @@ export { PAGE_RULE_OUT_KEY_MAX };
  * text contains that phrase, citing the reason.
  */
 
-/** Fewer letters/digits than this is too short to gate on without blocking ordinary prose. */
-export const PAGE_RULE_OUT_KEY_MIN = 3;
 export const PAGE_RULE_OUT_REASON_MAX = 2000;
+/** A phrase needs at least this many words of PAGE_RULE_OUT_MIN_WORD_LEN+ letters/digits… */
+export const PAGE_RULE_OUT_MIN_WORDS = 2;
+export const PAGE_RULE_OUT_MIN_WORD_LEN = 2;
+/** …or at least this many letters/digits in total. Anything shorter would
+ *  block ordinary prose ("Bob" would refuse every page mentioning a Bob). */
+export const PAGE_RULE_OUT_MIN_CHARS = 8;
 
-/**
- * The stance phrase for an anchor's quote, or null when there is nothing
- * gateable (an element with no text, or a fragment shorter than the minimum).
- *
- *  - Whitespace collapses to single spaces (the gate reads page text the same way).
- *  - A quote with a colon keeps only its longest colon-free part. The gate
- *    reads "a: b" as category "a" plus specific noun "b" and matches on "b"
- *    alone, so a quote like "Owner: Bob" would quietly become a stance on
- *    "bob". The longest part is what the human most plausibly meant, and it
- *    is still a literal substring of the page, so it matches the page text.
- *  - Capped at PAGE_RULE_OUT_KEY_MAX at a word boundary, never with an
- *    ellipsis: the phrase has to stay a literal substring of the page text.
- */
-export function pageRuleOutKey(quote: string): string | null {
+/** Why a spot can't be ruled out, before anything is sent. */
+export type PageRuleOutRefusal = "no_text" | "too_short";
+
+/** The one message for each refusal, shown by the companion before submit and
+ *  returned by the server, so the two can't drift. */
+export const PAGE_RULE_OUT_MESSAGES: Record<PageRuleOutRefusal, string> = {
+  no_text: "That spot has no text to rule out. Select the words you want gone.",
+  too_short:
+    "That's too short to rule out without blocking ordinary text. Select at least two words, or a longer word or phrase.",
+};
+
+/** The phrase after normalization (whitespace, colon rule, cap). */
+function normalizeRuleOutPhrase(quote: string): string {
   let key = String(quote ?? "").replace(/\s+/g, " ").trim();
   if (key.includes(":")) {
     key = key
@@ -44,8 +47,37 @@ export function pageRuleOutKey(quote: string): string | null {
     const space = cut.lastIndexOf(" ");
     key = (space > 0 ? cut.slice(0, space) : cut).trim();
   }
-  const meaningful = key.replace(/[^\p{L}\p{N}]/gu, "").length;
-  return meaningful >= PAGE_RULE_OUT_KEY_MIN ? key : null;
+  return key;
+}
+
+/**
+ * The stance phrase for an anchor's quote, or why there is none.
+ *
+ *  - Whitespace collapses to single spaces (the gate reads page text the same way).
+ *  - A quote with a colon keeps only its longest colon-free part. The gate
+ *    reads "a: b" as category "a" plus specific noun "b" and matches on "b"
+ *    alone, so a quote like "Owner: Bob Smith" would quietly become a stance
+ *    on "bob smith". The longest part is what the human most plausibly meant,
+ *    and it is still a literal substring of the page, so it matches the page.
+ *  - Capped at PAGE_RULE_OUT_KEY_MAX at a word boundary, never with an
+ *    ellipsis: the phrase has to stay a literal substring of the page text.
+ *  - Long enough to gate on: at least PAGE_RULE_OUT_MIN_WORDS words of
+ *    PAGE_RULE_OUT_MIN_WORD_LEN+ letters/digits, or PAGE_RULE_OUT_MIN_CHARS
+ *    letters/digits in total.
+ */
+export function checkPageRuleOut(quote: string): { ok: true; key: string } | { ok: false; reason: PageRuleOutRefusal } {
+  const key = normalizeRuleOutPhrase(quote);
+  const words = key.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= PAGE_RULE_OUT_MIN_WORD_LEN);
+  const chars = key.replace(/[^\p{L}\p{N}]/gu, "").length;
+  if (chars === 0) return { ok: false, reason: "no_text" };
+  if (words.length < PAGE_RULE_OUT_MIN_WORDS && chars < PAGE_RULE_OUT_MIN_CHARS) return { ok: false, reason: "too_short" };
+  return { ok: true, key };
+}
+
+/** The stance phrase for an anchor's quote, or null when it can't be ruled out. */
+export function pageRuleOutKey(quote: string): string | null {
+  const r = checkPageRuleOut(quote);
+  return r.ok ? r.key : null;
 }
 
 /**

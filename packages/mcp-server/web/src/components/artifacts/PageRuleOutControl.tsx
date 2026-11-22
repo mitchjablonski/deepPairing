@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Comment, HtmlAnchor } from "@deeppairing/shared";
-import { pageRuleOutKey } from "@deeppairing/shared";
+import { checkPageRuleOut, PAGE_RULE_OUT_MESSAGES } from "@deeppairing/shared";
 import { apiBase, safeFetch, sessionHeaders } from "../../lib/api";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { useUnsavedText } from "../../lib/unsavedText";
@@ -20,6 +20,9 @@ import { useArtifactStore } from "../../stores/artifact";
  * stance is human-authored, so the reason is required and never composed).
  * Escape cancels, Ctrl/⌘+Enter confirms, offline disables the confirm.
  *
+ * Page rule-outs stay project-local: the phrase is never mirrored into the
+ * cross-project ledger (server-enforced via the stance's origin).
+ *
  * Security: an anchor from the frame only pre-targets this control. The
  * stance is created only by this explicit submit in the parent UI.
  */
@@ -34,7 +37,11 @@ export function PageRuleOutControl({
   ruledOut?: string;
 }) {
   const offline = useOfflineReason();
-  const phrase = pageRuleOutKey(anchor.quote);
+  // The same check (and message) the server applies, so a spot that can't be
+  // ruled out says why before anything is sent.
+  const checked = checkPageRuleOut(anchor.quote);
+  const phrase = checked.ok ? checked.key : null;
+  const refusal = checked.ok ? null : PAGE_RULE_OUT_MESSAGES[checked.reason];
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   useUnsavedText(`page-rule-out:${artifactId}:${anchor.locator}`, reason);
@@ -95,20 +102,23 @@ export function PageRuleOutControl({
 
   if (!open) {
     return (
-      <button
-        ref={openerRef}
-        type="button"
-        onClick={() => setOpen(true)}
-        disabled={!phrase}
-        title={
-          phrase
-            ? "Remember this text as a rejected approach, so Claude doesn't present it again in this project"
-            : "This spot has too little text to rule out. Select the words you want gone."
-        }
-        className="px-1.5 py-0.5 rounded text-2xs text-text-muted hover:text-accent-red hover:bg-accent-red-dim/40 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        Rule this out
-      </button>
+      <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+        {refusal && (
+          <span className="text-2xs text-text-muted" data-testid="page-rule-out-unavailable">
+            {refusal}
+          </span>
+        )}
+        <button
+          ref={openerRef}
+          type="button"
+          onClick={() => setOpen(true)}
+          disabled={!phrase}
+          title={refusal ?? "Remember this text as a rejected approach, so Claude doesn't present it again in this project"}
+          className="px-1.5 py-0.5 rounded text-2xs text-text-muted hover:text-accent-red hover:bg-accent-red-dim/40 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Rule this out
+        </button>
+      </span>
     );
   }
 

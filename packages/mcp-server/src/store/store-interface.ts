@@ -262,6 +262,11 @@ export interface RejectedApproach {
    *  "Rule this out"): the anchor it was made on, kept for provenance only.
    *  Nothing matches on it; the gate matches on `description`. */
   sourceAnchor?: HtmlAnchor;
+  /** #680 slice 4 — where the stance came from when that changes how it may be
+   *  shared. `page_rule_out` = the companion's "Rule this out" on a page: its
+   *  phrase is page text the agent wrote (possibly private), so it is NEVER
+   *  mirrored into the cross-project ledger, whatever the publish opt-in. */
+  origin?: RejectedApproachOrigin;
   /** #620 — which door recorded a stance added from the terminal (`cli` =
    *  `deeppairing stance add`, `mcp` = the `record_stance` tool behind
    *  `/deeppairing:reject`). Absent on stances born from a rejected artifact.
@@ -273,6 +278,11 @@ export interface RejectedApproach {
 }
 
 export type StanceAddedVia = "cli" | "mcp";
+
+export type RejectedApproachOrigin = "page_rule_out";
+export function isRejectedApproachOrigin(v: unknown): v is RejectedApproachOrigin {
+  return v === "page_rule_out";
+}
 
 export interface AddStanceParams {
   concept: string;
@@ -604,6 +614,8 @@ export interface IStore {
     concept?: string;
     /** #680 slice 4 — provenance for a stance ruled out on a page. */
     sourceAnchor?: HtmlAnchor;
+    /** #680 slice 4 — `page_rule_out` keeps the stance project-local. */
+    origin?: RejectedApproachOrigin;
   }): MaybePromise<void>;
   /**
    * #620/#625 — add a terminal stance (store/stance-add.ts) as ONE preferences

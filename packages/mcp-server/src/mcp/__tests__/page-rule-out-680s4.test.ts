@@ -10,7 +10,9 @@
  * Fakes, not mocks: a real FileStore, the real HTTP routes, the real MCP server.
  */
 import { describe, it, expect, beforeEach } from "vitest";
+import { PAGE_RULE_OUT_MESSAGES } from "@deeppairing/shared";
 import type { FileStore } from "../../store/file-store.js";
+import { getGlobalStore } from "../../store/global-store.js";
 import { createHttpRoutes } from "../../http/routes.js";
 import { withHash } from "../../http/__tests__/routes.harness.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
@@ -123,6 +125,29 @@ describe("#680 slice 4 — recording the stance", () => {
   });
 });
 
+describe("#680 slice 4 — page rule-outs stay project-local", () => {
+  it("is never mirrored into the cross-project ledger, even when the project publishes; it still gates here", async () => {
+    const id = await presentPage();
+    store.setGlobalLedgerPublish(true);
+    // Control: an ordinary rejection in this opted-in project DOES publish, so
+    // the empty result below is the rule working, not a dead mirror.
+    store.recordRejectedApproach({ description: "redis for caching", reason: "control" });
+    expect((await ruleOut(id, { htmlAnchor: cellAnchor, reason: "private reason" })).status).toBe(200);
+
+    const ledger = getGlobalStore().query({ limit: 100 }).map((e) => e.concept.toLowerCase());
+    expect(ledger).toContain("redis for caching");
+    expect(ledger.some((c) => c.includes("60s"))).toBe(false);
+    const row = store.getSessionMemory().rejectedApproaches.find((r) => r.description === "Up to 60s");
+    expect(row).toMatchObject({ origin: "page_rule_out", sourceArtifactId: id });
+
+    // A later unrelated write keeps the origin, and retiring it writes no global counter-approval.
+    store.recordRejectedApproach({ description: "global singletons", reason: "x" });
+    expect(store.getSessionMemory().rejectedApproaches.find((r) => r.description === "Up to 60s")?.origin).toBe("page_rule_out");
+    expect(store.overrideRejectedApproach({ description: "Up to 60s" }).retired).toBe(1);
+    expect(getGlobalStore().query({ limit: 100 }).some((e) => e.concept.toLowerCase().includes("60s"))).toBe(false);
+  });
+});
+
 describe("#680 slice 4 — validation", () => {
   it.each([
     ["an empty reason", { htmlAnchor: cellAnchor, reason: "" }],
@@ -149,7 +174,8 @@ describe("#680 slice 4 — validation", () => {
 
   it.each([
     ["no_text", { kind: "element" as const, locator: "img", quote: "" }],
-    ["no_text", { kind: "element" as const, locator: "td", quote: "ok" }],
+    ["too_short", { kind: "element" as const, locator: "td", quote: "None" }],
+    ["too_short", { kind: "text" as const, locator: "p", quote: "60s" }],
     // A selection spanning two blocks: the gate reads one block at a time, so it would never fire.
     ["not_on_page", { kind: "text" as const, locator: "div", quote: "Red apples ripen. Green pears soften. Blue plums dry." }],
     // Overlaps the page's own title: it would refuse every revision of this page.
@@ -158,7 +184,10 @@ describe("#680 slice 4 — validation", () => {
     const id = await presentPage(PAGE_HTML + "<p>Session cache strategies</p>");
     const res = await ruleOut(id, { htmlAnchor, reason: "x" });
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ code: "rule_out_not_gateable", reason: why });
+    const json = await res.json() as any;
+    expect(json).toMatchObject({ code: "rule_out_not_gateable", reason: why });
+    // no_text / too_short carry the exact message the companion shows before submit.
+    if (why === "no_text" || why === "too_short") expect(json.error).toBe(PAGE_RULE_OUT_MESSAGES[why]);
     expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
   });
 

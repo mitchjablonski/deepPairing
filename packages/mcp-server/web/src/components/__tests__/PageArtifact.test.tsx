@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Artifact } from "@deeppairing/shared";
+import { PAGE_RULE_OUT_MESSAGES } from "@deeppairing/shared";
 import { pageArtifact } from "@deeppairing/shared/__fixtures__/artifacts";
 import { PageArtifact } from "../artifacts/PageArtifact";
 import { useArtifactStore } from "../../stores/artifact";
@@ -569,10 +570,19 @@ describe("PageArtifact — rule this out (#680 slice 4)", () => {
     expect(screen.queryByTestId("page-rule-out-recorded")).not.toBeInTheDocument();
   });
 
-  it("is disabled for a spot with too little text to rule out", () => {
+  it.each([
+    ["no_text", { kind: "element", locator: "img", quote: "" }],
+    ["too_short", { kind: "cell", locator: "td", quote: "None" }],
+  ] as const)("says why before submit and stays disabled for a spot it can't rule out (%s)", async (why, anchor) => {
     render(<PageArtifact artifact={pageArtifact} />);
     const win = fakeFrameWindow();
-    fromFrame(win, { dp: "anchor", anchor: { kind: "element", locator: "img", quote: "" } });
-    expect(within(screen.getByTestId("page-anchor-composer")).getByRole("button", { name: "Rule this out" })).toBeDisabled();
+    fromFrame(win, { dp: "anchor", anchor });
+    const composer = screen.getByTestId("page-anchor-composer");
+    const button = within(composer).getByRole("button", { name: "Rule this out" });
+    expect(button).toBeDisabled();
+    expect(within(composer).getByTestId("page-rule-out-unavailable")).toHaveTextContent(PAGE_RULE_OUT_MESSAGES[why]);
+    await userEvent.click(button);
+    expect(screen.queryByTestId("page-rule-out-panel")).not.toBeInTheDocument();
+    expect(ruleOutPosts()).toHaveLength(0);
   });
 });

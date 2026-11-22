@@ -10,7 +10,8 @@ import {
   formatZodIssues,
   isClosedArtifactStatus,
   isLateCommentableStatus,
-  pageRuleOutKey,
+  checkPageRuleOut,
+  PAGE_RULE_OUT_MESSAGES,
 } from "@deeppairing/shared";
 import { ERROR_CODES } from "../error-codes.js";
 import { LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
@@ -379,7 +380,10 @@ export function createReviewRoutes({
   //   - description = pageRuleOutKey(anchor.quote) (shared, so the companion
   //     shows the exact phrase recorded); reason = the human's text, required,
   //     never composed; sourceArtifactId = this page; sourceAnchor = the anchor
-  //     (provenance only).
+  //     (provenance only); origin = "page_rule_out", which keeps the stance
+  //     project-local: it is never mirrored into the cross-project ledger,
+  //     even when this project publishes (the phrase is agent-written page
+  //     text and may be private).
   //   - Before recording, the phrase is run through the SAME matcher and the
   //     same page projection the gate uses (artifactProposal + findRejected
   //     ApproachMatch): it must match this page's body text (otherwise the
@@ -425,12 +429,12 @@ export function createReviewRoutes({
       );
     }
 
-    const description = pageRuleOutKey(anchor.quote);
     const notGateable = (why: string, message: string) =>
       c.json({ error: message, code: ERROR_CODES.rule_out_not_gateable, reason: why }, 400);
-    if (!description) {
-      return notGateable("no_text", "That spot has too little text to rule out. Select the words you want gone.");
-    }
+    // Same check, same message the companion shows before submit.
+    const checked = checkPageRuleOut(anchor.quote);
+    if (!checked.ok) return notGateable(checked.reason, PAGE_RULE_OUT_MESSAGES[checked.reason]);
+    const description = checked.key;
     const proposal = artifactProposal("page", page.title, page.content);
     const split = proposal?.rawEditTextFrom ?? 0;
     const head = proposal ? proposal.text.slice(0, split) : [];
@@ -453,7 +457,8 @@ export function createReviewRoutes({
     // first recorded reason (the store only fills a blank one).
     const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches
       .some((r) => r.description === description);
-    await store.recordRejectedApproach({ description, reason, sourceArtifactId: page.id, sourceAnchor: anchor });
+    // origin page_rule_out: project-local always, never mirrored to the shared ledger.
+    await store.recordRejectedApproach({ description, reason, sourceArtifactId: page.id, sourceAnchor: anchor, origin: "page_rule_out" });
     const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
 
     const newId = `cmt_${nanoid(10)}`;
