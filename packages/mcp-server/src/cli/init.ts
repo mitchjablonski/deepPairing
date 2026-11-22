@@ -1439,8 +1439,9 @@ ${helpInvocations}
                                            --path names a file inside the project (resolved from the current directory,
                                            sent project-relative), watched while under review: each save records a new
                                            version. Same request-ID rules as options.
-    dp read-decision --session-id ID --decision-id ID
+    dp read-decision --session-id ID --decision-id ID [--wait-ms MS]
                                            Read a saved choice and linked rejection reasons without consuming feedback.
+                                           Optionally wait 1–30000 ms for the choice.
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)

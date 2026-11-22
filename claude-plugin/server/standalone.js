@@ -43157,7 +43157,7 @@ var DaemonClient = class {
       throw err;
     }
   }
-  async readStandaloneDecision(expectedProjectRoot, decisionId, signal) {
+  async readStandaloneDecision(expectedProjectRoot, decisionId, signal, waitMs) {
     let result;
     try {
       result = await this.request("/read-decision", {
@@ -43165,7 +43165,7 @@ var DaemonClient = class {
         signal,
         redirect: "error",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expectedProjectRoot, decisionId })
+        body: JSON.stringify({ expectedProjectRoot, decisionId, waitMs })
       }, true);
     } catch (err) {
       if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {

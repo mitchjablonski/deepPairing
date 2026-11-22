@@ -31922,18 +31922,20 @@ var FileStore = class _FileStore {
   }
   // --- Feedback notification (for long-poll) ---
   feedbackWaiters = [];
-  /** Register a waiter that resolves when new feedback arrives */
-  waitForFeedback(timeoutMs = 3e4) {
+  /** Register a waiter until feedback arrives, the budget expires, or the caller leaves. */
+  waitForFeedback(timeoutMs = 3e4, signal) {
+    if (signal?.aborted) return Promise.resolve();
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.feedbackWaiters = this.feedbackWaiters.filter((w) => w !== wrappedResolve);
-        resolve();
-      }, timeoutMs);
-      const wrappedResolve = () => {
+      const finish = () => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", finish);
+        const index = this.feedbackWaiters.indexOf(finish);
+        if (index !== -1) this.feedbackWaiters.splice(index, 1);
         resolve();
       };
-      this.feedbackWaiters.push(wrappedResolve);
+      const timer = setTimeout(finish, timeoutMs);
+      this.feedbackWaiters.push(finish);
+      signal?.addEventListener("abort", finish, { once: true });
     });
   }
   /** Notify all waiters that feedback has arrived */
@@ -39347,6 +39349,7 @@ function decisionFeedback(decision) {
     reasoning: decision.response?.reasoning
   };
 }
+var MAX_DECISION_WAIT_MS = 3e4;
 
 // src/daemon/routes.ts
 var OpenStandaloneReviewBody = external_exports.object({
@@ -39373,7 +39376,8 @@ var PresentStandalonePageBody = external_exports.object({
 }).strict();
 var ReadStandaloneDecisionBody = external_exports.object({
   expectedProjectRoot: external_exports.string().min(1),
-  decisionId: external_exports.string().min(1)
+  decisionId: external_exports.string().min(1),
+  waitMs: external_exports.number().int().min(1).max(MAX_DECISION_WAIT_MS).optional()
 }).strict();
 var RetirementBody = external_exports.object({
   artifactId: external_exports.string().min(1),
@@ -39709,9 +39713,11 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       return c.json(result);
     });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
+      const signal = c.req.raw.signal;
       const parsed = await parseJsonBody(c, ReadStandaloneDecisionBody);
       if (!parsed.ok) return parsed.res;
-      const { expectedProjectRoot, decisionId } = parsed.data;
+      const { expectedProjectRoot, decisionId, waitMs } = parsed.data;
+      const deadline = performance.now() + (waitMs ?? 0);
       const sessionId = c.req.param("sessionId");
       if (expectedProjectRoot !== projectRoot2 || !isStandaloneSessionForProject(sessionId, projectRoot2)) {
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
@@ -39726,20 +39732,48 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           code: ERROR_CODES.session_not_registered
         }, 404);
       }
-      return withDecisionResolveLock(store, async () => {
-        const decision = store.getDecision(decisionId);
-        const artifact = decision && store.getArtifacts().find((a) => a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
-        if (!decision || !artifact) {
+      let idleRefreshed = false;
+      while (!signal.aborted) {
+        const read = await withDecisionResolveLock(store, async () => {
+          if (signal.aborted) return null;
+          const decision = store.getDecision(decisionId);
+          const artifacts = decision ? store.getArtifacts() : [];
+          const artifact = decision && artifacts.find((a) => a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
+          if (!decision || !artifact) return null;
+          let waitStatus;
+          if (waitMs !== void 0) {
+            const remaining = deadline - performance.now();
+            if (decision.response) {
+              waitStatus = "resolved";
+            } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
+              waitStatus = "closed";
+            } else if (remaining > 0) {
+              if (!idleRefreshed) {
+                refreshCompanionLink();
+                idleRefreshed = true;
+              }
+              return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+            } else {
+              waitStatus = "timed_out";
+            }
+          }
+          const result = {
+            ...decisionFeedback(decision),
+            sessionId,
+            artifactStatus: artifact.status,
+            recordedRejections: store.getSessionMemory().rejectedApproaches.filter((entry) => entry.sourceArtifactId === artifact.id).map(({ description, reason }) => ({ description, reason })),
+            ...waitStatus === void 0 ? {} : { waitStatus }
+          };
+          return { result };
+        });
+        if (signal.aborted) break;
+        if (!read) {
           return c.json({ error: "Decision does not exist in this standalone session.", code: ERROR_CODES.decision_not_in_session }, 404);
         }
-        const result = {
-          ...decisionFeedback(decision),
-          sessionId,
-          artifactStatus: artifact.status,
-          recordedRejections: store.getSessionMemory().rejectedApproaches.filter((entry) => entry.sourceArtifactId === artifact.id).map(({ description, reason }) => ({ description, reason }))
-        };
-        return c.json(result);
-      });
+        if (read.result) return c.json(read.result);
+        await read.wake;
+      }
+      return c.body(null, 408);
     });
   }
   app.post("/api/internal/sessions/:sessionId/register", async (c) => {
