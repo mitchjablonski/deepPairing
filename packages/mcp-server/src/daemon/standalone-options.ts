@@ -66,7 +66,7 @@ export async function presentStandaloneOptions(
     structuredContent: { artifactId, decisionId, replayed: true },
   });
   const conflict = (): ToolResult => ({
-    content: [{ type: "text", text: "This operation ID is already bound to different options input." }],
+    content: [{ type: "text", text: "This request ID is already bound to different options input. Retry with the original input or use a new UUID for changed input." }],
     isError: true,
     structuredContent: { code: "standalone_operation_conflict" },
   });

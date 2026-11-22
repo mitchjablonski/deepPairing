@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withGlobalStore } from "../../__tests__/global-store-fixture.js";
+import { ARTIFACT_CREATE_MAX_BODY_BYTES } from "../../http/guards.js";
 import { projectHashOf } from "../../project-root.js";
 import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { createDaemon, type Daemon } from "../create-daemon.js";
@@ -42,7 +43,7 @@ function fixture() {
   const present = (daemon: Daemon, operationId: string, input = args) =>
     request(daemon, "present-options", { operationId, args: input });
   return {
-    sessionId, start, request, present,
+    root, sessionId, start, request, present,
     dispose: () => {
       for (const daemon of daemons) {
         for (const store of daemon.sessions.values()) store.dispose();
@@ -54,6 +55,38 @@ function fixture() {
 }
 
 describe("authenticated standalone options", () => {
+  it("shares the measured 512 KiB artifact limit, with auth and the ordinary control-route limit intact", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      expect((await f.request(daemon, "open-review", { mode: "open" })).status).toBe(200);
+      const operationId = randomUUID();
+      const withCode = (code: string) => ({
+        ...args,
+        options: args.options.map((option, index) => index === 0
+          ? { ...option, visuals: [{ id: "sample", kind: "annotated_code", code }] }
+          : option),
+      });
+      const envelopeBytes = Buffer.byteLength(JSON.stringify({ expectedProjectRoot: f.root, operationId, args: withCode("") }));
+      const code = "x".repeat(ARTIFACT_CREATE_MAX_BODY_BYTES - envelopeBytes);
+      const tooBig = await f.present(daemon, operationId, withCode(code + "x"));
+      expect(tooBig.status).toBe(413);
+      expect(await tooBig.json()).toMatchObject({
+        code: "body_too_large",
+        error: expect.stringContaining("Shorten the options or their visuals"),
+      });
+      expect((await f.request(daemon, "present-options", { operationId, args: withCode(code) }, false)).status).toBe(401);
+      expect((await f.request(daemon, "open-review", { mode: "resume", padding: "x".repeat(64 * 1024) })).status).toBe(413);
+      expect(daemon.sessions.get(f.sessionId)!.getArtifacts()).toHaveLength(0);
+      const result = await f.present(daemon, operationId, withCode(code));
+      expect(result.status).toBe(200);
+      expect(await result.json()).toMatchObject({ structuredContent: { artifactId: expect.stringMatching(/^art_/) } });
+      expect(daemon.sessions.get(f.sessionId)!.getArtifacts()).toHaveLength(1);
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("completes a prepared receipt after both records survived and the artifact was renamed", async () => {
     const f = fixture();
     try {

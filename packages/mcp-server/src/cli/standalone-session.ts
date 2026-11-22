@@ -9,7 +9,13 @@ import { readSessionDirectories } from "./session-selection.js";
 
 const SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const PRESENT_OPTIONS_USAGE = "Usage: deeppairing present options --session-id ID --request-id UUID --file options.json";
+const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
+
+type PresentOptionsReceipt = { sessionId: string; requestId: string } & (
+  | { artifactId: string; decisionId: string; companionUrl: string; replayed?: true; isError?: never }
+  | { isError: true; code: string; reason?: string; message: string }
+);
 
 function requireStandaloneSession(projectRoot: string, sessionId: string): void {
   if (!isStandaloneSessionId(sessionId)) throw new Error("Use a standalone session ID returned by deeppairing open.");
@@ -51,7 +57,7 @@ export async function standaloneSession(
   return { sessionId, companionUrl };
 }
 
-export async function standalonePresent(projectRoot: string, args: string[]) {
+export async function standalonePresent(projectRoot: string, args: string[]): Promise<PresentOptionsReceipt> {
   if (args[0] !== "options") throw new Error(PRESENT_OPTIONS_USAGE);
   const { values } = parseArgs({
     args: args.slice(1),
@@ -61,7 +67,7 @@ export async function standalonePresent(projectRoot: string, args: string[]) {
   if (!sessionId || !rawRequestId || !file) throw new Error(PRESENT_OPTIONS_USAGE);
   requireStandaloneSession(projectRoot, sessionId);
   const requestId = requestIdSchema.safeParse(rawRequestId);
-  if (!requestId.success) throw new Error("--request-id must be a UUID. Reuse it when retrying the same proposal.");
+  if (!requestId.success) throw new Error(`--request-id must be a UUID. ${PRESENT_OPTIONS_RETRY}`);
 
   const json = readFileSync(file, "utf8").replace(/^\uFEFF/, "");
   let input: unknown;
@@ -81,16 +87,19 @@ export async function standalonePresent(projectRoot: string, args: string[]) {
   }
   const receipt = { sessionId, requestId: requestId.data };
   if (result.isError) {
-    const { code, reason } = result.structuredContent ?? {};
+    const { code: structuredCode, reason } = result.structuredContent ?? {};
+    const metaCode = result._meta?.code;
+    const code = typeof structuredCode === "string" ? structuredCode : typeof metaCode === "string" ? metaCode : "present_options_refused";
+    const message = result.content[0]?.text ?? "The daemon refused the options proposal.";
     return {
       ...receipt,
-      isError: true as const,
-      code: typeof code === "string" ? code : "present_options_refused",
+      isError: true,
+      code,
       ...(typeof reason === "string" ? { reason } : {}),
-      message: result.content[0]?.text ?? "The daemon refused the options proposal.",
+      message: code === "standalone_operation_conflict" ? message : `${message} ${PRESENT_OPTIONS_RETRY}`,
     };
   }
   const { artifactId, decisionId, replayed } = result.structuredContent ?? {};
   if (typeof artifactId !== "string" || typeof decisionId !== "string") throw new Error("The daemon did not confirm the options presentation. If retrying, use the same --request-id and options input.");
-  return { ...receipt, artifactId, decisionId, companionUrl, ...(replayed === true ? { replayed } : {}) };
+  return { ...receipt, artifactId, decisionId, companionUrl, ...(replayed === true ? { replayed: true as const } : {}) };
 }

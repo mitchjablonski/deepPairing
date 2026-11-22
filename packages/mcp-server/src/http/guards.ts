@@ -3,7 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import { ERROR_CODES } from "../error-codes.js";
 
 /**
- * R1 (#279) — the ceiling for the artifact-CREATE route only (see
+ * R1 (#279) — the ceiling for artifact-creation routes only (see
  * applyTopLevelGuards). 512 KiB fits a large multi-file pull request's unified
  * diff with room to spare; the 85 KB PR that round 13 could not present is a
  * sixth of it. Still a bound, deliberately: a review surface that has to render
@@ -13,18 +13,14 @@ import { ERROR_CODES } from "../error-codes.js";
 export const ARTIFACT_CREATE_MAX_BODY_BYTES = 512 * 1024;
 
 /**
- * R1 (#279) — is this the ONE route that mints an artifact?
+ * Select the exact authenticated routes that accept artifact-sized payloads.
  *
- * `POST /api/internal/sessions/:sessionId/artifacts`, exactly — not its
- * children (`…/artifacts/status-changes/acknowledge`,
- * `…/artifacts/:id/status`, …), which are small control messages and keep the
- * ordinary cap. Deliberately a path test rather than a body sniff: the guard
- * runs BEFORE the body is read (that is the point of a stream limiter), so
- * "does this body contain a changeset?" is not a question it can ask.
+ * The ordinary cap still applies to child and control routes. Match paths
+ * before reading the request so the stream limiter sees its whole body.
  */
 export function isArtifactCreateRoute(method: string, pathname: string): boolean {
   if (method !== "POST") return false;
-  return /^\/api\/internal\/sessions\/[^/]+\/artifacts$/.test(pathname);
+  return /^\/api\/internal\/sessions\/[^/]+\/(?:artifacts|present-options)$/.test(pathname);
 }
 
 /**
@@ -117,7 +113,9 @@ export function applyTopLevelGuards(app: Hono, opts: { maxBodyBytes: number }): 
         {
           error:
             `Request body exceeds the ${ARTIFACT_CREATE_MAX_BODY_BYTES}-byte artifact cap. ` +
-            `A diff this large is past what one review surface can hold — split it by area (and keep each part a changeset your pair approves).`,
+            (c.req.path.endsWith("/present-options")
+              ? "Shorten the options or their visuals, and use a new request ID for the changed input."
+              : "A diff this large is past what one review surface can hold — split it by area (and keep each part a changeset your pair approves)."),
           code: ERROR_CODES.body_too_large,
         },
         413,

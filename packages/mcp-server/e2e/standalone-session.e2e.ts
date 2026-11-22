@@ -109,7 +109,7 @@ test("standalone CLI opens and resumes the exact session across processes and da
     });
 
     const inputFile = path.join(root, "options.json");
-    await fs.writeFile(inputFile, JSON.stringify({
+    const input = {
       title: "Choose a replay backend",
       context: "Choose the storage backend for event replay.",
       options: [
@@ -118,9 +118,15 @@ test("standalone CLI opens and resumes the exact session across processes and da
         { id: "local", title: "Local file", description: "Keep a local replay file",
           pros: [], cons: [], effort: "low", risk: "low" },
       ],
-    }));
+    };
+    await fs.writeFile(inputFile, JSON.stringify(input));
     const runPresent = (requestId: string) => run(project, "present", "options",
       "--session-id", resumed.sessionId, "--request-id", requestId, "--file", inputFile);
+    const readRefusal = async (requestId: string) => {
+      const result = await runPresent(requestId).catch((error: { code: number; stdout: string; stderr: string }) => error);
+      expect(result).toMatchObject({ code: 1, stderr: "" });
+      return JSON.parse(result.stdout);
+    };
     const requestId = randomUUID();
     const presented = JSON.parse((await runPresent(requestId)).stdout);
     expect(presented).toMatchObject({
@@ -133,13 +139,39 @@ test("standalone CLI opens and resumes the exact session across processes and da
     const reason = "No operators for this dependency.";
     await sibling.recordRejectedApproach({ description: "Redis Streams", concept: "Redis Streams", reason });
     const deniedId = randomUUID();
-    const refused = await runPresent(deniedId).catch((error: { code: number; stdout: string; stderr: string }) => error);
-    expect(refused).toMatchObject({ code: 1, stderr: "" });
-    expect(JSON.parse(refused.stdout)).toMatchObject({
+    expect(await readRefusal(deniedId)).toMatchObject({
       sessionId: resumed.sessionId, requestId: deniedId, isError: true, code: "rejected_approach_blocked", reason,
+      message: expect.stringContaining("Use a new UUID if you change the input."),
     });
     expect(await readCatalog()).toMatchObject({
       sessions: expect.arrayContaining([expect.objectContaining({ sessionId: resumed.sessionId, live: false, artifactCount: 1 })]),
+    });
+
+    await fs.writeFile(inputFile, JSON.stringify({ ...input, options: [] }));
+    const invalidId = randomUUID();
+    const invalid = await readRefusal(invalidId);
+    expect(invalid).toMatchObject({
+      sessionId: resumed.sessionId, requestId: invalidId, isError: true, code: "INPUT_VALIDATION_FAILED",
+      message: expect.stringContaining("Use a new UUID if you change the input."),
+    });
+    expect(invalid).not.toHaveProperty("reason");
+
+    await fs.writeFile(inputFile, JSON.stringify({
+      ...input,
+      options: [
+        { id: "sqlite", title: "SQLite", description: "Use an embedded database", pros: [], cons: [], effort: "low", risk: "low" },
+        input.options[1],
+      ],
+    }));
+    expect(await readRefusal(deniedId)).toMatchObject({
+      isError: true, code: "standalone_operation_conflict", message: expect.stringContaining("use a new UUID for changed input."),
+    });
+    const changedId = randomUUID();
+    const changed = JSON.parse((await runPresent(changedId)).stdout);
+    expect(changed).toMatchObject({ sessionId: resumed.sessionId, requestId: changedId, artifactId: expect.stringMatching(/^art_/) });
+    expect(changed.artifactId).not.toBe(presented.artifactId);
+    expect(await readCatalog()).toMatchObject({
+      sessions: expect.arrayContaining([expect.objectContaining({ sessionId: resumed.sessionId, live: false, artifactCount: 2 })]),
     });
     expect(await fs.readdir(project)).not.toContain(".mcp.json");
 

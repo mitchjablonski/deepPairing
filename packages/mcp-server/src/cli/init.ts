@@ -1431,7 +1431,8 @@ ${helpInvocations}
     dp open                                Create a standalone review session and print its ID and companion URL as JSON
     dp resume <standalone-session-id>      Print a fresh URL for an existing standalone review session in this project
     dp present options --session-id ID --request-id UUID --file options.json
-                                           Present options from a JSON object. Reuse the request ID for retries.
+                                           Present options from a JSON object. Reuse the request ID for unchanged input.
+                                           Use a new UUID if you change the input.
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
