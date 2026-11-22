@@ -40608,7 +40608,7 @@ var PAGE_WATCH_POLL_MS = 1e3;
 function statSig(p) {
   try {
     const st = fs27.statSync(p);
-    return `${st.mtimeMs}:${st.size}:${st.ino}`;
+    return `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
   } catch {
     return "missing";
   }
@@ -40654,6 +40654,9 @@ var PageWatcher = class {
   minIntervalMs;
   pollMs;
   disposed = false;
+  sig(p) {
+    return (this.deps.statSig ?? statSig)(p);
+  }
   log(msg) {
     try {
       this.deps.log?.(`[page-watch] ${msg}`);
@@ -40729,7 +40732,7 @@ var PageWatcher = class {
       watcher: null,
       poll: null,
       quiet: null,
-      lastSig: statSig(absPath),
+      lastSig: this.sig(absPath),
       lastRecordAt: 0,
       dirty: false,
       gen: 0,
@@ -40761,7 +40764,7 @@ var PageWatcher = class {
     this.arm(entry, this.quietMs);
     if (this.pollMs > 0) {
       entry.poll = setInterval(() => {
-        const sig = statSig(entry.absPath);
+        const sig = this.sig(entry.absPath);
         if (sig === entry.lastSig) return;
         entry.lastSig = sig;
         this.onChange(entry);
@@ -40789,7 +40792,7 @@ var PageWatcher = class {
   }
   onChange(entry) {
     if (entry.stopped) return;
-    entry.lastSig = statSig(entry.absPath);
+    entry.lastSig = this.sig(entry.absPath);
     entry.dirty = true;
     entry.gen++;
     if (entry.processing) return;
@@ -40833,7 +40836,6 @@ var PageWatcher = class {
     } catch {
       return;
     }
-    const readSig = statSig(entry.absPath);
     const source = readPageSource(this.rootReal, entry.sourcePath);
     if (!source.ok) {
       const message = readerReason(source.error.content[0]?.text ?? "the file could not be read");
@@ -40872,7 +40874,7 @@ var PageWatcher = class {
       entry.dirty = true;
       return;
     }
-    if (this.overtaken(entry, readSig, html)) return;
+    if (this.overtaken(entry, html)) return;
     if (!pre.ok) {
       const match2 = pre.event.match ?? {};
       const concept = conceptName(match2.concept) ?? (typeof match2.description === "string" ? match2.description.slice(0, 200) : void 0);
@@ -40884,11 +40886,11 @@ var PageWatcher = class {
     }
     this.record(store, entry, cur, content, pre.trace);
   }
-  /** Has the file moved on from the snapshot this read saw? A stat change
-   *  alone (an mtime-only touch) is not enough: the content must differ. */
-  overtaken(entry, readSig, html) {
-    const sig = statSig(entry.absPath);
-    if (sig === readSig) return false;
+  /** Has the file moved on from the snapshot this read saw? Decided by the
+   *  content (and resolved path), never by the stat: an mtime-only touch is
+   *  not stale, and a same-stat rewrite is. */
+  overtaken(entry, html) {
+    const sig = this.sig(entry.absPath);
     const again = readPageSource(this.rootReal, entry.sourcePath);
     if (again.ok && again.sourcePath === entry.sourcePath && again.html === html) return false;
     entry.lastSig = sig;

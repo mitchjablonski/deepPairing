@@ -25,7 +25,7 @@ let live: boolean;
 let fakeWatchers: Array<{ dir: string; fire: (name: string | null) => void; closed: boolean }>;
 let watcher: PageWatcher;
 
-function makeWatcher(opts: { pollIntervalMs?: number; gate?: PageWatchDeps["gate"] } = {}): PageWatcher {
+function makeWatcher(opts: { pollIntervalMs?: number; gate?: PageWatchDeps["gate"]; statSig?: PageWatchDeps["statSig"] } = {}): PageWatcher {
   return new PageWatcher({
     projectRoot: root,
     getStore: (sid) => (sid === SID ? store : undefined),
@@ -39,6 +39,7 @@ function makeWatcher(opts: { pollIntervalMs?: number; gate?: PageWatchDeps["gate
     },
     pollIntervalMs: opts.pollIntervalMs ?? 0,
     ...(opts.gate ? { gate: opts.gate } : {}),
+    ...(opts.statSig ? { statSig: opts.statSig } : {}),
   });
 }
 
@@ -537,6 +538,52 @@ describe("page file watch — a save landing during the gate check (Codex review
     await watcher.idle();
     expect(pages()).toHaveLength(2);
     expect((liveTip()!.content as any).html).toBe("<p>save A</p>");
+  });
+
+  it("same-stat rewrite: a same-size save the stat can't see during the gate still discards A", async () => {
+    // A coarse filesystem, faked: timestamps never move, so the signature is
+    // size + inode only (what a same-tick or mtime-restored rewrite looks like).
+    const coarse = (p: string) => {
+      try { const st = fs.statSync(p); return `${st.size}:${st.ino}`; } catch { return "missing"; }
+    };
+    watcher.dispose();
+    const held = heldFirstGate();
+    watcher = makeWatcher({ gate: held.gate, pollIntervalMs: 1_000, statSig: coarse });
+    const v1 = presentFilePage("docs/page.html", "<p>zero</p>");
+    watcher.sync(SID);
+    disk("<p>save AAAA</p>"); // size differs from v1, so the poll sees it
+    await vi.advanceTimersByTimeAsync(3_000); // poll tick, then A's quiet ends; gate pending
+    expect(held.pending()).toBe(true);
+    const file = path.join(root, "docs/page.html");
+    const before = fs.statSync(file);
+    disk("<p>save BBBB</p>"); // same size, same inode
+    fs.utimesSync(file, before.atime, before.mtime); // and the mtime put back
+    expect(coarse(file)).toBe(`${before.size}:${before.ino}`);
+    held.release();
+    await watcher.idle();
+    expect(pages()).toHaveLength(1);
+    expect(store.getArtifacts().find((a) => a.id === v1.id)!.fileWatch).toBeUndefined();
+    await settle(2_100);
+    expect(pages()).toHaveLength(2);
+    expect((liveTip()!.content as any).html).toBe("<p>save BBBB</p>");
+    expect(events.filter((e) => e.type === "artifact_created")).toHaveLength(1);
+  });
+
+  it("statSig includes ctime, so the real poll notices an mtime-restored rewrite", async () => {
+    watcher.dispose();
+    watcher = makeWatcher({ pollIntervalMs: 1_000 });
+    presentFilePage("docs/page.html", "<p>save AAAA</p>");
+    watcher.sync(SID);
+    await settle(3_000); // start-up check: unchanged, nothing recorded
+    expect(pages()).toHaveLength(1);
+    const file = path.join(root, "docs/page.html");
+    const before = fs.statSync(file);
+    await new Promise((r) => setImmediate(r));
+    disk("<p>save BBBB</p>");
+    fs.utimesSync(file, before.atime, before.mtime);
+    await settle(1_000); // next poll tick
+    await settle(2_100);
+    expect((liveTip()!.content as any).html).toBe("<p>save BBBB</p>");
   });
 });
 
