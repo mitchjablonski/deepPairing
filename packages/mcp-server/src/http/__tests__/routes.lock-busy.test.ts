@@ -156,3 +156,25 @@ describe("reject route under a busy preferences lock", () => {
     expect(broadcasts.filter((b) => b.type === "ledger_write")).toHaveLength(2);
   });
 });
+
+describe("#680 slice 4 — page rule-out under a busy preferences lock", () => {
+  it("a live owner: 503 lock_busy, and neither the stance nor the rule-out comment is left behind; a retry is clean", async () => {
+    store.createArtifact({ id: "page_1", type: "page", title: "Cache", content: { title: "Cache", html: "<p>Up to 60s of staleness</p>" } });
+    const body = { htmlAnchor: { kind: "text", locator: "p", quote: "Up to 60s" }, reason: "too stale" };
+    fs.writeFileSync(lock, liveOwner());
+
+    const res = await post("/api/artifacts/page_1/rule-out", body);
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe(ERROR_CODES.lock_busy);
+    expect(readPrefsRejections()).toEqual([]);
+    expect(store.getCommentsForArtifact("page_1")).toHaveLength(0);
+    expect(broadcasts.some((b) => b.type === "ledger_write" || b.type === "comment_added")).toBe(false);
+
+    fs.unlinkSync(lock);
+    const retry = await post("/api/artifacts/page_1/rule-out", body);
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ alreadyRecorded: false });
+    expect(readPrefsRejections()).toEqual([expect.objectContaining({ description: "Up to 60s", origin: "page_rule_out" })]);
+    expect(store.getCommentsForArtifact("page_1").filter((c) => c.ruleOut)).toHaveLength(1);
+  });
+});

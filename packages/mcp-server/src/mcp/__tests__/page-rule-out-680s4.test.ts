@@ -13,6 +13,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { PAGE_RULE_OUT_MESSAGES } from "@deeppairing/shared";
 import type { FileStore } from "../../store/file-store.js";
 import { getGlobalStore } from "../../store/global-store.js";
+import { findRejectedApproachMatch } from "../preflight-validator.js";
+import { readRejectedApproachEntries } from "../../cli/preflight-hook-core.js";
 import { createHttpRoutes } from "../../http/routes.js";
 import { withHash } from "../../http/__tests__/routes.harness.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
@@ -103,8 +105,29 @@ describe("#680 slice 4 — recording the stance", () => {
     await ruleOut(id, { htmlAnchor: cellAnchor, reason: "first" });
     const again = await ruleOut(id, { htmlAnchor: cellAnchor, reason: "second" });
     expect(again.status).toBe(200);
-    expect(await again.json()).toMatchObject({ alreadyRecorded: true, reason: "first" });
+    const body = await again.json() as any;
+    expect(body).toMatchObject({ alreadyRecorded: true, reason: "first" });
     expect(store.getSessionMemory().rejectedApproaches).toHaveLength(1);
+    // No second rule-out comment with a different reason: the first is reused.
+    const ruleOuts = store.getCommentsForArtifact(id).filter((c) => c.ruleOut);
+    expect(ruleOuts.map((c) => c.content)).toEqual(["first"]);
+    expect(body.comment.id).toBe(ruleOuts[0]!.id);
+  });
+
+  it("a repeat whose first comment never landed leaves one, carrying the RECORDED reason", async () => {
+    const id = await presentPage();
+    store.recordRejectedApproach({ description: "Up to 60s", reason: "first", sourceArtifactId: id, origin: "page_rule_out" });
+    const res = await ruleOut(id, { htmlAnchor: cellAnchor, reason: "second" });
+    expect(await res.json()).toMatchObject({ alreadyRecorded: true, reason: "first" });
+    expect(store.getCommentsForArtifact(id).filter((c) => c.ruleOut).map((c) => c.content)).toEqual(["first"]);
+  });
+
+  it("a phrase already rejected some other way is not re-labelled: no rule-out comment", async () => {
+    const id = await presentPage();
+    store.recordRejectedApproach({ description: "Up to 60s", reason: "from a decision card" });
+    const res = await ruleOut(id, { htmlAnchor: cellAnchor, reason: "mine" });
+    expect(await res.json()).toMatchObject({ alreadyRecorded: true, reason: "from a decision card" });
+    expect(store.getCommentsForArtifact(id)).toHaveLength(0);
   });
 
   it("caps a long quote at a word boundary, as a literal prefix of the page text", async () => {
@@ -179,15 +202,16 @@ describe("#680 slice 4 — validation", () => {
     // A selection spanning two blocks: the gate reads one block at a time, so it would never fire.
     ["not_on_page", { kind: "text" as const, locator: "div", quote: "Red apples ripen. Green pears soften. Blue plums dry." }],
     // Overlaps the page's own title: it would refuse every revision of this page.
-    ["matches_title", { kind: "text" as const, locator: "h1", quote: "Session cache strategies" }],
+    // Only common words: it would block ordinary prose.
+    ["too_generic", { kind: "text" as const, locator: "p", quote: "of the" }],
   ])("refuses an anchor the gate couldn't enforce sensibly (%s)", async (why, htmlAnchor) => {
-    const id = await presentPage(PAGE_HTML + "<p>Session cache strategies</p>");
+    const id = await presentPage(PAGE_HTML + "<p>Most of the handlers</p>");
     const res = await ruleOut(id, { htmlAnchor, reason: "x" });
     expect(res.status).toBe(400);
     const json = await res.json() as any;
     expect(json).toMatchObject({ code: "rule_out_not_gateable", reason: why });
-    // no_text / too_short carry the exact message the companion shows before submit.
-    if (why === "no_text" || why === "too_short") expect(json.error).toBe(PAGE_RULE_OUT_MESSAGES[why]);
+    // no_text / too_short / too_generic carry the exact message the companion shows before submit.
+    if (why === "no_text" || why === "too_short" || why === "too_generic") expect(json.error).toBe(PAGE_RULE_OUT_MESSAGES[why]);
     expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
   });
 
@@ -211,6 +235,10 @@ describe("#680 slice 4 — validation", () => {
     // Store-level backstop: a marker naming no recorded stance is dropped.
     const direct = store.addComment({ id: "cmt_forged", artifactId: id, content: "forged", author: "human", target: { artifactId: id, htmlAnchor: cellAnchor }, ruleOut: { description: "Up to 60s" } });
     expect(direct.ruleOut).toBeUndefined();
+    // …nor one naming a stance that isn't THIS page's rule-out.
+    store.recordRejectedApproach({ description: "Up to 60s", reason: "elsewhere" });
+    const notOurs = store.addComment({ id: "cmt_not_ours", artifactId: id, content: "x", author: "human", target: { artifactId: id, htmlAnchor: cellAnchor }, ruleOut: { description: "Up to 60s" } });
+    expect(notOurs.ruleOut).toBeUndefined();
     expect(store.getCommentsForArtifact(id).every((c) => c.ruleOut === undefined)).toBe(true);
   });
 });
@@ -240,6 +268,56 @@ describe("#680 slice 4 — the existing gate enforces it", () => {
     expect(keep.text).toContain("too stale");
     const drop = await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "dropped the 60s option", content: { html: PAGE_HTML.replace("Up to 60s", "Up to 5s") } });
     expect(drop.isError, drop.text).toBeFalsy();
+  });
+});
+
+describe("#680 slice 4 — a rule-out reaches only pages that still contain the phrase", () => {
+  const PHRASE_SPOT = { kind: "text" as const, locator: "p:nth-of-type(3)", quote: LONG_SENTENCE };
+  const OPTION = (title: string, description: string) => ({ id: title.toLowerCase().replace(/\W+/g, "-"), title, description, pros: [], cons: [], effort: "low", risk: "low", recommendation: false });
+  let phrase: string;
+  beforeEach(async () => {
+    const id = await presentPage();
+    const res = await ruleOut(id, { htmlAnchor: PHRASE_SPOT, reason: "one queue is enough" });
+    expect(res.status).toBe(200);
+    phrase = (await res.json() as any).description;
+    expect(phrase).toContain("write-through purge queue");
+  });
+
+  it("an option titled with a fragment of the phrase is allowed (no reverse lane)", async () => {
+    const res = await callTool("present_options", {
+      title: "Invalidation",
+      context: "How should invalidation work?",
+      options: [OPTION("Purge queue", "a queue of purge messages"), OPTION("TTL only", "let entries expire")],
+    });
+    expect(res.isError, res.text).toBeFalsy();
+  });
+
+  it("a page TITLED with a fragment, with an unrelated body, is allowed", async () => {
+    const res = await callTool("present_page", { title: "Stale session", summary: "every node", html: "<p>Sessions expire after an hour.</p>" });
+    expect(res.isError, res.text).toBeFalsy();
+  });
+
+  it("a page whose BODY contains the phrase is refused, with the reason", async () => {
+    const res = await callTool("present_page", { title: "Another take", html: `<section><p>${phrase} and more.</p></section>` });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("REJECTED_APPROACH_BLOCKED");
+    expect(res.text).toContain("one queue is enough");
+  });
+
+  it("a non-page artifact containing the whole phrase is allowed (the stance is page text, not a named approach)", async () => {
+    const res = await callTool("present_findings", {
+      title: "Cache review",
+      summary: `Today: ${phrase}.`,
+      findings: [{ category: "design", title: phrase, detail: "seen in prod", significance: "low" }],
+    });
+    expect(res.isError, res.text).toBeFalsy();
+  });
+
+  it("the matcher skips it for raw edits (the PreToolUse hook) and the hook's reader keeps the origin", () => {
+    const row = store.getSessionMemory().rejectedApproaches.find((r) => r.description === phrase)!;
+    expect(findRejectedApproachMatch([`const note = "${phrase}";`], [row], { rawEditText: true })).toBeNull();
+    const entries = readRejectedApproachEntries(ctx.tmpDir);
+    expect(entries.find((e) => e.entry.description === phrase)?.entry.origin).toBe("page_rule_out");
   });
 });
 

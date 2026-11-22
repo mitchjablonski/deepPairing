@@ -107,8 +107,8 @@ export const ERROR_CODES = {
   /** The standalone proposal matched a previously rejected approach. */
   rejected_approach_blocked: "rejected_approach_blocked",
   /** #680 slice 4 — "Rule this out" on a page spot: the anchored text can't
-   *  become a stance the gate would enforce (no text, not within one block of
-   *  this page, or it would also match the page's own title/summary). */
+   *  become a stance the gate would enforce sensibly (`reason`: no_text,
+   *  too_short, too_generic, or not_on_page — not within one block of it). */
   rule_out_not_gateable: "rule_out_not_gateable",
   /** #680 slice 4 — "Rule this out" on a page version that is no longer under
    *  review (superseded, retracted, rejected or dismissed). */

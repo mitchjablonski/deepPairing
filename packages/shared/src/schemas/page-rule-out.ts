@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { HtmlAnchorSchema, PAGE_RULE_OUT_KEY_MAX } from "./comment.js";
+import { contentTokens } from "../stopwords.js";
 
 export { PAGE_RULE_OUT_KEY_MAX };
 
@@ -23,7 +24,7 @@ export const PAGE_RULE_OUT_MIN_WORD_LEN = 2;
 export const PAGE_RULE_OUT_MIN_CHARS = 8;
 
 /** Why a spot can't be ruled out, before anything is sent. */
-export type PageRuleOutRefusal = "no_text" | "too_short";
+export type PageRuleOutRefusal = "no_text" | "too_short" | "too_generic";
 
 /** The one message for each refusal, shown by the companion before submit and
  *  returned by the server, so the two can't drift. */
@@ -31,6 +32,8 @@ export const PAGE_RULE_OUT_MESSAGES: Record<PageRuleOutRefusal, string> = {
   no_text: "That spot has no text to rule out. Select the words you want gone.",
   too_short:
     "That's too short to rule out without blocking ordinary text. Select at least two words, or a longer word or phrase.",
+  too_generic:
+    "That's only common words, so ruling it out would block ordinary text. Include a word that names the thing you want gone.",
 };
 
 /** The phrase after normalization (whitespace, colon rule, cap). */
@@ -63,7 +66,8 @@ function normalizeRuleOutPhrase(quote: string): string {
  *    ellipsis: the phrase has to stay a literal substring of the page text.
  *  - Long enough to gate on: at least PAGE_RULE_OUT_MIN_WORDS words of
  *    PAGE_RULE_OUT_MIN_WORD_LEN+ letters/digits, or PAGE_RULE_OUT_MIN_CHARS
- *    letters/digits in total.
+ *    letters/digits in total (else `too_short`), AND at least one content
+ *    token — 3+ letters/digits, not a stopword (else `too_generic`).
  */
 export function checkPageRuleOut(quote: string): { ok: true; key: string } | { ok: false; reason: PageRuleOutRefusal } {
   const key = normalizeRuleOutPhrase(quote);
@@ -71,6 +75,10 @@ export function checkPageRuleOut(quote: string): { ok: true; key: string } | { o
   const chars = key.replace(/[^\p{L}\p{N}]/gu, "").length;
   if (chars === 0) return { ok: false, reason: "no_text" };
   if (words.length < PAGE_RULE_OUT_MIN_WORDS && chars < PAGE_RULE_OUT_MIN_CHARS) return { ok: false, reason: "too_short" };
+  // At least one content token (3+ letters/digits, not a stopword — the same
+  // rule the matcher's meaningfulTokens uses), so "of the" or "to be" can't
+  // become a stance that refuses ordinary prose.
+  if (contentTokens(key).length === 0) return { ok: false, reason: "too_generic" };
   return { ok: true, key };
 }
 

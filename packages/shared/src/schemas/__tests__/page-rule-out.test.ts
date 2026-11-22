@@ -18,15 +18,24 @@ describe("pageRuleOutKey", () => {
   });
 
   it("accepts two words of 2+ letters/digits, or 8+ letters/digits in total", () => {
-    expect(pageRuleOutKey("Up to")).toBe("Up to");
+    expect(checkPageRuleOut("Up to")).toEqual({ ok: false, reason: "too_generic" }); // two words, but no content token
     expect(pageRuleOutKey("Up to 60s")).toBe("Up to 60s");
     expect(pageRuleOutKey("Postgres")).toBe("Postgres"); // 8 characters
     expect(pageRuleOutKey("Postgre")).toBeNull(); // 7, one word
     expect(pageRuleOutKey("write-through")).toBe("write-through"); // two words
   });
 
+  it("refuses stopword-only phrases (too_generic): at least one 3+ letter/digit non-stopword token", () => {
+    for (const q of ["of the", "in the", "to be", "to be or", "and the", "for the", "with this", "is it"]) {
+      expect(checkPageRuleOut(q), q).toEqual({ ok: false, reason: "too_generic" });
+    }
+    expect(pageRuleOutKey("most of the")).toBe("most of the"); // "most" is a content token
+    expect(pageRuleOutKey("in the cache")).toBe("in the cache");
+    expect(pageRuleOutKey("использовать кэш")).toBe("использовать кэш"); // non-Latin content tokens count
+  });
+
   it("has one message per refusal, shared by the companion and the server", () => {
-    expect(Object.keys(PAGE_RULE_OUT_MESSAGES).sort()).toEqual(["no_text", "too_short"]);
+    expect(Object.keys(PAGE_RULE_OUT_MESSAGES).sort()).toEqual(["no_text", "too_generic", "too_short"]);
   });
 
   it("keeps the longest colon-free part (the gate reads 'a: b' as category + noun)", () => {

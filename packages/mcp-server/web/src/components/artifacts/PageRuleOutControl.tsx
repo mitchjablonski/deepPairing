@@ -11,7 +11,8 @@ import { useArtifactStore } from "../../stores/artifact";
  *
  * Records a rejected stance from the anchored text, with your reason, so the
  * gate refuses a later page (present_page, revise, or a watched-file save)
- * that contains it. The page itself stays under review. The phrase shown is
+ * whose text still contains it. Pages only: other artifacts and edits are not
+ * checked against it. The page itself stays under review. The phrase shown is
  * the exact one the server records (pageRuleOutKey is shared).
  *
  * Misclick-safe like "Never suggest this": the first click only opens a
@@ -30,11 +31,15 @@ export function PageRuleOutControl({
   artifactId,
   anchor,
   ruledOut,
+  onRecorded,
 }: {
   artifactId: string;
   anchor: HtmlAnchor;
-  /** The phrase already ruled out at this spot (from its rule-out comment), if any. */
+  /** The phrase already ruled out at this spot, from the LIVE stance list
+   *  (a retired stance is absent, so the spot can be ruled out again). */
   ruledOut?: string;
+  /** Called with the recorded phrase so the parent's live stance list updates. */
+  onRecorded?: (description: string) => void;
 }) {
   const offline = useOfflineReason();
   // The same check (and message) the server applies, so a spot that can't be
@@ -82,6 +87,7 @@ export function PageRuleOutControl({
       try { body = await res.json(); } catch { /* the WS echo still delivers the comment */ }
       if (body?.comment?.id) useArtifactStore.getState().addComment(body.comment);
       setRecorded(body?.description ?? phrase);
+      onRecorded?.(body?.description ?? phrase);
       setOpen(false);
       setReason("");
     } catch (err) {
@@ -95,7 +101,7 @@ export function PageRuleOutControl({
   if (recorded) {
     return (
       <p className="text-2xs text-accent-red" role="status" data-testid="page-rule-out-recorded">
-        ✓ Ruled out “{recorded}”. Claude won't present a page containing it again in this project. You can retire it in the Ledger.
+        ✓ Ruled out “{recorded}”. Claude won't present a page that still contains this text in this project. You can retire it in the Ledger.
       </p>
     );
   }
@@ -113,7 +119,7 @@ export function PageRuleOutControl({
           type="button"
           onClick={() => setOpen(true)}
           disabled={!phrase}
-          title={refusal ?? "Remember this text as a rejected approach, so Claude doesn't present it again in this project"}
+          title={refusal ?? "Remember this text as rejected, so Claude won't present a page that still contains it in this project"}
           className="px-1.5 py-0.5 rounded text-2xs text-text-muted hover:text-accent-red hover:bg-accent-red-dim/40 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Rule this out
@@ -131,9 +137,9 @@ export function PageRuleOutControl({
       data-testid="page-rule-out-panel"
     >
       <label htmlFor={reasonId} className="block text-2xs text-text-muted mb-1.5">
-        Rule out “<span className="text-text-primary">{phrase}</span>”? Claude won't present a page containing it again in
-        this project, and the page stays under review (you can retire the stance later in the Ledger). Why are you ruling
-        it out? (required)
+        Rule out “<span className="text-text-primary">{phrase}</span>”? Claude won't present a page that still contains this
+        text in this project. It only applies to pages, and this page stays under review (you can retire the stance later
+        in the Ledger). Why are you ruling it out? (required)
       </label>
       <textarea
         id={reasonId}

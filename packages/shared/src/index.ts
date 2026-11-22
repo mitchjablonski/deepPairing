@@ -187,6 +187,8 @@ export {
   type CommentSuggestion,
 } from "./schemas/comment.js";
 
+export { SHORT_STOPWORDS, MIN_CONTENT_TOKEN_LEN, contentTokens } from "./stopwords.js";
+
 export {
   PAGE_RULE_OUT_KEY_MAX,
   PAGE_RULE_OUT_MESSAGES,

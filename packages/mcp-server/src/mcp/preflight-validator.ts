@@ -49,7 +49,9 @@ export function normalizeConceptKey(name: string): string {
  * semantics already make common words harmless; this only guards the case of
  * a concept whose ONLY tokens are function words. Checked pre-stem.
  */
-const SHORT_STOPWORDS = new Set([
+// #680 slice 4 — mirrored in @deeppairing/shared (stopwords.ts) for the page
+// "Rule this out" content-token rule; stopwords-mirror.test.ts pins the copies.
+export const SHORT_STOPWORDS: ReadonlySet<string> = new Set([
   "the", "and", "for", "but", "not", "use", "with", "from", "into", "onto",
   "that", "this", "than", "then", "via", "per", "our", "your", "its",
 ]);
@@ -496,6 +498,22 @@ export function findRejectedApproachMatch(
   for (const rej of rejected) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
+    // #680 slice 4 — a page "Rule this out" stance reaches ONLY a page's own
+    // text, and only FORWARD: it blocks when the ruled-out phrase appears in a
+    // page body block. Page bodies are the strings from `rawEditTextFrom` on,
+    // which only a page proposal sets (present_page, a page revise, a file-watch
+    // save). No reverse lane (an option titled "Purge queue" or a page titled
+    // "Stale sessions" is not the phrase), no specific-noun lane, no concept
+    // lane, and nothing else (other artifact types, the PreToolUse hook's raw
+    // edits) — the phrase is page text, not a named approach.
+    if (rej.origin === "page_rule_out") {
+      if (opts.rawEditTextFrom === undefined) continue;
+      for (let idx = opts.rawEditTextFrom; idx < proposalStrings.length; idx++) {
+        const proposal = proposalStrings[idx]!;
+        if (containsAsPhrase(clean(proposal), rejNormalized)) return { proposal, rejected: rej, via: "surface" };
+      }
+      continue;
+    }
     // The portion AFTER the first colon is the specific rejection noun
     // ("Deploy: Railway" → "railway"); the prefix is the category and
     // recurs across unrelated rejections, so we don't match on it.
@@ -700,6 +718,9 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   // near miss; it's a block).
   const nearMisses: PreflightNearMiss[] = [];
   for (const rej of rejectedApproaches) {
+    // #680 slice 4 — a page rule-out is a literal phrase scoped to page text;
+    // a partial token overlap is not a near miss of it.
+    if (rej.origin === "page_rule_out") continue;
     const conceptText = rej.concept ?? rej.description;
     const cov = Math.max(
       ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),

@@ -1336,14 +1336,18 @@ export class FileStore implements IStore {
       isLateCommentableStatus(targetArtifact.status);
     // #680 slice 4 — store-authoritative: the marker is kept only on a human
     // comment on a page, and only when the stance it names really is in this
-    // project's rejection memory, so no writer (the internal comment route is
-    // passthrough) can label a plain comment as a recorded stance.
+    // project's rejection memory as THIS page's rule-out (origin page_rule_out,
+    // sourceArtifactId = this page), so no writer (the internal comment route
+    // is passthrough) can label a plain comment as a recorded stance.
     const ruleOut =
       ruleOutParsed?.success &&
       params.author === "human" &&
       targetArtifact?.type === "page" &&
       this.normalizeRejectedApproaches(this.readPreferences().rejectedApproaches ?? [])
-        .some((r) => r.description === ruleOutParsed.data.description)
+        .some((r) =>
+          r.description === ruleOutParsed.data.description &&
+          r.origin === "page_rule_out" &&
+          r.sourceArtifactId === params.artifactId)
         ? ruleOutParsed.data
         : undefined;
     const comment: Comment = {

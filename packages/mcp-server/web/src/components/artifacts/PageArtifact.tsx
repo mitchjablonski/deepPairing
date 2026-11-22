@@ -15,6 +15,8 @@ import { sanitizePageHtml } from "../../lib/pageSanitize";
 import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage } from "../../lib/pageAnchorMessages";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
+import { useRememberedRejections } from "../decision/NeverSuggestControl";
+import { pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -95,6 +97,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     [artifact.fileWatch],
   );
   const comments = useChainComments(artifact.id);
+  // #680 slice 4 — "Ruled out" reflects the LIVE stance (GET /api/memory, kept
+  // fresh by ledger writes), not just the comment marker: a stance retired in
+  // the Ledger stops showing as ruled out, and the spot can be ruled out again.
+  const owner = useArtifactStore((s) => s.owningSession(artifact.id));
+  const { rows: rememberedRows, remember } = useRememberedRejections(owner);
+  const liveStances = useMemo(() => new Set(rememberedRows.map((r) => r.description)), [rememberedRows]);
   const anchored = useMemo(() => anchoredPageComments(comments), [comments]);
   const anchors = useMemo(() => anchored.map((c) => c.target.htmlAnchor as HtmlAnchor), [anchored]);
 
@@ -318,7 +326,11 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
               key={openNonce}
               artifactId={artifact.id}
               anchor={draft}
-              ruledOut={draftComments.find((c) => c.ruleOut && !c.parentCommentId)?.ruleOut?.description}
+              ruledOut={(() => {
+                const phrase = pageRuleOutKey(draft.quote);
+                return phrase && liveStances.has(phrase) ? phrase : undefined;
+              })()}
+              onRecorded={(description) => remember({ description, sourceArtifactId: artifact.id })}
             />
           </div>
         </div>
@@ -347,9 +359,14 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
                     </span>
                     <span className="flex-1 min-w-0 space-y-1">
                       <AnchorContext anchor={anchor} />
-                      {c.ruleOut && (
+                      {c.ruleOut && liveStances.has(c.ruleOut.description) && (
                         <span className="block text-2xs text-accent-red" data-testid="page-annotation-ruled-out">
-                          Ruled out: Claude won't present “{c.ruleOut.description}” again
+                          Ruled out: Claude won't present a page that still contains “{c.ruleOut.description}”
+                        </span>
+                      )}
+                      {c.ruleOut && !liveStances.has(c.ruleOut.description) && (
+                        <span className="block text-2xs text-text-muted" data-testid="page-annotation-ruled-out-retired">
+                          Was ruled out; that stance has since been retired
                         </span>
                       )}
                       {missing && (
