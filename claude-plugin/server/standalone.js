@@ -25946,6 +25946,10 @@ function suggestionSummary(filePath, lineStart, lineEnd) {
   const loc = lineEnd > lineStart ? `${lineStart}\u2013${lineEnd}` : `${lineStart}`;
   return `Suggested edit to ${filePath ?? "code"}:${loc}`;
 }
+var PAGE_RULE_OUT_KEY_MAX = 120;
+var CommentRuleOutSchema = external_exports.object({
+  description: external_exports.string().min(1).max(PAGE_RULE_OUT_KEY_MAX)
+});
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -25964,6 +25968,9 @@ var CommentSchema = external_exports.object({
   // daemon that doesn't understand it treats the comment as a plain comment and
   // simply ignores this field — graceful degradation, never a crash.
   suggestion: CommentSuggestionSchema.optional(),
+  // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
+  // the matching rejected stance is in the project's rejection memory.
+  ruleOut: CommentRuleOutSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: external_exports.string().nullable().optional(),
   /**
@@ -27137,6 +27144,13 @@ var PromptBodySchema = external_exports.object({
   content: external_exports.string().min(1),
   decisionId: external_exports.string().min(1),
   sessionId: external_exports.string().min(1)
+});
+
+// ../shared/dist/schemas/page-rule-out.js
+var PAGE_RULE_OUT_REASON_MAX = 2e3;
+var PageRuleOutBodySchema = external_exports.object({
+  htmlAnchor: HtmlAnchorSchema,
+  reason: external_exports.string().max(PAGE_RULE_OUT_REASON_MAX).refine((s) => s.trim().length > 0, { message: "Say why you're ruling this out" })
 });
 
 // ../shared/dist/schemas/annotation.js
@@ -29877,9 +29891,10 @@ ${s.replacementText}${note ? `
       isFollowUp: !!c.followUp
     };
   }
+  const ruleOutNote = c.ruleOut ? ` \u2192 RULED OUT: recorded as a page-only rejected stance ("${clipProse(c.ruleOut.description, 120)}"). A page whose text still contains it (present_page, a page revise, a watched-file save) is now refused with this reason; take it out of this page. Other tools are not affected.` : "";
   return {
     bucket: "comment",
-    prose: `- ${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
+    prose: `- ${c.ruleOut ? "\u{1F6AB} " : ""}${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}${ruleOutNote}`,
     structured: {
       id: c.id,
       artifactId: c.target.artifactId,
@@ -29887,6 +29902,7 @@ ${s.replacementText}${note ? `
       content: c.content,
       // #187 — see the question path: present only for a late follow-up.
       ...c.followUp ? { followUp: true } : {},
+      ...c.ruleOut ? { ruleOut: { description: c.ruleOut.description } } : {},
       ...commonTargetFields(c, removedLine)
     },
     isFollowUp: !!c.followUp
@@ -30430,6 +30446,27 @@ var AUTONOMY_HINT_AUTONOMOUS = [
 function autonomyHintFor(level) {
   return level === "balanced" ? AUTONOMY_HINT_BALANCED : level === "autonomous" ? AUTONOMY_HINT_AUTONOMOUS : AUTONOMY_HINT_SUPERVISED;
 }
+var PAGE_RULE_OUT_HINT_BUDGET_CHARS = 600;
+var PAGE_RULE_OUT_HINT_PHRASE_MAX = 80;
+var PAGE_RULE_OUT_HINT_REASON_MAX = 120;
+var clipHint = (s, n) => s.length > n ? `${s.slice(0, n - 1)}\u2026` : s;
+function renderPageRuleOutBlock(rows) {
+  if (rows.length === 0) return "";
+  const header = "\n\u{1F4C4} Ruled out on pages (don't present a page whose text still contains these \u2014 present_page, a page revise and a watched-file save will refuse; other tools are not affected):";
+  const lines = [header];
+  let used = header.length;
+  let shown = 0;
+  for (const r of rows) {
+    const line = `  - "${clipHint(r.description, PAGE_RULE_OUT_HINT_PHRASE_MAX)}"${r.reason ? ` \u2014 reason: ${clipHint(r.reason, PAGE_RULE_OUT_HINT_REASON_MAX)}` : ""}`;
+    const trailerRoom = shown + 1 < rows.length ? 60 : 0;
+    if (used + 1 + line.length + trailerRoom > PAGE_RULE_OUT_HINT_BUDGET_CHARS) break;
+    lines.push(line);
+    used += 1 + line.length;
+    shown++;
+  }
+  if (shown < rows.length) lines.push(`  \u2026 ${rows.length - shown} more (see the companion's Ledger)`);
+  return lines.join("\n");
+}
 async function buildFirstCallHint(store, port, answeredCommentIds = [], env = {}) {
   const answeringCommentIds = new Set(answeredCommentIds.filter((id) => typeof id === "string" && id.length > 0));
   const obligationsParts = [];
@@ -30440,10 +30477,12 @@ async function buildFirstCallHint(store, port, answeredCommentIds = [], env = {}
   const headerLine = companionUrl ? `[First use this session] The companion UI is LIVE at ${companionUrl} \u2014 this is the daemon's REAL, server-provided port (not a guess). The human reviews artifacts, comments, and makes decisions there. When they ask for the URL, give them this exact one; NEVER guess a default \u2014 it is NOT Vite's 5173 or any other made-up port.` : `[First use this session] The companion UI daemon hasn't reported its port yet. Do NOT invent a URL (it is NOT 5173 or any default) \u2014 read the deeppairing://onboarding resource for the live URL once the daemon is up.`;
   const memory = await store.getSessionMemory();
   const memoryParts = [];
-  if (memory.rejectedApproaches.length > 0) {
+  const ordinaryRejections = memory.rejectedApproaches.filter((a) => a.origin !== "page_rule_out");
+  const pageRuleOutBlock = renderPageRuleOutBlock(memory.rejectedApproaches.filter((a) => a.origin === "page_rule_out"));
+  if (ordinaryRejections.length > 0) {
     memoryParts.push(
       `Rejected approaches (NEVER propose these \u2014 present_* tools will refuse):
-${memory.rejectedApproaches.map((a) => `  - ${a.description}${a.reason ? ` \u2014 reason: ${a.reason}` : ""}`).join("\n")}`
+${ordinaryRejections.map((a) => `  - ${a.description}${a.reason ? ` \u2014 reason: ${a.reason}` : ""}`).join("\n")}`
     );
   }
   if (memory.approvedPatterns.length > 0) {
@@ -30811,6 +30850,7 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
       droppedContextual++;
     }
   }
+  if (pageRuleOutBlock) assembled.push(pageRuleOutBlock);
   const droppedTotal = droppedContextual + droppedPolicy;
   if (droppedTotal > 0) {
     const policyHint = droppedPolicy > 0 && droppedContextual === 0 ? ` Use \`recall\` with mode='philosophy' source='user-seeded' to see all seeded stances.` : "";
@@ -30852,7 +30892,7 @@ function decideElicitResponse(result) {
 function normalizeConceptKey2(name) {
   return String(name).trim().toLowerCase().replace(/\s+/g, " ");
 }
-var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
+var SHORT_STOPWORDS2 = /* @__PURE__ */ new Set([
   "the",
   "and",
   "for",
@@ -30912,7 +30952,7 @@ function aliasCanonical(token) {
   return CONCEPT_ALIASES[token] ?? token;
 }
 function meaningfulTokens(s) {
-  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken).map(aliasCanonical);
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS2.has(t)).map(stemToken).map(aliasCanonical);
 }
 function tokenCoverage(concept, proposal) {
   const tokens = meaningfulTokens(concept);
@@ -31018,11 +31058,25 @@ function containsAsPhrase(haystack, needle) {
   const esc3 = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^a-z0-9])${esc3}(?:[^a-z0-9]|$)`).test(haystack);
 }
+function containsAsPhraseUnicode(haystack, needle) {
+  const n = needle.trim();
+  if (n.length < 3) return false;
+  const esc3 = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${esc3}(?![\\p{L}\\p{N}])`, "u").test(haystack);
+}
 function findRejectedApproachMatch(proposalStrings, rejected, opts = {}) {
   const clean = (s) => s.trim().toLowerCase();
   for (const rej of rejected) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
+    if (rej.origin === "page_rule_out") {
+      if (opts.rawEditTextFrom === void 0) continue;
+      for (let idx = opts.rawEditTextFrom; idx < proposalStrings.length; idx++) {
+        const proposal = proposalStrings[idx];
+        if (containsAsPhraseUnicode(clean(proposal), rejNormalized)) return { proposal, rejected: rej, via: "surface" };
+      }
+      continue;
+    }
     const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
     for (let idx = 0; idx < proposalStrings.length; idx++) {
       const proposal = proposalStrings[idx];
@@ -31072,6 +31126,7 @@ function runPreflight(input) {
   }
   const nearMisses = [];
   for (const rej of rejectedApproaches) {
+    if (rej.origin === "page_rule_out") continue;
     const conceptText = rej.concept ?? rej.description;
     const cov = Math.max(
       ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),
@@ -31133,7 +31188,9 @@ function runPreflight(input) {
 Prior rejection reason: "${match.rejected.reason}"` : "";
       const conceptLine = match.via === "concept" && match.rejected.concept ? `
 Matched on underlying concept: "${match.rejected.concept}". A paraphrased proposal still counts \u2014 the user has rejected this kind of approach.` : "";
-      const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match.proposal}" which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}
+      const message = match.rejected.origin === "page_rule_out" ? `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 this page's text still contains "${match.rejected.description}", which the user ruled out on a page (in the block "${match.proposal}").${reasonLine}
+
+Take that text out of the page and present it again. This stance applies only to pages (present_page, a page revise, a watched-file save); other tools are not affected. A page rule-out can't be allowed once: if it no longer applies, ask the human to retire it in the companion's Ledger, then present the page again. The artifact was NOT created.` : `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match.proposal}" which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}
 
 Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to allow this proposal once or retire the stance from the companion UI's gate log before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
       return {
@@ -31153,7 +31210,10 @@ Do NOT retry with this approach. Propose an alternative. If this is a false posi
               via: match.via,
               // #470 — with description + concept, the exact stance row an
               // allowance binds to.
-              rejectedAt: match.rejected.rejectedAt
+              rejectedAt: match.rejected.rejectedAt,
+              // #680 slice 4 — a page rule-out block is never allow-once
+              // eligible (the daemon marks it so; see prepareBlockEvent).
+              ...match.rejected.origin === "page_rule_out" ? { origin: "page_rule_out" } : {}
             }
           }
         },
@@ -31924,6 +31984,13 @@ var ERROR_CODES = {
   standalone_operation_conflict: "standalone_operation_conflict",
   /** The standalone proposal matched a previously rejected approach. */
   rejected_approach_blocked: "rejected_approach_blocked",
+  /** #680 slice 4 — "Rule this out" on a page spot: the anchored text can't
+   *  become a stance the gate would enforce sensibly (`reason`: no_text,
+   *  too_short, too_generic, or not_on_page — not within one block of it). */
+  rule_out_not_gateable: "rule_out_not_gateable",
+  /** #680 slice 4 — "Rule this out" on a page version that is no longer under
+   *  review (superseded, retracted, rejected or dismissed). */
+  rule_out_page_closed: "rule_out_page_closed",
   /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
    *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
    *  unverifiable) owner. Nothing was committed; retry, or inspect with
@@ -39241,8 +39308,8 @@ async function recordStance(store, input) {
       error: `This project already has ${result.count} stances (from every source); an add is refused once it has ${MAX_PROJECT_STANCES}, because more would slow the edit hook toward failing open. Retire ones you no longer need ("Retire this stance" in the companion's gate log, or edit .deeppairing/preferences.json), then add this again.`
     };
   }
-  if (result.status === "recorded") {
-    return { status: "recorded", row: result.row, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
+  if (result.status === "recorded" || result.status === "widened") {
+    return { status: result.status, row: result.row, publishable: isPublishableStance(input.addedVia, input.requestedBy) };
   }
   return { status: result.status, row: result.row };
 }
@@ -39261,6 +39328,12 @@ function formatRecordStanceOutcome(outcome, scope) {
     return {
       ok: true,
       text: `${scope} already had the stance "${name}" with no reason recorded. Added yours: "${row.reason}". Nothing else about it changed.`
+    };
+  }
+  if (outcome.status === "widened") {
+    return {
+      ok: true,
+      text: `${scope} already had "${name}" as a page rule-out, which only refused pages containing it. It is now an ordinary stance: any proposal naming it is refused (reason: "${row.reason ?? ""}"). ` + (outcome.publishable ? "It can now be published to the cross-project ledger if this project publishes." : "It is still not published to the cross-project ledger, because who asked for it can't be verified.")
     };
   }
   if (outcome.status === "exists") {
@@ -41609,7 +41682,10 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   // #140 — see questions.items.region.
                   region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
                   // #680 slice 2 — the spot on a page artifact this comment points at.
-                  htmlAnchor: HTML_ANCHOR_OUTPUT_SCHEMA
+                  htmlAnchor: HTML_ANCHOR_OUTPUT_SCHEMA,
+                  // #680 slice 4 — present when the human ruled this spot out: the
+                  // phrase now recorded as a rejected stance (content is their reason).
+                  ruleOut: { type: "object", properties: { description: { type: "string" } }, description: "Page only \u2014 the human ruled this spot out; `description` is now a rejected stance the gate enforces, with `content` as the reason." }
                 }
               }
             },
