@@ -8,9 +8,21 @@ import type { Artifact, BriefRef, ProposalSnapshot } from "@deeppairing/shared";
 import { wireForm } from "../proposal-resolution.js";
 import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 import { formatBriefNotes, hasRawBriefRef, normalizeNewBriefRef, savedBriefAdvisory, type BriefRefNormalization } from "../brief-ref.js";
+import type { CreateArtifactParams, RecordDecisionParams } from "../../store/store-interface.js";
+
+type PresentOptionsContext = Pick<ToolContext, "store" | "port" | "broadcast" | "helpers"> & {
+  server?: ToolContext["server"];
+};
+
+/** The daemon's standalone persistence path owns both linked writes. */
+export interface StandaloneOptionsWrite {
+  artifactId: string;
+  decisionId: string;
+  persist(artifact: CreateArtifactParams, decision: RecordDecisionParams): { artifact: Artifact } | { replay: ToolResult };
+}
 
 /** #572 — this session's artifacts, or null when they can't be read. */
-async function readArtifacts(ctx: ToolContext): Promise<Artifact[] | null> {
+async function readArtifacts(ctx: PresentOptionsContext): Promise<Artifact[] | null> {
   try { return await ctx.store.getArtifacts(); } catch { return null; }
 }
 
@@ -22,7 +34,7 @@ function withSuffix(result: ToolResult, suffix: string): ToolResult {
 }
 
 /** #572 — normalize a new ref once. A call without one reads nothing extra. */
-async function normalizeBrief(ctx: ToolContext, args: unknown): Promise<BriefRefNormalization> {
+async function normalizeBrief(ctx: PresentOptionsContext, args: unknown): Promise<BriefRefNormalization> {
   if (!hasRawBriefRef(args)) return { notes: [] };
   return normalizeNewBriefRef((args as { briefRef: unknown }).briefRef, await readArtifacts(ctx), ctx.store.getSessionId());
 }
@@ -30,14 +42,14 @@ async function normalizeBrief(ctx: ToolContext, args: unknown): Promise<BriefRef
 /** #572 — the CURRENT advisory for a replayed/deduplicated card, from its saved
  *  pin. Replay and dedup key on the raw args, so a call without a ref matches
  *  only a card saved without one: nothing to say, nothing extra read. */
-async function savedAdvisoryFor(ctx: ToolContext, artifactId: string, args: unknown): Promise<string> {
+async function savedAdvisoryFor(ctx: PresentOptionsContext, artifactId: string, args: unknown): Promise<string> {
   if (!hasRawBriefRef(args)) return "";
   const arts = await readArtifacts(ctx);
   if (!arts) return "";
   return savedBriefAdvisory(arts.find((a) => a.id === artifactId), args, arts);
 }
 
-export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
+export async function handlePresentOptions(ctx: PresentOptionsContext, args: any, standalone?: StandaloneOptionsWrite): Promise<ToolResult> {
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
   // #470 (§6 step 0) — replay a committed admitted operation first.
@@ -57,10 +69,10 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   // sent id-less, so the stored content AND the broadcast event carry the same
   // canonical shape (and future comment threads anchor consistently). Mirrors
   // coerceOption's fallback so a write and a later coerced read agree.
-  const proposedOptions = validatedOptions.map((o) =>
-    o.visuals?.length
-      ? { ...o, visuals: o.visuals.map((v, i) => ({ ...v, id: v.id ?? `${o.id}_visual_${i}` })) }
-      : o,
+  const proposedOptions = validatedOptions.map(({ visuals, ...option }) =>
+    visuals
+      ? { ...option, visuals: visuals.map((v, i) => ({ ...v, id: v.id ?? `${option.id}_visual_${i}` })) }
+      : option,
   );
   const pre = (await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true }))!;
   if (!pre.ok) {
@@ -89,7 +101,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     const arts = await ctx.store.getArtifacts();
     const admitted = arts.find((a) => a.id === String(outcome.admitted.artifactId));
     notifyResourcesListChanged(ctx.server);
-    if (admitted) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
+    if (admitted && ctx.server) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
     // A fresh admission of THIS call's own normalization reports its write
     // notes; a replay, or a claim made with the frozen pin, reports a current
     // advisory from what was actually saved.
@@ -120,8 +132,8 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
 
   // #572 slice A — normalize the brief ref ONCE, for this write.
   const brief = await normalizeBrief(ctx, args);
-  const id = `art_${nanoid(10)}`;
-  const decisionId = `dec_${nanoid(10)}`;
+  const id = standalone?.artifactId ?? `art_${nanoid(10)}`;
+  const decisionId = standalone?.decisionId ?? `dec_${nanoid(10)}`;
   // M1.1 — spread title only when present so an absent-title artifact's content
   // is byte-identical to today (no `title: undefined` key on disk).
   const content = { context, ...(title ? { title } : {}), options: proposedOptions, decisionId, stakes };
@@ -131,8 +143,13 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   // matches PERSIST (labels+location only — never the value) and we read them
   // back for the broadcast below.
   let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
+  const decision: RecordDecisionParams = {
+    decisionId, artifactId: id, context,
+    ...(title ? { title } : {}),
+    options: proposedOptions, stakes,
+  };
   try {
-    artifact = await ctx.store.createArtifact({
+    const input: CreateArtifactParams = {
       id,
       type: "decision",
       title: artifactTitle,
@@ -142,7 +159,14 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
       // #533 — the presenting agent's label (check_feedback ownership filter).
       presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : undefined,
       ...(brief.ref ? { briefRef: brief.ref } : {}),
-    });
+    };
+    if (standalone) {
+      const write = standalone.persist(input, decision);
+      if ("replay" in write) return write.replay;
+      artifact = write.artifact;
+    } else {
+      artifact = await ctx.store.createArtifact(input);
+    }
   } catch (e) {
     dedup.abort?.();
     throw e;
@@ -151,14 +175,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   const secretMatches = artifact.secretWarnings ?? [];
   // Y1' — record the preflight trace alongside the artifact.
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
-  await ctx.store.recordDecisionRequest({
-    decisionId,
-    artifactId: id,
-    context,
-    ...(title ? { title } : {}),
-    options: proposedOptions,
-    stakes,
-  } as any);
+  if (!standalone) await ctx.store.recordDecisionRequest(decision);
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
     ctx.broadcast({
@@ -169,7 +186,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     });
   }
   notifyResourcesListChanged(ctx.server);
-  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  if (ctx.server) await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({
     type: "decision_request",
     decisionId,

@@ -31920,6 +31920,10 @@ var ERROR_CODES = {
   unsupported: "unsupported",
   /** Durable review-post state needs inspection; do not retry an external POST. */
   review_post_conflict: "review_post_conflict",
+  /** A standalone review request ID is already bound to different input. */
+  standalone_operation_conflict: "standalone_operation_conflict",
+  /** The standalone proposal matched a previously rejected approach. */
+  rejected_approach_blocked: "rejected_approach_blocked",
   /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
    *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
    *  unverifiable) owner. Nothing was committed; retry, or inspect with
@@ -36099,7 +36103,7 @@ async function savedAdvisoryFor(ctx, artifactId, args) {
   if (!arts) return "";
   return savedBriefAdvisory(arts.find((a) => a.id === artifactId), args, arts);
 }
-async function handlePresentOptions(ctx, args) {
+async function handlePresentOptions(ctx, args, standalone) {
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
   const op = await beginStanceOperation(ctx, "present_options", args);
@@ -36109,7 +36113,7 @@ async function handlePresentOptions(ctx, args) {
   const title = validated.data.title;
   const artifactTitle = title ?? context;
   const proposedOptions = validatedOptions.map(
-    (o) => o.visuals?.length ? { ...o, visuals: o.visuals.map((v2, i) => ({ ...v2, id: v2.id ?? `${o.id}_visual_${i}` })) } : o
+    ({ visuals, ...option }) => visuals ? { ...option, visuals: visuals.map((v2, i) => ({ ...v2, id: v2.id ?? `${option.id}_visual_${i}` })) } : option
   );
   const pre = await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true });
   if (!pre.ok) {
@@ -36136,7 +36140,7 @@ async function handlePresentOptions(ctx, args) {
     const arts = await ctx.store.getArtifacts();
     const admitted = arts.find((a) => a.id === String(outcome.admitted.artifactId));
     notifyResourcesListChanged(ctx.server);
-    if (admitted) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
+    if (admitted && ctx.server) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
     const briefLine = outcome.admitted.status === "admitted" && !outcome.rebound ? formatBriefNotes(brief2) : savedBriefAdvisory(admitted, args, arts);
     return admittedResult(outcome.admitted, ` They can select at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.${briefLine}`);
   }
@@ -36152,12 +36156,20 @@ async function handlePresentOptions(ctx, args) {
   }
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const brief = await normalizeBrief(ctx, args);
-  const id = `art_${nanoid3(10)}`;
-  const decisionId = `dec_${nanoid3(10)}`;
+  const id = standalone?.artifactId ?? `art_${nanoid3(10)}`;
+  const decisionId = standalone?.decisionId ?? `dec_${nanoid3(10)}`;
   const content = { context, ...title ? { title } : {}, options: proposedOptions, decisionId, stakes };
   let artifact;
+  const decision = {
+    decisionId,
+    artifactId: id,
+    context,
+    ...title ? { title } : {},
+    options: proposedOptions,
+    stakes
+  };
   try {
-    artifact = await ctx.store.createArtifact({
+    const input = {
       id,
       type: "decision",
       title: artifactTitle,
@@ -36167,7 +36179,14 @@ async function handlePresentOptions(ctx, args) {
       // #533 — the presenting agent's label (check_feedback ownership filter).
       presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0,
       ...brief.ref ? { briefRef: brief.ref } : {}
-    });
+    };
+    if (standalone) {
+      const write = standalone.persist(input, decision);
+      if ("replay" in write) return write.replay;
+      artifact = write.artifact;
+    } else {
+      artifact = await ctx.store.createArtifact(input);
+    }
   } catch (e) {
     dedup.abort?.();
     throw e;
@@ -36175,14 +36194,7 @@ async function handlePresentOptions(ctx, args) {
   dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
-  await ctx.store.recordDecisionRequest({
-    decisionId,
-    artifactId: id,
-    context,
-    ...title ? { title } : {},
-    options: proposedOptions,
-    stakes
-  });
+  if (!standalone) await ctx.store.recordDecisionRequest(decision);
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
     ctx.broadcast({
@@ -36193,7 +36205,7 @@ async function handlePresentOptions(ctx, args) {
     });
   }
   notifyResourcesListChanged(ctx.server);
-  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  if (ctx.server) await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({
     type: "decision_request",
     decisionId,
@@ -43083,6 +43095,16 @@ var DaemonClient = class {
       throw err;
     }
     if (receipt?.sessionId !== this.sessionId) throw new Error("The daemon did not confirm the requested standalone session.");
+  }
+  /** Submit a standalone proposal through the daemon's shared review checks. */
+  async presentStandaloneOptions(expectedProjectRoot, operationId, args, signal) {
+    return this.request("/present-options", {
+      method: "POST",
+      signal,
+      redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedProjectRoot, operationId, args })
+    }, true);
   }
   // --- Artifacts ---
   async createArtifact(params) {

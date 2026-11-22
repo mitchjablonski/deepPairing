@@ -23,6 +23,7 @@ import { errorName } from "@deeppairing/shared";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 import type { WorkerStop, WorkerStopBatch } from "../store/worker-stop-notices.js";
 import type { RetirementInput, RetirementOutcome } from "../store/retirement.js";
+import type { ToolResult } from "../mcp/tools/types.js";
 // Static on purpose (was a dynamic import): a dynamic import made esbuild wrap
 // lifecycle.ts and its whole dependency graph (including zod) in lazy __esm
 // initialisers, and the MCP SDK's top-level zod calls then ran before zod was
@@ -460,6 +461,15 @@ export class DaemonClient implements IStore {
       throw err;
     }
     if (receipt?.sessionId !== this.sessionId) throw new Error("The daemon did not confirm the requested standalone session.");
+  }
+
+  /** Submit a standalone proposal through the daemon's shared review checks. */
+  async presentStandaloneOptions(expectedProjectRoot: string, operationId: string, args: Record<string, unknown>, signal: AbortSignal): Promise<ToolResult> {
+    return this.request<ToolResult>("/present-options", {
+      method: "POST", signal, redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedProjectRoot, operationId, args }),
+    }, true); // Never auto-register an agent wrapper on a route or transport error.
   }
 
   // --- Artifacts ---

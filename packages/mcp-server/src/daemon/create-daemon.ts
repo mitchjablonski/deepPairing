@@ -540,6 +540,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       if (shutdownTimer) clearTimeout(shutdownTimer);
       shutdownTimer = null;
       checkAutoShutdown();
+      return boundPort;
     },
     (sessionId, event) => {
       if (event === "registered") schedulePageWatchSync(sessionId);
