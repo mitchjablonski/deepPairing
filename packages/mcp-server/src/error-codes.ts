@@ -102,6 +102,10 @@ export const ERROR_CODES = {
   unsupported: "unsupported",
   /** Durable review-post state needs inspection; do not retry an external POST. */
   review_post_conflict: "review_post_conflict",
+  /** A standalone review request ID is already bound to different input. */
+  standalone_operation_conflict: "standalone_operation_conflict",
+  /** The standalone proposal matched a previously rejected approach. */
+  rejected_approach_blocked: "rejected_approach_blocked",
   /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
    *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
    *  unverifiable) owner. Nothing was committed; retry, or inspect with

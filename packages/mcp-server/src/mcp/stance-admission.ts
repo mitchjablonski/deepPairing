@@ -65,7 +65,7 @@ type OperationResult = Record<string, unknown> & { status?: string };
  * allowances, so no admitted operation can exist there.
  */
 export async function beginStanceOperation(
-  ctx: ToolContext,
+  ctx: Pick<ToolContext, "store">,
   toolName: string,
   args: unknown,
 ): Promise<{ handle: StanceOperationHandle; replay?: OperationResult; refusal?: ToolResult }> {
@@ -133,7 +133,7 @@ function withLine(response: ToolResult, line: string): ToolResult {
  * block response, or the daemon's admitted operation.
  */
 export async function admitBlockedProposal(
-  ctx: ToolContext,
+  ctx: Pick<ToolContext, "store" | "broadcast">,
   input: {
     toolName: string;
     handle: StanceOperationHandle;

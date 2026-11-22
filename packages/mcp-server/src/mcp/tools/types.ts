@@ -27,6 +27,7 @@ export type ToolResult = {
    *  outputSchema (check_feedback). Clients that support structured tool
    *  output stop prose-parsing the status blob. */
   structuredContent?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
 };
 
 /**
