@@ -2,9 +2,10 @@ import { nanoid } from "nanoid";
 import { retirementFailure } from "../../store/retirement.js";
 import { ParentSupersededError } from "../../store/file-store.js";
 import { readFileWatch } from "@deeppairing/shared";
-import type { DecisionOption } from "@deeppairing/shared";
+import type { DecisionOption, PreflightTrace } from "@deeppairing/shared";
+import type { CreateArtifactParams } from "../../store/store-interface.js";
 import type { ToolContext, ToolResult } from "./types.js";
-import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
+import { buildPreflightTrace, notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { attachSkeletonSnapshot } from "../skeleton-snapshot.js";
@@ -53,6 +54,18 @@ const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
   reasoning: validateLogReasoningInput,
 };
 
+type StandalonePageReviseContext = Pick<ToolContext, "store" | "broadcast"> & {
+  helpers: Pick<ToolContext["helpers"], "preflightRejectedApproaches">;
+  standalonePage: {
+    artifactId: string;
+    persist: (input: CreateArtifactParams, trace: PreflightTrace) => ToolResult;
+  };
+};
+
+export function revisionNote(artifactId: string, reason: string): string {
+  return `Superseded by ${artifactId}: ${reason}`;
+}
+
 /** #680 slice 3 (review P2-2) — the CAS refusal, from the in-process store
  *  (ParentSupersededError) or the daemon (HTTP 409 `parent_superseded`). */
 function parentSupersededInfo(err: unknown): { successorId?: string; successorVersion?: number; successorFromFile: boolean } | null {
@@ -77,8 +90,11 @@ function pageChangedUnderYou(artifactId: string, successorId: string | undefined
 }
 
 /** B3 — revise_artifact, extracted verbatim from the server.ts switch. */
-export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise<ToolResult> {
-  const { store, server, broadcast } = ctx;
+export async function handleReviseArtifact(ctx: ToolContext | StandalonePageReviseContext, args: any): Promise<ToolResult> {
+  const { store, broadcast } = ctx;
+  const mcp = "server" in ctx ? ctx : undefined;
+  const server = mcp?.server ?? null;
+  const standalone = "standalonePage" in ctx ? ctx.standalonePage : undefined;
 
   const artifactId = String(args?.artifactId ?? "").trim();
   const mode = args?.mode as "supersede" | "retract" | "obsolete" | undefined;
@@ -103,15 +119,15 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // #470 (§6 step 0) — BEFORE the closed-parent check: a half-finished
     // admitted revision has often already superseded its parent, and that
     // check would wrongly refuse the retry. A replay finishes it instead.
-    const op = await beginStanceOperation(ctx, "revise_artifact", args);
-    if (op.refusal) return op.refusal;
-    if (op.replay) {
+    const op = mcp && await beginStanceOperation(mcp, "revise_artifact", args);
+    if (op?.refusal) return op.refusal;
+    if (op?.replay) {
       if (typeof op.replay.parentId === "string") await maybeUpdateTaskStatus(server, op.replay.parentId, store);
       return admittedResult(op.replay);
     }
     const all = await store.getArtifacts();
     const old = all.find((a) => a.id === artifactId);
-    if (!old) {
+    if (!old || (standalone && old.type !== "page")) {
       return {
         content: [{ type: "text", text: `revise_artifact: no artifact with id ${artifactId}.` }],
         isError: true,
@@ -176,14 +192,15 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // unchanged valid ids keep their threads.
     // A replacement proposes new work just like its original presentation.
     // Refuse before creating v2 or changing v1 so a blocked revision is atomic.
-    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });
+    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: !standalone });
     if (pre && !pre.ok) {
+      if (!mcp || !op) return pre.response;
       // #470 — the revision exactly as it would be persisted (inherited title,
       // provenance, stakes, refs, feature, parentId/version), bound to the
       // target's current state. An allowance never carries along the lineage:
       // a revision that still matches needs its own.
       const snapshot = reviseSnapshot(old, String(args?.title ?? old.title), reason, finalizeReviseContent(old, structuredClone(content)));
-      const outcome = await admitBlockedProposal(ctx, {
+      const outcome = await admitBlockedProposal(mcp, {
         toolName: "revise_artifact",
         handle: op.handle,
         pre,
@@ -226,7 +243,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     const styleContent = content;
 
     const title = String(args?.title ?? old.title);
-    const newId = `art_${nanoid(10)}`;
+    const newId = standalone?.artifactId ?? `art_${nanoid(10)}`;
     // #572 B1 — omitted claims carry the predecessor's exact list and origin;
     // supplied claims (the validated list) replace them whole with this
     // revision as their origin. Resolved from the `old` read above, never
@@ -254,9 +271,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // #162 — that re-scan now happens INSIDE createArtifact (the store is the
     // authoritative choke point, parity with addComment) — no handler-side
     // scan needed here.
-    let newArtifact: Awaited<ReturnType<typeof store.createArtifact>>;
-    try {
-    newArtifact = await store.createArtifact({
+    const createInput: CreateArtifactParams = {
       id: newId,
       // #680 slice 3 (review P2-2) — the supersede compare-and-swap: if the
       // page file watch (or another revise) versioned `old` while this call
@@ -265,7 +280,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       requireUnsupersededParent: true,
       type: old.type,
       title,
-      content: skeletonSnap.content as Record<string, unknown>,
+      content: (standalone ? validatedContent : skeletonSnap.content) as Record<string, unknown>,
       agentReasoning: reason,
       parentId: old.id,
       version: old.version + 1,
@@ -289,7 +304,14 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       // #572 B1 — a debrief revision with an explicit, admitted pin saves
       // that pin; otherwise the exact predecessor pin carries as above.
       ...(debriefPin?.ref ? { briefRef: debriefPin.ref } : carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}),
-    });
+    };
+    let newArtifact: Awaited<ReturnType<typeof store.createArtifact>>;
+    try {
+      if (standalone) {
+        if (!pre?.ok) throw new Error("Standalone page revision is missing its preflight decision.");
+        return standalone.persist(createInput, buildPreflightTrace(newId, "revise_artifact", pre.trace));
+      }
+      newArtifact = await store.createArtifact(createInput);
     } catch (err) {
       const lost = parentSupersededInfo(err);
       if (lost) return pageChangedUnderYou(artifactId, lost.successorId, lost.successorVersion, lost.successorFromFile);
@@ -307,7 +329,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     await store.addComment({
       id: `cmt_${nanoid(10)}`,
       artifactId: old.id,
-      content: `Superseded by ${newId}: ${reason}`,
+      content: revisionNote(newId, reason),
       author: "agent",
     });
 
@@ -374,6 +396,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
   // mode === "retract" | "obsolete" — both close a still-open artifact
   // with no replacement. retract = "shouldn't have presented it";
   // obsolete = "valid, but overcome by new information / I've moved on".
+  if (!mcp) return { content: [{ type: "text", text: "Standalone page revision requires supersede mode." }], isError: true };
   const artifacts = await store.getArtifacts();
   const artifact = artifacts.find((a) => a.id === artifactId);
   if (!artifact) {

@@ -27,7 +27,7 @@ import { scanForSecrets, scanContentForSecrets } from "../secret-scan.js";
 import { listSessions, searchAll, listAllDecisions, groupByFeature, normalizeFeatureId } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
-import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
+import { isCrossTerminalVerdictFlip, stalePageVerdictSuccessor } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult, RejectedApproachOrigin } from "./store-interface.js";
@@ -999,6 +999,11 @@ export class FileStore implements IStore {
     this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
+      const successor = stalePageVerdictSuccessor(art, this.artifacts, reason);
+      if (successor) {
+        throw new ParentSupersededError(artifactId, successor.id, successor.version,
+          readFileWatch(successor.fileWatch).recorded?.fromArtifactId === artifactId);
+      }
       // O3 (#231) — cross-tab last-wins verdict guard (backstop). The HTTP
       // verdict route pre-checks this and returns a 409, but guard it here too
       // so NO path (a future caller, the daemon-internal route) can silently

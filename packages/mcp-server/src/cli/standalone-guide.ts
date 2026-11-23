@@ -28,6 +28,7 @@ export const GUIDE_COMMANDS = [
   "present page",
   "read-decision",
   "read-page-feedback",
+  "revise-page",
 ] as const;
 
 /** read-page-feedback bounds, from the daemon's own limits. */
@@ -156,7 +157,16 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   Only anchored human comments are included. Page notes without an anchor
   and file-watch notices are not.
 
-5. READ THE DECISION
+5. REVISE AN INLINE PAGE
+  deeppairing revise-page --session-id <sessionId> --artifact-id <artifactId> --request-id <uuid> --file page.html --reason "What changed"
+  Supply the replacement HTML for the current inline page. The revision goes
+  through the page rejection checks and keeps the page metadata. A successful
+  revision returns the saved successor and keeps human feedback pending.
+    -> {"sessionId","requestId","parentArtifactId","artifactId","version","status",...}
+  For a watched page, edit the source file. If the target moved, the refusal
+  includes currentArtifactId. Read that version before deciding what to revise.
+
+6. READ THE DECISION
   deeppairing read-decision --session-id <sessionId> --decision-id <decisionId> --wait-ms 30000
   This waits up to 30000 ms (any value from 1 to 30000) for the human's
   choice. Reading consumes nothing, so repeat reads are safe. Branch on
@@ -172,8 +182,8 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   ${DECISION_NON_ANSWERABLE_STATUSES.join(", ")} means the card can no longer
   be answered.
 
-6. REQUEST IDS
-  Every present needs --request-id, a UUID you generate (for example
+7. REQUEST IDS
+  Every present or revision needs --request-id, a UUID you generate (for example
   \`node -e "console.log(crypto.randomUUID())"\`).
   - Retrying unchanged input (a timeout, a crash, output you never saw): reuse
     the SAME UUID. You get the original artifact back with "replayed": true,
@@ -181,15 +191,15 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   - Changed anything (the file's content, a flag): use a NEW UUID. Reusing a
     UUID with different input is refused with standalone_operation_conflict.
 
-7. REFUSALS
-  A refused present prints {"isError":true,"code":"...","message":"..."} and
+8. REFUSALS
+  A refused present or revision prints {"isError":true,"code":"...","message":"..."} and
   exits 1.
   - "code":"rejected_approach_blocked" comes with "reason": the human already
     rejected this approach, in their own words. Do NOT retry the same approach,
     reworded or not. Change the approach so it answers the reason, then present
     the changed proposal with a new UUID. If you believe the block is a false
-    positive, tell the human why; only they can allow it once, from the block
-    card in the companion. Never try to grant it yourself.
+    positive, tell the human why. When the companion offers Allow once, only
+    the human can choose it. An inline revision cannot use an allowance.
   - Any other code: fix what the message says. Use a new UUID if you change
     the input.
 

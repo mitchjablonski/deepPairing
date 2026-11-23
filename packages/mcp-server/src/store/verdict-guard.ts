@@ -1,4 +1,4 @@
-import type { ArtifactStatus } from "@deeppairing/shared";
+import type { Artifact, ArtifactStatus } from "@deeppairing/shared";
 import type { StatusTransitionReason } from "./store-interface.js";
 
 /**
@@ -68,5 +68,19 @@ export function isCrossTerminalVerdictFlip(
     TERMINAL_VERDICT_STATES.has(from) &&
     TERMINAL_VERDICT_STATES.has(to) &&
     from !== to
+  );
+}
+
+/** A companion tab may still offer verdicts or dismissal on the page version it rendered. */
+export function stalePageVerdictSuccessor(
+  target: Artifact | undefined,
+  artifacts: readonly Artifact[],
+  reason: StatusTransitionReason,
+): Artifact | undefined {
+  if (target?.type !== "page" || target.status !== "superseded" ||
+    (reason !== "ui_approve_button" && reason !== "ui_revise_button" && reason !== "ui_reject_button" &&
+     reason !== "ui_dismiss_obsolete")) return;
+  return artifacts.find((a) =>
+    a.type === "page" && a.sessionId === target.sessionId && a.parentId === target.id && a.version === target.version + 1,
   );
 }
