@@ -103,7 +103,7 @@ describe("authenticated standalone page revision", () => {
       const successorId = revision.structuredContent.artifactId as string;
       const store = daemon.sessions.get(f.sessionId)!;
       const memory = store.getSessionMemory();
-      for (const status of ["approved", "revised", "rejected"]) {
+      for (const status of ["approved", "revised", "rejected", "obsolete"]) {
         const response = await f.verdict(daemon, parentId, status);
         expect(response.status).toBe(409);
         expect(await response.json()).toMatchObject({ code: "parent_superseded", successorId, successorVersion: 2 });
@@ -179,6 +179,10 @@ describe("authenticated standalone page revision", () => {
         throw new Error("Interrupted after version write");
       });
       expect((await f.revise(daemon, operation, parentId, html)).status).toBe(500);
+      const dismiss = await f.verdict(daemon, parentId, "obsolete");
+      expect(dismiss.status).toBe(409);
+      expect(await dismiss.json()).toMatchObject({ code: "parent_superseded", successorVersion: 2 });
+      expect(store.getArtifacts()[0]).toMatchObject({ id: parentId, status: "superseded" });
       store.updateArtifactStatus(parentId, after);
       store.forceFlush();
       expect((await f.revise(daemon, operation, parentId, html)).status).toBe(500);

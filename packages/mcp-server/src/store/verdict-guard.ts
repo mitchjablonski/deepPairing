@@ -71,14 +71,15 @@ export function isCrossTerminalVerdictFlip(
   );
 }
 
-/** A companion tab may still offer verdicts on the page version it rendered. */
+/** A companion tab may still offer verdicts or dismissal on the page version it rendered. */
 export function stalePageVerdictSuccessor(
   target: Artifact | undefined,
   artifacts: readonly Artifact[],
   reason: StatusTransitionReason,
 ): Artifact | undefined {
   if (target?.type !== "page" || target.status !== "superseded" ||
-    (reason !== "ui_approve_button" && reason !== "ui_revise_button" && reason !== "ui_reject_button")) return;
+    (reason !== "ui_approve_button" && reason !== "ui_revise_button" && reason !== "ui_reject_button" &&
+     reason !== "ui_dismiss_obsolete")) return;
   return artifacts.find((a) =>
     a.type === "page" && a.sessionId === target.sessionId && a.parentId === target.id && a.version === target.version + 1,
   );
