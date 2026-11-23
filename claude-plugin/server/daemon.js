@@ -39474,6 +39474,24 @@ async function presentPage(ctx, args, opts = {}) {
   };
 }
 
+// src/daemon/page-successor.ts
+function findPageSuccessor(backing, artifacts) {
+  const rank = (a) => [isClosedArtifactStatus(a.status) ? 0 : 1, a.version ?? 0, Date.parse(a.createdAt ?? "") || 0];
+  const newer = (a, b) => {
+    const [x, y] = [rank(a), rank(b)];
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i];
+    return false;
+  };
+  let latest = backing;
+  const seen = /* @__PURE__ */ new Set([backing.id]);
+  while (true) {
+    const next = artifacts.reduce((best, a) => a.type === "page" && a.sessionId === backing.sessionId && a.parentId === latest.id && !seen.has(a.id) && (!best || newer(a, best)) ? a : best, void 0);
+    if (!next) return latest === backing ? void 0 : latest;
+    seen.add(next.id);
+    latest = next;
+  }
+}
+
 // src/daemon/standalone-page.ts
 var receiptSchema2 = external_exports.object({
   version: external_exports.literal(1),
@@ -39518,24 +39536,10 @@ async function presentStandalonePage(projectRoot2, store, operationId, input, po
     const sourcePath2 = saved.success ? saved.data.sourcePath : void 0;
     const artifacts = store.getArtifacts();
     const backing = artifacts.find((a) => a.id === artifactId);
-    const rank = (a) => [isClosedArtifactStatus(a.status) ? 0 : 1, a.version ?? 0, Date.parse(a.createdAt ?? "") || 0];
-    const newer = (a, b) => {
-      const [x, y] = [rank(a), rank(b)];
-      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i];
-      return false;
-    };
-    let latest = backing;
-    const seen = /* @__PURE__ */ new Set([artifactId]);
-    while (latest) {
-      const children = artifacts.filter((a) => a.parentId === latest.id && !seen.has(a.id));
-      const next = children.reduce((best, a) => !best || newer(a, best) ? a : best, void 0);
-      if (!next) break;
-      seen.add(next.id);
-      latest = next;
-    }
+    const latest = backing && findPageSuccessor(backing, artifacts);
     const version2 = backing?.version ?? (typeof disk.version === "number" ? disk.version : 1);
     const status = String(backing?.status ?? disk.status ?? "draft");
-    const current = latest && latest !== backing ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : void 0;
+    const current = latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : void 0;
     const moved = current ? ` It is ${status}; the page has since moved to v${current.currentVersion} (${current.currentArtifactId}, ${current.currentStatus}).` : isClosedArtifactStatus(status) ? ` It is ${status}.` : "";
     return {
       content: [{ type: "text", text: `This operation already presented page artifact ${artifactId} (v${version2}).${moved}` }],
@@ -39619,6 +39623,58 @@ async function presentStandalonePage(projectRoot2, store, operationId, input, po
   return { ...result, structuredContent: { ...result.structuredContent, artifactId, ...sourcePath ? { sourcePath } : {} } };
 }
 
+// src/daemon/page-feedback.ts
+var MAX_COMMENTS = 50;
+var MAX_RESPONSE_BYTES = 64 * 1024;
+function pageMetadata({ id, version: version2, status }) {
+  return { id, version: version2, status };
+}
+function commentFeedback(comment, htmlAnchor) {
+  const { id, content, intent, parentCommentId, followUp, ruleOut } = comment;
+  return {
+    id,
+    content,
+    parentCommentId,
+    htmlAnchor,
+    ...intent !== void 0 && { intent },
+    ...followUp !== void 0 && { followUp },
+    ...ruleOut !== void 0 && { ruleOut }
+  };
+}
+function readPageFeedback(store, artifactId) {
+  const sessionId = store.getSessionId();
+  const artifacts = store.getArtifacts();
+  const page = artifacts.find((a) => a.id === artifactId && a.type === "page" && a.sessionId === sessionId);
+  if (!page) return void 0;
+  const successor = findPageSuccessor(page, artifacts);
+  const pending = store.getCommentsForArtifact(artifactId).flatMap((comment) => {
+    const anchor = comment.target.htmlAnchor;
+    if (comment.sessionId !== sessionId || comment.author !== "human" || comment.acknowledged || !anchor) return [];
+    return [{ comment, anchor }];
+  });
+  pending.sort((a, b) => b.comment.createdAt.localeCompare(a.comment.createdAt) || a.comment.id.localeCompare(b.comment.id));
+  const result = {
+    sessionId,
+    artifact: pageMetadata(page),
+    ...successor && { successor: pageMetadata(successor) },
+    comments: [],
+    omittedComments: pending.length
+  };
+  let responseBytes = Buffer.byteLength(JSON.stringify(result));
+  if (responseBytes > MAX_RESPONSE_BYTES) return "metadata_too_large";
+  for (const { comment, anchor } of pending) {
+    if (result.comments.length === MAX_COMMENTS) break;
+    if (comment.content.length > MAX_RESPONSE_BYTES - responseBytes) continue;
+    const feedback = commentFeedback(comment, anchor);
+    const addedBytes = Buffer.byteLength(JSON.stringify(feedback)) + (result.comments.length ? 1 : 0);
+    if (responseBytes + addedBytes > MAX_RESPONSE_BYTES) continue;
+    result.comments.push(feedback);
+    responseBytes += addedBytes;
+  }
+  result.omittedComments -= result.comments.length;
+  return result;
+}
+
 // src/mcp/tools/decision-feedback.ts
 function decisionFeedback(decision) {
   const selectedOptionId = decision.response?.optionId;
@@ -39661,6 +39717,10 @@ var ReadStandaloneDecisionBody = external_exports.object({
   expectedProjectRoot: external_exports.string().min(1),
   decisionId: external_exports.string().min(1),
   waitMs: external_exports.number().int().min(1).max(MAX_DECISION_WAIT_MS).optional()
+}).strict();
+var ReadStandalonePageFeedbackBody = external_exports.object({
+  expectedProjectRoot: external_exports.string().min(1),
+  artifactId: external_exports.string().min(1)
 }).strict();
 var RetirementBody = external_exports.object({
   artifactId: external_exports.string().min(1),
@@ -39864,7 +39924,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   const AGENT_ACTIVITY_THROTTLE_MS = 5e3;
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    if (c.res.status >= 400 || c.req.path.endsWith("/open-review") || c.req.path.endsWith("/read-decision")) return;
+    if (c.res.status >= 400 || c.req.method === "POST" && /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback)$/.test(c.req.path)) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
     const sid = m?.[1];
     if (!sid) return;
@@ -39909,8 +39969,29 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   if (authToken && daemonProjectRoot && refreshCompanionLink) {
     let reviewDir2 = function(sessionId) {
       return path27.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+    }, requireWarmStandaloneStore2 = function(c, expectedProjectRoot, sessionId, command) {
+      if (expectedProjectRoot !== projectRoot2 || !isStandaloneSessionForProject(sessionId, projectRoot2)) {
+        return { ok: false, response: c.json({
+          error: "This standalone session does not belong to the daemon's project.",
+          code: ERROR_CODES.project_mismatch
+        }, 403) };
+      }
+      if (!fs26.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+        return { ok: false, response: c.json({
+          error: "Standalone session does not exist in this project.",
+          code: ERROR_CODES.session_not_registered
+        }, 404) };
+      }
+      const store = sessions.get(sessionId);
+      if (!store) {
+        return { ok: false, response: c.json({
+          error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry ${command}.`,
+          code: ERROR_CODES.session_not_registered
+        }, 404) };
+      }
+      return { ok: true, store };
     };
-    var reviewDir = reviewDir2;
+    var reviewDir = reviewDir2, requireWarmStandaloneStore = requireWarmStandaloneStore2;
     const projectRoot2 = daemonProjectRoot;
     app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
       const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
@@ -40002,19 +40083,9 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const { expectedProjectRoot, decisionId, waitMs } = parsed.data;
       const deadline = performance.now() + (waitMs ?? 0);
       const sessionId = c.req.param("sessionId");
-      if (expectedProjectRoot !== projectRoot2 || !isStandaloneSessionForProject(sessionId, projectRoot2)) {
-        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
-      }
-      if (!fs26.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
-      }
-      const store = sessions.get(sessionId);
-      if (!store) {
-        return c.json({
-          error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry read-decision.`,
-          code: ERROR_CODES.session_not_registered
-        }, 404);
-      }
+      const lookup = requireWarmStandaloneStore2(c, expectedProjectRoot, sessionId, "read-decision");
+      if (!lookup.ok) return lookup.response;
+      const { store } = lookup;
       let idleRefreshed = false;
       while (!signal.aborted) {
         const read = await withDecisionResolveLock(store, async () => {
@@ -40057,6 +40128,21 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         await read.wake;
       }
       return c.body(null, 408);
+    });
+    app.post("/api/internal/sessions/:sessionId/read-page-feedback", async (c) => {
+      const parsed = await parseJsonBody(c, ReadStandalonePageFeedbackBody);
+      if (!parsed.ok) return parsed.res;
+      const { expectedProjectRoot, artifactId } = parsed.data;
+      const lookup = requireWarmStandaloneStore2(c, expectedProjectRoot, c.req.param("sessionId"), "read-page-feedback");
+      if (!lookup.ok) return lookup.response;
+      const result = readPageFeedback(lookup.store, artifactId);
+      if (!result) {
+        return c.json({ error: "Page does not exist in this standalone session.", code: ERROR_CODES.artifact_not_in_session }, 404);
+      }
+      if (result === "metadata_too_large") {
+        return c.json({ error: "Page feedback metadata exceeds the response cap.", code: ERROR_CODES.body_too_large }, 413);
+      }
+      return c.json(result);
     });
   }
   app.post("/api/internal/sessions/:sessionId/register", async (c) => {
