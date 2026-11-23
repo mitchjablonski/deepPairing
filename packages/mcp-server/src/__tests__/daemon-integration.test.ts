@@ -186,6 +186,17 @@ describe("FN3 — ledger_write metric recorded daemon-side in /memory routes", (
     expect(m.counts.ledgerWrites.rejected).toBe(1);
     expect(m.counts.ledgerWrites.approved).toBe(1);
   });
+
+  it("counts a stance add that widens a page rule-out (#704 follow-up)", async () => {
+    const localApp = createDaemonRoutes(sessions, sessionMeta, createTestSession, () => {}, undefined, tmpDir);
+    await localApp.request(`/api/internal/sessions/s_fn3w/register`, j({}));
+    sessions.get("s_fn3w")!.recordRejectedApproach({ description: "Redis Streams queue", reason: "too heavy", origin: "page_rule_out" } as any);
+    const before = readMetrics(tmpDir).counts.ledgerWrites.rejected;
+    const res = await localApp.request(`/api/internal/sessions/s_fn3w/memory/stance`,
+      j({ concept: "Redis Streams queue", reason: "too heavy", addedVia: "cli", requestedBy: "user", maxRows: 200 }));
+    expect((await res.json()).status).toBe("widened");
+    expect(readMetrics(tmpDir).counts.ledgerWrites.rejected).toBe(before + 1);
+  });
 });
 
 describe("FN5 — decision resolve route requires an optionId", () => {
