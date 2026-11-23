@@ -535,6 +535,23 @@ export class DaemonClient implements IStore {
     return result;
   }
 
+  async reviseStandalonePage(
+    expectedProjectRoot: string, operationId: string, artifactId: string, htmlBase64: string, reason: string, signal: AbortSignal,
+  ): Promise<ToolResult> {
+    try {
+      return await this.request<ToolResult>("/revise-page", {
+        method: "POST", signal, redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot, operationId, artifactId, htmlBase64, reason }),
+      }, true);
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support standalone page revisions. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
+  }
+
   // --- Artifacts ---
 
   async createArtifact(params: CreateArtifactParams): Promise<Artifact> {

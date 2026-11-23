@@ -1446,6 +1446,8 @@ ${helpInvocations}
                                            Read pending anchored human comments for one page version as JSON.
                                            Returns newest comments first, up to 50 comments and 64 KiB of JSON.
                                            omittedComments counts entries that do not fit. Returned comments stay whole.
+    dp revise-page --session-id ID --artifact-id ID --request-id UUID --file page.html --reason TEXT
+                                           Replace the HTML on an inline page. Use a new request ID for changed input.
     dp guide [--json]                      Print the standalone review protocol for any shell-capable agent
     dp setup-agent --agent codex|cursor|copilot|opencode [--dry-run]
                                            Add a marked block to that agent's instruction file telling it to
@@ -1556,10 +1558,11 @@ ${helpInvocations}
     console.error(`deepPairing: ${errorMessage(err)}`);
     process.exitCode = 1;
   }
-} else if (cmd === "present") {
+} else if (cmd === "present" || cmd === "revise-page") {
   try {
-    const { standalonePresent } = await import("./standalone-session.js");
-    const result = await standalonePresent(cwd, args.slice(1));
+    const { standalonePresent, standaloneRevisePage } = await import("./standalone-session.js");
+    const write = cmd === "present" ? standalonePresent : standaloneRevisePage;
+    const result = await write(cwd, args.slice(1));
     console.log(JSON.stringify(result));
     if (result.isError) process.exitCode = 1;
   } catch (err) {

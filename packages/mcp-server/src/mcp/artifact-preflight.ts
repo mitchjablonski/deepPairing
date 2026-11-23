@@ -80,7 +80,7 @@ export function artifactProposal(type: string, title: string, value: unknown) {
   };
 }
 
-export function preflightArtifact(ctx: Pick<ToolContext, "helpers">, toolName: string, type: string, title: string, content: unknown, opts: Omit<PreflightOpts, "advisory"> = {}) {
+export function preflightArtifact(ctx: { helpers: Pick<ToolContext["helpers"], "preflightRejectedApproaches"> }, toolName: string, type: string, title: string, content: unknown, opts: Omit<PreflightOpts, "advisory"> = {}) {
   const proposal = artifactProposal(type, title, content);
   return proposal
     ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, {

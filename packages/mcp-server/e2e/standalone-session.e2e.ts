@@ -329,6 +329,30 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     expect(await readPage(successor.id)).toEqual({
       sessionId: resumed.sessionId, artifact: successor, comments: [], omittedComments: 0,
     });
+
+    const inlineFile = path.join(root, "inline-page.html");
+    await fs.writeFile(inlineFile, "<h1>Inline page</h1><p>Read the archived events.</p>");
+    const inline = JSON.parse((await run(project, "present", "page", "--session-id", resumed.sessionId,
+      "--request-id", randomUUID(), "--file", inlineFile, "--title", "Inline page")).stdout);
+    await fs.writeFile(inlineFile, "<h1>Inline page</h1><p>Read retained event logs in order.</p>");
+    const revisionId = randomUUID();
+    const revise = (requestId: string) => run(project, "revise-page", "--session-id", resumed.sessionId,
+      "--artifact-id", inline.artifactId, "--request-id", requestId, "--file", inlineFile, "--reason", "Clarify order");
+    const revised = JSON.parse((await revise(revisionId)).stdout);
+    expect(revised).toMatchObject({
+      sessionId: resumed.sessionId, requestId: revisionId, parentArtifactId: inline.artifactId,
+      artifactId: expect.stringMatching(/^art_/), version: 2, status: "draft",
+    });
+    expect(JSON.parse((await revise(revisionId)).stdout)).toEqual({ ...revised, replayed: true });
+    expect(await readPage(inline.artifactId)).toMatchObject({
+      artifact: { id: inline.artifactId, status: "superseded" },
+      successor: { id: revised.artifactId, status: "draft", version: 2 },
+    });
+    const staleRevision = await revise(randomUUID()).catch((err: { code: number; stdout: string; stderr: string }) => err);
+    expect(staleRevision).toMatchObject({ code: 1, stderr: "" });
+    expect(JSON.parse(staleRevision.stdout)).toMatchObject({
+      isError: true, code: "parent_superseded", currentArtifactId: revised.artifactId, currentVersion: 2,
+    });
   } finally {
     await page.close();
     await stopProjectDaemon(project);

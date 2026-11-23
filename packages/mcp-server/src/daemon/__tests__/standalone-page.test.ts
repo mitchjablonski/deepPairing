@@ -11,13 +11,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PAGE_HTML_MAX_BYTES, readFileWatch } from "@deeppairing/shared";
 import { withGlobalStore } from "../../__tests__/global-store-fixture.js";
 import { STANDALONE_PAGE_MAX_BODY_BYTES } from "../../http/guards.js";
 import { projectHashOf } from "../../project-root.js";
 import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { createDaemon, type Daemon } from "../create-daemon.js";
+import { reviseStandalonePage } from "../standalone-revise-page.js";
 
 const b64 = (html: string | Buffer) => Buffer.from(html).toString("base64");
 const page = (html: string, extra: Record<string, unknown> = {}) => ({ title: "Replay backend", htmlBase64: b64(html), ...extra });
@@ -65,8 +66,10 @@ function fixture() {
     expect((await request(daemon, "open-review", { mode: "open" }, { session })).status).toBe(200);
   const present = (daemon: Daemon, operationId: string, args: object, session = sessionId) =>
     request(daemon, "present-page", { operationId, args }, { session });
+  const revise = (daemon: Daemon, operationId: string, artifactId: string, html: string, reason = "Clarify the procedure") =>
+    request(daemon, "revise-page", { operationId, artifactId, htmlBase64: b64(html), reason });
   return {
-    root, sessionId, watchers, start, request, open, present,
+    root, sessionId, watchers, start, request, open, present, revise,
     dispose: () => {
       for (const daemon of daemons) {
         for (const store of daemon.sessions.values()) store.dispose();
@@ -76,6 +79,242 @@ function fixture() {
     },
   };
 }
+
+describe("authenticated standalone page revision", () => {
+  it("revises one exact inline page under concurrent calls and replays the original operation", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentArtifactId = source.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      store.addComment({ id: "cmt_live_feedback", artifactId: parentArtifactId, author: "human", content: "What is the replay procedure?" });
+      const first = randomUUID();
+      const second = randomUUID();
+      const html = "<p>Updated replay procedure</p>";
+      const results = await Promise.all([first, second].map(async (id) => (await f.revise(daemon, id, parentArtifactId, html)).json()));
+      const winnerIndex = results.findIndex((result) => !result.isError);
+      expect(winnerIndex).toBeGreaterThanOrEqual(0);
+      const winner = results[winnerIndex];
+      const operation = [first, second][winnerIndex]!;
+      const artifactId = winner.structuredContent.artifactId as string;
+      expect(winner.structuredContent).toMatchObject({ parentArtifactId, artifactId, version: 2, status: "draft" });
+      const stale = { isError: true, structuredContent: { code: "parent_superseded", currentArtifactId: artifactId, currentVersion: 2 } };
+      expect(results[1 - winnerIndex]).toMatchObject(stale);
+      expect(await (await f.revise(daemon, randomUUID(), parentArtifactId, html)).json()).toMatchObject(stale);
+      expect(await (await f.revise(daemon, operation, parentArtifactId, html)).json()).toMatchObject({
+        structuredContent: { artifactId, parentArtifactId, version: 2, replayed: true },
+      });
+      for (const changed of [[parentArtifactId, "<p>Different input</p>", "Clarify the procedure"],
+        [parentArtifactId, html, "Changed reason"], [artifactId, html, "Clarify the procedure"]] as const) {
+        expect(await (await f.revise(daemon, operation, ...changed)).json()).toMatchObject({
+          isError: true, structuredContent: { code: "standalone_operation_conflict" },
+        });
+      }
+      expect(store.getArtifacts()).toMatchObject([
+        { id: parentArtifactId, status: "superseded" }, { id: artifactId, parentId: parentArtifactId, content: { html } },
+      ]);
+      expect(store.getCommentsForArtifact(parentArtifactId)).toMatchObject([
+        { id: "cmt_live_feedback", acknowledged: false },
+        { author: "agent", content: `Superseded by ${artifactId}: Clarify the procedure` },
+      ]);
+      const nextOperation = randomUUID();
+      const next = await Promise.all([1, 2].map(async () =>
+        (await f.revise(daemon, nextOperation, artifactId, "<p>Final replay procedure</p>")).json()));
+      const latest = next[0].structuredContent.artifactId as string;
+      expect(next).toMatchObject([
+        { structuredContent: { artifactId: latest, version: 3 } },
+        { structuredContent: { artifactId: latest, version: 3 } },
+      ]);
+      expect(next.filter((result) => result.structuredContent.replayed === true)).toHaveLength(1);
+      expect(store.getArtifacts()).toHaveLength(3);
+      expect(daemon.activeSessions.size).toBe(0);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it.each([0, 1, 2])("recovers interruption at flush phase %s without writing another child or note", async (interruptOn) => {
+    const f = fixture();
+    try {
+      const first = f.start();
+      await f.open(first);
+      const source = await (await f.present(first, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentId = source.structuredContent.artifactId as string;
+      const store = first.sessions.get(f.sessionId)!;
+      const operation = randomUUID();
+      const html = "<p>Updated draft</p>";
+      const flush = store.forceFlush.bind(store);
+      let flushes = 0;
+      const interruption = vi.spyOn(store, "forceFlush").mockImplementation(() => {
+        if (interruptOn === 0) throw new Error("Artifact write failed");
+        flush();
+        if (++flushes === interruptOn) throw new Error("Interrupted after durable write");
+      });
+      try {
+        expect((await f.revise(first, operation, parentId, html)).status).toBe(500);
+      } finally {
+        interruption.mockRestore();
+      }
+      const receiptFile = path.join(f.root, ".deeppairing", "sessions", f.sessionId, `revise-page-${operation}.json`);
+      expect(JSON.parse(fs.readFileSync(receiptFile, "utf8"))).not.toHaveProperty("committed");
+      expect(store.getCommentsForArtifact(parentId)).toHaveLength(interruptOn === 2 ? 1 : 0);
+      const childId = store.getArtifacts().find((artifact) => artifact.parentId === parentId)?.id;
+      expect(childId).toBeTruthy();
+      store.dispose();
+      first.dispose();
+
+      const restarted = f.start();
+      expect((await f.revise(restarted, operation, parentId, html)).status).toBe(404);
+      expect((await f.request(restarted, "open-review", { mode: "resume" })).status).toBe(200);
+      const replay = await (await f.revise(restarted, operation, parentId, html)).json();
+      expect(replay).toMatchObject({ structuredContent: { artifactId: childId, parentArtifactId: parentId, version: 2 } });
+      expect(replay.structuredContent.replayed).toBe(interruptOn === 0 ? undefined : true);
+      expect(JSON.parse(fs.readFileSync(receiptFile, "utf8"))).toMatchObject({ committed: true });
+      const reopened = restarted.sessions.get(f.sessionId)!;
+      expect(reopened.getArtifacts()).toHaveLength(2);
+      expect(reopened.getCommentsForArtifact(parentId)).toMatchObject([{ content: `Superseded by ${childId}: Clarify the procedure` }]);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("applies the shared rejection gate and rejects file-backed parents", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>Use an existing file</p>"))).json();
+      fs.writeFileSync(path.join(f.root, "watched.html"), "<p>File backed</p>");
+      const watched = await (await f.present(daemon, randomUUID(), { path: "watched.html", title: "Watched" })).json();
+      const store = daemon.sessions.get(f.sessionId)!;
+      const reason = "No team to maintain this queue.";
+      store.recordRejectedApproach({ description: "Redis Streams", concept: "Redis Streams", reason });
+      const result = await (await f.revise(daemon, randomUUID(), source.structuredContent.artifactId, "<p>Use Redis Streams for replay.</p>")).json();
+      expect(result).toMatchObject({ isError: true, structuredContent: { code: "rejected_approach_blocked", reason } });
+      const fileRefusal = await (await f.revise(daemon, randomUUID(), watched.structuredContent.artifactId, "<p>Changed</p>")).json();
+      expect(fileRefusal.content[0].text).toContain("save changes to its source file");
+      expect(store.getArtifacts()).toHaveLength(2);
+      expect(store.getComments()).toHaveLength(0);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("requires the bearer and refuses oversized or non-UTF-8 inline bytes", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const artifactId = source.structuredContent.artifactId as string;
+      const body = { artifactId, operationId: randomUUID(), reason: "Clarify", htmlBase64: b64("<p>Updated</p>") };
+      expect((await f.request(daemon, "revise-page", body, { authenticated: false })).status).toBe(401);
+      expect((await f.request(daemon, "revise-page", { ...body, expectedProjectRoot: path.dirname(f.root) })).status).toBe(403);
+      expect((await f.request(daemon, "revise-page", { ...body, htmlBase64: b64(Buffer.from([0xff])) })).status).toBe(400);
+      const oversized = "<p>" + "x".repeat(PAGE_HTML_MAX_BYTES - 6) + "</p>";
+      expect((await f.revise(daemon, body.operationId, artifactId, oversized)).status).toBe(413);
+      expect(daemon.sessions.get(f.sessionId)!.getArtifacts()).toHaveLength(1);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("inherits page metadata in the gate and refuses metadata changed during preflight", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const metadata = { summary: "A short look at archival replay.", concept: "Redis Streams" };
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>", metadata))).json();
+      const artifactId = source.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const getMemory = store.getSessionMemory.bind(store);
+      vi.spyOn(store, "getSessionMemory").mockImplementationOnce(() => {
+        store.renameArtifact(artifactId, "Renamed replay");
+        return getMemory();
+      });
+      const html = "<p>Updated draft</p>";
+      const operation = randomUUID();
+      expect(await (await f.revise(daemon, operation, artifactId, html)).json()).toMatchObject({
+        isError: true, structuredContent: { code: "session_review_conflict" },
+      });
+      expect(store.getArtifacts()).toHaveLength(1);
+      const revised = await (await f.revise(daemon, operation, artifactId, html)).json();
+      const revisedId = revised.structuredContent.artifactId as string;
+      expect(store.getArtifacts().find((a) => a.id === revisedId)).toMatchObject({
+        title: "Renamed replay", content: { ...metadata, concept: { name: metadata.concept }, html },
+      });
+      const reason = "Nobody can operate Redis Streams.";
+      store.recordRejectedApproach({ description: "Redis Streams", concept: "Redis Streams", reason });
+      expect(await (await f.revise(daemon, randomUUID(), revisedId, "<p>Neutral text</p>")).json()).toMatchObject({
+        isError: true, structuredContent: { code: "rejected_approach_blocked", reason },
+      });
+      expect(store.getArtifacts()).toHaveLength(2);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("binds a request ID even when the parsed target is missing", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const operation = randomUUID();
+      const html = "<p>Updated draft</p>";
+      expect(await (await f.revise(daemon, operation, "art_missing", html)).json()).toMatchObject({
+        isError: true, structuredContent: { code: "artifact_not_in_session" },
+      });
+      expect(await (await f.revise(daemon, operation, source.structuredContent.artifactId, html)).json()).toMatchObject({
+        isError: true, structuredContent: { code: "standalone_operation_conflict" },
+      });
+      expect(daemon.sessions.get(f.sessionId)!.getArtifacts()).toHaveLength(1);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("recovers the original preflight trace and broadcasts the durable note once", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const store = daemon.sessions.get(f.sessionId)!;
+      const operation = randomUUID();
+      const artifactId = source.structuredContent.artifactId as string;
+      const args = { artifactId, html: "<p>Updated draft</p>", reason: "Clarify the procedure" };
+      const broadcast = vi.fn();
+      const traceWrite = vi.spyOn(store, "recordPreflightTrace").mockImplementationOnce(() => {
+        throw new Error("Interrupted before trace write");
+      });
+      const revise = () => reviseStandalonePage(f.root, store, operation, args, broadcast);
+      await expect(revise()).rejects.toThrow("Interrupted before trace write");
+      expect(broadcast).not.toHaveBeenCalled();
+      const receiptFile = path.join(f.root, ".deeppairing", "sessions", f.sessionId, `revise-page-${operation}.json`);
+      const prepared = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+      expect(prepared).toMatchObject({ trace: { toolName: "revise_artifact", decision: "admitted" } });
+      expect(prepared).not.toHaveProperty("committed");
+      const note = store.getCommentsForArtifact(artifactId)[0];
+      expect(note).toMatchObject({ author: "agent" });
+      const readMemory = vi.spyOn(store, "getSessionMemory");
+      expect(await revise()).toMatchObject({ structuredContent: { artifactId: prepared.trace.artifactId, replayed: true } });
+      expect(store.getPreflightTrace(prepared.trace.artifactId)).toEqual(prepared.trace);
+      expect(traceWrite).toHaveBeenLastCalledWith(prepared.trace.artifactId, prepared.trace);
+      expect(readMemory).not.toHaveBeenCalled();
+      expect(broadcast).toHaveBeenCalledWith({ type: "comment_added", comment: note });
+      const completionEvents = broadcast.mock.calls.length;
+      expect(await revise()).toMatchObject({ structuredContent: { replayed: true } });
+      expect(broadcast).toHaveBeenCalledTimes(completionEvents);
+      expect(store.getCommentsForArtifact(artifactId)).toHaveLength(1);
+    } finally {
+      f.dispose();
+    }
+  });
+});
 
 describe("authenticated standalone page", () => {
   it("presents an inline page, replays the same request ID, and refuses changed input on it", async () => {

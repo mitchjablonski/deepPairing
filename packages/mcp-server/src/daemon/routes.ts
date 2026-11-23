@@ -24,6 +24,7 @@ import type { RetirementInput } from "../store/retirement.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
 import { presentStandalonePage } from "./standalone-page.js";
+import { reviseStandalonePage } from "./standalone-revise-page.js";
 import { readPageFeedback } from "./page-feedback.js";
 import { decisionFeedback, MAX_DECISION_WAIT_MS, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
 
@@ -39,6 +40,8 @@ const PresentStandaloneOptionsBody = z.object({
 /** Inline HTML travels base64-encoded so the measured body cap is a fixed
  *  function of the 2 MiB page cap (JSON string escaping can grow HTML up to
  *  six-fold; base64 is exactly 4/3). Exactly one of htmlBase64 / path. */
+const inlinePageBase64 = z.string().min(1, "htmlBase64 must not be empty.")
+  .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, "htmlBase64 must be canonical base64.");
 const PresentStandalonePageBody = z.object({
   operationId: z.string().uuid().transform((id) => id.toLowerCase()),
   expectedProjectRoot: z.string().min(1),
@@ -46,12 +49,18 @@ const PresentStandalonePageBody = z.object({
     title: z.string().optional(),
     summary: z.string().optional(),
     concept: z.string().optional(),
-    htmlBase64: z.string().min(1, "htmlBase64 must not be empty.")
-      .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, "htmlBase64 must be canonical base64.").optional(),
+    htmlBase64: inlinePageBase64.optional(),
     path: z.string().min(1).optional(),
   }).strict().refine((a) => (a.htmlBase64 === undefined) !== (a.path === undefined), {
     message: "Give exactly one of htmlBase64 or path.",
   }),
+}).strict();
+const ReviseStandalonePageBody = z.object({
+  operationId: z.string().uuid().transform((id) => id.toLowerCase()),
+  expectedProjectRoot: z.string().min(1),
+  artifactId: z.string().trim().min(1).max(128),
+  htmlBase64: inlinePageBase64,
+  reason: z.string().trim().min(1).max(4096),
 }).strict();
 const ReadStandaloneDecisionBody = z.object({
   expectedProjectRoot: z.string().min(1),
@@ -628,6 +637,30 @@ export function createDaemonRoutes(
       try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks the present */ }
       const result = await presentStandalonePage(daemonProjectRoot, store, parsed.data.operationId,
         { ...rest, ...(html !== undefined ? { html } : {}) }, port, (event) => broadcast(sessionId, event));
+      return c.json(result);
+    });
+    app.post("/api/internal/sessions/:sessionId/revise-page", async (c) => {
+      const parsed = await parseJsonBody(c, ReviseStandalonePageBody);
+      if (!parsed.ok) return parsed.res;
+      const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason } = parsed.data;
+      const sessionId = c.req.param("sessionId");
+      const lookup = requireWarmStandaloneStore(c, expectedProjectRoot, sessionId, "revise-page");
+      if (!lookup.ok) return lookup.response;
+      const bytes = Buffer.from(htmlBase64, "base64");
+      if (bytes.length > PAGE_HTML_MAX_BYTES) {
+        return c.json({
+          error: `The page is ${bytes.length} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
+          code: ERROR_CODES.body_too_large,
+        }, 413);
+      }
+      // Keep request identity exact even for a caller outside the CLI.
+      // The UTF-8 round trip rejects invalid bytes and noncanonical encodings.
+      const html = bytes.toString("utf8");
+      if (Buffer.from(html, "utf8").toString("base64") !== htmlBase64) {
+        return c.json({ error: "The page must be valid UTF-8 HTML encoded as canonical base64." }, 400);
+      }
+      const result = await reviseStandalonePage(projectRoot, lookup.store, operationId, { artifactId, html, reason },
+        (event) => broadcast(sessionId, event));
       return c.json(result);
     });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {

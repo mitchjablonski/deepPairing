@@ -18,6 +18,7 @@ const PRESENT_PAGE_USAGE = "Usage: deeppairing present page --session-id ID --re
 const PRESENT_USAGE = `${PRESENT_OPTIONS_USAGE}\n       ${PRESENT_PAGE_USAGE.replace(/^Usage: /, "")}`;
 const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --decision-id ID [--wait-ms MS]";
 const READ_PAGE_FEEDBACK_USAGE = "Usage: deeppairing read-page-feedback --session-id ID --artifact-id ID";
+const REVISE_PAGE_USAGE = "Usage: deeppairing revise-page --session-id ID --artifact-id ID --request-id UUID --file page.html --reason TEXT";
 const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
 
@@ -104,6 +105,55 @@ export async function standaloneReadPageFeedback(projectRoot: string, args: stri
   requireStandaloneSession(projectRoot, sessionId);
   const { client } = await connectStandaloneSession(projectRoot, sessionId);
   return client.readStandalonePageFeedback(projectRoot, artifactId, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
+}
+
+export async function standaloneRevisePage(projectRoot: string, args: string[]) {
+  const { values } = parseArgs({
+    args,
+    options: {
+      "session-id": { type: "string" }, "artifact-id": { type: "string" },
+      "request-id": { type: "string" }, file: { type: "string" }, reason: { type: "string" },
+    },
+  });
+  const { "session-id": sessionId, "artifact-id": artifactId, "request-id": rawRequestId, file, reason } = values;
+  if (!sessionId || !artifactId?.trim() || !rawRequestId || !file || !reason?.trim()) throw new Error(REVISE_PAGE_USAGE);
+  requireStandaloneSession(projectRoot, sessionId);
+  const requestId = requestIdSchema.safeParse(rawRequestId);
+  if (!requestId.success) throw new Error(`--request-id must be a UUID. ${PRESENT_OPTIONS_RETRY}`);
+
+  const receipt = { sessionId, requestId: requestId.data };
+  const read = readBoundedPageFile(file, PAGE_HTML_MAX_BYTES);
+  if (!read.ok) {
+    return {
+      ...receipt, isError: true, code: ERROR_CODES.body_too_large,
+      message: `The page file is at least ${read.size} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
+    };
+  }
+  if (!read.bytes.toString("utf8").trim()) throw new Error("The page file is empty.");
+  const { client, companionUrl } = await connectStandaloneSession(projectRoot, sessionId);
+  let result;
+  try {
+    result = await client.reviseStandalonePage(projectRoot, requestId.data, artifactId.trim(), read.bytes.toString("base64"),
+      reason.trim(), AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
+  } catch (err) {
+    if (err instanceof Error && "status" in err && err.status === 413) {
+      return { ...receipt, isError: true, code: ERROR_CODES.body_too_large, message: errorMessage(err).replace(/^\[deepPairing\] /, "") };
+    }
+    throw new Error(`${errorMessage(err)} If retrying, use the same --request-id and revision input.`);
+  }
+  const details = result.structuredContent ?? {};
+  if (result.isError) {
+    return {
+      ...receipt, ...details, isError: true,
+      code: details.code ?? result._meta?.code ?? ERROR_CODES.validation_error,
+      message: result.content[0]?.text ?? "The daemon refused the page revision.",
+    };
+  }
+  if (details.sessionId !== sessionId || details.parentArtifactId !== artifactId.trim() ||
+    typeof details.artifactId !== "string" || typeof details.version !== "number") {
+    throw new Error("The daemon did not confirm the page revision. If retrying, use the same --request-id and revision input.");
+  }
+  return { ...details, ...receipt, companionUrl, isError: undefined };
 }
 
 export async function standalonePresent(projectRoot: string, args: string[]): Promise<PresentOptionsReceipt | PresentPageReceipt> {

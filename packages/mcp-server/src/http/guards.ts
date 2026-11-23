@@ -22,7 +22,7 @@ export const ARTIFACT_CREATE_MAX_BODY_BYTES = 512 * 1024;
  */
 export const STANDALONE_PAGE_MAX_BODY_BYTES = 4 * Math.ceil(PAGE_HTML_MAX_BYTES / 3) + 256 * 1024;
 
-const STANDALONE_PAGE_ROUTE = /^\/api\/internal\/sessions\/[^/]+\/present-page$/;
+const STANDALONE_PAGE_ROUTE = /^\/api\/internal\/sessions\/[^/]+\/(?:present-page|revise-page)$/;
 
 /**
  * Select the exact authenticated routes that accept artifact-sized payloads.
@@ -32,7 +32,8 @@ const STANDALONE_PAGE_ROUTE = /^\/api\/internal\/sessions\/[^/]+\/present-page$/
  */
 export function isArtifactCreateRoute(method: string, pathname: string): boolean {
   if (method !== "POST") return false;
-  return /^\/api\/internal\/sessions\/[^/]+\/(?:artifacts|present-options|present-page)$/.test(pathname);
+  return STANDALONE_PAGE_ROUTE.test(pathname) ||
+    /^\/api\/internal\/sessions\/[^/]+\/(?:artifacts|present-options)$/.test(pathname);
 }
 
 /**

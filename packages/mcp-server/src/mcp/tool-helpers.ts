@@ -369,10 +369,16 @@ export async function persistPreflightTrace(
   partial: PreflightTracePartial,
 ): Promise<void> {
   if (!store.recordPreflightTrace) return;
-  const trace = {
+  const trace = buildPreflightTrace(artifact.id, toolName, partial);
+  await store.recordPreflightTrace(artifact.id, trace);
+  broadcast({ type: "preflight_trace_recorded", artifactId: artifact.id, trace });
+}
+
+export function buildPreflightTrace(artifactId: string, toolName: string, partial: PreflightTracePartial) {
+  return {
     version: 1 as const,
     at: new Date().toISOString(),
-    artifactId: artifact.id,
+    artifactId,
     toolName,
     decision: partial.decision,
     consideredCount: partial.consideredCount,
@@ -380,8 +386,6 @@ export async function persistPreflightTrace(
     nearMisses: partial.nearMisses,
     block: partial.block,
   };
-  await store.recordPreflightTrace(artifact.id, trace);
-  broadcast({ type: "preflight_trace_recorded", artifactId: artifact.id, trace });
 }
 
 /**
