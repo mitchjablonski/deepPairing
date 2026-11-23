@@ -57,6 +57,8 @@ describe("deeppairing guide (#681)", () => {
   it("teaches read-page-feedback: passive, anchored, ruleOut, successor, bounds", () => {
     expect(guide).toContain("deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>");
     expect(guide).toMatch(/never\s+acknowledges anything/);
+    expect(guide).toMatch(/while\s+they\s+remain\s+unacknowledged/);
+    expect(guide).not.toMatch(/until\s+you\s+address\s+them/);
     for (const field of ["intent", "parentCommentId", "htmlAnchor", "ruleOut", "successor.id", "omittedComments"]) {
       expect(guide).toContain(field);
     }

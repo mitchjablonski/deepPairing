@@ -139,8 +139,8 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>
   After presenting a page, this reads the human's anchored comments on that
   exact page version, newest first. It is passive: reading never
-  acknowledges anything, so the same comments come back on every read until
-  you address them.
+  acknowledges anything, so repeated reads return the same comments while
+  they remain unacknowledged.
     -> {"sessionId","artifact":{"id","version","status"},"successor"?,
         "comments":[...],"omittedComments"}
   Each comment has id, content (the human's words), parentCommentId (set on
