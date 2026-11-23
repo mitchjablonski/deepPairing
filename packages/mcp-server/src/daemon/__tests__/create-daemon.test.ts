@@ -184,6 +184,79 @@ it("waits for the exact committed standalone choice and releases a disconnected 
   }
 });
 
+it("reads bounded feedback from one warm page version without activity, a lease, or acknowledgement", async () => {
+  vi.useFakeTimers();
+  const { tmpDir, daemon, exits } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const headers = {
+    "X-Project-Hash": projectHashOf(tmpDir), "X-Session-Id": sessionId,
+    "Content-Type": "application/json", Authorization: "Bearer test-token",
+  };
+  const sessionPath = (id: string, route: string) => `/api/internal/sessions/${id}/${route}`;
+  const post = (url: string, body: object, auth = headers.Authorization) => daemon.app.request(url, {
+    method: "POST", headers: { ...headers, Authorization: auth }, body: JSON.stringify(body),
+  });
+  const request = (id = sessionId, artifactId = "page1", project = tmpDir, auth?: string) =>
+    post(sessionPath(id, "read-page-feedback"), { expectedProjectRoot: project, artifactId }, auth);
+  fs.mkdirSync(path.join(tmpDir, ".deeppairing", "sessions", sessionId), { recursive: true });
+  const cold = await request();
+  expect(cold.status).toBe(404);
+  expect(await cold.json()).toMatchObject({ error: expect.stringContaining(`deeppairing resume ${sessionId}`) });
+  expect(daemon.sessions.size).toBe(0);
+  expect((await request(sessionId, "page1", tmpDir, "")).status).toBe(401);
+  expect((await request(sessionId, "page1", tmpDir + "-other")).status).toBe(403);
+  expect((await request("s_legacy")).status).toBe(403);
+  expect((await request(createStandaloneSessionId(tmpDir))).status).toBe(404);
+
+  expect((await post(sessionPath(sessionId, "open-review"), { expectedProjectRoot: tmpDir, mode: "resume" })).status).toBe(200);
+  const store = daemon.sessions.get(sessionId)!;
+  const lastActivity = daemon.sessionMeta.get(sessionId)!.lastActivity;
+  const htmlAnchor = { kind: "link" as const, quote: "Replay docs", locator: "a", href: "/replay", prefix: "See ", suffix: ".", version: 1 };
+  store.createArtifact({ id: "page1", type: "page", title: "Replay", content: {} });
+  store.createArtifact({ id: "page2", type: "page", title: "Replay v2", content: {}, parentId: "page1", version: 2 });
+  store.createArtifact({ id: "option", type: "decision", title: "Option", content: {} });
+  store.updateArtifactStatus("page1", "approved");
+  const add = (id: string, content: string, artifactId = "page1", version = 1, author: "human" | "agent" = "human") =>
+    store.addComment({
+      id, content, artifactId, author, target: { artifactId, htmlAnchor: { ...htmlAnchor, version } },
+      intent: "question", parentCommentId: "thread_parent",
+    });
+  add("a_huge", "🙂".repeat(17_000));
+  add("b_answered", "Already acknowledged");
+  store.acknowledgeComments(["b_answered"]);
+  add("c_agent", "Agent reply", "page1", 1, "agent");
+  add("e_successor", "On v2", "page2", 2);
+  for (let n = 0; n < 50; n++) add(`small_${n}`, `Question ${n}`);
+  vi.advanceTimersByTime(1);
+  add("f_question", "Which replay procedure do we use?", "page1", 2);
+
+  vi.advanceTimersByTime(49_999);
+  const response = await request();
+  expect(response.status).toBe(200);
+  const raw = await response.text();
+  expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(64 * 1024);
+  const snapshot = JSON.parse(raw);
+  expect(snapshot).toMatchObject({
+    sessionId, artifact: { id: "page1", version: 1, status: "approved" },
+    successor: { id: "page2", version: 2, status: "draft" }, omittedComments: 2,
+  });
+  expect(snapshot.comments).toHaveLength(50);
+  expect(snapshot.comments[0]).toEqual({
+    id: "f_question", content: "Which replay procedure do we use?", intent: "question",
+    parentCommentId: "thread_parent", followUp: true, htmlAnchor: { ...htmlAnchor, version: 2 },
+  });
+  expect(await (await request()).text()).toBe(raw);
+  expect((await request(sessionId, "option")).status).toBe(404);
+  const sibling = createStandaloneSessionId(tmpDir);
+  daemon.createSession(sibling);
+  expect((await request(sibling)).status).toBe(404);
+  expect(daemon.activeSessions.size).toBe(0);
+  expect(daemon.sessionMeta.get(sessionId)?.lastActivity).toBe(lastActivity);
+  expect(store.getUnacknowledgedComments().map((comment) => comment.id)).toContain("f_question");
+  vi.advanceTimersByTime(10_000);
+  expect(exits).toEqual([0]);
+});
+
 describe("#151 — the REAL live-decisions closure (not a replica)", () => {
   it("GET /api/decisions includes an unflushed decision from a factory-registered session", async () => {
     const { tmpDir, daemon } = makeDaemon();

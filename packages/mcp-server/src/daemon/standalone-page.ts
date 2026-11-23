@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isClosedArtifactStatus, PageContentSchema, type Artifact } from "@deeppairing/shared";
+import { isClosedArtifactStatus, PageContentSchema } from "@deeppairing/shared";
 import { z } from "zod";
 import { ERROR_CODES, TOOL_ERROR_CODES, TOOL_ERROR_RETRYABLE } from "../error-codes.js";
 import { callFingerprint } from "../mcp/proposal-resolution.js";
@@ -9,6 +9,7 @@ import type { BroadcastFn, ToolResult } from "../mcp/tools/types.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { withFileLock } from "../store/file-lock.js";
 import type { FileStore } from "../store/file-store.js";
+import { findPageSuccessor } from "./page-successor.js";
 import {
   operationDigest,
   readJsonFile,
@@ -102,25 +103,10 @@ export async function presentStandalonePage(
     // is reported separately.
     const artifacts = store.getArtifacts();
     const backing = artifacts.find((a) => a.id === artifactId);
-    const rank = (a: Artifact) => [isClosedArtifactStatus(a.status) ? 0 : 1, a.version ?? 0, Date.parse(a.createdAt ?? "") || 0];
-    const newer = (a: Artifact, b: Artifact) => {
-      const [x, y] = [rank(a), rank(b)];
-      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i]! > y[i]!;
-      return false;
-    };
-    let latest = backing;
-    const seen = new Set<string>([artifactId]);
-    while (latest) {
-      // A fork: prefer a live child, then the highest version, then the newest.
-      const children = artifacts.filter((a) => a.parentId === latest!.id && !seen.has(a.id));
-      const next = children.reduce<Artifact | undefined>((best, a) => (!best || newer(a, best) ? a : best), undefined);
-      if (!next) break;
-      seen.add(next.id);
-      latest = next;
-    }
+    const latest = backing && findPageSuccessor(backing, artifacts);
     const version = backing?.version ?? (typeof disk.version === "number" ? disk.version : 1);
     const status = String(backing?.status ?? disk.status ?? "draft");
-    const current = latest && latest !== backing
+    const current = latest
       ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status }
       : undefined;
     const moved = current

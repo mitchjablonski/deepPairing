@@ -43254,6 +43254,27 @@ var DaemonClient = class {
     }
     return result;
   }
+  async readStandalonePageFeedback(expectedProjectRoot, artifactId, signal) {
+    let result;
+    try {
+      result = await this.request("/read-page-feedback", {
+        method: "POST",
+        signal,
+        redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot, artifactId })
+      }, true);
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support reading standalone page feedback. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
+    if (result?.sessionId !== this.sessionId || result.artifact?.id !== artifactId) {
+      throw new Error("The daemon did not confirm the requested standalone session and page.");
+    }
+    return result;
+  }
   // --- Artifacts ---
   async createArtifact(params) {
     const data = await this.post("/artifacts", params);

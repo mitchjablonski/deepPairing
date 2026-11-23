@@ -267,9 +267,51 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
       sessionId: resumed.sessionId, requestId: pageId, artifactId: expect.stringMatching(/^art_/), sourcePath: "review/page.html",
     });
     expect(JSON.parse((await runPage()).stdout)).toEqual({ ...presentedPage, replayed: true, status: "draft" });
+
+    const runPageRead = (sessionId: string, artifactId: string) => run(project, "read-page-feedback",
+      "--session-id", sessionId, "--artifact-id", artifactId);
+    const readPage = async (artifactId = presentedPage.artifactId) =>
+      JSON.parse((await runPageRead(resumed.sessionId, artifactId)).stdout);
+    await receipt("resume", second.sessionId);
+    await expect(runPageRead(second.sessionId, presentedPage.artifactId)).rejects.toMatchObject({
+      code: 1, stdout: "", stderr: expect.stringContaining("Page does not exist in this standalone session."),
+    });
+    await page.locator(`button[data-artifact-item="${presentedPage.artifactId}"]`).click();
+    const pagePane = page.locator(`[data-dp-pane][data-artifact-id="${presentedPage.artifactId}"]:not([inert])`);
+    const frame = pagePane.getByTestId("page-artifact").frameLocator("iframe");
+    const composer = pagePane.getByTestId("page-anchor-composer");
+    await frame.getByRole("heading", { name: "Replay plan" }).click();
+    const question = "Where is the recovery procedure documented?";
+    await composer.getByLabel("Comment on the selected spot").fill(question);
+    await composer.getByRole("button", { name: "Ask", exact: true }).click();
+    await expect(composer.getByText(question, { exact: true })).toBeVisible();
+
+    const rejectedText = "Keep a local replay file.";
+    const rejectedReason = "A replay file can unexpectedly fill the disk.";
+    await frame.getByText(rejectedText, { exact: true }).click();
+    await composer.getByRole("button", { name: "Rule this out", exact: true }).click();
+    const ruleOutPanel = composer.getByTestId("page-rule-out-panel");
+    await ruleOutPanel.getByRole("textbox").fill(rejectedReason);
+    await ruleOutPanel.getByRole("button", { name: "Rule it out", exact: true }).click();
+    await expect(composer.getByTestId("page-rule-out-recorded")).toBeVisible();
+    const pageFeedback = await readPage();
+    expect(pageFeedback).toEqual({
+      sessionId: resumed.sessionId,
+      artifact: { id: presentedPage.artifactId, version: 1, status: "draft" },
+      omittedComments: 0,
+      comments: [
+        { id: expect.any(String), parentCommentId: null, intent: "comment", content: rejectedReason,
+          htmlAnchor: expect.objectContaining({ kind: "element", locator: expect.any(String), quote: rejectedText, version: 1 }),
+          ruleOut: { description: rejectedText } },
+        { id: expect.any(String), parentCommentId: null, intent: "question", content: question,
+          htmlAnchor: expect.objectContaining({ kind: "element", locator: expect.any(String), quote: "Replay plan", version: 1 }) },
+      ],
+    });
+    expect(await readPage()).toEqual(pageFeedback);
+
     // Saving the file records v2 through the daemon's watch; a retry of the
     // original call still replays v1 but says where the page went.
-    await fs.writeFile(path.join(project, "review", "page.html"), "<h1>Replay plan</h1><p>Keep a local replay file, compacted daily.</p>");
+    await fs.writeFile(path.join(project, "review", "page.html"), "<h1>Replay plan</h1><p>Stream the events from retained archives.</p>");
     let movedReplay: Record<string, unknown> = {};
     for (const end = Date.now() + 20_000; Date.now() < end;) {
       movedReplay = JSON.parse((await runPage()).stdout);
@@ -282,6 +324,11 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
       note: expect.stringMatching(/^replayed; the page has since moved to v2 \(art_/),
     });
     expect(movedReplay.currentArtifactId).not.toBe(presentedPage.artifactId);
+    const successor = { id: movedReplay.currentArtifactId as string, version: 2, status: "draft" };
+    expect(await readPage()).toEqual({ ...pageFeedback, artifact: { ...pageFeedback.artifact, status: "superseded" }, successor });
+    expect(await readPage(successor.id)).toEqual({
+      sessionId: resumed.sessionId, artifact: successor, comments: [], omittedComments: 0,
+    });
   } finally {
     await page.close();
     await stopProjectDaemon(project);

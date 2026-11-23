@@ -25,6 +25,7 @@ import type { WorkerStop, WorkerStopBatch } from "../store/worker-stop-notices.j
 import type { RetirementInput, RetirementOutcome } from "../store/retirement.js";
 import type { ToolResult } from "../mcp/tools/types.js";
 import type { StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
+import type { StandalonePageFeedbackRead } from "./page-feedback.js";
 // Static on purpose (was a dynamic import): a dynamic import made esbuild wrap
 // lifecycle.ts and its whole dependency graph (including zod) in lazy __esm
 // initialisers, and the MCP SDK's top-level zod calls then ran before zod was
@@ -510,6 +511,26 @@ export class DaemonClient implements IStore {
     }
     if (result?.sessionId !== this.sessionId || result.decisionId !== decisionId) {
       throw new Error("The daemon did not confirm the requested standalone session and decision.");
+    }
+    return result;
+  }
+
+  async readStandalonePageFeedback(expectedProjectRoot: string, artifactId: string, signal: AbortSignal): Promise<StandalonePageFeedbackRead> {
+    let result: StandalonePageFeedbackRead;
+    try {
+      result = await this.request("/read-page-feedback", {
+        method: "POST", signal, redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot, artifactId }),
+      }, true); // Do not register a wrapper or retry through one.
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support reading standalone page feedback. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
+    if (result?.sessionId !== this.sessionId || result.artifact?.id !== artifactId) {
+      throw new Error("The daemon did not confirm the requested standalone session and page.");
     }
     return result;
   }
