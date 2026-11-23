@@ -2,8 +2,8 @@ import type { Artifact, Comment, HtmlAnchor } from "@deeppairing/shared";
 import type { FileStore } from "../store/file-store.js";
 import { findPageSuccessor } from "./page-successor.js";
 
-const MAX_COMMENTS = 50;
-const MAX_RESPONSE_BYTES = 64 * 1024;
+export const MAX_COMMENTS = 50;
+export const MAX_RESPONSE_BYTES = 64 * 1024;
 
 function pageMetadata({ id, version, status }: Artifact) {
   return { id, version, status };
