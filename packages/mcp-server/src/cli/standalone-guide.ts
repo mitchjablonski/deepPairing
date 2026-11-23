@@ -12,6 +12,7 @@
  */
 import { DECISION_NON_ANSWERABLE_STATUSES, PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
 import { cliInvocation } from "../cli-invocation.js";
+import { MAX_COMMENTS, MAX_RESPONSE_BYTES } from "../daemon/page-feedback.js";
 import { SERVER_VERSION } from "../version.js";
 
 /**
@@ -26,7 +27,12 @@ export const GUIDE_COMMANDS = [
   "present options",
   "present page",
   "read-decision",
+  "read-page-feedback",
 ] as const;
+
+/** read-page-feedback bounds, from the daemon's own limits. */
+export const PAGE_FEEDBACK_MAX_COMMENTS = MAX_COMMENTS;
+export const PAGE_FEEDBACK_MAX_KIB = MAX_RESPONSE_BYTES / 1024;
 
 /** The `waitStatus` values `read-decision --wait-ms` returns (decision-feedback.ts). */
 export const GUIDE_WAIT_STATUSES = ["resolved", "closed", "timed_out"] as const;
@@ -125,10 +131,32 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   --file  sends any readable file once, inline; it is not watched.
   Use exactly one of them. Pages are capped at ${pageCapMiB} MiB.
     -> {"sessionId","requestId","artifactId","companionUrl",...}
-  The human annotates the page in the companion. A rejection there becomes
-  rejection memory and is enforced when you next present (see REFUSALS).
+  Keep the artifactId: you read the human's comments with it. A rejection in
+  the companion becomes rejection memory and is enforced when you next
+  present (see REFUSALS).
 
-4. READ THE DECISION
+4. READ PAGE FEEDBACK
+  deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>
+  After presenting a page, this reads the human's anchored comments on that
+  exact page version, newest first. It is passive: reading never
+  acknowledges anything, so the same comments come back on every read until
+  you address them.
+    -> {"sessionId","artifact":{"id","version","status"},"successor"?,
+        "comments":[...],"omittedComments"}
+  Each comment has id, content (the human's words), parentCommentId (set on
+  a reply), htmlAnchor (where it points: kind, locator, quote, and when
+  present prefix, suffix, table, nodeId, href, version), and optionally
+  intent ("comment" | "question" | "suggestion"), followUp and ruleOut.
+  - ruleOut: the human ruled the anchored text out. Take it out of the page;
+    don't argue for it. The comment content is their reason.
+  - successor: the page has moved to a newer version. Read that version
+    with its id (successor.id) as --artifact-id.
+  A read returns at most ${PAGE_FEEDBACK_MAX_COMMENTS} comments and ${PAGE_FEEDBACK_MAX_KIB} KiB of JSON. omittedComments counts
+  the ones that didn't fit; returned comments are always whole.
+  Only anchored human comments are included. Page notes without an anchor
+  and file-watch notices are not.
+
+5. READ THE DECISION
   deeppairing read-decision --session-id <sessionId> --decision-id <decisionId> --wait-ms 30000
   This waits up to 30000 ms (any value from 1 to 30000) for the human's
   choice. Reading consumes nothing, so repeat reads are safe. Branch on
@@ -144,7 +172,7 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   ${DECISION_NON_ANSWERABLE_STATUSES.join(", ")} means the card can no longer
   be answered.
 
-5. REQUEST IDS
+6. REQUEST IDS
   Every present needs --request-id, a UUID you generate (for example
   \`node -e "console.log(crypto.randomUUID())"\`).
   - Retrying unchanged input (a timeout, a crash, output you never saw): reuse
@@ -153,7 +181,7 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   - Changed anything (the file's content, a flag): use a NEW UUID. Reusing a
     UUID with different input is refused with standalone_operation_conflict.
 
-6. REFUSALS
+7. REFUSALS
   A refused present prints {"isError":true,"code":"...","message":"..."} and
   exits 1.
   - "code":"rejected_approach_blocked" comes with "reason": the human already
@@ -167,8 +195,9 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
 
 THE LOOP
   open (or resume) -> present -> give the human the companionUrl ->
-  read-decision --wait-ms 30000, repeated while timed_out -> act on the choice,
-  or change the approach after a rejection and present again.
+  read-decision --wait-ms 30000, repeated while timed_out (or
+  read-page-feedback for a page) -> act on the choice or the comments, or
+  change the approach after a rejection and present again.
 
 NOTE, CLAUDE CODE ONLY (skip this unless you are Claude Code)
   The deepPairing Claude Code plugin adds MCP tools for the same loop and a

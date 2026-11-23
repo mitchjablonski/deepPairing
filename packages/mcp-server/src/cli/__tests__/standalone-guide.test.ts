@@ -52,6 +52,18 @@ describe("deeppairing guide (#681)", () => {
     for (const status of GUIDE_WAIT_STATUSES) expect(guide).toContain(`- "${status}":`);
     expect(guide).toContain(DECISION_NON_ANSWERABLE_STATUSES.join(", "));
     expect(guide).not.toMatch(/withdrawn|every command prints/i);
+  });
+
+  it("teaches read-page-feedback: passive, anchored, ruleOut, successor, bounds", () => {
+    expect(guide).toContain("deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>");
+    expect(guide).toMatch(/never\s+acknowledges anything/);
+    for (const field of ["intent", "parentCommentId", "htmlAnchor", "ruleOut", "successor.id", "omittedComments"]) {
+      expect(guide).toContain(field);
+    }
+    expect(guide).toMatch(/Take it out of the page/);
+    expect(guide).toContain("at most 50 comments and 64 KiB");
+    expect(guide).toMatch(/Page notes without an anchor\s+and file-watch notices are not/);
+    expect(guide).not.toContain("#679");
     expect(guide).toContain("--wait-ms");
     expect(guide).toContain("rejected_approach_blocked");
     expect(guide).toMatch(/Do NOT retry the same approach/);
@@ -131,5 +143,10 @@ describe("deeppairing guide (#681)", () => {
     expect(bad.status).toBe(1);
     expect(bad.stdout).toBe("");
     expect(bad.stderr).toContain("--wait-ms must be a whole number from 1 to 30000");
+
+    const pageUsage = runCli(["read-page-feedback", "--session-id", "s"]);
+    expect(pageUsage.status).toBe(1);
+    expect(pageUsage.stdout).toBe("");
+    expect(pageUsage.stderr).toContain("deeppairing read-page-feedback --session-id ID --artifact-id ID");
   }, 60_000);
 });
