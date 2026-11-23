@@ -39362,7 +39362,8 @@ function formatRecordStanceOutcome(outcome, scope) {
 var pageRevisionFeedbackIdsSchema = external_exports.array(external_exports.string().trim().min(1).max(128)).min(1).max(50).refine((ids) => new Set(ids).size === ids.length, "Feedback comment IDs must be unique.");
 var pageRevisionFeedbackProofSchema = external_exports.object({
   commentIds: pageRevisionFeedbackIdsSchema,
-  digest: external_exports.string().regex(/^[0-9a-f]{64}$/)
+  digest: external_exports.string().regex(/^[0-9a-f]{64}$/),
+  includesRuleOut: external_exports.literal(true).optional()
 }).strict();
 
 // src/store/file-store.ts

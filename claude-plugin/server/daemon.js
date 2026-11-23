@@ -29795,11 +29795,12 @@ import { createHash as createHash3 } from "node:crypto";
 var pageRevisionFeedbackIdsSchema = external_exports.array(external_exports.string().trim().min(1).max(128)).min(1).max(50).refine((ids) => new Set(ids).size === ids.length, "Feedback comment IDs must be unique.");
 var pageRevisionFeedbackProofSchema = external_exports.object({
   commentIds: pageRevisionFeedbackIdsSchema,
-  digest: external_exports.string().regex(/^[0-9a-f]{64}$/)
+  digest: external_exports.string().regex(/^[0-9a-f]{64}$/),
+  includesRuleOut: external_exports.literal(true).optional()
 }).strict();
 var PageRevisionFeedbackConflictError = class extends Error {
 };
-function provePageRevisionFeedback(artifacts, comments, sessionId, parentId, requested, reconciledComments) {
+function provePageRevisionFeedback(artifacts, comments, sessionId, parentId, requested, reconciledComments, onRefusal) {
   const byId = new Map(artifacts.map((a) => [a.id, a]));
   if (byId.size !== artifacts.length) return;
   const chain = /* @__PURE__ */ new Set();
@@ -29818,21 +29819,42 @@ function provePageRevisionFeedback(artifacts, comments, sessionId, parentId, req
   }
   const commentIds = [...requested].sort();
   const selected = new Set(commentIds);
-  function selectedEvidence(rows) {
+  function selectedEvidence(rows, refuse2) {
     const byCommentId = /* @__PURE__ */ new Map();
     for (const comment of rows) {
       if (!selected.has(comment.id)) continue;
-      const anchor = HtmlAnchorSchema.safeParse(comment.target?.htmlAnchor);
-      if (byCommentId.has(comment.id) || comment.author !== "human" || comment.sessionId !== sessionId || !anchor.success || !chain.has(comment.target.artifactId) || comment.suggestion !== void 0 || comment.intent !== void 0 && comment.intent !== "comment") return;
-      byCommentId.set(comment.id, [comment.target.artifactId, anchor.data, comment.content, comment.createdAt, comment.ruleOut]);
+      byCommentId.set(comment.id, byCommentId.has(comment.id) ? null : comment);
     }
-    if (byCommentId.size !== selected.size) return;
-    return JSON.stringify(commentIds.map((id) => [id, byCommentId.get(id)]));
+    const evidence2 = [];
+    let includesRuleOut = false;
+    for (const id of commentIds) {
+      const comment = byCommentId.get(id);
+      const anchor = HtmlAnchorSchema.safeParse(comment?.target?.htmlAnchor);
+      if (!comment || comment.author !== "human" || comment.sessionId !== sessionId || !anchor.success || !chain.has(comment.target.artifactId)) {
+        refuse2?.({ id });
+        return;
+      }
+      if (comment.intent === "question") {
+        refuse2?.({ id, kind: "question" });
+        return;
+      }
+      if (comment.intent === "suggestion" || comment.suggestion !== void 0) {
+        refuse2?.({ id, kind: "suggestion" });
+        return;
+      }
+      if (comment.intent !== void 0 && comment.intent !== "comment") {
+        refuse2?.({ id });
+        return;
+      }
+      evidence2.push([id, [comment.target.artifactId, anchor.data, comment.content, comment.createdAt, comment.ruleOut]]);
+      includesRuleOut ||= comment.ruleOut !== void 0;
+    }
+    return { serialized: JSON.stringify(evidence2), includesRuleOut };
   }
-  const evidence = selectedEvidence(comments);
-  if (!evidence || reconciledComments && selectedEvidence(reconciledComments) !== evidence) return;
-  const digest = createHash3("sha256").update(JSON.stringify([lineage, evidence])).digest("hex");
-  return { commentIds, digest };
+  const evidence = selectedEvidence(comments, onRefusal);
+  if (!evidence || reconciledComments && selectedEvidence(reconciledComments)?.serialized !== evidence.serialized) return;
+  const digest = createHash3("sha256").update(JSON.stringify([lineage, evidence.serialized])).digest("hex");
+  return { commentIds, digest, ...evidence.includesRuleOut ? { includesRuleOut: true } : {} };
 }
 
 // src/store/file-store.ts
@@ -41291,6 +41313,7 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
         version: child.version,
         status: child.status,
         ...feedback2 ? { acknowledgedCommentIds: feedback2.commentIds } : {},
+        ...feedback2?.includesRuleOut ? { acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged." } : {},
         ...replayed ? { replayed: true } : {},
         ...latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : {}
       }
@@ -41310,13 +41333,19 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
   const parent = target();
   if ("isError" in parent) return parent;
   const metadataDigest = operationDigest(parent.metadata);
-  const proveFeedback = () => provePageRevisionFeedback(store.getArtifacts(), store.getComments(), sessionId, parentId, ackCommentIds);
-  const feedback = ackCommentIds.length ? proveFeedback() : void 0;
+  const proveFeedback = (onRefusal) => provePageRevisionFeedback(store.getArtifacts(), store.getComments(), sessionId, parentId, ackCommentIds, void 0, onRefusal);
+  const selection = {};
+  const feedback = ackCommentIds.length ? proveFeedback((failure) => {
+    selection.refusal = failure;
+  }) : void 0;
   if (ackCommentIds.length && !feedback) {
-    return refused(
-      "Every acknowledgement must name an ordinary anchored human comment on this page or a direct ancestor.",
-      ERROR_CODES.validation_error
-    );
+    const { refusal: selectionRefusal } = selection;
+    if (!selectionRefusal) {
+      return refused("The selected feedback could not be verified against this page's history.", ERROR_CODES.validation_error);
+    }
+    const id = JSON.stringify(selectionRefusal.id);
+    const message = selectionRefusal?.kind === "question" ? `Comment ${id} is a question. Answer it in the revised page and leave it out of --ack-comment-id so it stays pending until handled.` : selectionRefusal?.kind === "suggestion" ? `Comment ${id} is a suggestion. Use its separate review flow and leave it out of --ack-comment-id.` : `Comment ${id} is ineligible. Supply an ordinary anchored human comment ID from this page or a direct ancestor.`;
+    return refused(message, ERROR_CODES.validation_error);
   }
   let blockReason;
   const result = await handleReviseArtifact({
