@@ -93,6 +93,10 @@ describe("deeppairing guide (#681)", () => {
   it("teaches guarded inline page revision and preserves pending feedback", () => {
     expect(guide).toContain("deeppairing revise-page --session-id <sessionId> --artifact-id <artifactId> --request-id <uuid> --file page.html --reason");
     expect(guide).toContain("keeps human feedback pending");
+    expect(guide).toContain("--ack-comment-id <commentId> ...");
+    expect(guide).toContain("this page or a direct ancestor");
+    expect(guide).toContain("acknowledgedCommentIds");
+    expect(guide).toContain("leaves the recorded rejection in effect");
     expect(guide).toContain("For a watched page, edit the source file.");
     expect(guide).toContain("includes currentArtifactId.");
   });

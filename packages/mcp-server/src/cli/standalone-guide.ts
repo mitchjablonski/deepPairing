@@ -158,11 +158,18 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   and file-watch notices are not.
 
 5. REVISE AN INLINE PAGE
-  deeppairing revise-page --session-id <sessionId> --artifact-id <artifactId> --request-id <uuid> --file page.html --reason "What changed"
+  deeppairing revise-page --session-id <sessionId> --artifact-id <artifactId> --request-id <uuid> --file page.html --reason "What changed" [--ack-comment-id <commentId> ...]
   Supply the replacement HTML for the current inline page. The revision goes
   through the page rejection checks and keeps the page metadata. A successful
-  revision returns the saved successor and keeps human feedback pending.
+  revision returns the saved successor and keeps human feedback pending by default.
     -> {"sessionId","requestId","parentArtifactId","artifactId","version","status",...}
+  Optionally repeat --ack-comment-id for up to 50 ordinary anchored human
+  comments you read on this page or a direct ancestor. Get each ID with
+  read-page-feedback on its exact page version. The receipt lists those IDs
+  in acknowledgedCommentIds once the revision and acknowledgements are saved.
+  All other feedback stays pending. Questions still need answers, and
+  suggestions use their own review flow. Acknowledging a Rule this out comment
+  leaves the recorded rejection in effect.
   For a watched page, edit the source file. If the target moved, the refusal
   includes currentArtifactId. Read that version before deciding what to revise.
 
@@ -190,6 +197,7 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
     never a duplicate card.
   - Changed anything (the file's content, a flag): use a NEW UUID. Reusing a
     UUID with different input is refused with standalone_operation_conflict.
+    For a revision, changing the set of comment IDs counts as changed input.
 
 8. REFUSALS
   A refused present or revision prints {"isError":true,"code":"...","message":"..."} and

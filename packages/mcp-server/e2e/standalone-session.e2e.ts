@@ -334,19 +334,33 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     await fs.writeFile(inlineFile, "<h1>Inline page</h1><p>Read the archived events.</p>");
     const inline = JSON.parse((await run(project, "present", "page", "--session-id", resumed.sessionId,
       "--request-id", randomUUID(), "--file", inlineFile, "--title", "Inline page")).stdout);
+    const anchor = { htmlAnchor: { kind: "element", locator: "p", quote: "Read the archived events.", version: 1 } };
+    const acknowledgedId = "cmt_inline_ack";
+    const pendingId = "cmt_inline_pending";
+    await resumedClient.addComment({
+      id: acknowledgedId, artifactId: inline.artifactId, author: "human", content: "Clarify event order.", target: anchor,
+    });
+    await resumedClient.addComment({
+      id: pendingId, artifactId: inline.artifactId, author: "human", content: "Where are the logs?", intent: "question", target: anchor,
+    });
+    const inlineFeedback = await readPage(inline.artifactId);
+    expect(inlineFeedback.comments.map((comment: { id: string }) => comment.id)).toEqual(expect.arrayContaining([acknowledgedId, pendingId]));
     await fs.writeFile(inlineFile, "<h1>Inline page</h1><p>Read retained event logs in order.</p>");
     const revisionId = randomUUID();
     const revise = (requestId: string) => run(project, "revise-page", "--session-id", resumed.sessionId,
-      "--artifact-id", inline.artifactId, "--request-id", requestId, "--file", inlineFile, "--reason", "Clarify order");
+      "--artifact-id", inline.artifactId, "--request-id", requestId, "--file", inlineFile, "--reason", "Clarify order",
+      "--ack-comment-id", acknowledgedId);
     const revised = JSON.parse((await revise(revisionId)).stdout);
     expect(revised).toMatchObject({
       sessionId: resumed.sessionId, requestId: revisionId, parentArtifactId: inline.artifactId,
       artifactId: expect.stringMatching(/^art_/), version: 2, status: "draft",
+      acknowledgedCommentIds: [acknowledgedId],
     });
     expect(JSON.parse((await revise(revisionId)).stdout)).toEqual({ ...revised, replayed: true });
     expect(await readPage(inline.artifactId)).toMatchObject({
       artifact: { id: inline.artifactId, status: "superseded" },
       successor: { id: revised.artifactId, status: "draft", version: 2 },
+      comments: [{ id: pendingId }],
     });
     const staleRevision = await revise(randomUUID()).catch((err: { code: number; stdout: string; stderr: string }) => err);
     expect(staleRevision).toMatchObject({ code: 1, stderr: "" });

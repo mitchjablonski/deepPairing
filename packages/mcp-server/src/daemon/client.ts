@@ -537,12 +537,13 @@ export class DaemonClient implements IStore {
 
   async reviseStandalonePage(
     expectedProjectRoot: string, operationId: string, artifactId: string, htmlBase64: string, reason: string, signal: AbortSignal,
+    ackCommentIds?: string[],
   ): Promise<ToolResult> {
     try {
       return await this.request<ToolResult>("/revise-page", {
         method: "POST", signal, redirect: "error",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expectedProjectRoot, operationId, artifactId, htmlBase64, reason }),
+        body: JSON.stringify({ expectedProjectRoot, operationId, artifactId, htmlBase64, reason, ackCommentIds }),
       }, true);
     } catch (err) {
       if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {

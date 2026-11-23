@@ -1446,8 +1446,9 @@ ${helpInvocations}
                                            Read pending anchored human comments for one page version as JSON.
                                            Returns newest comments first, up to 50 comments and 64 KiB of JSON.
                                            omittedComments counts entries that do not fit. Returned comments stay whole.
-    dp revise-page --session-id ID --artifact-id ID --request-id UUID --file page.html --reason TEXT
+    dp revise-page --session-id ID --artifact-id ID --request-id UUID --file page.html --reason TEXT [--ack-comment-id ID ...]
                                            Replace the HTML on an inline page. Use a new request ID for changed input.
+                                           Acknowledge up to 50 ordinary anchored comments on this page or a direct ancestor.
     dp guide [--json]                      Print the standalone review protocol for any shell-capable agent
     dp setup-agent --agent codex|cursor|copilot|opencode [--dry-run]
                                            Add a marked block to that agent's instruction file telling it to
