@@ -96,7 +96,10 @@ describe("deeppairing guide (#681)", () => {
     expect(guide).toContain("--ack-comment-id <commentId> ...");
     expect(guide).toContain("this page or a direct ancestor");
     expect(guide).toContain("acknowledgedCommentIds");
-    expect(guide).toContain("leaves the recorded rejection in effect");
+    expect(guide).toContain("a comment that is already acknowledged is safe");
+    expect(guide).toContain("You can answer a question in the revised page.");
+    expect(guide).toContain("Use the separate suggestion review flow for suggestions.");
+    expect(guide).toContain("leaves the rule-out status unchanged");
     expect(guide).toContain("For a watched page, edit the source file.");
     expect(guide).toContain("includes currentArtifactId.");
   });

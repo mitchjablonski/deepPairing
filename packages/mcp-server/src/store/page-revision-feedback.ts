@@ -8,8 +8,10 @@ export const pageRevisionFeedbackIdsSchema = z.array(z.string().trim().min(1).ma
 export const pageRevisionFeedbackProofSchema = z.object({
   commentIds: pageRevisionFeedbackIdsSchema,
   digest: z.string().regex(/^[0-9a-f]{64}$/),
+  includesRuleOut: z.literal(true).optional(),
 }).strict();
 export type PageRevisionFeedbackProof = z.infer<typeof pageRevisionFeedbackProofSchema>;
+export type PageRevisionFeedbackRefusal = { id: string; kind?: "question" | "suggestion" };
 
 export class PageRevisionFeedbackConflictError extends Error {}
 
@@ -23,6 +25,7 @@ export function provePageRevisionFeedback(
   parentId: string,
   requested: readonly string[],
   reconciledComments?: readonly Comment[],
+  onRefusal?: (refusal: PageRevisionFeedbackRefusal) => void,
 ): PageRevisionFeedbackProof | undefined {
   const byId = new Map(artifacts.map((a) => [a.id, a]));
   if (byId.size !== artifacts.length) return;
@@ -44,21 +47,41 @@ export function provePageRevisionFeedback(
   }
   const commentIds = [...requested].sort();
   const selected = new Set(commentIds);
-  function selectedEvidence(rows: readonly Comment[]) {
-    const byCommentId = new Map<string, unknown[]>();
+  function selectedEvidence(rows: readonly Comment[], refuse?: typeof onRefusal) {
+    const byCommentId = new Map<string, Comment | null>();
     for (const comment of rows) {
       if (!selected.has(comment.id)) continue;
-      const anchor = HtmlAnchorSchema.safeParse(comment.target?.htmlAnchor);
-      if (byCommentId.has(comment.id) || comment.author !== "human" || comment.sessionId !== sessionId ||
-        !anchor.success || !chain.has(comment.target.artifactId) || comment.suggestion !== undefined ||
-        (comment.intent !== undefined && comment.intent !== "comment")) return;
-      byCommentId.set(comment.id, [comment.target.artifactId, anchor.data, comment.content, comment.createdAt, comment.ruleOut]);
+      byCommentId.set(comment.id, byCommentId.has(comment.id) ? null : comment);
     }
-    if (byCommentId.size !== selected.size) return;
-    return JSON.stringify(commentIds.map((id) => [id, byCommentId.get(id)]));
+    const evidence = [];
+    let includesRuleOut = false;
+    for (const id of commentIds) {
+      const comment = byCommentId.get(id);
+      const anchor = HtmlAnchorSchema.safeParse(comment?.target?.htmlAnchor);
+      if (!comment || comment.author !== "human" || comment.sessionId !== sessionId ||
+        !anchor.success || !chain.has(comment.target.artifactId)) {
+        refuse?.({ id });
+        return;
+      }
+      if (comment.intent === "question") {
+        refuse?.({ id, kind: "question" });
+        return;
+      }
+      if (comment.intent === "suggestion" || comment.suggestion !== undefined) {
+        refuse?.({ id, kind: "suggestion" });
+        return;
+      }
+      if (comment.intent !== undefined && comment.intent !== "comment") {
+        refuse?.({ id });
+        return;
+      }
+      evidence.push([id, [comment.target.artifactId, anchor.data, comment.content, comment.createdAt, comment.ruleOut]]);
+      includesRuleOut ||= comment.ruleOut !== undefined;
+    }
+    return { serialized: JSON.stringify(evidence), includesRuleOut };
   }
-  const evidence = selectedEvidence(comments);
-  if (!evidence || (reconciledComments && selectedEvidence(reconciledComments) !== evidence)) return;
-  const digest = createHash("sha256").update(JSON.stringify([lineage, evidence])).digest("hex");
-  return { commentIds, digest };
+  const evidence = selectedEvidence(comments, onRefusal);
+  if (!evidence || (reconciledComments && selectedEvidence(reconciledComments)?.serialized !== evidence.serialized)) return;
+  const digest = createHash("sha256").update(JSON.stringify([lineage, evidence.serialized])).digest("hex");
+  return { commentIds, digest, ...(evidence.includesRuleOut ? { includesRuleOut: true as const } : {}) };
 }

@@ -167,9 +167,11 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   comments you read on this page or a direct ancestor. Get each ID with
   read-page-feedback on its exact page version. The receipt lists those IDs
   in acknowledgedCommentIds once the revision and acknowledgements are saved.
-  All other feedback stays pending. Questions still need answers, and
-  suggestions use their own review flow. Acknowledging a Rule this out comment
-  leaves the recorded rejection in effect.
+  Including a comment that is already acknowledged is safe and records no
+  additional change. Leave questions and suggestions out of --ack-comment-id.
+  You can answer a question in the revised page. Its comment stays pending
+  until handled. Use the separate suggestion review flow for suggestions.
+  Acknowledging a Rule this out comment leaves the rule-out status unchanged.
   For a watched page, edit the source file. If the target moved, the refusal
   includes currentArtifactId. Read that version before deciding what to revise.
 

@@ -8,7 +8,7 @@ import type { BroadcastFn, ToolResult } from "../mcp/tools/types.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { withFileLock } from "../store/file-lock.js";
 import type { FileStore } from "../store/file-store.js";
-import { PageRevisionFeedbackConflictError, pageRevisionFeedbackProofSchema, provePageRevisionFeedback } from "../store/page-revision-feedback.js";
+import { PageRevisionFeedbackConflictError, pageRevisionFeedbackProofSchema, provePageRevisionFeedback, type PageRevisionFeedbackRefusal } from "../store/page-revision-feedback.js";
 import { findPageSuccessor } from "./page-successor.js";
 import {
   operationDigest, readJsonFile, readSessionRecord, receiptDigestSchema,
@@ -193,6 +193,7 @@ export async function reviseStandalonePage(
       structuredContent: {
         sessionId, parentArtifactId: parentId, artifactId, version: child.version, status: child.status,
         ...(feedback ? { acknowledgedCommentIds: feedback.commentIds } : {}),
+        ...(feedback?.includesRuleOut ? { acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged." } : {}),
         ...(replayed ? { replayed: true } : {}),
         ...(latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : {}),
       },
@@ -213,11 +214,22 @@ export async function reviseStandalonePage(
   const parent = target();
   if ("isError" in parent) return parent;
   const metadataDigest = operationDigest(parent.metadata);
-  const proveFeedback = () => provePageRevisionFeedback(store.getArtifacts(), store.getComments(), sessionId, parentId, ackCommentIds);
-  const feedback = ackCommentIds.length ? proveFeedback() : undefined;
+  const proveFeedback = (onRefusal?: (refusal: PageRevisionFeedbackRefusal) => void) =>
+    provePageRevisionFeedback(store.getArtifacts(), store.getComments(), sessionId, parentId, ackCommentIds, undefined, onRefusal);
+  const selection: { refusal?: PageRevisionFeedbackRefusal } = {};
+  const feedback = ackCommentIds.length ? proveFeedback((failure) => { selection.refusal = failure; }) : undefined;
   if (ackCommentIds.length && !feedback) {
-    return refused("Every acknowledgement must name an ordinary anchored human comment on this page or a direct ancestor.",
-      ERROR_CODES.validation_error);
+    const { refusal: selectionRefusal } = selection;
+    if (!selectionRefusal) {
+      return refused("The selected feedback could not be verified against this page's history.", ERROR_CODES.validation_error);
+    }
+    const id = JSON.stringify(selectionRefusal.id);
+    const message = selectionRefusal?.kind === "question"
+      ? `Comment ${id} is a question. Answer it in the revised page and leave it out of --ack-comment-id so it stays pending until handled.`
+      : selectionRefusal?.kind === "suggestion"
+        ? `Comment ${id} is a suggestion. Use its separate review flow and leave it out of --ack-comment-id.`
+        : `Comment ${id} is ineligible. Supply an ordinary anchored human comment ID from this page or a direct ancestor.`;
+    return refused(message, ERROR_CODES.validation_error);
   }
 
   let blockReason: string | undefined;

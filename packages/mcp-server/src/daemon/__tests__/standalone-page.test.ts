@@ -108,14 +108,14 @@ describe("authenticated standalone page revision", () => {
         title: "Sibling", content: { title: "Sibling", html: "<p>Sibling branch</p>" },
       });
       const add = (id: string, artifactId: string, intent?: "comment" | "question" | "suggestion", target: Record<string, unknown> = anchored) =>
-        store.addComment({ id, artifactId, author: "human", content: id, target, intent });
+        store.addComment({ id, artifactId, author: "human", content: `Private words for ${id}`, target, intent });
       const description = "Redis Streams";
       const reason = "The team cannot operate it.";
       store.recordRejectedApproach({ description, reason, sourceArtifactId: ancestorId, origin: "page_rule_out", sourceAnchor: anchored.htmlAnchor });
       store.addComment({ id: "cmt_old", artifactId: ancestorId, author: "human", content: reason, target: anchored, ruleOut: { description } });
       add("cmt_current", parentId, "comment");
       add("cmt_left_pending", ancestorId);
-      add("cmt_sibling", "art_sibling");
+      add("cmt_sibling", "art_sibling", "question");
       add("cmt_question", parentId, "question");
       add("cmt_suggestion", parentId, "suggestion");
       add("cmt_unanchored", parentId, undefined, {});
@@ -123,9 +123,17 @@ describe("authenticated standalone page revision", () => {
       const html = "<p>Third draft</p>";
       const revise = (operation: string, ids: string[]) => f.revise(daemon, operation, parentId, html, "Read feedback", ids);
       for (const invalid of ["cmt_sibling", "cmt_question", "cmt_suggestion", "cmt_unanchored", "cmt_agent", "cmt_unknown"]) {
-        expect(await (await revise(randomUUID(), ["cmt_old", invalid])).json()).toMatchObject({
+        const refusal = await (await revise(randomUUID(), ["cmt_old", invalid])).json();
+        expect(refusal).toMatchObject({
           isError: true, structuredContent: { code: "validation_error" },
         });
+        const message = refusal.content[0].text;
+        expect(message).toContain(JSON.stringify(invalid));
+        expect(message).not.toContain("Private words");
+        if (invalid === "cmt_question") expect(message).toContain("Answer it in the revised page");
+        else if (invalid === "cmt_suggestion") expect(message).toContain("Use its separate review flow");
+        else expect(message).toContain("is ineligible");
+        if (invalid === "cmt_sibling") expect(message).not.toContain("is a question");
       }
       expect((await revise(randomUUID(), ["cmt_old", "cmt_old"])).status).toBe(400);
       expect((await revise(randomUUID(), Array.from({ length: 51 }, (_, index) => `cmt_${index}`))).status).toBe(400);
@@ -137,7 +145,12 @@ describe("authenticated standalone page revision", () => {
       const memory = store.getSessionMemory();
       const operation = randomUUID();
       const success = await (await revise(operation, ["cmt_old", "cmt_current"])).json();
-      expect(success).toMatchObject({ structuredContent: { acknowledgedCommentIds: ["cmt_current", "cmt_old"], version: 3 } });
+      expect(success).toMatchObject({
+        structuredContent: {
+          acknowledgedCommentIds: ["cmt_current", "cmt_old"], version: 3,
+          acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged.",
+        },
+      });
       expect(await (await revise(operation, ["cmt_current", "cmt_old"])).json()).toMatchObject({
         structuredContent: { ...success.structuredContent, replayed: true },
       });
