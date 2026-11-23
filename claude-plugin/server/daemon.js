@@ -40767,7 +40767,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
     const result = r.store.addStance(parsed);
-    if ((result.status === "recorded" || result.status === "reason_added") && daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+    if ((result.status === "recorded" || result.status === "reason_added" || result.status === "widened") && daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
       try {
         recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "rejected" });
       } catch {
