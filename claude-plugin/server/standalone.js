@@ -31630,10 +31630,15 @@ var SessionNameLatch = class {
 };
 async function persistPreflightTrace(store, broadcast, artifact, toolName, partial2) {
   if (!store.recordPreflightTrace) return;
-  const trace = {
+  const trace = buildPreflightTrace(artifact.id, toolName, partial2);
+  await store.recordPreflightTrace(artifact.id, trace);
+  broadcast({ type: "preflight_trace_recorded", artifactId: artifact.id, trace });
+}
+function buildPreflightTrace(artifactId, toolName, partial2) {
+  return {
     version: 1,
     at: (/* @__PURE__ */ new Date()).toISOString(),
-    artifactId: artifact.id,
+    artifactId,
     toolName,
     decision: partial2.decision,
     consideredCount: partial2.consideredCount,
@@ -31641,8 +31646,6 @@ async function persistPreflightTrace(store, broadcast, artifact, toolName, parti
     nearMisses: partial2.nearMisses,
     block: partial2.block
   };
-  await store.recordPreflightTrace(artifact.id, trace);
-  broadcast({ type: "preflight_trace_recorded", artifactId: artifact.id, trace });
 }
 function notifyResourcesListChanged(server) {
   try {
@@ -39507,6 +39510,9 @@ var SUPERSEDE_VALIDATORS = {
   page: validateRevisePageInput,
   reasoning: validateLogReasoningInput
 };
+function revisionNote(artifactId, reason) {
+  return `Superseded by ${artifactId}: ${reason}`;
+}
 function parentSupersededInfo(err) {
   if (err instanceof ParentSupersededError) return { successorId: err.successorId, successorVersion: err.successorVersion, successorFromFile: err.successorFromFile };
   const e = err;
@@ -39527,7 +39533,10 @@ function pageChangedUnderYou(artifactId, successorId, successorVersion, fromFile
   };
 }
 async function handleReviseArtifact(ctx, args) {
-  const { store, server, broadcast } = ctx;
+  const { store, broadcast } = ctx;
+  const mcp = "server" in ctx ? ctx : void 0;
+  const server = mcp?.server ?? null;
+  const standalone = "standalonePage" in ctx ? ctx.standalonePage : void 0;
   const artifactId = String(args?.artifactId ?? "").trim();
   const mode = args?.mode;
   const reason = String(args?.reason ?? "").trim();
@@ -39545,15 +39554,15 @@ async function handleReviseArtifact(ctx, args) {
         isError: true
       };
     }
-    const op = await beginStanceOperation(ctx, "revise_artifact", args);
-    if (op.refusal) return op.refusal;
-    if (op.replay) {
+    const op = mcp && await beginStanceOperation(mcp, "revise_artifact", args);
+    if (op?.refusal) return op.refusal;
+    if (op?.replay) {
       if (typeof op.replay.parentId === "string") await maybeUpdateTaskStatus(server, op.replay.parentId, store);
       return admittedResult(op.replay);
     }
     const all = await store.getArtifacts();
     const old = all.find((a) => a.id === artifactId);
-    if (!old) {
+    if (!old || standalone && old.type !== "page") {
       return {
         content: [{ type: "text", text: `revise_artifact: no artifact with id ${artifactId}.` }],
         isError: true
@@ -39582,10 +39591,11 @@ async function handleReviseArtifact(ctx, args) {
       if (!v2.ok) return v2.error;
       validatedContent = v2.data;
     }
-    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });
+    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: !standalone });
     if (pre && !pre.ok) {
+      if (!mcp || !op) return pre.response;
       const snapshot = reviseSnapshot(old, String(args?.title ?? old.title), reason, finalizeReviseContent(old, structuredClone(content)));
-      const outcome2 = await admitBlockedProposal(ctx, {
+      const outcome2 = await admitBlockedProposal(mcp, {
         toolName: "revise_artifact",
         handle: op.handle,
         pre,
@@ -39605,48 +39615,53 @@ async function handleReviseArtifact(ctx, args) {
     const skeletonSnap = old.type === "plan" ? attachSkeletonSnapshot(content) : { content, note: "" };
     const styleContent = content;
     const title = String(args?.title ?? old.title);
-    const newId = `art_${nanoid3(10)}`;
+    const newId = standalone?.artifactId ?? `art_${nanoid3(10)}`;
     if (old.type === "debrief") carryDebriefClaims(old, content, newId, debriefPin, validatedContent);
     const decisionContent = old.type === "decision" ? content : null;
     if (decisionContent && Array.isArray(decisionContent.options)) {
       decisionContent.decisionId = `dec_${nanoid3(10)}`;
     }
+    const createInput = {
+      id: newId,
+      // #680 slice 3 (review P2-2) — the supersede compare-and-swap: if the
+      // page file watch (or another revise) versioned `old` while this call
+      // was in flight, nothing is created and the agent is told to revise the
+      // winner instead of minting a second v(N+1) on the same parent.
+      requireUnsupersededParent: true,
+      type: old.type,
+      title,
+      content: standalone ? validatedContent : skeletonSnap.content,
+      agentReasoning: reason,
+      parentId: old.id,
+      version: old.version + 1,
+      // Bug4 — carry the old version's relatedArtifactIds onto v2 so the
+      // reference graph doesn't dangle at the SOURCE when v1 is superseded
+      // (belt-and-suspenders with the client-side resolveToLiveId in the flow
+      // sidebar). Optional field; only set when the old artifact had refs.
+      ...old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {},
+      // #206 (I1) — carry the feature tag onto v2 so a superseded artifact's
+      // successor stays in the same feature group by its OWN tag, not only via
+      // the parentId chain. The store re-normalizes (idempotent on a slug).
+      ...old.featureId ? { feature: old.featureId } : {},
+      // #533 — the successor keeps its presenter, so a subagent filtering
+      // check_feedback by presentedBy still owns the feedback on v2.
+      ...old.presentedBy ? { presentedBy: old.presentedBy } : {},
+      // #572 slice A — a supersede (a decision "tune") CARRIES the exact brief
+      // pin: content replacement never erases it, and it is never moved to a
+      // newer brief (no implicit latest lookup). Re-briefing = a new card.
+      // The admitted path carries the same pin via reviseSnapshot, bound by
+      // reviseInheritedHash.
+      // #572 B1 — a debrief revision with an explicit, admitted pin saves
+      // that pin; otherwise the exact predecessor pin carries as above.
+      ...debriefPin?.ref ? { briefRef: debriefPin.ref } : carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
+    };
     let newArtifact;
     try {
-      newArtifact = await store.createArtifact({
-        id: newId,
-        // #680 slice 3 (review P2-2) — the supersede compare-and-swap: if the
-        // page file watch (or another revise) versioned `old` while this call
-        // was in flight, nothing is created and the agent is told to revise the
-        // winner instead of minting a second v(N+1) on the same parent.
-        requireUnsupersededParent: true,
-        type: old.type,
-        title,
-        content: skeletonSnap.content,
-        agentReasoning: reason,
-        parentId: old.id,
-        version: old.version + 1,
-        // Bug4 — carry the old version's relatedArtifactIds onto v2 so the
-        // reference graph doesn't dangle at the SOURCE when v1 is superseded
-        // (belt-and-suspenders with the client-side resolveToLiveId in the flow
-        // sidebar). Optional field; only set when the old artifact had refs.
-        ...old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {},
-        // #206 (I1) — carry the feature tag onto v2 so a superseded artifact's
-        // successor stays in the same feature group by its OWN tag, not only via
-        // the parentId chain. The store re-normalizes (idempotent on a slug).
-        ...old.featureId ? { feature: old.featureId } : {},
-        // #533 — the successor keeps its presenter, so a subagent filtering
-        // check_feedback by presentedBy still owns the feedback on v2.
-        ...old.presentedBy ? { presentedBy: old.presentedBy } : {},
-        // #572 slice A — a supersede (a decision "tune") CARRIES the exact brief
-        // pin: content replacement never erases it, and it is never moved to a
-        // newer brief (no implicit latest lookup). Re-briefing = a new card.
-        // The admitted path carries the same pin via reviseSnapshot, bound by
-        // reviseInheritedHash.
-        // #572 B1 — a debrief revision with an explicit, admitted pin saves
-        // that pin; otherwise the exact predecessor pin carries as above.
-        ...debriefPin?.ref ? { briefRef: debriefPin.ref } : carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
-      });
+      if (standalone) {
+        if (!pre?.ok) throw new Error("Standalone page revision is missing its preflight decision.");
+        return standalone.persist(createInput, buildPreflightTrace(newId, "revise_artifact", pre.trace));
+      }
+      newArtifact = await store.createArtifact(createInput);
     } catch (err) {
       const lost = parentSupersededInfo(err);
       if (lost) return pageChangedUnderYou(artifactId, lost.successorId, lost.successorVersion, lost.successorFromFile);
@@ -39660,7 +39675,7 @@ async function handleReviseArtifact(ctx, args) {
     await store.addComment({
       id: `cmt_${nanoid3(10)}`,
       artifactId: old.id,
-      content: `Superseded by ${newId}: ${reason}`,
+      content: revisionNote(newId, reason),
       author: "agent"
     });
     if (decisionContent?.options && decisionContent.decisionId) {
@@ -39689,6 +39704,7 @@ Skeleton change: your pair re-reviews the reshaped skeleton on the card. Fills a
       content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${old.type === "debrief" ? debriefReviseNotes(newArtifact, debriefPin, await store.getArtifacts()) : ""}${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }]
     };
   }
+  if (!mcp) return { content: [{ type: "text", text: "Standalone page revision requires supersede mode." }], isError: true };
   const artifacts = await store.getArtifacts();
   const artifact = artifacts.find((a) => a.id === artifactId);
   if (!artifact) {
@@ -43274,6 +43290,22 @@ var DaemonClient = class {
       throw new Error("The daemon did not confirm the requested standalone session and page.");
     }
     return result;
+  }
+  async reviseStandalonePage(expectedProjectRoot, operationId, artifactId, htmlBase64, reason, signal) {
+    try {
+      return await this.request("/revise-page", {
+        method: "POST",
+        signal,
+        redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot, operationId, artifactId, htmlBase64, reason })
+      }, true);
+    } catch (err) {
+      if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {
+        throw new Error("The daemon does not support standalone page revisions. Restart it with the current deepPairing version.");
+      }
+      throw err;
+    }
   }
   // --- Artifacts ---
   async createArtifact(params) {
