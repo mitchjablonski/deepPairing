@@ -68,8 +68,17 @@ function fixture() {
     request(daemon, "present-page", { operationId, args }, { session });
   const revise = (daemon: Daemon, operationId: string, artifactId: string, html: string, reason = "Clarify the procedure") =>
     request(daemon, "revise-page", { operationId, artifactId, htmlBase64: b64(html), reason });
+  const verdict = (daemon: Daemon, artifactId: string, status: string) =>
+    daemon.app.request(`http://localhost/api/artifacts/${artifactId}/status`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json", "X-Project-Hash": projectHashOf(root), "X-Session-Id": sessionId,
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ status, feedback: "Stale feedback", concept: "Stale concept" }),
+    });
   return {
-    root, sessionId, watchers, start, request, open, present, revise,
+    root, sessionId, watchers, start, request, open, present, revise, verdict,
     dispose: () => {
       for (const daemon of daemons) {
         for (const store of daemon.sessions.values()) store.dispose();
@@ -81,6 +90,107 @@ function fixture() {
 }
 
 describe("authenticated standalone page revision", () => {
+  it("refuses stale companion verdicts and replays legacy committed pages with a changed parent status", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentId = source.structuredContent.artifactId as string;
+      const operation = randomUUID();
+      const html = "<p>Updated draft</p>";
+      const revision = await (await f.revise(daemon, operation, parentId, html)).json();
+      const successorId = revision.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const memory = store.getSessionMemory();
+      for (const status of ["approved", "revised", "rejected"]) {
+        const response = await f.verdict(daemon, parentId, status);
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: "parent_superseded", successorId, successorVersion: 2 });
+      }
+      expect(store.getSessionMemory()).toEqual(memory);
+      expect(store.getCommentsForArtifact(parentId)).toMatchObject([{ author: "agent" }]);
+      expect(store.getArtifacts()).toMatchObject([{ id: parentId, status: "superseded" }, { id: successorId, status: "draft" }]);
+      expect(() => store.updateArtifactStatus(parentId, "approved", "ui_approve_button")).toThrow("already replaced");
+
+      // Emulate the on-disk status left by an older daemon's stale verdict.
+      store.updateArtifactStatus(parentId, "approved");
+      store.forceFlush();
+      store.dispose();
+      daemon.dispose();
+      const reopened = f.start();
+      expect((await f.request(reopened, "open-review", { mode: "resume" })).status).toBe(200);
+      expect(await (await f.revise(reopened, operation, parentId, html)).json()).toMatchObject({
+        structuredContent: { artifactId: successorId, parentArtifactId: parentId, replayed: true },
+      });
+      expect(reopened.sessions.get(f.sessionId)!.getArtifacts()).toMatchObject([
+        { id: parentId, status: "approved" }, { id: successorId, status: "draft" },
+      ]);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("refuses a companion reject if the page was revised during its ledger preview", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentId = source.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const memory = store.getSessionMemory();
+      const successorId = "art_preview_successor";
+      vi.spyOn(store, "previewReviewConflict").mockImplementationOnce(() => {
+        // The verdict route awaits its preview. Land the revision before
+        // that continuation, using the real guarded artifact writer.
+        store.createArtifact({
+          id: successorId, parentId, type: "page", version: 2, requireUnsupersededParent: true,
+          title: "Updated page", content: { title: "Updated page", html: "<p>Updated draft</p>" },
+        });
+        store.updateArtifactStatus(parentId, "superseded", "agent_supersede");
+        return null;
+      });
+      const response = await f.verdict(daemon, parentId, "rejected");
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "parent_superseded", successorId });
+      expect(store.getSessionMemory()).toEqual(memory);
+      expect(store.getCommentsForArtifact(parentId)).toHaveLength(0);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it.each([["draft", "revised"], ["approved", "approved"]] as const)(
+    "does not complete an interrupted revision from %s over a later %s verdict", async (before, after) => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentId = source.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      if (before === "approved") store.updateArtifactStatus(parentId, before, "ui_approve_button");
+      const operation = randomUUID();
+      const html = "<p>Updated draft</p>";
+      const flush = store.forceFlush.bind(store);
+      vi.spyOn(store, "forceFlush").mockImplementationOnce(() => {
+        flush();
+        throw new Error("Interrupted after version write");
+      });
+      expect((await f.revise(daemon, operation, parentId, html)).status).toBe(500);
+      store.updateArtifactStatus(parentId, after);
+      store.forceFlush();
+      expect((await f.revise(daemon, operation, parentId, html)).status).toBe(500);
+      expect(store.getArtifacts()[0]).toMatchObject({ id: parentId, status: after });
+      expect(store.getCommentsForArtifact(parentId)).toHaveLength(0);
+      const receipt = path.join(f.root, ".deeppairing", "sessions", f.sessionId, `revise-page-${operation}.json`);
+      expect(JSON.parse(fs.readFileSync(receipt, "utf8"))).not.toHaveProperty("committed");
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("revises one exact inline page under concurrent calls and replays the original operation", async () => {
     const f = fixture();
     try {

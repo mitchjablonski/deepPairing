@@ -1,5 +1,5 @@
 import path from "node:path";
-import { PageContentSchema, PreflightTraceSchema, type Artifact } from "@deeppairing/shared";
+import { ArtifactStatusSchema, PageContentSchema, PreflightTraceSchema, type Artifact } from "@deeppairing/shared";
 import { z } from "zod";
 import { ERROR_CODES, TOOL_ERROR_CODES, type ErrorCode } from "../error-codes.js";
 import { preflightRejectedApproaches } from "../mcp/tool-helpers.js";
@@ -18,6 +18,8 @@ const receiptSchema = z.object({
   version: z.literal(1),
   fingerprint: receiptDigestSchema,
   childDigest: receiptDigestSchema.optional(),
+  parentStatus: ArtifactStatusSchema.optional(),
+  parentHistoryLength: z.number().int().nonnegative().optional(),
   trace: PreflightTraceSchema.optional(),
   committed: z.literal(true).optional(),
 }).strict();
@@ -72,7 +74,7 @@ export async function reviseStandalonePage(
         ERROR_CODES.validation_error);
     }
     const { title, summary, concept } = content.data;
-    return { metadata: { title, summary, concept } };
+    return { status: parent.status, historyLength: parent.statusHistory?.length ?? 0, metadata: { title, summary, concept } };
   }
 
   function requireChild(child: Record<string, unknown> | Artifact, receipt: Receipt): void {
@@ -120,17 +122,24 @@ export async function reviseStandalonePage(
       throw new Error("Standalone revision has inconsistent page lineage.");
     }
     const checkVersion = () => {
-      const durableChild = readSessionRecord(dir, "artifacts.json", "id", artifactId);
+      const durableChild = readSessionRecord(dir, "artifacts.json", "parentId", parentId);
       const durableParent = readSessionRecord(dir, "artifacts.json", "id", parentId);
-      if (!durableChild || durableParent?.status !== "superseded") {
+      if (durableChild?.id !== artifactId || durableParent?.sessionId !== sessionId || durableParent.type !== "page" ||
+        durableParent.version !== child.version - 1 || (!receipt.committed && durableParent.status !== "superseded")) {
         throw new Error("Standalone revision is missing its durable page version.");
       }
       requireChild(durableChild, receipt);
     };
     if (!receipt.committed) {
       if (parent.status !== "superseded") {
-        if (["retracted", "rejected", "obsolete"].includes(parent.status)) {
-          throw new Error("Standalone revision cannot recover from a closed predecessor.");
+        const expectedStatus = receipt.parentStatus;
+        const statusChanged = expectedStatus === undefined
+          ? !["draft", "reviewing"].includes(parent.status)
+          : parent.status !== expectedStatus;
+        const verdictChanged = receipt.parentHistoryLength !== undefined &&
+          (parent.statusHistory?.length ?? 0) !== receipt.parentHistoryLength;
+        if (statusChanged || verdictChanged) {
+          throw new Error("Standalone revision cannot recover after the predecessor's review state changed.");
         }
         store.updateArtifactStatus(parentId, "superseded", "agent_supersede");
       }
@@ -211,7 +220,13 @@ export async function reviseStandalonePage(
           return refused(`Page ${parentId}'s metadata changed during review. Read it before retrying the revision.`,
             ERROR_CODES.session_review_conflict);
         }
-        const prepared = { ...receipt, childDigest: childDigest(params), trace };
+        const prepared = {
+          ...receipt,
+          childDigest: childDigest(params),
+          parentStatus: current.status,
+          parentHistoryLength: current.historyLength,
+          trace,
+        };
         save(prepared);
         store.createArtifact(params);
         const committed = recover(prepared, false);

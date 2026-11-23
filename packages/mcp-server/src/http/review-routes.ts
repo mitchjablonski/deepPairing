@@ -14,11 +14,11 @@ import {
   PAGE_RULE_OUT_MESSAGES,
 } from "@deeppairing/shared";
 import { ERROR_CODES } from "../error-codes.js";
-import { LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
+import { LEDGER_EXEMPT_REJECT_TYPES, ParentSupersededError } from "../store/file-store.js";
 import { isSessionReviewConflictError } from "../store/session-records.js";
 import type { IStore } from "../store/store-interface.js";
 import { stripLeadingPathToken } from "../store/concept-hygiene.js";
-import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
+import { isCrossTerminalVerdictFlip, stalePageVerdictSuccessor } from "../store/verdict-guard.js";
 import { staleResolveBody, closedResolveBody, classifyClosedDecision, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { getSessionId, NO_SESSION_RESPONSE, readJsonValue } from "./route-helpers.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../store/rejected-option-recorder.js";
@@ -556,6 +556,20 @@ export function createReviewRoutes({
       );
     }
 
+    function stalePageResponse(successorId: string, successorVersion: number | undefined) {
+      broadcast({ type: "artifact_updated", artifactId, status: "superseded" }, sid);
+      return c.json({
+        error: ERROR_CODES.parent_superseded,
+        code: ERROR_CODES.parent_superseded,
+        currentStatus: "superseded",
+        successorId,
+        successorVersion,
+        message: `This page has been replaced by ${successorId}. Review the newer version before recording a verdict.`,
+      }, 409);
+    }
+    const staleAtRead = stalePageVerdictSuccessor(target, artsBefore, reason);
+    if (staleAtRead) return stalePageResponse(staleAtRead.id, staleAtRead.version);
+
     // #521 — an AUTO (confidence countdown) approval must still be permitted
     // at commit time: the human may have lowered the autonomy level (or the
     // artifact may have been revised) after the countdown armed / the request
@@ -700,11 +714,29 @@ export function createReviewRoutes({
     } else if (rejection) {
       const had = (await store.getSessionMemory()).rejectedApproaches
         .some((r) => r.description === rejection!.description);
-      await store.recordRejectedApproach(rejection);
+      if (target.type === "page") {
+        // The daemon's FileStore reads and records synchronously. Keep this
+        // live check, the ledger write and the status mutation in one turn.
+        const current = store.getArtifacts();
+        const artifacts = current instanceof Promise ? await current : current;
+        const stale = stalePageVerdictSuccessor(artifacts.find((a) => a.id === artifactId), artifacts, reason);
+        if (stale) return stalePageResponse(stale.id, stale.version);
+        const recorded = store.recordRejectedApproach(rejection);
+        if (recorded) await recorded;
+      } else {
+        await store.recordRejectedApproach(rejection);
+      }
       if (!had) retractOnConflict = rejection.description;
     }
 
-    await store.updateArtifactStatus(artifactId, status, reason as any);
+    try {
+      await store.updateArtifactStatus(artifactId, status, reason);
+    } catch (err) {
+      if (target.type === "page" && err instanceof ParentSupersededError && err.successorId) {
+        return stalePageResponse(err.successorId, err.successorVersion);
+      }
+      throw err;
+    }
     // "obsolete" is a dismissal, not a plan-review verdict — don't resolve a
     // plan review with it (and it narrows status to the three verdicts).
     if (status !== "obsolete") {
