@@ -16,6 +16,9 @@
   },
   "files": [
     "dist/",
+    "!dist/**/__tests__/",
+    "!dist/**/*.test.*",
+    "skills/",
     "deeppairing.md",
     "README.md"
   ],
@@ -41,7 +44,7 @@
     "test:e2e:attention-selection": "node scripts/check-attention-smoke-selection.mjs",
     "test:e2e:install": "playwright install chromium",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
-    "prepublishOnly": "node -e \"require('node:fs').copyFileSync('../../README.md', 'README.md')\" && pnpm build",
+    "prepublishOnly": "node -e \"const fs=require('node:fs');fs.copyFileSync('../../README.md','README.md');fs.rmSync('skills',{recursive:true,force:true});fs.cpSync('../../skills','skills',{recursive:true})\" && pnpm build",
     "lint": "eslint src web/src e2e --max-warnings 240"
   },
   "engines": {

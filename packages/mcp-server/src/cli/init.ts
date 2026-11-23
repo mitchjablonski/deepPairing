@@ -1446,6 +1446,10 @@ ${helpInvocations}
                                            Read pending anchored human comments for one page version as JSON.
                                            Returns newest comments first, up to 50 comments and 64 KiB of JSON.
                                            omittedComments counts entries that do not fit. Returned comments stay whole.
+    dp guide [--json]                      Print the standalone review protocol for any shell-capable agent
+    dp setup-agent --agent codex|cursor|copilot|opencode [--dry-run]
+                                           Add a marked block to that agent's instruction file telling it to
+                                           run \`dp guide\` (backs up first; --dry-run prints the diff)
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
@@ -1567,6 +1571,19 @@ ${helpInvocations}
     const { standaloneReadDecision, standaloneReadPageFeedback } = await import("./standalone-session.js");
     const read = cmd === "read-decision" ? standaloneReadDecision : standaloneReadPageFeedback;
     console.log(JSON.stringify(await read(cwd, args.slice(1))));
+  } catch (err) {
+    console.error(`deepPairing: ${errorMessage(err)}`);
+    process.exitCode = 1;
+  }
+} else if (cmd === "guide") {
+  // #681 — the standalone protocol, single-sourced in standalone-guide.ts.
+  const { renderStandaloneGuide, standaloneGuideJson } = await import("./standalone-guide.js");
+  console.log(args.includes("--json") ? JSON.stringify(standaloneGuideJson()) : renderStandaloneGuide());
+} else if (cmd === "setup-agent") {
+  try {
+    const { runSetupAgentCommand } = await import("./setup-agent.js");
+    // #681 review — resolve from the real cwd (git toplevel), never the env-driven project root.
+    console.log(runSetupAgentCommand(process.cwd(), args.slice(1), cliInvocation("guide")));
   } catch (err) {
     console.error(`deepPairing: ${errorMessage(err)}`);
     process.exitCode = 1;
