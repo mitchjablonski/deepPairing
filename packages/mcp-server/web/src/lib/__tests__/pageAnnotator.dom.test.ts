@@ -654,6 +654,62 @@ describe("annotator main — pointing keeps the page navigable (#714)", () => {
     expect(anchors()).toHaveLength(1);
   });
 
+  it("REVIEW: an authored link carrying the annotator's marker attribute is still never navigated", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<a id=\"fake-own\" data-dp-annotator href=\"https://example.com/escape\"><span id=\"fake-inner\">Escape</span></a>" +
+        "<dp-annotator-layer data-dp-annotator><a id=\"fake-layer\" href=\"https://example.com/escape2\">Escape 2</a></dp-annotator-layer>",
+    );
+    for (const id of ["fake-own", "fake-inner", "fake-layer"]) {
+      const el = document.getElementById(id)!;
+      for (const mods of [{}, { altKey: true }, { ctrlKey: true }, { metaKey: true }]) {
+        setMode(true);
+        expect(click(el, mods).defaultPrevented).toBe(true);
+        setMode(false);
+        expect(click(el, mods).defaultPrevented).toBe(true);
+      }
+      const aux = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+      el.dispatchEvent(aux);
+      expect(aux.defaultPrevented).toBe(true);
+    }
+    // Not mistaken for our own UI either: a pointing click anchors it.
+    setMode(true);
+    click(document.getElementById("fake-own")!);
+    expect(anchors()).toContainEqual(expect.objectContaining({ kind: "link", href: "https://example.com/escape" }));
+  });
+
+  it("REVIEW: label block-ness is by computed display: a display:block span or a block custom element points", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<label><input type=\"radio\" name=\"p2\" id=\"p2-a\"> <span id=\"blk\" style=\"display:block\">Block span body</span>" +
+        "<x-card id=\"xc\" style=\"display:block\">Custom card body</x-card><span id=\"inl\">Inline name</span></label>",
+    );
+    const radio = document.getElementById("p2-a") as HTMLInputElement;
+    expect(click(document.getElementById("blk")!).defaultPrevented).toBe(true);
+    expect(click(document.getElementById("xc")!).defaultPrevented).toBe(true);
+    expect(radio.checked).toBe(false);
+    expect(anchors().map((a) => a.quote)).toEqual(["Block span body", "Custom card body"]);
+    expect(click(document.getElementById("inl")!).defaultPrevented).toBe(false);
+    expect(radio.checked).toBe(true);
+  });
+
+  it("REVIEW: before Run a button inside a summary toggles its details instead of pointing", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<details id=\"bd\"><summary><button id=\"sb\" type=\"button\">Expand</button></summary><p>Body</p></details>",
+    );
+    const d = document.getElementById("bd") as HTMLDetailsElement;
+    click(document.getElementById("sb")!);
+    expect(d.open).toBe(true);
+    click(document.getElementById("sb")!);
+    expect(d.open).toBe(false);
+    expect(anchors()).toEqual([]);
+    // Alt-click still points at it.
+    click(document.getElementById("sb")!, { altKey: true });
+    expect(d.open).toBe(false);
+    expect(anchors()).toEqual([expect.objectContaining({ quote: "Expand" })]);
+  });
+
   it("Cmd/Ctrl+I inside the frame asks the parent to toggle pointing", () => {
     const ev = new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true, cancelable: true });
     document.body.dispatchEvent(ev);

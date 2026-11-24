@@ -326,9 +326,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             aria-keyshortcuts="Control+I Meta+I"
             className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary"
             title={
-              annotate
+              (annotate
                 ? `Clicks point at the page (${pointingShortcutLabel()} to switch). Hold ⌘/Ctrl to let one click through; switch off to let every click reach the page.`
-                : `Clicks reach the page (${pointingShortcutLabel()} to switch). Switch on to point at things.`
+                : `Clicks reach the page (${pointingShortcutLabel()} to switch). Switch on to point at things.`) +
+              ` After Run, use this toggle or press ${pointingShortcutLabel()} outside the page.`
             }
           >
             {annotate ? "Pointing: on" : "Pointing: off"}
@@ -338,6 +339,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             {annotate
               ? "Click anything on the page, or select text, to comment on that spot. In-page links, summaries, radio/checkbox tabs and form fields still work — Alt/Option-click to comment on one."
               : "Pointing is off: clicks go to the page. Turn it on to comment on a spot."}
+            {running && ` Scripts are running: to switch pointing, use this toggle or press ${pointingShortcutLabel()} outside the page.`}
           </span>
         </div>
       )}
