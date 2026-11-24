@@ -4,6 +4,8 @@ import { z } from "zod";
 import { ERROR_CODES } from "../error-codes.js";
 import { sha256Hex, stableStringify, wireForm } from "../mcp/proposal-resolution.js";
 import type { ToolResult } from "../mcp/tools/types.js";
+import type { Artifact, Comment, PreflightTrace } from "@deeppairing/shared";
+import type { PageRevisionFeedbackProof } from "../store/page-revision-feedback.js";
 
 /**
  * Shared pieces of the standalone request-ID receipt (#679). Each standalone
@@ -15,6 +17,15 @@ import type { ToolResult } from "../mcp/tools/types.js";
  */
 
 export const receiptDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+export interface StandaloneCloseoutSnapshot {
+  record(file: string, key: string, id: string): Record<string, unknown> | undefined;
+  artifact(id: string): Artifact | undefined;
+  comment(id: string): Comment | undefined;
+  hasOtherChild(parentId: string, childId: string): boolean;
+  trace(artifactId: string): PreflightTrace | undefined;
+  verifyFeedback(parentId: string, proof: PageRevisionFeedbackProof): void;
+}
 
 export function readJsonFile(file: string): unknown {
   try {
