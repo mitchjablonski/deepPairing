@@ -9,7 +9,13 @@
  *  - a click inside a `td`/`th` → a `cell` anchor with its row and column header text;
  *  - a click on a Mermaid node (`g.node`, `flowchart-*` ids) → a `diagram-node` anchor;
  *  - a click on a link → `preventDefault` (a page link NEVER navigates, so the
- *    frame can't leave the no-network document) and a `link` anchor.
+ *    frame can't leave the no-network document) and a `link` anchor — except a
+ *    same-document `#hash` link, which scrolls the frame to its target (#714);
+ *  - a click on `summary`, `label` or a form control keeps its default action
+ *    (details open, CSS-only tabs switch); Alt/Option-click points at it, and
+ *    holding Cmd/Ctrl lets any click through without pointing (#714);
+ *  - Cmd/Ctrl+I inside the frame → `{dp:"toggle-pointing"}` to the parent, so
+ *    the companion's pointing shortcut works while the reviewer is in the page.
  *
  * Each anchor is posted to `parent` as `{dp:"anchor", anchor}`. The target
  * origin is "*" because the frame's own origin is opaque and it cannot know the
@@ -454,6 +460,7 @@ function pickBest(list) {
 
 return {
   LIMITS: LIMITS,
+  LINK_SEL: LINK_SEL,
   norm: norm,
   clip: clip,
   cssEscape: cssEscape,
@@ -510,17 +517,74 @@ function targetEl(e) {
   return t && t.nodeType === 1 ? t : null;
 }
 function hideHover() { if (hoverBox) important(hoverBox, { display: "none" }); }
-function onMove(e) {
-  var t = targetEl(e);
-  if (!annotate || !t || own(t) || t === document.documentElement || t === document.body) { hideHover(); return; }
+/** #714 — what the page's own controls should keep doing while pointing: a
+ *  same-document "#hash" link (scrolls) and native controls (a summary opens
+ *  its details, a label/radio/checkbox switches CSS-only tabs, form fields take
+ *  input). Returns the element whose default action wins, or null. Alt/Option-
+ *  click still points at it. */
+var PASS_SEL = "summary, label, input, select, textarea, button, option, optgroup";
+function sameDocHash(link) {
+  var h = link && link.getAttribute ? link.getAttribute("href") : null;
+  if (typeof h !== "string") return null;
+  h = h.trim();
+  return h.charAt(0) === "#" ? h : null;
+}
+function passTarget(t) {
+  if (!t || !t.closest) return null;
+  var link = t.closest(core.LINK_SEL);
+  if (link) return sameDocHash(link) !== null ? link : null;
+  return t.closest(PASS_SEL);
+}
+/** Scroll the frame to a "#hash" target ourselves. The browser can't be left
+ *  to do it: a srcdoc document resolves even "#x" against the COMPANION's URL,
+ *  so the default action would navigate the frame away from the page. Opens
+ *  any closed details around the target, as a fragment navigation does. */
+function scrollToHash(h) {
+  var raw = h.slice(1), id = raw;
+  try { id = decodeURIComponent(raw); } catch (e) { id = raw; }
+  var el = id ? (document.getElementById(id) || document.getElementById(raw)) : null;
+  if (!el && id) {
+    var named = document.getElementsByName(id);
+    for (var i = 0; i < named.length; i++) if (named[i].localName === "a") { el = named[i]; break; }
+  }
+  if (!el) {
+    if (!id || id.toLowerCase() === "top") { try { window.scrollTo(0, 0); } catch (e2) { /* ignore */ } }
+    return;
+  }
+  for (var d = el.parentElement; d; d = d.parentElement) {
+    if (d.localName === "details" && !d.open) d.open = true;
+  }
+  if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "start" });
+}
+var lastHover = null;
+function paintHover(t, alt, interact) {
+  lastHover = t;
+  if (!annotate || interact || !t || own(t) || t === document.documentElement || t === document.body) { hideHover(); return; }
   if (!hoverBox || !hoverBox.isConnected) {
     hoverBox = mk("dp-annotator-hover");
-    important(hoverBox, { position: "absolute", "box-sizing": "border-box", outline: "2px dashed #3b82f6",
-      background: "rgba(59,130,246,0.06)", "pointer-events": "none", margin: "0", padding: "0" });
+    important(hoverBox, { position: "absolute", "box-sizing": "border-box", "pointer-events": "none", margin: "0", padding: "0" });
     ensureLayer().appendChild(hoverBox);
   }
+  // A control that keeps its own click gets a quiet grey outline; holding
+  // Alt/Option (which points at it instead) turns it into the usual blue one.
+  var pass = alt ? null : passTarget(t);
+  if (pass) important(hoverBox, { outline: "1px dotted #94a3b8", background: "transparent" });
+  else important(hoverBox, { outline: "2px dashed #3b82f6", background: "rgba(59,130,246,0.06)" });
   important(hoverBox, { display: "block" });
-  place(hoverBox, t.getBoundingClientRect());
+  place(hoverBox, (pass || t).getBoundingClientRect());
+}
+function onMove(e) { paintHover(targetEl(e), !!e.altKey, !!(e.ctrlKey || e.metaKey)); }
+function onKey(e) {
+  if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I")) {
+    // The companion's pointing shortcut, forwarded: while the reviewer is in
+    // the frame, the companion never sees the keystroke.
+    e.preventDefault();
+    post({ dp: "toggle-pointing" });
+    return;
+  }
+  if ((e.key === "Alt" || e.key === "Control" || e.key === "Meta") && lastHover && lastHover.isConnected) {
+    paintHover(lastHover, !!e.altKey, !!(e.ctrlKey || e.metaKey));
+  }
 }
 function samePins(a, b) {
   if (!a || a.length !== b.length) return false;
@@ -632,7 +696,7 @@ function onMessage(e) {
 }
 function onMouseDown() { suppressClick = false; }
 function onMouseUp(e) {
-  if (!annotate) return;
+  if (!annotate || e.ctrlKey || e.metaKey) return;
   var t = targetEl(e);
   if (t && own(t)) return;
   var sel = window.getSelection ? window.getSelection() : null;
@@ -641,22 +705,44 @@ function onMouseUp(e) {
   try { a = core.textAnchor(sel.getRangeAt(0)); } catch (err) { a = null; }
   if (a) { suppressClick = true; post({ dp: "anchor", anchor: a }); }
 }
+/** #714 — pointing never breaks the page's own navigation:
+ *  - a link NEVER navigates the frame (it is something to point at, not a way
+ *    out of the no-network document); a same-document "#hash" link scrolls to
+ *    its target instead, and any other link becomes a link anchor;
+ *  - summary, label and form controls keep their default action;
+ *  - Alt/Option-click points at any of those instead;
+ *  - holding Cmd/Ctrl lets one click through to the page (no anchor).
+ *  With pointing off, every click belongs to the page (links still never
+ *  navigate; hash links still scroll). */
 function onClick(e) {
   var t = targetEl(e);
   if (!t || own(t)) return;
-  var link = t.closest ? t.closest("a[href], area[href]") : null;
+  var pointing = annotate && !e.ctrlKey && !e.metaKey;
+  var forceAnchor = pointing && !!e.altKey;
+  var link = t.closest ? t.closest(core.LINK_SEL) : null;
   if (link) {
-    // Never navigate: a link on the page is something to point at, not a way
-    // out of the no-network document. Interact mode still lets the page's own
-    // click handlers see the event; only the navigation is cancelled.
+    // Interact mode still lets the page's own click handlers see the event;
+    // only the navigation is cancelled.
     e.preventDefault();
-    if (!annotate) return;
+    var hash = sameDocHash(link);
+    if (hash !== null && !forceAnchor) {
+      if (pointing && suppressClick) { suppressClick = false; return; }
+      scrollToHash(hash);
+      return;
+    }
+    if (!pointing) return;
     e.stopPropagation();
     if (suppressClick) { suppressClick = false; return; }
     post({ dp: "anchor", anchor: core.linkAnchor(link) });
     return;
   }
-  if (!annotate) return;
+  if (!pointing) return;
+  if (!forceAnchor && t.closest && t.closest(PASS_SEL)) {
+    // A click that ended a text selection (already posted as a text anchor)
+    // stays swallowed, so selecting a label's words doesn't also flip it.
+    if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); }
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
   if (suppressClick) { suppressClick = false; return; }
@@ -666,7 +752,7 @@ function onClick(e) {
 }
 function onAuxClick(e) {
   var t = targetEl(e);
-  if (t && t.closest && t.closest("a[href], area[href]")) e.preventDefault();
+  if (t && t.closest && t.closest(core.LINK_SEL)) e.preventDefault();
 }
 function onResize() { schedule(); }
 /** Capture phase so an inner scroll container (a wide table, a diagram) is
@@ -685,6 +771,8 @@ window.addEventListener("auxclick", onAuxClick, true);
 window.addEventListener("mousedown", onMouseDown, true);
 window.addEventListener("mouseup", onMouseUp, true);
 window.addEventListener("mousemove", onMove, true);
+window.addEventListener("keydown", onKey, true);
+window.addEventListener("keyup", onKey, true);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
 window.addEventListener("scroll", onScroll, true);
@@ -696,6 +784,8 @@ return function uninstall() {
   window.removeEventListener("mousedown", onMouseDown, true);
   window.removeEventListener("mouseup", onMouseUp, true);
   window.removeEventListener("mousemove", onMove, true);
+  window.removeEventListener("keydown", onKey, true);
+  window.removeEventListener("keyup", onKey, true);
   window.removeEventListener("message", onMessage);
   window.removeEventListener("resize", onResize);
   window.removeEventListener("scroll", onScroll, true);

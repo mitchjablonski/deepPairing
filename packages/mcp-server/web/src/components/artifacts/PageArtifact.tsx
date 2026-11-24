@@ -12,7 +12,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
-import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage } from "../../lib/pageAnchorMessages";
+import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage, isTogglePointingMessage } from "../../lib/pageAnchorMessages";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
@@ -20,6 +20,17 @@ import { pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
+
+/** #714 — the pointing toggle's shortcut, as shown on this platform. */
+function pointingShortcutLabel(): string {
+  const platform = typeof navigator !== "undefined" ? navigator.platform || "" : "";
+  return /Mac|iPhone|iPad|iPod/.test(platform) ? "⌘I" : "Ctrl+I";
+}
+
+/** #714 — Cmd/Ctrl+I (no Alt/Shift): not bound anywhere else in the companion. */
+export function isPointingShortcut(e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">): boolean {
+  return (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I");
+}
 
 /** The root comments that point at a spot on the page, oldest first: their
  *  order is the pin numbering. */
@@ -144,14 +155,19 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
   const sendPins = useCallback(() => postToFrame({ dp: "pins", anchors }), [postToFrame, anchors]);
-  const sendMode = useCallback(() => postToFrame({ dp: "mode", annotate: !running || annotate }), [postToFrame, running, annotate]);
+  // #714 — pointing is the reviewer's choice before Run as well as after: a
+  // page with no scripts never shows Run, and its own links, details and
+  // CSS-only tabs work either way (the annotator lets native controls keep
+  // their default action unless Alt/Option is held).
+  const sendMode = useCallback(() => postToFrame({ dp: "mode", annotate }), [postToFrame, annotate]);
 
   // Keep the latest senders and the EFFECTIVE pointing mode in refs so the one
   // message listener never goes stale.
   const sendersRef = useRef({ sendPins, sendMode });
   sendersRef.current = { sendPins, sendMode };
   const pointingRef = useRef(true);
-  pointingRef.current = !running || annotate;
+  pointingRef.current = annotate;
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -179,12 +195,36 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         sendersRef.current.sendPins();
         return;
       }
+      if (isTogglePointingMessage(event, frame)) {
+        // The shortcut pressed inside the frame: honoured only while the
+        // reviewer is actually in THIS page's frame.
+        if (!readOnly && frameOwnsFocusRef.current(element)) setAnnotate((a) => !a);
+        return;
+      }
       const status = acceptPinsStatus(event, frame);
       if (status) setFound(status);
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [artifact.version, readOnly]);
+
+  // #714 — Cmd/Ctrl+I toggles pointing from anywhere in the companion while
+  // this page is the selected artifact (and not in an exiting, inert pane).
+  useEffect(() => {
+    if (readOnly) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented || !isPointingShortcut(e)) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.isContentEditable === true) return;
+      const root = rootRef.current;
+      if (!root || !root.isConnected || root.closest("[inert]")) return;
+      if (useArtifactStore.getState().selectedArtifactId !== artifactIdRef.current) return;
+      e.preventDefault();
+      setAnnotate((a) => !a);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [readOnly]);
 
   // Re-send pins whenever the anchored comments change, and the mode whenever it does.
   useEffect(() => {
@@ -228,7 +268,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     : [];
 
   return (
-    <div className="space-y-3" data-testid="page-artifact">
+    <div className="space-y-3" data-testid="page-artifact" ref={rootRef}>
       {page.summary && (
         <div className="px-4 py-3 bg-accent-blue-dim/20 border border-accent-blue/20 rounded-lg">
           <SimpleMarkdown text={page.summary} className="prose-field text-sm text-text-primary space-y-2" />
@@ -267,19 +307,27 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         </div>
       )}
       {!readOnly && (
-        <div className="flex flex-wrap items-center gap-2 text-2xs text-text-muted">
-          <span>Click anything on the page, or select text, to comment on that spot.</span>
-          {running && (
-            <button
-              type="button"
-              onClick={() => setAnnotate((a) => !a)}
-              aria-pressed={annotate}
-              className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary"
-              title={annotate ? "Clicks point at the page. Switch to let clicks reach the page's own controls." : "Clicks reach the page's own controls. Switch back to point at things."}
-            >
-              {annotate ? "Pointing: on" : "Pointing: off"}
-            </button>
-          )}
+        <div className="flex flex-wrap items-center gap-2 text-2xs text-text-muted" data-testid="page-pointing-bar">
+          <button
+            type="button"
+            onClick={() => setAnnotate((a) => !a)}
+            aria-pressed={annotate}
+            aria-keyshortcuts="Control+I Meta+I"
+            className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary"
+            title={
+              annotate
+                ? `Clicks point at the page (${pointingShortcutLabel()} to switch). Hold ⌘/Ctrl to let one click through; switch off to let every click reach the page.`
+                : `Clicks reach the page (${pointingShortcutLabel()} to switch). Switch on to point at things.`
+            }
+          >
+            {annotate ? "Pointing: on" : "Pointing: off"}
+            <kbd className="ml-1 font-mono text-[9px] text-text-muted">{pointingShortcutLabel()}</kbd>
+          </button>
+          <span data-testid="page-pointing-hint">
+            {annotate
+              ? "Click anything on the page, or select text, to comment on that spot. In-page links, summaries, tabs and form controls still work — Alt/Option-click to comment on one."
+              : "Pointing is off: clicks go to the page. Turn it on to comment on a spot."}
+          </span>
         </div>
       )}
       <PrototypeFrame

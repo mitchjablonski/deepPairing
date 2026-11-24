@@ -377,6 +377,79 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
   });
 });
 
+// --- #714: the pointing toggle is always reachable ---------------------------
+
+describe("PageArtifact — pointing toggle and shortcut (#714)", () => {
+  const plain: Artifact = { ...pageArtifact, id: "art_page_plain_714", content: { title: "Plain", html: "<p>Just text.</p>" } };
+  const select = (id: string) => useArtifactStore.setState({ selectedArtifactId: id });
+
+  it("shows the Pointing toggle and the Alt/Option hint on a page with no scripts (no Run button)", () => {
+    render(<PageArtifact artifact={plain} />);
+    expect(screen.queryByRole("button", { name: /run page scripts/i })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: /pointing: on/i });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("page-pointing-hint")).toHaveTextContent(/Alt\/Option-click/);
+  });
+
+  it("shows the toggle before Run on a scripted page, and switching it off reaches the frame and drops anchors", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    expect(screen.getByRole("button", { name: /run page scripts/i })).toBeInTheDocument();
+    const win = fakeFrameWindow();
+    await userEvent.click(screen.getByRole("button", { name: /pointing: on/i }));
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false }, "*");
+    fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+  });
+
+  it("Cmd/Ctrl+I toggles pointing while this page is selected", () => {
+    select(plain.id);
+    render(<PageArtifact artifact={plain} />);
+    const win = fakeFrameWindow();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, cancelable: true }));
+    });
+    expect(screen.getByRole("button", { name: /pointing: off/i })).toHaveAttribute("aria-pressed", "false");
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false }, "*");
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", metaKey: true, cancelable: true }));
+    });
+    expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
+  });
+
+  it("the shortcut does nothing when another artifact is selected, or with Shift/Alt held", () => {
+    select("some_other_artifact");
+    render(<PageArtifact artifact={plain} />);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, cancelable: true }));
+    });
+    expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
+    select(plain.id);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "I", ctrlKey: true, shiftKey: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, altKey: true, cancelable: true }));
+    });
+    expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
+  });
+
+  it("the shortcut pressed inside the frame toggles pointing only from its own, focused frame", () => {
+    select(plain.id);
+    render(<PageArtifact artifact={plain} />);
+    const win = fakeFrameWindow();
+    fromFrame({ postMessage: vi.fn() }, { dp: "toggle-pointing" });
+    fromFrame(win, { dp: "toggle-pointing" }, { frameFocused: false });
+    expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
+    fromFrame(win, { dp: "toggle-pointing" });
+    expect(screen.getByRole("button", { name: /pointing: off/i })).toBeInTheDocument();
+  });
+
+  it("a read-only page shows no pointing toggle", () => {
+    const retracted: Artifact = { ...plain, id: "art_page_plain_ro", status: "retracted" };
+    select(retracted.id);
+    render(<PageArtifact artifact={retracted} />);
+    expect(screen.queryByRole("button", { name: /pointing/i })).not.toBeInTheDocument();
+  });
+});
+
 describe("PageArtifact — document attributes before Run (#680 slice 2)", () => {
   it("keeps the body class a page stylesheet depends on, and RTL direction, on the wrapper", () => {
     const styled: Artifact = {
