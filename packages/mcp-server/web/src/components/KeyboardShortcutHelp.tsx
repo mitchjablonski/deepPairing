@@ -11,6 +11,7 @@ const shortcuts = [
   { keys: "r", description: "Focus revision textarea" },
   { keys: "q", description: "Ask the agent about this artifact" },
   { keys: "⌘⏎", description: "Respond with note · empty = approve (from review textarea)" },
+  { keys: "⌘I", description: "Page review: toggle pointing (Alt/Option-click comments on a link or control)" },
   { keys: "Escape", description: "Cancel countdown / close overlay / exit replay" },
   { keys: "?", description: "Toggle this help" },
 ];

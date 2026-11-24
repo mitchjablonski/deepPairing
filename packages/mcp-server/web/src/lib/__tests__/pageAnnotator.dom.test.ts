@@ -391,6 +391,337 @@ describe("annotator main — event wiring", () => {
   });
 });
 
+// --- #714: pointing never breaks the page's own navigation ------------------
+
+const NAV_PAGE =
+  "<nav><a id=\"toc\" href=\"#details\">Details</a> <a id=\"toc-top\" href=\"#top\">Top</a></nav>" +
+  "<details id=\"more\"><summary id=\"sum\">More</summary><p id=\"hidden-p\">Hidden body</p></details>" +
+  "<details><summary>Closed</summary><h2 id=\"details\">Details section</h2></details>" +
+  "<div class=\"tabs\">" +
+  "<input type=\"radio\" name=\"tab\" id=\"tab-a\" checked><label id=\"lab-a\" for=\"tab-a\">Tab A</label>" +
+  "<input type=\"radio\" name=\"tab\" id=\"tab-b\"><label id=\"lab-b\" for=\"tab-b\">Tab B</label>" +
+  "</div>" +
+  "<p id=\"plain\">A plain paragraph.</p>" +
+  "<a id=\"ext\" href=\"https://example.com/out\">Outside</a>" +
+  "<a id=\"rel\" href=\"other.html#sec\">Another doc</a>";
+
+describe("annotator main — pointing keeps the page navigable (#714)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  let scrolled: Element[];
+  const origScroll = Element.prototype.scrollIntoView;
+  beforeEach(() => {
+    document.body.innerHTML = NAV_PAGE;
+    posted = [];
+    scrolled = [];
+    // A fake scroll that records which element was asked to scroll into view.
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(
+      document,
+      window,
+      window,
+      makeCore(),
+    ) as () => void;
+  });
+  afterEach(() => {
+    uninstall();
+    Element.prototype.scrollIntoView = origScroll;
+    vi.restoreAllMocks();
+  });
+
+  const anchors = () => posted.filter((m) => m?.dp === "anchor").map((m) => m.anchor);
+  const click = (el: Element, init: MouseEventInit = {}) => {
+    const ev = new MouseEvent("click", { bubbles: true, cancelable: true, ...init });
+    el.dispatchEvent(ev);
+    return ev;
+  };
+  const setMode = (annotate: boolean) =>
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate }, source: window }));
+
+  it("a same-document #hash link scrolls to its target without creating an anchor (and never navigates)", () => {
+    const ev = click(document.getElementById("toc")!);
+    // The browser's own handling is cancelled: a srcdoc frame resolves "#x"
+    // against the companion's URL, so letting it run would leave the page.
+    expect(ev.defaultPrevented).toBe(true);
+    expect(scrolled).toEqual([document.getElementById("details")]);
+    expect(anchors()).toEqual([]);
+  });
+
+  it("scrolling to a target inside a closed <details> opens it", () => {
+    const target = document.getElementById("details")!;
+    const details = target.closest("details")!;
+    expect(details.open).toBe(false);
+    click(document.getElementById("toc")!);
+    expect(details.open).toBe(true);
+  });
+
+  it("a hash link still scrolls with pointing switched off", () => {
+    setMode(false);
+    click(document.getElementById("toc")!);
+    expect(scrolled).toEqual([document.getElementById("details")]);
+    expect(anchors()).toEqual([]);
+  });
+
+  it("a summary click toggles its details (default action kept, no anchor)", () => {
+    const sum = document.getElementById("sum")!;
+    const details = document.getElementById("more") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    const ev = click(sum);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(details.open).toBe(true);
+    expect(anchors()).toEqual([]);
+  });
+
+  it("a label click switches its radio (CSS-only tabs keep working, no anchor)", () => {
+    const a = document.getElementById("tab-a") as HTMLInputElement;
+    const b = document.getElementById("tab-b") as HTMLInputElement;
+    expect(a.checked).toBe(true);
+    const ev = click(document.getElementById("lab-b")!);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(b.checked).toBe(true);
+    expect(a.checked).toBe(false);
+    expect(anchors()).toEqual([]);
+  });
+
+  it("a radio click itself switches, no anchor", () => {
+    const b = document.getElementById("tab-b") as HTMLInputElement;
+    const ev = click(b);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(b.checked).toBe(true);
+    expect(anchors()).toEqual([]);
+  });
+
+  it("Alt-click on a hash link points at it instead of scrolling", () => {
+    const ev = click(document.getElementById("toc")!, { altKey: true });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(scrolled).toEqual([]);
+    expect(anchors()).toEqual([expect.objectContaining({ kind: "link", href: "#details", quote: "Details" })]);
+    expect(HtmlAnchorSchema.safeParse(anchors()[0]).success).toBe(true);
+  });
+
+  it("Alt-click on a summary points at it and leaves the details closed", () => {
+    const details = document.getElementById("more") as HTMLDetailsElement;
+    const ev = click(document.getElementById("sum")!, { altKey: true });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(details.open).toBe(false);
+    expect(anchors()).toEqual([expect.objectContaining({ kind: "element", quote: "More" })]);
+  });
+
+  it("Alt-click on a label points at it and does not switch the radio", () => {
+    const a = document.getElementById("tab-a") as HTMLInputElement;
+    const b = document.getElementById("tab-b") as HTMLInputElement;
+    const ev = click(document.getElementById("lab-b")!, { altKey: true });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(a.checked).toBe(true);
+    expect(b.checked).toBe(false);
+    expect(anchors()).toEqual([expect.objectContaining({ kind: "element", quote: "Tab B" })]);
+  });
+
+  it("an external link is still never navigated and becomes a link anchor", () => {
+    const ev = click(document.getElementById("ext")!);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(scrolled).toEqual([]);
+    expect(anchors()).toEqual([expect.objectContaining({ kind: "link", href: "https://example.com/out" })]);
+  });
+
+  it("a cross-document link with a fragment is not treated as same-document", () => {
+    const ev = click(document.getElementById("rel")!);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(scrolled).toEqual([]);
+    expect(anchors()).toEqual([expect.objectContaining({ kind: "link", href: "other.html#sec" })]);
+  });
+
+  it("external links never navigate under any modifier or mode", () => {
+    const ext = document.getElementById("ext")!;
+    expect(click(ext, { altKey: true }).defaultPrevented).toBe(true);
+    expect(click(ext, { ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(click(ext, { metaKey: true }).defaultPrevented).toBe(true);
+    setMode(false);
+    expect(click(ext).defaultPrevented).toBe(true);
+  });
+
+  it("an ordinary element click still points in one click", () => {
+    const ev = click(document.getElementById("plain")!);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(anchors()).toEqual([expect.objectContaining({ kind: "element", quote: "A plain paragraph." })]);
+  });
+
+  it("holding Cmd/Ctrl lets a click through to the page without pointing", () => {
+    expect(click(document.getElementById("plain")!, { metaKey: true }).defaultPrevented).toBe(false);
+    expect(click(document.getElementById("plain")!, { ctrlKey: true }).defaultPrevented).toBe(false);
+    // ...and a held-Ctrl external link becomes no anchor (but still never navigates).
+    expect(click(document.getElementById("ext")!, { ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(anchors()).toEqual([]);
+  });
+
+  it("REVIEW: Cmd/Ctrl+I is left to the page while typing in its fields, on autorepeat, and after Run", () => {
+    const input = document.createElement("input");
+    const ta = document.createElement("textarea");
+    const ce = document.createElement("div");
+    ce.contentEditable = "true";
+    document.body.append(input, ta, ce);
+    for (const el of [input, ta, ce]) {
+      const ev = new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true, cancelable: true });
+      el.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(false);
+    }
+    const rep = new KeyboardEvent("keydown", { key: "i", ctrlKey: true, repeat: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(rep);
+    expect(rep.defaultPrevented).toBe(false);
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: true }, source: window }));
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "toggle-pointing")).toHaveLength(0);
+  });
+
+  const svgLink = () => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const a = document.createElementNS("http://www.w3.org/2000/svg", "a");
+    a.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "https://example.com/svg-out");
+    const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    text.textContent = "SVG link";
+    a.appendChild(text);
+    svg.appendChild(a);
+    document.body.appendChild(svg);
+    return text;
+  };
+
+  it("REVIEW: an SVG xlink:href link never navigates with pointing off, with Ctrl/Cmd held, or on middle-click", () => {
+    const text = svgLink();
+    setMode(false);
+    expect(click(text).defaultPrevented).toBe(true);
+    setMode(true);
+    expect(click(text, { ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(click(text, { metaKey: true }).defaultPrevented).toBe(true);
+    const aux = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+    text.dispatchEvent(aux);
+    expect(aux.defaultPrevented).toBe(true);
+    expect(anchors()).toEqual([]);
+  });
+
+  it("REVIEW: a plain click on an SVG xlink link (pointing on) is prevented and points at it", () => {
+    const text = svgLink();
+    expect(click(text).defaultPrevented).toBe(true);
+    expect(anchors()).toHaveLength(1);
+    expect(HtmlAnchorSchema.safeParse(anchors()[0]).success).toBe(true);
+  });
+
+  it("REVIEW: a hashbang or target-less #hash link points at the link instead of doing nothing", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<a id=\"bang\" href=\"#!/route\">Route</a><a id=\"stale\" href=\"#gone\">Gone</a>",
+    );
+    expect(click(document.getElementById("bang")!).defaultPrevented).toBe(true);
+    expect(click(document.getElementById("stale")!).defaultPrevented).toBe(true);
+    expect(scrolled).toEqual([]);
+    expect(anchors().map((a) => a.href)).toEqual(["#!/route", "#gone"]);
+    // "#top" with no such id still scrolls to the top rather than anchoring.
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    click(document.getElementById("toc-top")!);
+    expect(scrollTo).toHaveBeenCalledWith(0, 0);
+    expect(anchors()).toHaveLength(2);
+  });
+
+  it("REVIEW: before Run a button has no action, so a click on it points; after Run it passes through", () => {
+    document.body.insertAdjacentHTML("beforeend", "<button id=\"opt\">Option A</button><input id=\"sub\" type=\"submit\" value=\"Go\">");
+    expect(click(document.getElementById("opt")!).defaultPrevented).toBe(true);
+    expect(click(document.getElementById("sub")!).defaultPrevented).toBe(true);
+    expect(anchors()).toHaveLength(2);
+    expect(anchors()[0]).toMatchObject({ kind: "element", quote: "Option A" });
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: true }, source: window }));
+    expect(click(document.getElementById("opt")!).defaultPrevented).toBe(false);
+    expect(anchors()).toHaveLength(2);
+  });
+
+  it("REVIEW: a label-wrapped card: block content points, the label text and its control switch", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<label id=\"card\"><input type=\"radio\" name=\"plan\" id=\"plan-a\"> <b id=\"card-title\">Plan A</b>" +
+        "<div><p id=\"card-body\">Cheaper, slower rollout.</p></div></label>",
+    );
+    const radio = document.getElementById("plan-a") as HTMLInputElement;
+    const body = click(document.getElementById("card-body")!);
+    expect(body.defaultPrevented).toBe(true);
+    expect(radio.checked).toBe(false);
+    expect(anchors()).toEqual([expect.objectContaining({ kind: "element", quote: "Cheaper, slower rollout." })]);
+    expect(click(document.getElementById("card-title")!).defaultPrevented).toBe(false);
+    expect(radio.checked).toBe(true);
+    radio.checked = false;
+    expect(click(radio).defaultPrevented).toBe(false);
+    expect(radio.checked).toBe(true);
+    expect(anchors()).toHaveLength(1);
+  });
+
+  it("REVIEW: an authored link carrying the annotator's marker attribute is still never navigated", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<a id=\"fake-own\" data-dp-annotator href=\"https://example.com/escape\"><span id=\"fake-inner\">Escape</span></a>" +
+        "<dp-annotator-layer data-dp-annotator><a id=\"fake-layer\" href=\"https://example.com/escape2\">Escape 2</a></dp-annotator-layer>",
+    );
+    for (const id of ["fake-own", "fake-inner", "fake-layer"]) {
+      const el = document.getElementById(id)!;
+      for (const mods of [{}, { altKey: true }, { ctrlKey: true }, { metaKey: true }]) {
+        setMode(true);
+        expect(click(el, mods).defaultPrevented).toBe(true);
+        setMode(false);
+        expect(click(el, mods).defaultPrevented).toBe(true);
+      }
+      const aux = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+      el.dispatchEvent(aux);
+      expect(aux.defaultPrevented).toBe(true);
+    }
+    // Not mistaken for our own UI either: a pointing click anchors it.
+    setMode(true);
+    click(document.getElementById("fake-own")!);
+    expect(anchors()).toContainEqual(expect.objectContaining({ kind: "link", href: "https://example.com/escape" }));
+  });
+
+  it("REVIEW: label block-ness is by computed display: a display:block span or a block custom element points", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<label><input type=\"radio\" name=\"p2\" id=\"p2-a\"> <span id=\"blk\" style=\"display:block\">Block span body</span>" +
+        "<x-card id=\"xc\" style=\"display:block\">Custom card body</x-card><span id=\"inl\">Inline name</span></label>",
+    );
+    const radio = document.getElementById("p2-a") as HTMLInputElement;
+    expect(click(document.getElementById("blk")!).defaultPrevented).toBe(true);
+    expect(click(document.getElementById("xc")!).defaultPrevented).toBe(true);
+    expect(radio.checked).toBe(false);
+    expect(anchors().map((a) => a.quote)).toEqual(["Block span body", "Custom card body"]);
+    expect(click(document.getElementById("inl")!).defaultPrevented).toBe(false);
+    expect(radio.checked).toBe(true);
+  });
+
+  it("REVIEW: before Run a button inside a summary toggles its details instead of pointing", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<details id=\"bd\"><summary><button id=\"sb\" type=\"button\">Expand</button></summary><p>Body</p></details>",
+    );
+    const d = document.getElementById("bd") as HTMLDetailsElement;
+    click(document.getElementById("sb")!);
+    expect(d.open).toBe(true);
+    click(document.getElementById("sb")!);
+    expect(d.open).toBe(false);
+    expect(anchors()).toEqual([]);
+    // Alt-click still points at it.
+    click(document.getElementById("sb")!, { altKey: true });
+    expect(d.open).toBe(false);
+    expect(anchors()).toEqual([expect.objectContaining({ quote: "Expand" })]);
+  });
+
+  it("Cmd/Ctrl+I inside the frame asks the parent to toggle pointing", () => {
+    const ev = new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(posted.filter((m) => m?.dp === "toggle-pointing")).toHaveLength(1);
+    // Plain "i" (typing) and Alt/Shift chords are left alone.
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "I", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "toggle-pointing")).toHaveLength(1);
+  });
+});
+
 describe("annotator script string", () => {
   it("calls preventDefault on link clicks and posts to the parent with targetOrigin '*'", () => {
     expect(ANNOTATOR_SCRIPT).toContain("preventDefault");

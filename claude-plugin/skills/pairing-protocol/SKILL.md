@@ -523,7 +523,9 @@ Words to the agent:
   written TO your pair (what the page shows, what you want from them) and a
   `concept` when the page proposes a named pattern. It renders full-width in a
   sandboxed frame with NO network, so inline every asset; scripts run only
-  when your pair clicks Run, so the page must read without them. It is a
+  when your pair clicks Run, so the page must read without them. For in-page
+  navigation use `#id` links, `<details>` and radio/checkbox tabs, which keep
+  working while your pair comments; `:target`-based CSS never switches there. It is a
   reviewable draft: approve, request changes, or reject with a reason. The
   rejection gate reads the page's visible text, title, summary and concept
   like any other present_* call; a match is refused with the stored reason,
