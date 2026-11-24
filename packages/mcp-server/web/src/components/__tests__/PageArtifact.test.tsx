@@ -458,6 +458,9 @@ describe("PageArtifact — pointing toggle and shortcut (#714)", () => {
     const win = fakeFrameWindow();
     fromFrame(win, { dp: "toggle-pointing" });
     expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
+    // The hint and title say how to switch once scripts run.
+    expect(screen.getByTestId("page-pointing-hint")).toHaveTextContent(/use this toggle or press (⌘I|Ctrl\+I) outside the page/);
+    expect(screen.getByRole("button", { name: /pointing: on/i }).getAttribute("title")).toMatch(/After Run, use this toggle or press (⌘I|Ctrl\+I) outside the page/);
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, cancelable: true }));
     });

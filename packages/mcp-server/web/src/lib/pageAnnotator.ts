@@ -547,12 +547,24 @@ var annotate = true, scripts = false, suppressClick = false, hoverBox = null, la
 var current = [], lastFound = null, pending = 0;
 // #714 gap 2 — version-change marks (validated locators) and their toggle.
 var changes = [], showChanges = false, lastChangesFound = null;
-function own(el) { return !!(el && el.closest && el.closest("[data-dp-annotator]")); }
+/** Our own nodes, by reference: an authored element can carry the marker
+ *  attribute too, so ownership is never inferred from markup (#715 review). */
+var ownNodes = typeof WeakSet === "function" ? new WeakSet() : null;
+function own(el) {
+  if (!ownNodes) return false;
+  for (var n = el; n && n.nodeType === 1; n = n.parentElement) if (ownNodes.has(n)) return true;
+  return false;
+}
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
 function important(el, styles) {
   for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) el.style.setProperty(k, styles[k], "important");
 }
-function mk(tag) { var el = document.createElement(tag); el.setAttribute("data-dp-annotator", ""); return el; }
+function mk(tag) {
+  var el = document.createElement(tag);
+  el.setAttribute("data-dp-annotator", "");
+  if (ownNodes) ownNodes.add(el);
+  return el;
+}
 function ensureLayer() {
   if (layer && layer.isConnected) return layer;
   layer = mk("dp-annotator-layer");
@@ -628,17 +640,36 @@ function hashTarget(h) {
   if (el) return el;
   return !id || id.toLowerCase() === "top" ? "top" : null;
 }
+/** Block-level by computed display (anything but inline* / contents), with
+ *  the tag list as the fallback when computed style is unavailable. */
+function isBlock(n) {
+  var d = "";
+  try { d = window.getComputedStyle ? String(window.getComputedStyle(n).display || "") : ""; } catch (e) { d = ""; }
+  if (!d) return BLOCK_TAGS.test(n.localName);
+  return d.indexOf("inline") !== 0 && d !== "contents";
+}
 function passLabel(t) {
   var label = t.closest("label");
   if (!label) return null;
-  for (var n = t; n && n !== label; n = n.parentElement) if (BLOCK_TAGS.test(n.localName)) return null;
+  for (var n = t; n && n !== label; n = n.parentElement) if (isBlock(n)) return null;
   return label;
+}
+/** The details-toggling summary a button sits in, if any. */
+function summaryOf(el) {
+  var sum = el.closest("summary");
+  var d = sum && sum.parentElement;
+  if (!d || d.localName !== "details") return null;
+  for (var c = d.firstElementChild; c; c = c.nextElementSibling) if (c.localName === "summary") return c === sum ? sum : null;
+  return null;
 }
 function passTarget(t) {
   if (!t || !t.closest) return null;
   var link = closestLink(t);
   if (link) { var h = sameDocHash(link); return h !== null && hashTarget(h) ? link : null; }
-  if (t.closest(BUTTON_SEL)) return scripts ? t.closest(BUTTON_SEL) : null;
+  var btn = t.closest(BUTTON_SEL);
+  // Before Run a button has no action of its own; inside a summary the click
+  // toggles the details instead (see onClick).
+  if (btn) return scripts ? btn : summaryOf(btn);
   return t.closest(PASS_SEL) || passLabel(t);
 }
 /** Scroll the frame to a "#hash" target ourselves. The browser can't be left
@@ -897,14 +928,17 @@ function onMouseUp(e) {
  *  navigate; hash links still scroll). */
 function onClick(e) {
   var t = targetEl(e);
-  if (!t || own(t)) return;
+  if (!t) return;
+  var link = closestLink(t);
+  // The navigation guard runs before anything else, our own nodes included:
+  // no link is ever allowed to navigate the frame.
+  if (link) e.preventDefault();
+  if (own(t)) return;
   var pointing = annotate && !e.ctrlKey && !e.metaKey;
   var forceAnchor = pointing && !!e.altKey;
-  var link = closestLink(t);
   if (link) {
     // Interact mode still lets the page's own click handlers see the event;
-    // only the navigation is cancelled.
-    e.preventDefault();
+    // only the navigation is cancelled (above).
     var hash = sameDocHash(link);
     var target = hash !== null && !forceAnchor ? hashTarget(hash) : null;
     if (target) {
@@ -923,7 +957,16 @@ function onClick(e) {
     return;
   }
   if (!pointing) return;
-  if (!forceAnchor && passTarget(t)) {
+  var pass = forceAnchor ? null : passTarget(t);
+  if (pass && !scripts && pass.localName === "summary" && t.closest(BUTTON_SEL)) {
+    // A button inside a summary, before Run: the button has no action, so the
+    // click toggles the details itself (deterministic across engines).
+    e.preventDefault();
+    if (suppressClick) { suppressClick = false; return; }
+    pass.parentElement.open = !pass.parentElement.open;
+    return;
+  }
+  if (pass) {
     // A click that ended a text selection (already posted as a text anchor)
     // stays swallowed, so selecting a label's words doesn't also flip it.
     if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); }
