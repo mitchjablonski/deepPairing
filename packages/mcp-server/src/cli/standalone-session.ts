@@ -11,6 +11,7 @@ import { createStandaloneSessionId, isStandaloneSessionForProject, isStandaloneS
 import type { ToolResult } from "../mcp/tools/types.js";
 import { readBoundedPageFile } from "./page-file.js";
 import { readSessionDirectories } from "./session-selection.js";
+import { pageRevisionFeedbackIdsSchema } from "../store/page-revision-feedback.js";
 
 const SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const PRESENT_OPTIONS_USAGE = "Usage: deeppairing present options --session-id ID --request-id UUID --file options.json";
@@ -18,7 +19,7 @@ const PRESENT_PAGE_USAGE = "Usage: deeppairing present page --session-id ID --re
 const PRESENT_USAGE = `${PRESENT_OPTIONS_USAGE}\n       ${PRESENT_PAGE_USAGE.replace(/^Usage: /, "")}`;
 const READ_DECISION_USAGE = "Usage: deeppairing read-decision --session-id ID --decision-id ID [--wait-ms MS]";
 const READ_PAGE_FEEDBACK_USAGE = "Usage: deeppairing read-page-feedback --session-id ID --artifact-id ID";
-const REVISE_PAGE_USAGE = "Usage: deeppairing revise-page --session-id ID --artifact-id ID --request-id UUID --file page.html --reason TEXT";
+const REVISE_PAGE_USAGE = "Usage: deeppairing revise-page --session-id ID --artifact-id ID --request-id UUID --file page.html --reason TEXT [--ack-comment-id ID ...]";
 const PRESENT_OPTIONS_RETRY = "Reuse the request ID for unchanged input. Use a new UUID if you change the input.";
 const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
 
@@ -113,6 +114,7 @@ export async function standaloneRevisePage(projectRoot: string, args: string[]) 
     options: {
       "session-id": { type: "string" }, "artifact-id": { type: "string" },
       "request-id": { type: "string" }, file: { type: "string" }, reason: { type: "string" },
+      "ack-comment-id": { type: "string", multiple: true },
     },
   });
   const { "session-id": sessionId, "artifact-id": artifactId, "request-id": rawRequestId, file, reason } = values;
@@ -120,6 +122,9 @@ export async function standaloneRevisePage(projectRoot: string, args: string[]) 
   requireStandaloneSession(projectRoot, sessionId);
   const requestId = requestIdSchema.safeParse(rawRequestId);
   if (!requestId.success) throw new Error(`--request-id must be a UUID. ${PRESENT_OPTIONS_RETRY}`);
+  const requestedIds = values["ack-comment-id"];
+  const acknowledgement = pageRevisionFeedbackIdsSchema.optional().safeParse(requestedIds);
+  if (!acknowledgement.success) throw new Error("--ack-comment-id accepts up to 50 unique comment IDs, each 1–128 characters.");
 
   const receipt = { sessionId, requestId: requestId.data };
   const read = readBoundedPageFile(file, PAGE_HTML_MAX_BYTES);
@@ -134,7 +139,7 @@ export async function standaloneRevisePage(projectRoot: string, args: string[]) 
   let result;
   try {
     result = await client.reviseStandalonePage(projectRoot, requestId.data, artifactId.trim(), read.bytes.toString("base64"),
-      reason.trim(), AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
+      reason.trim(), AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS), acknowledgement.data);
   } catch (err) {
     if (err instanceof Error && "status" in err && err.status === 413) {
       return { ...receipt, isError: true, code: ERROR_CODES.body_too_large, message: errorMessage(err).replace(/^\[deepPairing\] /, "") };
@@ -150,7 +155,8 @@ export async function standaloneRevisePage(projectRoot: string, args: string[]) 
     };
   }
   if (details.sessionId !== sessionId || details.parentArtifactId !== artifactId.trim() ||
-    typeof details.artifactId !== "string" || typeof details.version !== "number") {
+    typeof details.artifactId !== "string" || typeof details.version !== "number" ||
+    (acknowledgement.data && JSON.stringify(details.acknowledgedCommentIds) !== JSON.stringify([...acknowledgement.data].sort()))) {
     throw new Error("The daemon did not confirm the page revision. If retrying, use the same --request-id and revision input.");
   }
   return { ...details, ...receipt, companionUrl, isError: undefined };

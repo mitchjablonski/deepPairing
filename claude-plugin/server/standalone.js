@@ -39358,6 +39358,14 @@ function formatRecordStanceOutcome(outcome, scope) {
   };
 }
 
+// src/store/page-revision-feedback.ts
+var pageRevisionFeedbackIdsSchema = external_exports.array(external_exports.string().trim().min(1).max(128)).min(1).max(50).refine((ids) => new Set(ids).size === ids.length, "Feedback comment IDs must be unique.");
+var pageRevisionFeedbackProofSchema = external_exports.object({
+  commentIds: pageRevisionFeedbackIdsSchema,
+  digest: external_exports.string().regex(/^[0-9a-f]{64}$/),
+  includesRuleOut: external_exports.literal(true).optional()
+}).strict();
+
 // src/store/file-store.ts
 var RetirementCommentFields = external_exports.object({
   id: external_exports.string().min(1),
@@ -43291,14 +43299,14 @@ var DaemonClient = class {
     }
     return result;
   }
-  async reviseStandalonePage(expectedProjectRoot, operationId, artifactId, htmlBase64, reason, signal) {
+  async reviseStandalonePage(expectedProjectRoot, operationId, artifactId, htmlBase64, reason, signal, ackCommentIds) {
     try {
       return await this.request("/revise-page", {
         method: "POST",
         signal,
         redirect: "error",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expectedProjectRoot, operationId, artifactId, htmlBase64, reason })
+        body: JSON.stringify({ expectedProjectRoot, operationId, artifactId, htmlBase64, reason, ackCommentIds })
       }, true);
     } catch (err) {
       if (err instanceof Error && "status" in err && err.status === 404 && !("code" in err)) {

@@ -8,6 +8,7 @@ import type { BroadcastFn, ToolResult } from "../mcp/tools/types.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { withFileLock } from "../store/file-lock.js";
 import type { FileStore } from "../store/file-store.js";
+import { PageRevisionFeedbackConflictError, pageRevisionFeedbackProofSchema, provePageRevisionFeedback, type PageRevisionFeedbackRefusal } from "../store/page-revision-feedback.js";
 import { findPageSuccessor } from "./page-successor.js";
 import {
   operationDigest, readJsonFile, readSessionRecord, receiptDigestSchema,
@@ -21,6 +22,7 @@ const receiptSchema = z.object({
   parentStatus: ArtifactStatusSchema.optional(),
   parentHistoryLength: z.number().int().nonnegative().optional(),
   trace: PreflightTraceSchema.optional(),
+  feedback: pageRevisionFeedbackProofSchema.optional(),
   committed: z.literal(true).optional(),
 }).strict();
 type Receipt = z.infer<typeof receiptSchema>;
@@ -37,14 +39,15 @@ export async function reviseStandalonePage(
   projectRoot: string,
   store: FileStore,
   operationId: string,
-  input: { artifactId: string; html: string; reason: string },
+  input: { artifactId: string; html: string; reason: string; ackCommentIds?: string[] },
   broadcast: BroadcastFn,
 ): Promise<ToolResult> {
   const sessionId = store.getSessionId();
   const { artifactId: parentId, reason, html } = input;
   const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
   const receiptPath = path.join(dir, `revise-page-${operationId}.json`);
-  const fingerprint = operationDigest(input);
+  const ackCommentIds = [...(input.ackCommentIds ?? [])].sort();
+  const fingerprint = operationDigest({ artifactId: parentId, reason, html, ...(ackCommentIds.length ? { ackCommentIds } : {}) });
   const key = standaloneOperationKey(projectRoot, sessionId, "revise_page", operationId);
   const artifactId = `art_${key}`;
   const commentId = `cmt_${key}`;
@@ -105,6 +108,10 @@ export async function reviseStandalonePage(
       return null;
     }
     requireChild(child, receipt);
+    const { feedback } = receipt;
+    if (JSON.stringify(feedback?.commentIds ?? []) !== JSON.stringify(ackCommentIds)) {
+      throw new Error("Standalone revision is missing its exact feedback selection.");
+    }
     const { trace } = receipt;
     if (trace?.decision !== "admitted" || trace.artifactId !== artifactId || trace.toolName !== "revise_artifact") {
       throw new Error("Standalone revision is missing its admitted preflight trace.");
@@ -121,15 +128,19 @@ export async function reviseStandalonePage(
     if (!parent || parent.version + 1 !== child.version || artifacts.some((a) => a.parentId === parentId && a.id !== artifactId)) {
       throw new Error("Standalone revision has inconsistent page lineage.");
     }
-    const checkVersion = () => {
-      const durableChild = readSessionRecord(dir, "artifacts.json", "parentId", parentId);
-      const durableParent = readSessionRecord(dir, "artifacts.json", "id", parentId);
+    const requireDurableVersion = (durableParent: Record<string, unknown> | Artifact | undefined,
+      durableChild: Record<string, unknown> | Artifact | undefined) => {
       if (durableChild?.id !== artifactId || durableParent?.sessionId !== sessionId || durableParent.type !== "page" ||
         durableParent.version !== child.version - 1 || (!receipt.committed && durableParent.status !== "superseded")) {
         throw new Error("Standalone revision is missing its durable page version.");
       }
       requireChild(durableChild, receipt);
     };
+    const checkVersion = () => requireDurableVersion(
+      readSessionRecord(dir, "artifacts.json", "id", parentId),
+      readSessionRecord(dir, "artifacts.json", "parentId", parentId),
+    );
+    const flush = () => feedback ? store.forceFlush({ parentId, proof: feedback }) : store.forceFlush();
     if (!receipt.committed) {
       if (parent.status !== "superseded") {
         const expectedStatus = receipt.parentStatus;
@@ -145,11 +156,11 @@ export async function reviseStandalonePage(
       }
       // The comments file can flush even when artifact persistence fails.
       // Stage the revision note only after verifying both durable versions.
-      store.forceFlush();
+      flush();
       checkVersion();
       if (!diskNote) {
         if (!bufferedNote) store.addComment({ id: commentId, artifactId: parentId, content: note, author: "agent" });
-        store.forceFlush();
+        flush();
         const savedNote = readSessionRecord(dir, "comments.json", "id", commentId);
         if (!savedNote) throw new Error("Standalone revision is missing its durable note.");
         requireNote(savedNote);
@@ -160,11 +171,16 @@ export async function reviseStandalonePage(
       if (!savedTrace || operationDigest(savedTrace) !== operationDigest(trace) || !comment) {
         throw new Error("Standalone revision is missing its durable note or preflight trace.");
       }
+      const acknowledged = feedback ? store.acknowledgePageRevisionFeedback(parentId, feedback, (rows) => {
+        const successors = rows.filter((row) => row.parentId === parentId);
+        requireDurableVersion(rows.find((row) => row.id === parentId), successors.length === 1 ? successors[0] : undefined);
+      }) : [];
       save({ ...receipt, committed: true });
       broadcast({ type: "artifact_created", artifact: child });
       broadcast({ type: "artifact_updated", artifactId: parentId, status: "superseded" });
       broadcast({ type: "comment_added", comment });
       broadcast({ type: "preflight_trace_recorded", artifactId, trace });
+      for (const row of acknowledged) broadcast({ type: "comment_updated", comment: row });
     } else {
       checkVersion();
       if (!diskNote) throw new Error("Standalone revision is missing its durable note.");
@@ -176,6 +192,8 @@ export async function reviseStandalonePage(
       content: [{ type: "text", text: `Page ${parentId} was revised as ${artifactId} (v${child.version}).` }],
       structuredContent: {
         sessionId, parentArtifactId: parentId, artifactId, version: child.version, status: child.status,
+        ...(feedback ? { acknowledgedCommentIds: feedback.commentIds } : {}),
+        ...(feedback?.includesRuleOut ? { acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged." } : {}),
         ...(replayed ? { replayed: true } : {}),
         ...(latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : {}),
       },
@@ -196,6 +214,23 @@ export async function reviseStandalonePage(
   const parent = target();
   if ("isError" in parent) return parent;
   const metadataDigest = operationDigest(parent.metadata);
+  const proveFeedback = (onRefusal?: (refusal: PageRevisionFeedbackRefusal) => void) =>
+    provePageRevisionFeedback(store.getArtifacts(), store.getComments(), sessionId, parentId, ackCommentIds, undefined, onRefusal);
+  const selection: { refusal?: PageRevisionFeedbackRefusal } = {};
+  const feedback = ackCommentIds.length ? proveFeedback((failure) => { selection.refusal = failure; }) : undefined;
+  if (ackCommentIds.length && !feedback) {
+    const { refusal: selectionRefusal } = selection;
+    if (!selectionRefusal) {
+      return refused("The selected feedback could not be verified against this page's history.", ERROR_CODES.validation_error);
+    }
+    const id = JSON.stringify(selectionRefusal.id);
+    const message = selectionRefusal?.kind === "question"
+      ? `Comment ${id} is a question. Answer it in the revised page and leave it out of --ack-comment-id so it stays pending until handled.`
+      : selectionRefusal?.kind === "suggestion"
+        ? `Comment ${id} is a suggestion. Use its separate review flow and leave it out of --ack-comment-id.`
+        : `Comment ${id} is ineligible. Supply an ordinary anchored human comment ID from this page or a direct ancestor.`;
+    return refused(message, ERROR_CODES.validation_error);
+  }
 
   let blockReason: string | undefined;
   const result = await handleReviseArtifact({
@@ -220,15 +255,48 @@ export async function reviseStandalonePage(
           return refused(`Page ${parentId}'s metadata changed during review. Read it before retrying the revision.`,
             ERROR_CODES.session_review_conflict);
         }
+        if (feedback && (proveFeedback()?.digest !== feedback.digest ||
+          (receipt.feedback && receipt.feedback.digest !== feedback.digest))) {
+          return refused("The selected page feedback changed during review. Read it before retrying the revision.",
+            ERROR_CODES.session_review_conflict);
+        }
         const prepared = {
           ...receipt,
           childDigest: childDigest(params),
           parentStatus: current.status,
           parentHistoryLength: current.historyLength,
           trace,
+          ...(feedback ? { feedback } : {}),
         };
-        save(prepared);
-        store.createArtifact(params);
+        const create = () => {
+          save(prepared);
+          store.createArtifact(params);
+        };
+        if (feedback) {
+          // Prove raw durable and newly buffered comments under the session
+          // lock before any ordinary flush could normalize corrupt input.
+          try {
+            store.preparePageRevisionFeedback(parentId, feedback, (durableParent) => {
+              const parsed = PageContentSchema.safeParse({ ...durableParent.content, title: durableParent.title });
+              const live = target();
+              if ("isError" in live || !parsed.success || parsed.data.sourcePath !== undefined ||
+                durableParent.status !== current.status || (durableParent.statusHistory?.length ?? 0) !== current.historyLength ||
+                operationDigest(live.metadata) !== metadataDigest) {
+                throw new PageRevisionFeedbackConflictError("Page revision predecessor changed during review.");
+              }
+              const { title, summary, concept } = parsed.data;
+              if (operationDigest({ title, summary, concept }) !== metadataDigest) {
+                throw new PageRevisionFeedbackConflictError("Page revision predecessor metadata changed during review.");
+              }
+              create();
+            });
+          } catch (error) {
+            if (error instanceof PageRevisionFeedbackConflictError) {
+              return refused(error.message, ERROR_CODES.session_review_conflict);
+            }
+            throw error;
+          }
+        } else create();
         const committed = recover(prepared, false);
         if (!committed) throw new Error("Standalone revision could not confirm page creation.");
         return committed;

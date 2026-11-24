@@ -25,6 +25,7 @@ import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
 import { presentStandalonePage } from "./standalone-page.js";
 import { reviseStandalonePage } from "./standalone-revise-page.js";
+import { pageRevisionFeedbackIdsSchema } from "../store/page-revision-feedback.js";
 import { readPageFeedback } from "./page-feedback.js";
 import { decisionFeedback, MAX_DECISION_WAIT_MS, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
 
@@ -61,6 +62,7 @@ const ReviseStandalonePageBody = z.object({
   artifactId: z.string().trim().min(1).max(128),
   htmlBase64: inlinePageBase64,
   reason: z.string().trim().min(1).max(4096),
+  ackCommentIds: pageRevisionFeedbackIdsSchema.optional(),
 }).strict();
 const ReadStandaloneDecisionBody = z.object({
   expectedProjectRoot: z.string().min(1),
@@ -642,7 +644,7 @@ export function createDaemonRoutes(
     app.post("/api/internal/sessions/:sessionId/revise-page", async (c) => {
       const parsed = await parseJsonBody(c, ReviseStandalonePageBody);
       if (!parsed.ok) return parsed.res;
-      const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason } = parsed.data;
+      const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason, ackCommentIds } = parsed.data;
       const sessionId = c.req.param("sessionId");
       const lookup = requireWarmStandaloneStore(c, expectedProjectRoot, sessionId, "revise-page");
       if (!lookup.ok) return lookup.response;
@@ -659,7 +661,7 @@ export function createDaemonRoutes(
       if (Buffer.from(html, "utf8").toString("base64") !== htmlBase64) {
         return c.json({ error: "The page must be valid UTF-8 HTML encoded as canonical base64." }, 400);
       }
-      const result = await reviseStandalonePage(projectRoot, lookup.store, operationId, { artifactId, html, reason },
+      const result = await reviseStandalonePage(projectRoot, lookup.store, operationId, { artifactId, html, reason, ackCommentIds },
         (event) => broadcast(sessionId, event));
       return c.json(result);
     });

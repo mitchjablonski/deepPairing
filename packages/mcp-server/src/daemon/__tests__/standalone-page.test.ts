@@ -19,9 +19,11 @@ import { projectHashOf } from "../../project-root.js";
 import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { createDaemon, type Daemon } from "../create-daemon.js";
 import { reviseStandalonePage } from "../standalone-revise-page.js";
+import { provePageRevisionFeedback } from "../../store/page-revision-feedback.js";
 
 const b64 = (html: string | Buffer) => Buffer.from(html).toString("base64");
 const page = (html: string, extra: Record<string, unknown> = {}) => ({ title: "Replay backend", htmlBase64: b64(html), ...extra });
+const anchored = { htmlAnchor: { kind: "element" as const, locator: "p", quote: "First draft" } };
 
 const until = async (cond: () => boolean, ms = 2_000) => {
   const end = Date.now() + ms;
@@ -66,8 +68,9 @@ function fixture() {
     expect((await request(daemon, "open-review", { mode: "open" }, { session })).status).toBe(200);
   const present = (daemon: Daemon, operationId: string, args: object, session = sessionId) =>
     request(daemon, "present-page", { operationId, args }, { session });
-  const revise = (daemon: Daemon, operationId: string, artifactId: string, html: string, reason = "Clarify the procedure") =>
-    request(daemon, "revise-page", { operationId, artifactId, htmlBase64: b64(html), reason });
+  const revise = (daemon: Daemon, operationId: string, artifactId: string, html: string,
+    reason = "Clarify the procedure", ackCommentIds?: string[]) =>
+    request(daemon, "revise-page", { operationId, artifactId, htmlBase64: b64(html), reason, ackCommentIds });
   const verdict = (daemon: Daemon, artifactId: string, status: string) =>
     daemon.app.request(`http://localhost/api/artifacts/${artifactId}/status`, {
       method: "POST",
@@ -90,6 +93,218 @@ function fixture() {
 }
 
 describe("authenticated standalone page revision", () => {
+  it("acknowledges only selected ordinary comments from the exact direct lineage", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const first = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const ancestorId = first.structuredContent.artifactId as string;
+      const next = await (await f.revise(daemon, randomUUID(), ancestorId, "<p>Second draft</p>")).json();
+      const parentId = next.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      store.createArtifact({
+        id: "art_sibling", parentId: ancestorId, version: 2, type: "page",
+        title: "Sibling", content: { title: "Sibling", html: "<p>Sibling branch</p>" },
+      });
+      const add = (id: string, artifactId: string, intent?: "comment" | "question" | "suggestion", target: Record<string, unknown> = anchored) =>
+        store.addComment({ id, artifactId, author: "human", content: `Private words for ${id}`, target, intent });
+      const description = "Redis Streams";
+      const reason = "The team cannot operate it.";
+      store.recordRejectedApproach({ description, reason, sourceArtifactId: ancestorId, origin: "page_rule_out", sourceAnchor: anchored.htmlAnchor });
+      store.addComment({ id: "cmt_old", artifactId: ancestorId, author: "human", content: reason, target: anchored, ruleOut: { description } });
+      add("cmt_current", parentId, "comment");
+      add("cmt_left_pending", ancestorId);
+      add("cmt_sibling", "art_sibling", "question");
+      add("cmt_question", parentId, "question");
+      add("cmt_suggestion", parentId, "suggestion");
+      add("cmt_unanchored", parentId, undefined, {});
+      store.addComment({ id: "cmt_agent", artifactId: parentId, author: "agent", content: "Agent", target: anchored });
+      const html = "<p>Third draft</p>";
+      const revise = (operation: string, ids: string[]) => f.revise(daemon, operation, parentId, html, "Read feedback", ids);
+      for (const invalid of ["cmt_sibling", "cmt_question", "cmt_suggestion", "cmt_unanchored", "cmt_agent", "cmt_unknown"]) {
+        const refusal = await (await revise(randomUUID(), ["cmt_old", invalid])).json();
+        expect(refusal).toMatchObject({
+          isError: true, structuredContent: { code: "validation_error" },
+        });
+        const message = refusal.content[0].text;
+        expect(message).toContain(JSON.stringify(invalid));
+        expect(message).not.toContain("Private words");
+        if (invalid === "cmt_question") expect(message).toContain("Answer it in the revised page");
+        else if (invalid === "cmt_suggestion") expect(message).toContain("Use its separate review flow");
+        else expect(message).toContain("is ineligible");
+        if (invalid === "cmt_sibling") expect(message).not.toContain("is a question");
+      }
+      expect((await revise(randomUUID(), ["cmt_old", "cmt_old"])).status).toBe(400);
+      expect((await revise(randomUUID(), Array.from({ length: 51 }, (_, index) => `cmt_${index}`))).status).toBe(400);
+      expect(store.getArtifacts()).toHaveLength(3);
+      expect(store.getComment("cmt_old")?.acknowledged).toBe(false);
+      expect(await (await f.revise(daemon, randomUUID(), parentId, "<p>Use Redis Streams</p>", "Read feedback", ["cmt_old"])).json())
+        .toMatchObject({ isError: true, structuredContent: { code: "rejected_approach_blocked", reason } });
+      expect(store.getComment("cmt_old")?.acknowledged).toBe(false);
+      const memory = store.getSessionMemory();
+      const operation = randomUUID();
+      const success = await (await revise(operation, ["cmt_old", "cmt_current"])).json();
+      expect(success).toMatchObject({
+        structuredContent: {
+          acknowledgedCommentIds: ["cmt_current", "cmt_old"], version: 3,
+          acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged.",
+        },
+      });
+      expect(await (await revise(operation, ["cmt_current", "cmt_old"])).json()).toMatchObject({
+        structuredContent: { ...success.structuredContent, replayed: true },
+      });
+      expect(await (await revise(operation, ["cmt_old"])).json()).toMatchObject({
+        isError: true, structuredContent: { code: "standalone_operation_conflict" },
+      });
+      expect(store.getComments().filter((c) => c.author === "human" && c.acknowledged).map((c) => c.id).sort())
+        .toEqual(["cmt_current", "cmt_old"]);
+      expect(store.getSessionMemory()).toEqual(memory);
+      expect(store.getComment("cmt_old")?.ruleOut).toEqual({ description });
+      expect(store.getArtifacts()).toHaveLength(4);
+      const disk = JSON.parse(fs.readFileSync(path.join(f.root, ".deeppairing", "sessions", f.sessionId, "comments.json"), "utf8"));
+      expect(disk).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "cmt_old", acknowledged: true }),
+        expect.objectContaining({ id: "cmt_left_pending", acknowledged: false }),
+      ]));
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it.each(["removed", "duplicated"])("refuses a %s durable ID from a stale warm store without creating a successor", async (change) => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const first = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentId = first.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const id = "cmt_removed";
+      store.addComment({ id, artifactId: parentId, author: "human", content: "Clarify", target: anchored });
+      store.forceFlush();
+      const file = path.join(f.root, ".deeppairing", "sessions", f.sessionId, "comments.json");
+      const disk = JSON.parse(fs.readFileSync(file, "utf8"));
+      const modified = JSON.stringify(change === "removed" ? [] : [disk[0], disk[0]]);
+      fs.writeFileSync(file, modified);
+      // An unrelated dirty row would cause the generic flush to rewrite the
+      // collection and collapse the duplicate before it could be diagnosed.
+      store.addComment({ id: "cmt_buffered", artifactId: parentId, author: "human", content: "Unrelated", target: anchored });
+      expect(store.getComment(id)?.acknowledged).toBe(false);
+      const response = await f.revise(daemon, randomUUID(), parentId, "<p>Second draft</p>", "Read feedback", [id]);
+      if (change === "removed") {
+        expect(await response.json()).toMatchObject({ isError: true, structuredContent: { code: "session_review_conflict" } });
+      } else {
+        expect(response.status).toBe(500);
+        expect(() => store.forceFlush()).toThrow();
+      }
+      expect(store.getArtifacts()).toMatchObject([{ id: parentId, status: "draft" }]);
+      expect(fs.readFileSync(file, "utf8")).toBe(modified);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("fails closed on missing, cyclical, gapped and foreign lineage", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const first = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentId = first.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const id = "cmt_lineage";
+      store.addComment({ id, artifactId: parentId, author: "human", content: "Clarify", target: anchored });
+      const [root] = store.getArtifacts();
+      expect(provePageRevisionFeedback([root!], store.getComments(), f.sessionId, parentId, [id])).toBeDefined();
+      for (const artifacts of [[{ ...root!, parentId: "missing", version: 2 }],
+        [{ ...root!, parentId, version: 2 }], [{ ...root!, version: 2 }],
+        [{ ...root!, sessionId: "other" }], [root!, root!]]) {
+        expect(provePageRevisionFeedback(artifacts, store.getComments(), f.sessionId, parentId, [id])).toBeUndefined();
+      }
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it.each(["version", "acknowledgement", "receipt"])("recovers an interruption at %s using the exact original preparation", async (phase) => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const first = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentId = first.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const commentId = "cmt_ack_recovery";
+      store.addComment({ id: commentId, artifactId: parentId, author: "human", content: "Clarify", target: anchored });
+      const operation = randomUUID();
+      const dir = path.join(f.root, ".deeppairing", "sessions", f.sessionId);
+      const receipt = path.join(dir, `revise-page-${operation}.json`);
+      const comments = path.join(dir, "comments.json");
+      // Newly posted input starts in memory. Verify it is already on disk
+      // before the first artifact flush can persist the successor.
+      const flush = store.forceFlush.bind(store);
+      const failVersion = phase === "version" ? vi.spyOn(store, "forceFlush").mockImplementationOnce((selection) => {
+        expect(JSON.parse(fs.readFileSync(comments, "utf8"))).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: commentId, acknowledged: false }),
+        ]));
+        flush(selection);
+        throw new Error("Interrupted after version flush");
+      }) : undefined;
+      const rename = fs.renameSync.bind(fs);
+      const failWrite = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        if (phase === "acknowledgement" && to === comments &&
+          JSON.parse(fs.readFileSync(from, "utf8")).some((row: { id: string; acknowledged: boolean }) => row.id === commentId && row.acknowledged)) {
+          throw new Error("Comments write interrupted");
+        }
+        if (phase === "receipt" && to === receipt && JSON.parse(fs.readFileSync(from, "utf8")).committed) {
+          throw new Error("Receipt write interrupted");
+        }
+        rename(from, to);
+      });
+      const revise = (active: Daemon) => f.revise(active, operation, parentId, "<p>Second draft</p>", "Read feedback", [commentId]);
+      try {
+        expect((await revise(daemon)).status).toBe(500);
+      } finally {
+        failWrite.mockRestore();
+        failVersion?.mockRestore();
+      }
+      const child = store.getArtifacts().find((row) => row.parentId === parentId)!;
+      expect(child).toBeDefined();
+      expect(JSON.parse(fs.readFileSync(path.join(dir, "artifacts.json"), "utf8"))).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: child.id, parentId }),
+      ]));
+      if (phase === "version") expect(store.getPreflightTrace(child.id)).toBeNull();
+      else expect(store.getPreflightTrace(child.id)).toMatchObject({ decision: "admitted" });
+      expect(store.getCommentsForArtifact(parentId).filter((row) => row.author === "agent")).toHaveLength(phase === "version" ? 0 : 1);
+      expect(store.getComment(commentId)?.acknowledged).toBe(phase === "receipt");
+      expect(JSON.parse(fs.readFileSync(receipt, "utf8"))).not.toHaveProperty("committed");
+      if (phase === "acknowledgement") {
+        const original = fs.readFileSync(comments, "utf8");
+        const rows = JSON.parse(original);
+        const duplicate = JSON.stringify([...rows, rows.find((row: { id: string }) => row.id === commentId)]);
+        fs.writeFileSync(comments, duplicate);
+        store.addComment({ id: "cmt_new_buffered", artifactId: parentId, author: "human", content: "Unrelated", target: anchored });
+        expect((await revise(daemon)).status).toBe(500);
+        expect(() => store.forceFlush()).toThrow();
+        expect(fs.readFileSync(comments, "utf8")).toBe(duplicate);
+        expect(store.getComment(commentId)?.acknowledged).toBe(false);
+        fs.writeFileSync(comments, original);
+      }
+      store.dispose();
+      daemon.dispose();
+      const restarted = f.start();
+      expect((await f.request(restarted, "open-review", { mode: "resume" })).status).toBe(200);
+      expect(await (await revise(restarted)).json()).toMatchObject({
+        structuredContent: { artifactId: child.id, acknowledgedCommentIds: [commentId], replayed: true },
+      });
+      expect(restarted.sessions.get(f.sessionId)?.getComment(commentId)?.acknowledged).toBe(true);
+      expect(restarted.sessions.get(f.sessionId)?.getArtifacts()).toHaveLength(2);
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("refuses stale companion verdicts and replays legacy committed pages with a changed parent status", async () => {
     const f = fixture();
     try {

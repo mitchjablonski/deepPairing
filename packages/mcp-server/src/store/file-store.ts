@@ -35,6 +35,7 @@ import { isRejectedApproachOrigin } from "./store-interface.js";
 import { normalizeConceptKey } from "../mcp/preflight-validator.js";
 
 import { isPublishableStance } from "./stance-add.js";
+import { PageRevisionFeedbackConflictError, provePageRevisionFeedback, type PageRevisionFeedbackProof } from "./page-revision-feedback.js";
 
 const isStanceAddedVia = (v: unknown): v is StanceAddedVia => v === "cli" || v === "mcp";
 const isStanceRequestedBy = (v: unknown): v is StanceRequestedBy => v === "user" || v === "unknown";
@@ -535,7 +536,7 @@ export class FileStore implements IStore {
     return merged;
   }
 
-  private flush(): void {
+  private flush(pageFeedback?: { parentId: string; proof: PageRevisionFeedbackProof }): void {
     // A conflicted writer still holds the stale in-memory verdict that caused
     // the safety failure. Never write its artifacts again: only a newly created
     // FileStore may reload the persisted artifact and resume authorization.
@@ -545,6 +546,9 @@ export class FileStore implements IStore {
     const reviewConflict = this.reviewConflict;
     try {
       withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+        // An ACK retry must validate the raw collections before the ordinary
+        // merge can salvage a corrupt or duplicate selected row.
+        if (pageFeedback) this.readDurablePageRevisionFeedback(pageFeedback.parentId, pageFeedback.proof, false);
         let firstFailure: unknown = reviewConflict;
         let artifactWriteBlocked = !!reviewConflict;
         const attempt = (write: () => void): void => {
@@ -625,13 +629,13 @@ export class FileStore implements IStore {
   private flushedLatencyCount = 0;
 
   /** Force an immediate flush — call before process exit */
-  forceFlush(): void {
+  forceFlush(pageFeedback?: { parentId: string; proof: PageRevisionFeedbackProof }): void {
     if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flush();
+    this.flush(pageFeedback);
   }
 
   /** Cancel any pending debounced flush WITHOUT writing — for teardown or
@@ -1425,6 +1429,91 @@ export class FileStore implements IStore {
       if (ids.includes(c.id)) c.acknowledged = true;
     }
     this.scheduleFlush();
+  }
+
+  /** Caller holds the session flush lock. Validate raw input before merging. */
+  private readDurablePageRevisionFeedback(
+    parentId: string,
+    proof: PageRevisionFeedbackProof,
+    allowBuffered: boolean,
+  ) {
+    const artifacts: unknown = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "artifacts.json"), "utf8"));
+    if (!Array.isArray(artifacts) || artifacts.some((a) => !ArtifactSchema.safeParse(a).success)) {
+      throw new Error("Unreadable page revision artifact history.");
+    }
+    const file = "comments.json";
+    const filePath = path.join(this.sessionDir(), file);
+    let diskBytes: string | undefined;
+    try { diskBytes = fs.readFileSync(filePath, "utf8"); }
+    catch (error) {
+      if (errorCode(error) !== "ENOENT" || this.observedRecordFiles.has(file) || !allowBuffered) throw error;
+    }
+    const validate = (read: () => unknown) => {
+      try { return this.validateRetirementComments(read()); }
+      catch (error) {
+        // Keep a subsequent ordinary timer flush from salvaging this exact
+        // malformed collection before the operator repairs it.
+        this.retirementFeedbackBlocked = true;
+        throw error;
+      }
+    };
+    const disk = validate(() => JSON.parse(diskBytes ?? "[]"));
+    const local = validate(() => this.comments);
+    const baseline = JSON.parse(this.recordBaselines[file] ?? "[]") as Comment[];
+    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id));
+    // Only genuinely new buffered rows may supplement disk. A previously
+    // persisted row that disappeared or changed must fail both checks.
+    const observed = new Set([...baseline, ...disk].map((c) => c.id));
+    const comparable = allowBuffered ? [...disk, ...local.filter((c) => !observed.has(c.id))] : disk;
+    const current = provePageRevisionFeedback(artifacts as Artifact[], comparable, this.sessionId, parentId, proof.commentIds, merged);
+    if (current?.digest !== proof.digest) throw new PageRevisionFeedbackConflictError("Page revision feedback no longer matches its receipt.");
+    return { artifacts: artifacts as Artifact[], merged, filePath, diskBytes };
+  }
+
+  /** Validate the bound selection under the same lock used by disk writers. */
+  preparePageRevisionFeedback<T>(parentId: string, proof: PageRevisionFeedbackProof, create: (parent: Artifact) => T): T {
+    this.assertAuthorizationReadable();
+    return withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+      const { artifacts, merged, filePath, diskBytes } = this.readDurablePageRevisionFeedback(parentId, proof, true);
+      const parent = artifacts.find((artifact) => artifact.id === parentId);
+      if (!parent || artifacts.some((artifact) => artifact.parentId === parentId)) {
+        throw new PageRevisionFeedbackConflictError("Page revision predecessor already has a durable successor.");
+      }
+      // Persist any buffered input before the artifact lane can commit the
+      // successor. This is the verified selection with its original ACK bits.
+      this.writePageRevisionComments(merged, filePath, diskBytes);
+      return create(parent);
+    });
+  }
+
+  private writePageRevisionComments(comments: Comment[], filePath: string, diskBytes: string | undefined): void {
+    const bytes = JSON.stringify(comments, null, 2);
+    if (bytes !== diskBytes) writeStringAtomic(filePath, bytes);
+    this.comments = comments;
+    this.recordBaselines["comments.json"] = JSON.stringify(comments);
+    this.observedRecordFiles.add("comments.json");
+    delete this.backedUpCorruption[filePath];
+    this.retirementFeedbackBlocked = false;
+  }
+
+  /** Keep the warm read unchanged until the exact acknowledgement is durable. */
+  acknowledgePageRevisionFeedback(
+    parentId: string,
+    proof: PageRevisionFeedbackProof,
+    verifyRevision: (artifacts: readonly Artifact[]) => void,
+  ): Comment[] {
+    this.assertAuthorizationReadable();
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    return withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+      const { artifacts, merged, filePath, diskBytes } = this.readDurablePageRevisionFeedback(parentId, proof, false);
+      verifyRevision(artifacts);
+      const selected = new Set(proof.commentIds);
+      const updated = merged.map((comment) =>
+        selected.has(comment.id) && !comment.acknowledged ? { ...comment, acknowledged: true } : comment,
+      );
+      this.writePageRevisionComments(updated, filePath, diskBytes);
+      return updated.filter((comment) => selected.has(comment.id));
+    });
   }
 
   getComment(commentId: string): Comment | undefined {

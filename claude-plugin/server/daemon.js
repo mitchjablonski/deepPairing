@@ -2288,7 +2288,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes5, createHash: createHash6 } = __require("crypto");
+    var { randomBytes: randomBytes5, createHash: createHash7 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -2956,7 +2956,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash6("sha1").update(key2 + GUID).digest("base64");
+        const digest = createHash7("sha1").update(key2 + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -3325,7 +3325,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash6 } = __require("crypto");
+    var { createHash: createHash7 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -3632,7 +3632,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash6("sha1").update(key2 + GUID).digest("base64");
+        const digest = createHash7("sha1").update(key2 + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -29790,6 +29790,73 @@ function isPublishableStance(addedVia, requestedBy) {
   return addedVia !== "mcp" && requestedBy !== "unknown";
 }
 
+// src/store/page-revision-feedback.ts
+import { createHash as createHash3 } from "node:crypto";
+var pageRevisionFeedbackIdsSchema = external_exports.array(external_exports.string().trim().min(1).max(128)).min(1).max(50).refine((ids) => new Set(ids).size === ids.length, "Feedback comment IDs must be unique.");
+var pageRevisionFeedbackProofSchema = external_exports.object({
+  commentIds: pageRevisionFeedbackIdsSchema,
+  digest: external_exports.string().regex(/^[0-9a-f]{64}$/),
+  includesRuleOut: external_exports.literal(true).optional()
+}).strict();
+var PageRevisionFeedbackConflictError = class extends Error {
+};
+function provePageRevisionFeedback(artifacts, comments, sessionId, parentId, requested, reconciledComments, onRefusal) {
+  const byId = new Map(artifacts.map((a) => [a.id, a]));
+  if (byId.size !== artifacts.length) return;
+  const chain = /* @__PURE__ */ new Set();
+  const lineage = [];
+  for (let next = byId.get(parentId); next; ) {
+    const { id, parentId: previousId, version: version2 } = next;
+    if (next.type !== "page" || next.sessionId !== sessionId || chain.has(id) || typeof version2 !== "number" || !Number.isSafeInteger(version2) || version2 < 1 || previousId !== null && typeof previousId !== "string") return;
+    chain.add(id);
+    lineage.push([id, version2, previousId]);
+    if (previousId === null) {
+      if (version2 !== 1) return;
+      break;
+    }
+    next = byId.get(previousId);
+    if (!next || next.version !== version2 - 1) return;
+  }
+  const commentIds = [...requested].sort();
+  const selected = new Set(commentIds);
+  function selectedEvidence(rows, refuse2) {
+    const byCommentId = /* @__PURE__ */ new Map();
+    for (const comment of rows) {
+      if (!selected.has(comment.id)) continue;
+      byCommentId.set(comment.id, byCommentId.has(comment.id) ? null : comment);
+    }
+    const evidence2 = [];
+    let includesRuleOut = false;
+    for (const id of commentIds) {
+      const comment = byCommentId.get(id);
+      const anchor = HtmlAnchorSchema.safeParse(comment?.target?.htmlAnchor);
+      if (!comment || comment.author !== "human" || comment.sessionId !== sessionId || !anchor.success || !chain.has(comment.target.artifactId)) {
+        refuse2?.({ id });
+        return;
+      }
+      if (comment.intent === "question") {
+        refuse2?.({ id, kind: "question" });
+        return;
+      }
+      if (comment.intent === "suggestion" || comment.suggestion !== void 0) {
+        refuse2?.({ id, kind: "suggestion" });
+        return;
+      }
+      if (comment.intent !== void 0 && comment.intent !== "comment") {
+        refuse2?.({ id });
+        return;
+      }
+      evidence2.push([id, [comment.target.artifactId, anchor.data, comment.content, comment.createdAt, comment.ruleOut]]);
+      includesRuleOut ||= comment.ruleOut !== void 0;
+    }
+    return { serialized: JSON.stringify(evidence2), includesRuleOut };
+  }
+  const evidence = selectedEvidence(comments, onRefusal);
+  if (!evidence || reconciledComments && selectedEvidence(reconciledComments)?.serialized !== evidence.serialized) return;
+  const digest = createHash3("sha256").update(JSON.stringify([lineage, evidence.serialized])).digest("hex");
+  return { commentIds, digest, ...evidence.includesRuleOut ? { includesRuleOut: true } : {} };
+}
+
 // src/store/file-store.ts
 var isStanceAddedVia = (v2) => v2 === "cli" || v2 === "mcp";
 var isStanceRequestedBy = (v2) => v2 === "user" || v2 === "unknown";
@@ -30157,10 +30224,11 @@ var FileStore = class _FileStore {
     delete this.backedUpCorruption[filePath];
     return merged;
   }
-  flush() {
+  flush(pageFeedback) {
     const reviewConflict = this.reviewConflict;
     try {
       withSessionFlushLock(path17.join(this.sessionDir(), ".flush.lock"), () => {
+        if (pageFeedback) this.readDurablePageRevisionFeedback(pageFeedback.parentId, pageFeedback.proof, false);
         let firstFailure = reviewConflict;
         let artifactWriteBlocked = !!reviewConflict;
         const attempt = (write) => {
@@ -30264,13 +30332,13 @@ var FileStore = class _FileStore {
   }
   flushedLatencyCount = 0;
   /** Force an immediate flush — call before process exit */
-  forceFlush() {
+  forceFlush(pageFeedback) {
     if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flush();
+    this.flush(pageFeedback);
   }
   /** Cancel any pending debounced flush WITHOUT writing — for teardown or
    *  session eviction, so a timer can't fire against a dir that's about to be
@@ -30831,6 +30899,75 @@ var FileStore = class _FileStore {
       if (ids.includes(c.id)) c.acknowledged = true;
     }
     this.scheduleFlush();
+  }
+  /** Caller holds the session flush lock. Validate raw input before merging. */
+  readDurablePageRevisionFeedback(parentId, proof, allowBuffered) {
+    const artifacts = JSON.parse(fs18.readFileSync(path17.join(this.sessionDir(), "artifacts.json"), "utf8"));
+    if (!Array.isArray(artifacts) || artifacts.some((a) => !ArtifactSchema.safeParse(a).success)) {
+      throw new Error("Unreadable page revision artifact history.");
+    }
+    const file2 = "comments.json";
+    const filePath = path17.join(this.sessionDir(), file2);
+    let diskBytes;
+    try {
+      diskBytes = fs18.readFileSync(filePath, "utf8");
+    } catch (error51) {
+      if (errorCode(error51) !== "ENOENT" || this.observedRecordFiles.has(file2) || !allowBuffered) throw error51;
+    }
+    const validate = (read) => {
+      try {
+        return this.validateRetirementComments(read());
+      } catch (error51) {
+        this.retirementFeedbackBlocked = true;
+        throw error51;
+      }
+    };
+    const disk = validate(() => JSON.parse(diskBytes ?? "[]"));
+    const local = validate(() => this.comments);
+    const baseline = JSON.parse(this.recordBaselines[file2] ?? "[]");
+    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id));
+    const observed = new Set([...baseline, ...disk].map((c) => c.id));
+    const comparable = allowBuffered ? [...disk, ...local.filter((c) => !observed.has(c.id))] : disk;
+    const current = provePageRevisionFeedback(artifacts, comparable, this.sessionId, parentId, proof.commentIds, merged);
+    if (current?.digest !== proof.digest) throw new PageRevisionFeedbackConflictError("Page revision feedback no longer matches its receipt.");
+    return { artifacts, merged, filePath, diskBytes };
+  }
+  /** Validate the bound selection under the same lock used by disk writers. */
+  preparePageRevisionFeedback(parentId, proof, create) {
+    this.assertAuthorizationReadable();
+    return withSessionFlushLock(path17.join(this.sessionDir(), ".flush.lock"), () => {
+      const { artifacts, merged, filePath, diskBytes } = this.readDurablePageRevisionFeedback(parentId, proof, true);
+      const parent = artifacts.find((artifact) => artifact.id === parentId);
+      if (!parent || artifacts.some((artifact) => artifact.parentId === parentId)) {
+        throw new PageRevisionFeedbackConflictError("Page revision predecessor already has a durable successor.");
+      }
+      this.writePageRevisionComments(merged, filePath, diskBytes);
+      return create(parent);
+    });
+  }
+  writePageRevisionComments(comments, filePath, diskBytes) {
+    const bytes = JSON.stringify(comments, null, 2);
+    if (bytes !== diskBytes) writeStringAtomic(filePath, bytes);
+    this.comments = comments;
+    this.recordBaselines["comments.json"] = JSON.stringify(comments);
+    this.observedRecordFiles.add("comments.json");
+    delete this.backedUpCorruption[filePath];
+    this.retirementFeedbackBlocked = false;
+  }
+  /** Keep the warm read unchanged until the exact acknowledgement is durable. */
+  acknowledgePageRevisionFeedback(parentId, proof, verifyRevision) {
+    this.assertAuthorizationReadable();
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    return withSessionFlushLock(path17.join(this.sessionDir(), ".flush.lock"), () => {
+      const { artifacts, merged, filePath, diskBytes } = this.readDurablePageRevisionFeedback(parentId, proof, false);
+      verifyRevision(artifacts);
+      const selected = new Set(proof.commentIds);
+      const updated = merged.map(
+        (comment) => selected.has(comment.id) && !comment.acknowledged ? { ...comment, acknowledged: true } : comment
+      );
+      this.writePageRevisionComments(updated, filePath, diskBytes);
+      return updated.filter((comment) => selected.has(comment.id));
+    });
   }
   getComment(commentId) {
     return this.comments.find((c) => c.id === commentId);
@@ -35131,7 +35268,7 @@ async function recordRejectedOptionConcept(store, broadcast, params) {
 import { randomBytes as randomBytes3 } from "node:crypto";
 
 // src/mcp/proposal-resolution.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 
 // src/mcp/skeleton-line.ts
 var skeletonVisualId = (relPath) => `${SKELETON_VISUAL_PREFIX}${relPath}`;
@@ -35176,7 +35313,7 @@ function stableStringify(v2) {
 function sameStance(row, ref) {
   return row.description === ref.description && (row.concept ?? void 0) === (ref.concept ?? void 0) && (row.rejectedAt ?? void 0) === (ref.rejectedAt ?? void 0);
 }
-var sha256Hex = (s) => createHash3("sha256").update(s).digest("hex");
+var sha256Hex = (s) => createHash4("sha256").update(s).digest("hex");
 var EXCEPTION_TOOL_TYPES = {
   present_code_change: "code_change",
   present_options: "decision",
@@ -38225,7 +38362,7 @@ function isStandaloneSessionForProject(id, projectRoot2) {
 import path24 from "node:path";
 
 // src/mcp/tool-helpers.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 
 // src/mcp/advisory-recall.ts
 function tokenSetKey(s) {
@@ -38431,7 +38568,7 @@ STYLE (clarity ${score}/100) \u2014 house prose, warn only. Nothing was changed.
 ` + lines.join("\n");
 }
 function hashPresentArgs(args) {
-  return createHash4("sha256").update(stableStringify(args)).digest("hex");
+  return createHash5("sha256").update(stableStringify(args)).digest("hex");
 }
 function buildDedupResponse(dup, port, extraStructured) {
   const at = Number.isFinite(port) && port > 0 ? ` at localhost:${port}` : "";
@@ -40343,7 +40480,7 @@ function within(dir, abs) {
 }
 
 // src/mcp/skeleton-drift.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 var normalizeSkeletonText = (text) => text.replace(/^﻿/, "").replace(/\r\n?/g, "\n").replace(/\n$/, "");
 var key = (line) => line.trimEnd();
 function exteriorWithGaps(lines, fences, keep) {
@@ -40367,7 +40504,7 @@ function skeletonExteriorDigest(text, file2) {
   const fences = scanSkeletonText(norm2, file2);
   const ext = exteriorWithGaps(norm2.split("\n"), fences, () => true);
   return {
-    sha256: createHash5("sha256").update(ext.map((l) => l.text).join("\n")).digest("hex"),
+    sha256: createHash6("sha256").update(ext.map((l) => l.text).join("\n")).digest("hex"),
     lines: ext.length,
     fenceIds: [...new Set(fences.map((f) => f.id))]
   };
@@ -41020,6 +41157,7 @@ var receiptSchema3 = external_exports.object({
   parentStatus: ArtifactStatusSchema.optional(),
   parentHistoryLength: external_exports.number().int().nonnegative().optional(),
   trace: PreflightTraceSchema.optional(),
+  feedback: pageRevisionFeedbackProofSchema.optional(),
   committed: external_exports.literal(true).optional()
 }).strict();
 function refused(message, code, details = {}) {
@@ -41033,7 +41171,8 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
   const { artifactId: parentId, reason, html } = input;
   const dir = path30.join(projectRoot2, ".deeppairing", "sessions", sessionId);
   const receiptPath = path30.join(dir, `revise-page-${operationId}.json`);
-  const fingerprint = operationDigest(input);
+  const ackCommentIds = [...input.ackCommentIds ?? []].sort();
+  const fingerprint = operationDigest({ artifactId: parentId, reason, html, ...ackCommentIds.length ? { ackCommentIds } : {} });
   const key2 = standaloneOperationKey(projectRoot2, sessionId, "revise_page", operationId);
   const artifactId = `art_${key2}`;
   const commentId = `cmt_${key2}`;
@@ -41094,6 +41233,10 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
       return null;
     }
     requireChild(child, receipt);
+    const { feedback: feedback2 } = receipt;
+    if (JSON.stringify(feedback2?.commentIds ?? []) !== JSON.stringify(ackCommentIds)) {
+      throw new Error("Standalone revision is missing its exact feedback selection.");
+    }
     const { trace } = receipt;
     if (trace?.decision !== "admitted" || trace.artifactId !== artifactId || trace.toolName !== "revise_artifact") {
       throw new Error("Standalone revision is missing its admitted preflight trace.");
@@ -41109,14 +41252,17 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
     if (!parent2 || parent2.version + 1 !== child.version || artifacts.some((a) => a.parentId === parentId && a.id !== artifactId)) {
       throw new Error("Standalone revision has inconsistent page lineage.");
     }
-    const checkVersion = () => {
-      const durableChild = readSessionRecord(dir, "artifacts.json", "parentId", parentId);
-      const durableParent = readSessionRecord(dir, "artifacts.json", "id", parentId);
+    const requireDurableVersion = (durableParent, durableChild) => {
       if (durableChild?.id !== artifactId || durableParent?.sessionId !== sessionId || durableParent.type !== "page" || durableParent.version !== child.version - 1 || !receipt.committed && durableParent.status !== "superseded") {
         throw new Error("Standalone revision is missing its durable page version.");
       }
       requireChild(durableChild, receipt);
     };
+    const checkVersion = () => requireDurableVersion(
+      readSessionRecord(dir, "artifacts.json", "id", parentId),
+      readSessionRecord(dir, "artifacts.json", "parentId", parentId)
+    );
+    const flush = () => feedback2 ? store.forceFlush({ parentId, proof: feedback2 }) : store.forceFlush();
     if (!receipt.committed) {
       if (parent2.status !== "superseded") {
         const expectedStatus = receipt.parentStatus;
@@ -41127,11 +41273,11 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
         }
         store.updateArtifactStatus(parentId, "superseded", "agent_supersede");
       }
-      store.forceFlush();
+      flush();
       checkVersion();
       if (!diskNote) {
         if (!bufferedNote) store.addComment({ id: commentId, artifactId: parentId, content: note, author: "agent" });
-        store.forceFlush();
+        flush();
         const savedNote = readSessionRecord(dir, "comments.json", "id", commentId);
         if (!savedNote) throw new Error("Standalone revision is missing its durable note.");
         requireNote(savedNote);
@@ -41142,11 +41288,16 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
       if (!savedTrace || operationDigest(savedTrace) !== operationDigest(trace) || !comment) {
         throw new Error("Standalone revision is missing its durable note or preflight trace.");
       }
+      const acknowledged = feedback2 ? store.acknowledgePageRevisionFeedback(parentId, feedback2, (rows) => {
+        const successors = rows.filter((row) => row.parentId === parentId);
+        requireDurableVersion(rows.find((row) => row.id === parentId), successors.length === 1 ? successors[0] : void 0);
+      }) : [];
       save({ ...receipt, committed: true });
       broadcast({ type: "artifact_created", artifact: child });
       broadcast({ type: "artifact_updated", artifactId: parentId, status: "superseded" });
       broadcast({ type: "comment_added", comment });
       broadcast({ type: "preflight_trace_recorded", artifactId, trace });
+      for (const row of acknowledged) broadcast({ type: "comment_updated", comment: row });
     } else {
       checkVersion();
       if (!diskNote) throw new Error("Standalone revision is missing its durable note.");
@@ -41161,6 +41312,8 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
         artifactId,
         version: child.version,
         status: child.status,
+        ...feedback2 ? { acknowledgedCommentIds: feedback2.commentIds } : {},
+        ...feedback2?.includesRuleOut ? { acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged." } : {},
         ...replayed ? { replayed: true } : {},
         ...latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : {}
       }
@@ -41180,6 +41333,20 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
   const parent = target();
   if ("isError" in parent) return parent;
   const metadataDigest = operationDigest(parent.metadata);
+  const proveFeedback = (onRefusal) => provePageRevisionFeedback(store.getArtifacts(), store.getComments(), sessionId, parentId, ackCommentIds, void 0, onRefusal);
+  const selection = {};
+  const feedback = ackCommentIds.length ? proveFeedback((failure) => {
+    selection.refusal = failure;
+  }) : void 0;
+  if (ackCommentIds.length && !feedback) {
+    const { refusal: selectionRefusal } = selection;
+    if (!selectionRefusal) {
+      return refused("The selected feedback could not be verified against this page's history.", ERROR_CODES.validation_error);
+    }
+    const id = JSON.stringify(selectionRefusal.id);
+    const message = selectionRefusal?.kind === "question" ? `Comment ${id} is a question. Answer it in the revised page and leave it out of --ack-comment-id so it stays pending until handled.` : selectionRefusal?.kind === "suggestion" ? `Comment ${id} is a suggestion. Use its separate review flow and leave it out of --ack-comment-id.` : `Comment ${id} is ineligible. Supply an ordinary anchored human comment ID from this page or a direct ancestor.`;
+    return refused(message, ERROR_CODES.validation_error);
+  }
   let blockReason;
   const result = await handleReviseArtifact({
     store,
@@ -41206,15 +41373,45 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
             ERROR_CODES.session_review_conflict
           );
         }
+        if (feedback && (proveFeedback()?.digest !== feedback.digest || receipt.feedback && receipt.feedback.digest !== feedback.digest)) {
+          return refused(
+            "The selected page feedback changed during review. Read it before retrying the revision.",
+            ERROR_CODES.session_review_conflict
+          );
+        }
         const prepared = {
           ...receipt,
           childDigest: childDigest(params),
           parentStatus: current.status,
           parentHistoryLength: current.historyLength,
-          trace
+          trace,
+          ...feedback ? { feedback } : {}
         };
-        save(prepared);
-        store.createArtifact(params);
+        const create = () => {
+          save(prepared);
+          store.createArtifact(params);
+        };
+        if (feedback) {
+          try {
+            store.preparePageRevisionFeedback(parentId, feedback, (durableParent) => {
+              const parsed = PageContentSchema.safeParse({ ...durableParent.content, title: durableParent.title });
+              const live = target();
+              if ("isError" in live || !parsed.success || parsed.data.sourcePath !== void 0 || durableParent.status !== current.status || (durableParent.statusHistory?.length ?? 0) !== current.historyLength || operationDigest(live.metadata) !== metadataDigest) {
+                throw new PageRevisionFeedbackConflictError("Page revision predecessor changed during review.");
+              }
+              const { title, summary, concept } = parsed.data;
+              if (operationDigest({ title, summary, concept }) !== metadataDigest) {
+                throw new PageRevisionFeedbackConflictError("Page revision predecessor metadata changed during review.");
+              }
+              create();
+            });
+          } catch (error51) {
+            if (error51 instanceof PageRevisionFeedbackConflictError) {
+              return refused(error51.message, ERROR_CODES.session_review_conflict);
+            }
+            throw error51;
+          }
+        } else create();
         const committed = recover(prepared, false);
         if (!committed) throw new Error("Standalone revision could not confirm page creation.");
         return committed;
@@ -41332,7 +41529,8 @@ var ReviseStandalonePageBody = external_exports.object({
   expectedProjectRoot: external_exports.string().min(1),
   artifactId: external_exports.string().trim().min(1).max(128),
   htmlBase64: inlinePageBase64,
-  reason: external_exports.string().trim().min(1).max(4096)
+  reason: external_exports.string().trim().min(1).max(4096),
+  ackCommentIds: pageRevisionFeedbackIdsSchema.optional()
 }).strict();
 var ReadStandaloneDecisionBody = external_exports.object({
   expectedProjectRoot: external_exports.string().min(1),
@@ -41700,7 +41898,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     app.post("/api/internal/sessions/:sessionId/revise-page", async (c) => {
       const parsed = await parseJsonBody(c, ReviseStandalonePageBody);
       if (!parsed.ok) return parsed.res;
-      const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason } = parsed.data;
+      const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason, ackCommentIds } = parsed.data;
       const sessionId = c.req.param("sessionId");
       const lookup = requireWarmStandaloneStore2(c, expectedProjectRoot, sessionId, "revise-page");
       if (!lookup.ok) return lookup.response;
@@ -41719,7 +41917,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         projectRoot2,
         lookup.store,
         operationId,
-        { artifactId, html, reason },
+        { artifactId, html, reason, ackCommentIds },
         (event) => broadcast(sessionId, event)
       );
       return c.json(result);
