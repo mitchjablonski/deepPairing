@@ -24,7 +24,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const guide = renderStandaloneGuide("node /fake/dist/cli/init.js");
 
 /** The key constraints every surface must carry. */
-const KEY_CONSTRAINTS = [/NO network|No network/, /clicks Run/, /data: URIs/, PAGE_DECISION_ATTR, PAGE_QUESTION_ATTR, /<details>/, /<section id=/, /TL;DR/, /inline SVG/];
+const KEY_CONSTRAINTS = [/NO network|No network/, /clicks Run/, /images and fonts as data: URIs/, /video, audio, iframes and objects won't load/, PAGE_DECISION_ATTR, PAGE_QUESTION_ATTR, /<details>/, /<section id=/, /TL;DR/, /inline SVG/];
 
 describe("page-authoring guidance (#714 gap 6)", () => {
   it("the standalone guide carries every rule and the skeleton, verbatim", () => {

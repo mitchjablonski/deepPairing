@@ -9,7 +9,10 @@
  *  - external_asset: a resource the no-network sandbox will block (an
  *    http:, https: or protocol-relative URL on script/img/iframe/source/
  *    video/audio/embed/object/SVG image, a stylesheet <link>, or a CSS url()
- *    / @import). Plain navigation links (<a href>) never warn.
+ *    / @import, comments skipped). <noscript> content is skipped (the
+ *    sanitizer drops it). Plain navigation links (<a href>) never warn. The
+ *    warning names the tag and attribute, never the URL (it can carry
+ *    credentials or signed parameters).
  *  - no_headings: no <h1>-<h6> anywhere.
  *  - no_section_ids: a page over PAGE_LINT_LONG_PAGE_BYTES whose <section>s
  *    and headings carry no id at all.
@@ -22,9 +25,6 @@
 
 /** Pages larger than this (UTF-8 bytes) should carry section ids. */
 export const PAGE_LINT_LONG_PAGE_BYTES = 16 * 1024;
-/** At most this many blocked URLs are quoted in a warning. */
-export const PAGE_LINT_MAX_URLS = 5;
-const MAX_URL_CHARS = 120;
 
 export type PageLintCode = "external_asset" | "no_headings" | "no_section_ids";
 
@@ -33,12 +33,19 @@ export interface PageLintWarning {
   message: string;
   /** external_asset: how many blocked references the page has. */
   count?: number;
-  /** external_asset: the first few blocked URLs, as written. */
-  urls?: string[];
+  /**
+   * external_asset: where they are, grouped by tag and attribute (e.g.
+   * "img src", "link href (stylesheet)", "CSS url() in <style>"). The URLs
+   * themselves are never echoed: they can carry credentials or signed params.
+   */
+  sources?: Array<{ source: string; count: number }>;
 }
 
-/** Elements whose body is raw text: no tags inside it count. */
-const RAW_TEXT = ["script", "style", "textarea", "xmp", "title", "template", "noembed", "noframes"] as const;
+/**
+ * Elements whose body is skipped: raw text (no tags inside count), plus
+ * <noscript>, whose content the companion's sanitizer drops before render.
+ */
+const SKIPPED_BODY = ["script", "style", "textarea", "xmp", "title", "template", "noembed", "noframes", "noscript"] as const;
 
 /** element -> attributes that load a resource the sandbox will block. */
 const RESOURCE_ATTRS: Record<string, readonly string[]> = {
@@ -78,44 +85,63 @@ function isExternal(value: string): boolean {
   return externalAt(value.toLowerCase(), 0);
 }
 
-/** The external URLs in an srcset (comma-separated "url descriptor" candidates). */
-function externalSrcset(value: string): string[] {
-  const out: string[] = [];
+/** How many srcset candidates ("url descriptor", comma-separated) are external. */
+function externalSrcsetCount(value: string): number {
+  let count = 0;
   for (const candidate of value.split(",")) {
     const url = candidate.trim().split(/\s/, 1)[0] ?? "";
-    if (url && isExternal(url)) out.push(url);
+    if (url && isExternal(url)) count++;
+  }
+  return count;
+}
+
+/** CSS with every comment blanked out, by one forward indexOf walk. */
+function stripCssComments(css: string): string {
+  let out = "";
+  let i = 0;
+  while (i < css.length) {
+    const open = css.indexOf("/*", i);
+    if (open === -1) { out += css.slice(i); break; }
+    out += css.slice(i, open) + " ";
+    const close = css.indexOf("*/", open + 2);
+    if (close === -1) break; // an unterminated comment runs to the end
+    i = close + 2;
   }
   return out;
 }
 
 /**
- * External url(...) and @import targets in CSS text. Two indexOf walks, each
- * strictly forward, so linear in the CSS length.
+ * Count external url(...) and @import targets in CSS text, by kind. Comments
+ * are skipped. `@import url(...)` counts once, as an @import. Each walk is a
+ * strictly forward indexOf, so linear in the CSS length.
  */
-function externalCssUrls(css: string): string[] {
-  const lower = css.toLowerCase();
-  const out: string[] = [];
-  const grab = (from: number): string => {
+export function externalCssRefs(rawCss: string): { url: number; import: number } {
+  const lower = stripCssComments(rawCss).toLowerCase();
+  const counts = { url: 0, import: 0 };
+  /** Index of the URL after optional spaces and one optional quote. */
+  const target = (from: number): number => {
     let i = from;
-    while (i < css.length && isSpace(css.charCodeAt(i))) i++;
-    const q = css[i];
-    if (q === "\"" || q === "'") i++;
-    let j = i;
-    while (j < css.length && j - i < MAX_URL_CHARS && !isSpace(css.charCodeAt(j)) && css[j] !== ")" && css[j] !== q && css[j] !== ";") j++;
-    return css.slice(i, j);
+    while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
+    if (lower[i] === "\"" || lower[i] === "'") i++;
+    return i;
   };
-  for (const needle of ["url(", "@import"]) {
-    let at = lower.indexOf(needle);
-    while (at !== -1) {
-      const start = at + needle.length;
-      let i = start;
-      while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
-      if (lower[i] === "\"" || lower[i] === "'") i++;
-      if (externalAt(lower, i)) out.push(grab(start));
-      at = lower.indexOf(needle, start);
-    }
+  let at = lower.indexOf("@import");
+  while (at !== -1) {
+    let i = target(at + 7);
+    if (lower.startsWith("url(", i)) i = target(i + 4);
+    if (externalAt(lower, i)) counts.import++;
+    at = lower.indexOf("@import", at + 7);
   }
-  return out;
+  at = lower.indexOf("url(");
+  while (at !== -1) {
+    // Skip a url() that is the target of an @import (already counted).
+    let k = at - 1;
+    while (k >= 0 && isSpace(lower.charCodeAt(k))) k--;
+    const isImportTarget = k >= 6 && lower.startsWith("@import", k - 6);
+    if (!isImportTarget && externalAt(lower, target(at + 4))) counts.url++;
+    at = lower.indexOf("url(", at + 4);
+  }
+  return counts;
 }
 
 interface Tag {
@@ -187,7 +213,14 @@ export function lintPage(html: string): PageLintWarning[] {
   };
   let commentEnd = -2; // memo for "-->" (same monotone argument)
 
-  const blocked: string[] = [];
+  // source label -> count; insertion order is first-seen order.
+  const blocked = new Map<string, number>();
+  const add = (source: string, count = 1) => { if (count > 0) blocked.set(source, (blocked.get(source) ?? 0) + count); };
+  const addCss = (css: string, where: string) => {
+    const refs = externalCssRefs(css);
+    add(`CSS url() in ${where}`, refs.url);
+    add(`CSS @import in ${where}`, refs.import);
+  };
   let headings = 0;
   let sectionIds = 0;
 
@@ -227,37 +260,38 @@ export function lintPage(html: string): PageLintWarning[] {
       for (const attr of resourceAttrs) {
         const value = tag.attrs[attr];
         if (value === undefined) continue;
-        if (attr === "srcset") for (const u of externalSrcset(value)) blocked.push(u);
-        else if (isExternal(value)) blocked.push(value.trim());
+        if (attr === "srcset") add(`${tag.name} srcset`, externalSrcsetCount(value));
+        else if (isExternal(value)) add(`${tag.name} ${attr}`);
       }
     }
     if (tag.name === "link" && tag.attrs.href !== undefined && isExternal(tag.attrs.href)) {
-      const rel = ` ${(tag.attrs.rel ?? "").toLowerCase().replace(/\s+/g, " ")} `;
-      if (rel.includes(" stylesheet ") || rel.includes(" preload ") || rel.includes(" modulepreload ") || rel.includes(" icon ")) {
-        blocked.push(tag.attrs.href.trim());
-      }
+      const rels = (tag.attrs.rel ?? "").toLowerCase().split(/\s+/);
+      const kind = ["stylesheet", "modulepreload", "preload", "icon"].find((r) => rels.includes(r));
+      if (kind) add(`link href (${kind})`);
     }
-    if (tag.attrs.style) for (const u of externalCssUrls(tag.attrs.style)) blocked.push(u);
+    if (tag.attrs.style) addCss(tag.attrs.style, "a style attribute");
 
-    if ((RAW_TEXT as readonly string[]).includes(tag.name)) {
+    if ((SKIPPED_BODY as readonly string[]).includes(tag.name)) {
       const close = findClose(tag.name, tag.end);
       if (close === -1) continue; // unclosed: keep scanning after the start tag
-      if (tag.name === "style") for (const u of externalCssUrls(html.slice(tag.end, close))) blocked.push(u);
+      if (tag.name === "style") addCss(html.slice(tag.end, close), "<style>");
       const gt = lower.indexOf(">", close);
       i = gt === -1 ? n : gt + 1;
     }
   }
 
   const warnings: PageLintWarning[] = [];
-  if (blocked.length > 0) {
-    const urls = [...new Set(blocked)].slice(0, PAGE_LINT_MAX_URLS).map((u) => (u.length > MAX_URL_CHARS ? `${u.slice(0, MAX_URL_CHARS)}…` : u));
+  if (blocked.size > 0) {
+    const sources = [...blocked].map(([source, count]) => ({ source, count }));
+    const total = sources.reduce((sum, s) => sum + s.count, 0);
     warnings.push({
       code: "external_asset",
-      count: blocked.length,
-      urls,
+      count: total,
+      sources,
       message:
-        `${blocked.length} external asset reference${blocked.length === 1 ? "" : "s"} will not load (the page has no network): ${urls.join(", ")}` +
-        `${blocked.length > urls.length ? ", ..." : ""}. Inline the asset (data: URIs work) or drop it.`,
+        `${total} external asset reference${total === 1 ? "" : "s"} will not load (the page has no network): ` +
+        `${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. ` +
+        "Inline images and fonts as data: URIs and styles and scripts as inline <style>/<script>; video, audio, iframes and objects won't load at all.",
     });
   }
   if (headings === 0) {

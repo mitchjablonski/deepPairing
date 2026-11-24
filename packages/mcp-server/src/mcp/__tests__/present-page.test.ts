@@ -341,7 +341,9 @@ describe("present_page — non-blocking authoring lint (#714 gap 6)", () => {
     expect(res.isError).toBeFalsy();
     expect(pages()).toHaveLength(1);
     expect(res.text).toContain("Page warnings (non-blocking; the page was presented)");
-    expect(res.text).toContain("https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js");
+    expect(res.text).toContain("script src x1");
+    expect(res.text).not.toContain("cdn.jsdelivr.net");
+    expect(JSON.stringify(res.structuredContent)).not.toContain("cdn.jsdelivr.net");
     const codes = (res.structuredContent?.warnings as Array<{ code: string }>).map((w) => w.code);
     expect(codes).toEqual(["external_asset", "no_headings"]);
   });

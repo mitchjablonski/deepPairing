@@ -523,7 +523,8 @@ Words to the agent:
   written TO your pair (what the page shows, what you want from them) and a
   `concept` when the page proposes a named pattern. It renders full-width in a
   sandboxed frame with NO network: CDN scripts, stylesheets, fonts and remote
-  images are blocked, so inline every asset (data: URIs work). Scripts run
+  images are blocked, so inline styles and scripts, and images and fonts as
+  data: URIs (video, audio, iframes and objects won't load). Scripts run
   only when your pair clicks Run, so the page must read without them. Keep it
   under 2 MiB. Make it skimmable: a TL;DR block first, then
   `<section id="...">` with an `<h2>` each, tables for comparisons, inline SVG

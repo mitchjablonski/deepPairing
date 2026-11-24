@@ -115,6 +115,9 @@ describe("deeppairing guide (#681)", () => {
     expect(watched).toMatch(/leaves the page unchanged records nothing/);
     expect(watched).toMatch(/is refused and records nothing/);
     expect(watched).toMatch(/can't\s+acknowledge comments by ID/);
+    // A gate-refused watched save is silent on read-page-feedback today.
+    expect(watched.replace(/\s+/g, " ")).toContain("A save the gate refuses writes a notice on the live version that read-page-feedback doesn't return yet");
+    expect(watched).toMatch(/check the page in\s+the companion/);
     expect(watched).not.toContain("deeppairing revise-page");
     expect(watched).not.toContain("--ack-comment-id");
     expect(inline).toContain("(presented with --file)");
@@ -132,7 +135,15 @@ describe("deeppairing guide (#681)", () => {
   it("tells the agent to share the URL and wait for review before trusting an empty read", () => {
     expect(guide).toMatch(/The receipt only confirms the page was created/);
     expect(guide).toMatch(/then wait for them to\s+review it/);
-    expect(guide).toMatch(/means\s+they haven't reviewed yet, not that they have no comments/);
+    // Empty means "no pending anchored comments", not "not reviewed" (Codex P2).
+    expect(guide).not.toMatch(/means\s+they haven't reviewed yet/);
+    expect(guide).toMatch(/Don't read an empty read-page-feedback result as "no feedback"/);
+    const flat = guide.replace(/\s+/g, " ");
+    expect(flat).toContain('An empty "comments" list means only that there are no PENDING ANCHORED comments.');
+    for (const reason of ["may not have reviewed yet", "may have approved with no comments", "may have left only an unanchored note", "acknowledged their comments already"]) {
+      expect(flat).toContain(reason);
+    }
+    expect(flat).toMatch(/check artifact\.status .* and successor, or wait for the human/);
     expect(guide).toMatch(/give the human the companionUrl and wait\s+for their review/);
   });
 

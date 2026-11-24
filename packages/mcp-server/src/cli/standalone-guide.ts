@@ -146,8 +146,8 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   same-UUID replay returns the receipt without them).
   The receipt only confirms the page was created. Give the human the
   companionUrl and tell them the page is ready, then wait for them to
-  review it. An empty read-page-feedback result right after presenting means
-  they haven't reviewed yet, not that they have no comments.
+  review it. Don't read an empty read-page-feedback result as "no feedback"
+  (see step 4).
 
 3a. WRITE A REVIEWABLE PAGE
 ${renderPageAuthoringGuide()}
@@ -157,8 +157,14 @@ ${renderPageAuthoringGuide()}
   After presenting a page, this reads the human's anchored comments on that
   exact page version, newest first. It is passive: reading never
   acknowledges anything, so repeated reads return the same comments while
-  they remain unacknowledged. It does not wait: if the human hasn't
-  reviewed yet, it returns no comments.
+  they remain unacknowledged. It does not wait.
+  An empty "comments" list means only that there are no PENDING ANCHORED
+  comments. The human may not have reviewed yet, may have approved with no
+  comments, may have left only an unanchored note, or you may have
+  acknowledged their comments already. Before concluding anything, check
+  artifact.status (draft or reviewing: no verdict yet; anything else: the
+  human has acted or the page has closed) and successor, or wait for the
+  human to tell you they are done.
     -> {"sessionId","artifact":{"id","version","status"},"successor"?,
         "comments":[...],"omittedComments"}
   Each comment has id, content (the human's words), parentCommentId (set on
@@ -186,8 +192,10 @@ ${renderPageAuthoringGuide()}
   the new version, read the ORIGINAL page:
   deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>
   and follow successor.id once it appears. No successor yet means the save
-  hasn't been recorded (or was unchanged or refused). A watched save can't
-  acknowledge comments by ID.
+  hasn't been recorded (or was unchanged or refused). A save the gate refuses
+  writes a notice on the live version that read-page-feedback doesn't return
+  yet, so if no successor appears after the quiet window, check the page in
+  the companion. A watched save can't acknowledge comments by ID.
 
   5b. INLINE PAGE (presented with --file)
   deeppairing revise-page --session-id <sessionId> --artifact-id <artifactId> --request-id <uuid> --file page.html --reason "What changed" [--ack-comment-id <commentId> ...]

@@ -31,7 +31,7 @@ export const PAGE_STRUCTURE_RULES = [
 
 /** What the sandbox does to a page. */
 export const PAGE_CONSTRAINT_RULES = [
-  "No network. Scripts, stylesheets, fonts and images from a URL (CDNs included) are blocked. Inline every asset; data: URIs work.",
+  "No network. Scripts, stylesheets, fonts and images from a URL (CDNs included) are blocked. Inline styles and scripts as <style>/<script>, and images and fonts as data: URIs. Video, audio, iframes and objects won't load at all.",
   "Scripts run only after your pair clicks Run, so the page must read completely without JavaScript.",
   `Stay under the ${PAGE_CAP_MIB} MiB cap.`,
   "Put depth in <details> so the top level stays skimmable.",
@@ -101,7 +101,7 @@ ${PAGE_SKELETON_HTML.split("\n").map((line) => `    ${line}`).join("\n")}`;
  * descriptions are paid for on every turn, so this stays one paragraph).
  */
 export const PAGE_AUTHORING_TOOL_NOTE =
-  "Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline everything, data: URIs are fine). Its scripts run only when your pair clicks Run, so the page must read well without them. " +
+  "Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline styles and scripts, and images and fonts as data: URIs; video, audio, iframes and objects won't load). Its scripts run only when your pair clicks Run, so the page must read well without them. " +
   `Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, inline SVG diagrams (Mermaid source is not rendered), <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. ` +
   "The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.";
 
