@@ -1,4 +1,4 @@
-import{a as e}from"./chunk-BEqpzyXh.js";import{t}from"./react-BD_ANHAE.js";import{t as n}from"./jsx-runtime-DOlcsXOY.js";import{n as r,o as i,s as a}from"./api-HWtMma59.js";import{S as o,h as s}from"./artifact-CWMmPSm_.js";import{D as c,N as l,R as u,W as d,b as f,v as p,y as m}from"./dist-D2hlTl70.js";import{f as h,t as g}from"./useOfflineReason-D0fie1-s.js";import{C as _,T as v,_ as y,g as b,j as x,m as S,v as C}from"./index-DTFIyIH7.js";import{t as w}from"./PrototypeFrame-B4Qg5VKA.js";import{t as T}from"./ConceptBadge-CxFwKflJ.js";import{r as E}from"./NeverSuggestControl-Bzo1I3de.js";import{t as D}from"./ArtifactStatusActions-1dXSrAlY.js";var O=e(t(),1),k=String.raw`
+import{a as e}from"./chunk-BEqpzyXh.js";import{t}from"./react-BD_ANHAE.js";import{t as n}from"./jsx-runtime-DOlcsXOY.js";import{n as r,o as i,s as a}from"./api-HWtMma59.js";import{S as o,h as s}from"./artifact-CWMmPSm_.js";import{D as c,N as l,R as u,W as d,b as f,v as p,y as m}from"./dist-D2hlTl70.js";import{f as h,t as g}from"./useOfflineReason-D0fie1-s.js";import{C as _,T as v,_ as y,g as b,j as x,m as S,v as C}from"./index-B8hyGWZS.js";import{t as ee}from"./PrototypeFrame-B4Qg5VKA.js";import{t as w}from"./ConceptBadge-CxFwKflJ.js";import{r as T}from"./NeverSuggestControl-Bzo1I3de.js";import{t as E}from"./ArtifactStatusActions-CaJJ3zZd.js";var D=e(t(),1),O=String.raw`
 "use strict";
 var LIMITS = { locator: 512, quote: 280, affix: 32, header: 200, nodeId: 200, href: 512 };
 var SKIP = "script,style,noscript,template,[data-dp-annotator]";
@@ -419,6 +419,7 @@ function pickBest(list) {
 
 return {
   LIMITS: LIMITS,
+  LINK_SEL: LINK_SEL,
   norm: norm,
   clip: clip,
   cssEscape: cssEscape,
@@ -434,16 +435,28 @@ return {
   cellAnchor: cellAnchor,
   mermaidNodeId: mermaidNodeId
 };
-`,A=String.raw`
+`,k=String.raw`
 "use strict";
-var annotate = true, suppressClick = false, hoverBox = null, layer = null;
+var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0;
-function own(el) { return !!(el && el.closest && el.closest("[data-dp-annotator]")); }
+/** Our own nodes, by reference: an authored element can carry the marker
+ *  attribute too, so ownership is never inferred from markup (#715 review). */
+var ownNodes = typeof WeakSet === "function" ? new WeakSet() : null;
+function own(el) {
+  if (!ownNodes) return false;
+  for (var n = el; n && n.nodeType === 1; n = n.parentElement) if (ownNodes.has(n)) return true;
+  return false;
+}
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
 function important(el, styles) {
   for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) el.style.setProperty(k, styles[k], "important");
 }
-function mk(tag) { var el = document.createElement(tag); el.setAttribute("data-dp-annotator", ""); return el; }
+function mk(tag) {
+  var el = document.createElement(tag);
+  el.setAttribute("data-dp-annotator", "");
+  if (ownNodes) ownNodes.add(el);
+  return el;
+}
 function ensureLayer() {
   if (layer && layer.isConnected) return layer;
   layer = mk("dp-annotator-layer");
@@ -471,17 +484,135 @@ function targetEl(e) {
   return t && t.nodeType === 1 ? t : null;
 }
 function hideHover() { if (hoverBox) important(hoverBox, { display: "none" }); }
-function onMove(e) {
-  var t = targetEl(e);
-  if (!annotate || !t || own(t) || t === document.documentElement || t === document.body) { hideHover(); return; }
+/** #714 — what the page's own controls should keep doing while pointing: a
+ *  same-document "#hash" link with a target (scrolls) and native controls (a
+ *  summary opens its details, a label/radio/checkbox switches radio/checkbox
+ *  tabs, form fields take input). Buttons only once the page's scripts run:
+ *  before Run a button has no default action (no scripts, no allow-forms), so
+ *  a click on it points as before. A label passes only for a click on its own
+ *  text or inline content, never on block content inside it (a label-wrapped
+ *  card stays commentable). Alt/Option-click still points at any of these. */
+var PASS_SEL = "summary, input, select, textarea, option, optgroup";
+var BUTTON_SEL = "button, input[type=button], input[type=submit], input[type=reset], input[type=image]";
+var BLOCK_TAGS = /^(address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|img|li|main|nav|ol|p|pre|section|svg|table|ul|video|canvas)$/;
+var XLINK = "http://www.w3.org/1999/xlink";
+/** The link a click is inside: HTML a/area[href], or an SVG <a> with
+ *  xlink:href (core.LINK_SEL misses those, and they navigate too). */
+function closestLink(t) {
+  if (!t || !t.closest) return null;
+  var link = t.closest(core.LINK_SEL);
+  if (link) return link;
+  for (var n = t; n && n.nodeType === 1; n = n.parentElement) {
+    if (n.localName === "a" && n.getAttributeNS && n.getAttributeNS(XLINK, "href") !== null) return n;
+  }
+  return null;
+}
+function hrefOf(link) {
+  var h = link.getAttribute ? link.getAttribute("href") : null;
+  if (h === null && link.getAttributeNS) h = link.getAttributeNS(XLINK, "href");
+  return h;
+}
+function sameDocHash(link) {
+  var h = link ? hrefOf(link) : null;
+  if (typeof h !== "string") return null;
+  h = h.trim();
+  return h.charAt(0) === "#" ? h : null;
+}
+/** Where a "#hash" leads: an element, "top" (for "#" / "#top" with no such
+ *  id), or null — no target (a "#!/route" hashbang, a stale id), in which case
+ *  the click points at the link rather than doing nothing. */
+function hashTarget(h) {
+  var raw = h.slice(1), id = raw;
+  try { id = decodeURIComponent(raw); } catch (e) { id = raw; }
+  var el = id ? (document.getElementById(id) || document.getElementById(raw)) : null;
+  if (!el && id) {
+    var named = document.getElementsByName(id);
+    for (var i = 0; i < named.length; i++) if (named[i].localName === "a") { el = named[i]; break; }
+  }
+  if (el) return el;
+  return !id || id.toLowerCase() === "top" ? "top" : null;
+}
+/** Block-level by computed display (anything but inline* / contents), with
+ *  the tag list as the fallback when computed style is unavailable. */
+function isBlock(n) {
+  var d = "";
+  try { d = window.getComputedStyle ? String(window.getComputedStyle(n).display || "") : ""; } catch (e) { d = ""; }
+  if (!d) return BLOCK_TAGS.test(n.localName);
+  return d.indexOf("inline") !== 0 && d !== "contents";
+}
+function passLabel(t) {
+  var label = t.closest("label");
+  if (!label) return null;
+  for (var n = t; n && n !== label; n = n.parentElement) if (isBlock(n)) return null;
+  return label;
+}
+/** The details-toggling summary a button sits in, if any. */
+function summaryOf(el) {
+  var sum = el.closest("summary");
+  var d = sum && sum.parentElement;
+  if (!d || d.localName !== "details") return null;
+  for (var c = d.firstElementChild; c; c = c.nextElementSibling) if (c.localName === "summary") return c === sum ? sum : null;
+  return null;
+}
+function passTarget(t) {
+  if (!t || !t.closest) return null;
+  var link = closestLink(t);
+  if (link) { var h = sameDocHash(link); return h !== null && hashTarget(h) ? link : null; }
+  var btn = t.closest(BUTTON_SEL);
+  // Before Run a button has no action of its own; inside a summary the click
+  // toggles the details instead (see onClick).
+  if (btn) return scripts ? btn : summaryOf(btn);
+  return t.closest(PASS_SEL) || passLabel(t);
+}
+/** Scroll the frame to a "#hash" target ourselves. The browser can't be left
+ *  to do it: a srcdoc document resolves even "#x" against the COMPANION's URL,
+ *  so the default action would navigate the frame away from the page. Opens
+ *  any closed details around the target, as a fragment navigation does. */
+function goTo(target) {
+  if (target === "top") { try { window.scrollTo(0, 0); } catch (e2) { /* ignore */ } return; }
+  for (var d = target.parentElement; d; d = d.parentElement) {
+    if (d.localName === "details" && !d.open) d.open = true;
+  }
+  if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "start" });
+}
+function editable(t) {
+  if (!t || t.nodeType !== 1) return false;
+  if (t.isContentEditable) return true;
+  var n = t.localName;
+  return n === "input" || n === "textarea" || n === "select";
+}
+var lastHover = null;
+function paintHover(t, alt, interact) {
+  lastHover = t;
+  if (!annotate || interact || !t || own(t) || t === document.documentElement || t === document.body) { hideHover(); return; }
   if (!hoverBox || !hoverBox.isConnected) {
     hoverBox = mk("dp-annotator-hover");
-    important(hoverBox, { position: "absolute", "box-sizing": "border-box", outline: "2px dashed #3b82f6",
-      background: "rgba(59,130,246,0.06)", "pointer-events": "none", margin: "0", padding: "0" });
+    important(hoverBox, { position: "absolute", "box-sizing": "border-box", "pointer-events": "none", margin: "0", padding: "0" });
     ensureLayer().appendChild(hoverBox);
   }
+  // A control that keeps its own click gets a quiet grey outline; holding
+  // Alt/Option (which points at it instead) turns it into the usual blue one.
+  var pass = alt ? null : passTarget(t);
+  if (pass) important(hoverBox, { outline: "1px dotted #94a3b8", background: "transparent" });
+  else important(hoverBox, { outline: "2px dashed #3b82f6", background: "rgba(59,130,246,0.06)" });
   important(hoverBox, { display: "block" });
-  place(hoverBox, t.getBoundingClientRect());
+  place(hoverBox, (pass || t).getBoundingClientRect());
+}
+function onMove(e) { paintHover(targetEl(e), !!e.altKey, !!(e.ctrlKey || e.metaKey)); }
+function onKey(e) {
+  if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I")) {
+    // The companion's pointing shortcut, forwarded: while the reviewer is in
+    // the frame, the companion never sees the keystroke. Never while typing
+    // in the page, never on autorepeat, and only before Run (after Run agent
+    // script shares this frame, so the parent ignores it then anyway).
+    if (e.repeat || scripts || editable(targetEl(e))) return;
+    e.preventDefault();
+    post({ dp: "toggle-pointing" });
+    return;
+  }
+  if ((e.key === "Alt" || e.key === "Control" || e.key === "Meta") && lastHover && lastHover.isConnected) {
+    paintHover(lastHover, !!e.altKey, !!(e.ctrlKey || e.metaKey));
+  }
 }
 function samePins(a, b) {
   if (!a || a.length !== b.length) return false;
@@ -588,12 +719,13 @@ function onMessage(e) {
     focusPin(d.index);
   } else if (d.dp === "mode") {
     annotate = d.annotate !== false;
+    scripts = d.scripts === true;
     if (!annotate) hideHover();
   }
 }
 function onMouseDown() { suppressClick = false; }
 function onMouseUp(e) {
-  if (!annotate) return;
+  if (!annotate || e.ctrlKey || e.metaKey) return;
   var t = targetEl(e);
   if (t && own(t)) return;
   var sel = window.getSelection ? window.getSelection() : null;
@@ -602,22 +734,61 @@ function onMouseUp(e) {
   try { a = core.textAnchor(sel.getRangeAt(0)); } catch (err) { a = null; }
   if (a) { suppressClick = true; post({ dp: "anchor", anchor: a }); }
 }
+/** #714 — pointing never breaks the page's own navigation:
+ *  - a link NEVER navigates the frame (it is something to point at, not a way
+ *    out of the no-network document); a same-document "#hash" link scrolls to
+ *    its target instead, and any other link becomes a link anchor;
+ *  - summary, label and form controls keep their default action;
+ *  - Alt/Option-click points at any of those instead;
+ *  - holding Cmd/Ctrl lets one click through to the page (no anchor).
+ *  With pointing off, every click belongs to the page (links still never
+ *  navigate; hash links still scroll). */
 function onClick(e) {
   var t = targetEl(e);
-  if (!t || own(t)) return;
-  var link = t.closest ? t.closest("a[href], area[href]") : null;
+  if (!t) return;
+  var link = closestLink(t);
+  // The navigation guard runs before anything else, our own nodes included:
+  // no link is ever allowed to navigate the frame.
+  if (link) e.preventDefault();
+  if (own(t)) return;
+  var pointing = annotate && !e.ctrlKey && !e.metaKey;
+  var forceAnchor = pointing && !!e.altKey;
   if (link) {
-    // Never navigate: a link on the page is something to point at, not a way
-    // out of the no-network document. Interact mode still lets the page's own
-    // click handlers see the event; only the navigation is cancelled.
-    e.preventDefault();
-    if (!annotate) return;
+    // Interact mode still lets the page's own click handlers see the event;
+    // only the navigation is cancelled (above).
+    var hash = sameDocHash(link);
+    var target = hash !== null && !forceAnchor ? hashTarget(hash) : null;
+    if (target) {
+      if (pointing && suppressClick) { suppressClick = false; return; }
+      goTo(target);
+      return;
+    }
+    if (!pointing) return;
     e.stopPropagation();
     if (suppressClick) { suppressClick = false; return; }
-    post({ dp: "anchor", anchor: core.linkAnchor(link) });
+    // An SVG xlink link isn't one core can re-find as a link; point at it as
+    // an element instead.
+    var la = null;
+    try { la = link.matches && link.matches(core.LINK_SEL) ? core.linkAnchor(link) : core.elementAnchor(link); } catch (err0) { la = null; }
+    if (la) post({ dp: "anchor", anchor: la });
     return;
   }
-  if (!annotate) return;
+  if (!pointing) return;
+  var pass = forceAnchor ? null : passTarget(t);
+  if (pass && !scripts && pass.localName === "summary" && t.closest(BUTTON_SEL)) {
+    // A button inside a summary, before Run: the button has no action, so the
+    // click toggles the details itself (deterministic across engines).
+    e.preventDefault();
+    if (suppressClick) { suppressClick = false; return; }
+    pass.parentElement.open = !pass.parentElement.open;
+    return;
+  }
+  if (pass) {
+    // A click that ended a text selection (already posted as a text anchor)
+    // stays swallowed, so selecting a label's words doesn't also flip it.
+    if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); }
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
   if (suppressClick) { suppressClick = false; return; }
@@ -626,8 +797,7 @@ function onClick(e) {
   if (a) post({ dp: "anchor", anchor: a });
 }
 function onAuxClick(e) {
-  var t = targetEl(e);
-  if (t && t.closest && t.closest("a[href], area[href]")) e.preventDefault();
+  if (closestLink(targetEl(e))) e.preventDefault();
 }
 function onResize() { schedule(); }
 /** Capture phase so an inner scroll container (a wide table, a diagram) is
@@ -646,6 +816,8 @@ window.addEventListener("auxclick", onAuxClick, true);
 window.addEventListener("mousedown", onMouseDown, true);
 window.addEventListener("mouseup", onMouseUp, true);
 window.addEventListener("mousemove", onMove, true);
+window.addEventListener("keydown", onKey, true);
+window.addEventListener("keyup", onKey, true);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
 window.addEventListener("scroll", onScroll, true);
@@ -657,6 +829,8 @@ return function uninstall() {
   window.removeEventListener("mousedown", onMouseDown, true);
   window.removeEventListener("mouseup", onMouseUp, true);
   window.removeEventListener("mousemove", onMove, true);
+  window.removeEventListener("keydown", onKey, true);
+  window.removeEventListener("keyup", onKey, true);
   window.removeEventListener("message", onMessage);
   window.removeEventListener("resize", onResize);
   window.removeEventListener("scroll", onScroll, true);
@@ -666,6 +840,6 @@ return function uninstall() {
   if (pending) clearTimeout(pending);
   if (layer && layer.parentNode) layer.parentNode.removeChild(layer);
 };
-`,j=`(function(){try{var core=(function(document,window){`+k+`
-})(document,window);(function(document,window,parent,core){`+A+`
-})(document,window,window.parent,core);}catch(e){}})();`,M=new Set([`script`,`noscript`,`template`,`iframe`,`frame`,`frameset`,`object`,`embed`,`applet`,`portal`,`base`]);function N(e){let t=e.replace(/[\x00-\x20\x7f-\x9f]/g,``).toLowerCase();return t.startsWith(`javascript:`)||t.startsWith(`vbscript:`)||t.startsWith(`data:text/html`)||t.startsWith(`data:application/xhtml`)}function P(e){for(let t of Array.from(e.attributes)){let n=t.name.toLowerCase();if(n.startsWith(`on`)){e.removeAttribute(t.name);continue}(n===`srcdoc`||N(t.value))&&e.removeAttribute(t.name)}}var F=[`class`,`dir`,`lang`,`style`];function I(e){return!/url\s*\(|expression\s*\(|@import|javascript:|behavior\s*:|-moz-binding|\\/i.test(e)}function L(e){let t={};if(!e)return t;for(let n of F){let r=e.getAttribute(n);r==null||r===``||n===`dir`&&!/^(ltr|rtl|auto)$/i.test(r.trim())||n===`style`&&!I(r)||(t[n]=r)}return t}function R(e){let t=[],n=e.documentElement?[e.documentElement]:[];for(;n.length;){let e=n.pop();t.push(e);let r=e.childNodes;for(let e=r.length-1;e>=0;e--){let t=r[e];t.nodeType===1&&n.push(t)}}return t}function z(e){if(typeof DOMParser>`u`)return{html:``,htmlAttrs:{},bodyAttrs:{}};let t=new DOMParser().parseFromString(e,`text/html`);for(let e of R(t))M.has(e.localName.toLowerCase())&&e.remove();for(let e of Array.from(t.querySelectorAll(`script`)))e.remove();for(let e of Array.from(t.getElementsByTagNameNS(`*`,`script`)))e.remove();for(let e of Array.from(t.querySelectorAll(`meta`)))(e.getAttribute(`http-equiv`)??``).trim().toLowerCase()===`refresh`&&e.remove();for(let e of R(t)){let t=e.localName.toLowerCase();t!==`set`&&!t.startsWith(`animate`)||(Array.from(e.attributes).find(e=>e.name.toLowerCase()===`attributename`)?.value??``).toLowerCase().includes(`href`)&&e.remove()}for(let e of R(t))P(e);return{html:t.head.innerHTML+t.body.innerHTML,htmlAttrs:L(t.documentElement),bodyAttrs:L(t.body)}}function B(e,t){if(!t||e.source!==t)return null;let n=e.data;return!n||typeof n!=`object`||Array.isArray(n)?null:n}function ee(e,t){let n=B(e,t);if(!n||n.dp!==`anchor`)return null;let r=u.safeParse(n.anchor);return r.success?r.data:null}var V=500;function te(e,t){let n=B(e,t);if(!n||n.dp!==`pins-status`)return null;let r=n.found;return!Array.isArray(r)||r.length>V||!r.every(e=>typeof e==`boolean`)?null:r}function ne(e,t){let n=B(e,t);return!!n&&n.dp===`ready`}var H=n();function re({artifactId:e,anchor:t,ruledOut:n,onRecorded:o}){let c=g(),l=m(t.quote),u=l.ok?l.key:null,d=l.ok?null:p[l.reason],[f,_]=(0,O.useState)(!1),[v,y]=(0,O.useState)(``);h(`page-rule-out:${e}:${t.locator}`,v);let[b,x]=(0,O.useState)(!1),[S,C]=(0,O.useState)(null),[w,T]=(0,O.useState)(null),E=o?n??null:w??n??null,D=(0,O.useRef)(null),k=(0,O.useRef)(!1);(0,O.useEffect)(()=>{!f&&k.current&&(k.current=!1,D.current?.focus())},[f]);let A=()=>{k.current=!0,_(!1),y(``),C(null)},j=v.trim(),M=async()=>{if(!(c||b||!j||!u)){x(!0),C(null);try{let n=s.getState().owningSession(e),c=await i(`${r()}/api/artifacts/${encodeURIComponent(e)}/rule-out`,{method:`POST`,headers:a(n),body:JSON.stringify({htmlAnchor:t,reason:j})}),l=null;try{l=await c.json()}catch{}l?.comment?.id&&s.getState().addComment(l.comment),T(l?.description??u),o?.(l?.description??u),_(!1),y(``)}catch(e){C(e instanceof Error?e.message:`Couldn't save that. Try again.`)}finally{x(!1)}}};if(E)return(0,H.jsxs)(`p`,{className:`text-2xs text-accent-red`,role:`status`,"data-testid":`page-rule-out-recorded`,children:[`✓ Ruled out “`,E,`”. Claude won't present a page that still contains this text in this project. You can retire it in the Ledger.`]});if(!f)return(0,H.jsxs)(`span`,{className:`inline-flex flex-wrap items-center justify-end gap-1.5`,children:[d&&(0,H.jsx)(`span`,{className:`text-2xs text-text-muted`,"data-testid":`page-rule-out-unavailable`,children:d}),(0,H.jsx)(`button`,{ref:D,type:`button`,onClick:()=>_(!0),disabled:!u,title:d??`Remember this text as rejected, so Claude won't present a page that still contains it in this project`,className:`px-1.5 py-0.5 rounded text-2xs text-text-muted hover:text-accent-red hover:bg-accent-red-dim/40 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`,children:`Rule this out`})]});let N=`page-rule-out-reason-${e}`;return(0,H.jsxs)(`div`,{role:`group`,"aria-label":`Rule this out`,className:`w-full p-2 bg-surface-secondary border border-accent-red/30 rounded-lg`,"data-testid":`page-rule-out-panel`,children:[(0,H.jsxs)(`label`,{htmlFor:N,className:`block text-2xs text-text-muted mb-1.5`,children:[`Rule out “`,(0,H.jsx)(`span`,{className:`text-text-primary`,children:u}),`”? Claude won't present a page that still contains this text in this project. It only applies to pages, and this page's status doesn't change (you can retire the stance later in the Ledger). Why are you ruling it out? (required)`]}),(0,H.jsx)(`textarea`,{id:N,rows:2,autoFocus:!0,value:v,onChange:e=>y(e.target.value),onKeyDown:e=>{e.key===`Enter`&&(e.metaKey||e.ctrlKey)&&(e.preventDefault(),M()),e.key===`Escape`&&(e.preventDefault(),A())},placeholder:`Your reason (Claude sees it when the gate refuses this text)…`,className:`w-full px-2 py-1.5 bg-surface-primary border border-border-default rounded text-2xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet resize-none`}),S&&(0,H.jsx)(`p`,{className:`mt-1 text-2xs text-accent-red`,role:`alert`,children:S}),(0,H.jsxs)(`div`,{className:`flex gap-1.5 mt-1.5 justify-end`,children:[(0,H.jsx)(`button`,{type:`button`,onClick:A,className:`px-2 py-1 text-2xs text-text-muted hover:text-text-secondary cursor-pointer`,children:`Cancel`}),(0,H.jsx)(`button`,{type:`button`,title:c??(j?void 0:`Say why first`),onClick:()=>void M(),disabled:b||!!c||!j,className:`px-2 py-1 text-2xs text-text-inverse bg-accent-red hover:bg-accent-red/80 rounded press-scale cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`,children:`Rule it out`})]})]})}var ie={script:j,sanitize:z};function ae(e){return e.filter(e=>y(`page`,e)).slice().sort((e,t)=>e.createdAt.localeCompare(t.createdAt))}function U({anchor:e}){let t=e.quote.trim();return(0,H.jsxs)(`div`,{className:`space-y-0.5 text-2xs text-text-muted`,"data-testid":`page-anchor-context`,children:[(0,H.jsxs)(`div`,{className:`flex flex-wrap items-center gap-1.5`,children:[(0,H.jsx)(`span`,{className:`px-1.5 py-0.5 rounded bg-surface-elevated text-text-secondary`,children:b(e.kind)}),t?(0,H.jsxs)(`span`,{className:`text-text-primary italic break-words`,children:[`“`,t,`”`]}):(0,H.jsx)(`code`,{className:`font-mono break-all`,children:e.locator})]}),e.table&&(e.table.row||e.table.col)&&(0,H.jsxs)(`div`,{children:[e.table.row&&(0,H.jsxs)(H.Fragment,{children:[`Row `,(0,H.jsx)(`span`,{className:`text-text-secondary`,children:e.table.row})]}),e.table.row&&e.table.col&&` · `,e.table.col&&(0,H.jsxs)(H.Fragment,{children:[`Column `,(0,H.jsx)(`span`,{className:`text-text-secondary`,children:e.table.col})]})]}),e.nodeId&&(0,H.jsxs)(`div`,{children:[`Node `,(0,H.jsx)(`code`,{className:`font-mono`,children:e.nodeId})]}),e.href&&(0,H.jsxs)(`div`,{className:`break-all`,children:[`Link to `,(0,H.jsx)(`code`,{className:`font-mono`,children:e.href})]}),t&&(0,H.jsxs)(`div`,{className:`break-all`,children:[`at `,(0,H.jsx)(`code`,{className:`font-mono`,children:e.locator})]})]})}function W({artifact:e}){let t=c(e.content),n=(0,O.useRef)(null),r=o(e=>e.active),i=x(e.status,r),a=i===`closed`||i===`frozen`,u=l(e.fileWatch),p=(0,O.useMemo)(()=>new Set((l(e.fileWatch).recorded?.orphaned??[]).map(e=>e.commentId)),[e.fileWatch]),m=v(e.id),{rows:h,remember:g}=E(s(t=>t.owningSession(e.id))),y=(0,O.useMemo)(()=>new Set(h.map(e=>e.description)),[h]),b=(0,O.useMemo)(()=>ae(m),[m]),k=(0,O.useMemo)(()=>b.map(e=>e.target.htmlAnchor),[b]),[A,j]=(0,O.useState)(null),[M,N]=(0,O.useState)(0),[P,F]=(0,O.useState)(!1),I=(0,O.useRef)(null),[L,R]=(0,O.useState)(0),z=(0,O.useRef)(null),B=(0,O.useRef)(e.id);B.current=e.id;let V=(0,O.useCallback)(e=>!e||e!==n.current||!e.isConnected||document.activeElement!==e||e.closest(`[inert]`)?!1:s.getState().selectedArtifactId===B.current,[]),W=(0,O.useRef)(V);W.current=V;let[G,K]=(0,O.useState)(null),[q,oe]=(0,O.useState)(!1),[J,se]=(0,O.useState)(!0),Y=(0,O.useCallback)(e=>{n.current?.contentWindow?.postMessage(e,`*`)},[]),X=(0,O.useCallback)(()=>Y({dp:`pins`,anchors:k}),[Y,k]),Z=(0,O.useCallback)(()=>Y({dp:`mode`,annotate:!q||J}),[Y,q,J]),Q=(0,O.useRef)({sendPins:X,sendMode:Z});Q.current={sendPins:X,sendMode:Z};let $=(0,O.useRef)(!0);$.current=!q||J,(0,O.useEffect)(()=>{function t(t){let r=n.current,i=r?.contentWindow,o=ee(t,i);if(o){if(a||!$.current||!W.current(r))return;I.current=r,j({...o,version:e.version}),F(!1),N(e=>e+1),R(e=>e+1);return}if(ne(t,i)){Q.current.sendMode(),Q.current.sendPins();return}let s=te(t,i);s&&K(s)}return window.addEventListener(`message`,t),()=>window.removeEventListener(`message`,t)},[e.version,a]),(0,O.useEffect)(()=>{X()},[X]),(0,O.useEffect)(()=>{Z()},[Z]),(0,O.useEffect)(()=>{K(null)},[q]),(0,O.useEffect)(()=>{!L||!V(I.current)||z.current?.querySelector(`textarea`)?.focus?.()},[L,V]);let ce=(0,O.useCallback)(e=>oe(e),[]),le=t=>{let n=k[t];n&&(Y({dp:`focus`,index:t}),a||(I.current=null,j({...n,version:e.version}),F(!0),N(e=>e+1)))},ue=A?m.filter(e=>{if(C(e.target.htmlAnchor,A))return!0;let t=b.find(t=>t.id===e.parentCommentId);return!!t&&C(t.target.htmlAnchor,A)}):[];return(0,H.jsxs)(`div`,{className:`space-y-3`,"data-testid":`page-artifact`,children:[t.summary&&(0,H.jsx)(`div`,{className:`px-4 py-3 bg-accent-blue-dim/20 border border-accent-blue/20 rounded-lg`,children:(0,H.jsx)(_,{text:t.summary,className:`prose-field text-sm text-text-primary space-y-2`})}),(t.sourcePath||t.concept)&&(0,H.jsxs)(`div`,{className:`flex flex-wrap items-center gap-2 text-2xs text-text-muted`,children:[t.concept&&(0,H.jsx)(T,{name:t.concept.name,explanation:t.concept.oneLineExplanation}),t.sourcePath&&(0,H.jsxs)(`span`,{children:[`From `,(0,H.jsx)(`code`,{className:`font-mono text-text-secondary`,children:t.sourcePath})]})]}),u.recorded&&(0,H.jsxs)(`div`,{className:`text-2xs text-text-muted`,"data-testid":`page-file-recorded`,children:[`Recorded automatically from `,(0,H.jsx)(`code`,{className:`font-mono text-text-secondary`,children:u.recorded.sourcePath}),` after a save, replacing v`,u.recorded.fromVersion,`.`,u.recorded.orphaned.length+(u.recorded.orphanedOverflow??0)>0&&(0,H.jsxs)(H.Fragment,{children:[` `,u.recorded.orphaned.length+(u.recorded.orphanedOverflow??0),` earlier comment(s) point at text that is no longer on the page.`]})]}),u.refused&&!a&&(0,H.jsxs)(`div`,{className:`px-3 py-2 rounded-lg border border-accent-amber/40 bg-accent-amber/10 text-xs text-text-primary`,role:`status`,"data-testid":`page-file-refused`,children:[`A later save to`,` `,(0,H.jsx)(`code`,{className:`font-mono`,children:u.refused.sourcePath}),u.refused.cause===`gate`?(0,H.jsxs)(H.Fragment,{children:[` was not recorded: `,u.refused.message,`. You are still looking at v`,e.version,`.`]}):(0,H.jsxs)(H.Fragment,{children:[` could not be recorded: `,u.refused.message,`. You are still looking at v`,e.version,`.`]})]}),!a&&(0,H.jsxs)(`div`,{className:`flex flex-wrap items-center gap-2 text-2xs text-text-muted`,children:[(0,H.jsx)(`span`,{children:`Click anything on the page, or select text, to comment on that spot.`}),q&&(0,H.jsx)(`button`,{type:`button`,onClick:()=>se(e=>!e),"aria-pressed":J,className:`px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary`,title:J?`Clicks point at the page. Switch to let clicks reach the page's own controls.`:`Clicks reach the page's own controls. Switch back to point at things.`,children:J?`Pointing: on`:`Pointing: off`})]}),(0,H.jsx)(w,{html:t.html,maxBytes:d,staticFirst:!0,noun:`page`,frameClassName:`w-full h-[70vh] min-h-[420px] rounded border border-border-default bg-white`,annotation:ie,iframeRef:n,onRunningChange:ce}),A&&!a&&(0,H.jsxs)(`div`,{className:`p-3 rounded-lg border border-accent-blue/30 bg-surface-elevated space-y-2`,ref:z,"data-testid":`page-anchor-composer`,children:[(0,H.jsxs)(`div`,{className:`flex items-start gap-2`,children:[(0,H.jsx)(`div`,{className:`flex-1 min-w-0`,children:(0,H.jsx)(U,{anchor:A})}),(0,H.jsx)(`button`,{type:`button`,onClick:()=>j(null),className:`text-2xs text-text-muted hover:text-text-secondary`,children:`Close`})]}),(0,H.jsx)(S,{artifactId:e.id,comments:ue,target:{htmlAnchor:A},roomy:!0,focusOnOpen:P,placeholder:`Comment on this spot… (⌘⏎ to send)`,textareaLabel:`Comment on the selected spot`,secondarySubmitLabel:`Ask`,secondarySubmitTitle:`Post as a question about this spot — the agent owes you an answer`},M),(0,H.jsx)(`div`,{className:`flex justify-end`,"data-testid":`page-rule-out`,children:(0,H.jsx)(re,{artifactId:e.id,anchor:A,ruledOut:(()=>{let e=f(A.quote);return e&&y.has(e)?e:void 0})(),onRecorded:t=>g({description:t,sourceArtifactId:e.id})},M)})]}),b.length>0&&(0,H.jsxs)(`div`,{className:`space-y-1.5`,"data-testid":`page-annotations`,children:[(0,H.jsx)(`h3`,{className:`text-2xs font-semibold text-text-muted uppercase tracking-wide`,children:`On the page`}),(0,H.jsx)(`ol`,{className:`space-y-1.5`,children:b.map((e,t)=>{let n=e.target.htmlAnchor,r=G?G[t]===!1:p.has(e.id);return(0,H.jsx)(`li`,{children:(0,H.jsxs)(`button`,{type:`button`,onClick:()=>le(t),className:`w-full text-left flex gap-2 p-2 rounded border border-border-default hover:bg-surface-elevated`,"data-testid":`page-annotation`,children:[(0,H.jsx)(`span`,{className:`shrink-0 w-5 h-5 rounded-full bg-accent-amber text-[11px] font-semibold text-black flex items-center justify-center`,children:t+1}),(0,H.jsxs)(`span`,{className:`flex-1 min-w-0 space-y-1`,children:[(0,H.jsx)(U,{anchor:n}),e.ruleOut&&y.has(e.ruleOut.description)&&(0,H.jsxs)(`span`,{className:`block text-2xs text-accent-red`,"data-testid":`page-annotation-ruled-out`,children:[`Ruled out: Claude won't present a page that still contains “`,e.ruleOut.description,`”`]}),e.ruleOut&&!y.has(e.ruleOut.description)&&(0,H.jsx)(`span`,{className:`block text-2xs text-text-muted`,"data-testid":`page-annotation-ruled-out-retired`,children:`Was ruled out; that stance has since been retired`}),r&&(0,H.jsx)(`span`,{className:`block text-2xs text-accent-amber`,"data-testid":`page-anchor-missing`,children:`Not found in this version`}),(0,H.jsx)(`span`,{className:`block text-xs text-text-primary line-clamp-3`,children:e.content})]})]})},e.id)})})]}),(0,H.jsx)(D,{artifact:e})]})}export{W as PageArtifact};
+`,A=`(function(){try{var core=(function(document,window){`+O+`
+})(document,window);(function(document,window,parent,core){`+k+`
+})(document,window,window.parent,core);}catch(e){}})();`,j=new Set([`script`,`noscript`,`template`,`iframe`,`frame`,`frameset`,`object`,`embed`,`applet`,`portal`,`base`]);function M(e){let t=e.replace(/[\x00-\x20\x7f-\x9f]/g,``).toLowerCase();return t.startsWith(`javascript:`)||t.startsWith(`vbscript:`)||t.startsWith(`data:text/html`)||t.startsWith(`data:application/xhtml`)}function N(e){for(let t of Array.from(e.attributes)){let n=t.name.toLowerCase();if(n.startsWith(`on`)){e.removeAttribute(t.name);continue}(n===`srcdoc`||M(t.value))&&e.removeAttribute(t.name)}}var P=[`class`,`dir`,`lang`,`style`];function F(e){return!/url\s*\(|expression\s*\(|@import|javascript:|behavior\s*:|-moz-binding|\\/i.test(e)}function I(e){let t={};if(!e)return t;for(let n of P){let r=e.getAttribute(n);r==null||r===``||n===`dir`&&!/^(ltr|rtl|auto)$/i.test(r.trim())||n===`style`&&!F(r)||(t[n]=r)}return t}function L(e){let t=[],n=e.documentElement?[e.documentElement]:[];for(;n.length;){let e=n.pop();t.push(e);let r=e.childNodes;for(let e=r.length-1;e>=0;e--){let t=r[e];t.nodeType===1&&n.push(t)}}return t}function R(e){if(typeof DOMParser>`u`)return{html:``,htmlAttrs:{},bodyAttrs:{}};let t=new DOMParser().parseFromString(e,`text/html`);for(let e of L(t))j.has(e.localName.toLowerCase())&&e.remove();for(let e of Array.from(t.querySelectorAll(`script`)))e.remove();for(let e of Array.from(t.getElementsByTagNameNS(`*`,`script`)))e.remove();for(let e of Array.from(t.querySelectorAll(`meta`)))(e.getAttribute(`http-equiv`)??``).trim().toLowerCase()===`refresh`&&e.remove();for(let e of L(t)){let t=e.localName.toLowerCase();t!==`set`&&!t.startsWith(`animate`)||(Array.from(e.attributes).find(e=>e.name.toLowerCase()===`attributename`)?.value??``).toLowerCase().includes(`href`)&&e.remove()}for(let e of L(t))N(e);return{html:t.head.innerHTML+t.body.innerHTML,htmlAttrs:I(t.documentElement),bodyAttrs:I(t.body)}}function z(e,t){if(!t||e.source!==t)return null;let n=e.data;return!n||typeof n!=`object`||Array.isArray(n)?null:n}function te(e,t){let n=z(e,t);if(!n||n.dp!==`anchor`)return null;let r=u.safeParse(n.anchor);return r.success?r.data:null}var B=500;function ne(e,t){let n=z(e,t);if(!n||n.dp!==`pins-status`)return null;let r=n.found;return!Array.isArray(r)||r.length>B||!r.every(e=>typeof e==`boolean`)?null:r}function re(e,t){let n=z(e,t);return!!n&&n.dp===`ready`}function ie(e,t){let n=z(e,t);return!!n&&n.dp===`toggle-pointing`}var V=n();function ae({artifactId:e,anchor:t,ruledOut:n,onRecorded:o}){let c=g(),l=m(t.quote),u=l.ok?l.key:null,d=l.ok?null:p[l.reason],[f,_]=(0,D.useState)(!1),[v,y]=(0,D.useState)(``);h(`page-rule-out:${e}:${t.locator}`,v);let[b,x]=(0,D.useState)(!1),[S,C]=(0,D.useState)(null),[ee,w]=(0,D.useState)(null),T=o?n??null:ee??n??null,E=(0,D.useRef)(null),O=(0,D.useRef)(!1);(0,D.useEffect)(()=>{!f&&O.current&&(O.current=!1,E.current?.focus())},[f]);let k=()=>{O.current=!0,_(!1),y(``),C(null)},A=v.trim(),j=async()=>{if(!(c||b||!A||!u)){x(!0),C(null);try{let n=s.getState().owningSession(e),c=await i(`${r()}/api/artifacts/${encodeURIComponent(e)}/rule-out`,{method:`POST`,headers:a(n),body:JSON.stringify({htmlAnchor:t,reason:A})}),l=null;try{l=await c.json()}catch{}l?.comment?.id&&s.getState().addComment(l.comment),w(l?.description??u),o?.(l?.description??u),_(!1),y(``)}catch(e){C(e instanceof Error?e.message:`Couldn't save that. Try again.`)}finally{x(!1)}}};if(T)return(0,V.jsxs)(`p`,{className:`text-2xs text-accent-red`,role:`status`,"data-testid":`page-rule-out-recorded`,children:[`✓ Ruled out “`,T,`”. Claude won't present a page that still contains this text in this project. You can retire it in the Ledger.`]});if(!f)return(0,V.jsxs)(`span`,{className:`inline-flex flex-wrap items-center justify-end gap-1.5`,children:[d&&(0,V.jsx)(`span`,{className:`text-2xs text-text-muted`,"data-testid":`page-rule-out-unavailable`,children:d}),(0,V.jsx)(`button`,{ref:E,type:`button`,onClick:()=>_(!0),disabled:!u,title:d??`Remember this text as rejected, so Claude won't present a page that still contains it in this project`,className:`px-1.5 py-0.5 rounded text-2xs text-text-muted hover:text-accent-red hover:bg-accent-red-dim/40 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`,children:`Rule this out`})]});let M=`page-rule-out-reason-${e}`;return(0,V.jsxs)(`div`,{role:`group`,"aria-label":`Rule this out`,className:`w-full p-2 bg-surface-secondary border border-accent-red/30 rounded-lg`,"data-testid":`page-rule-out-panel`,children:[(0,V.jsxs)(`label`,{htmlFor:M,className:`block text-2xs text-text-muted mb-1.5`,children:[`Rule out “`,(0,V.jsx)(`span`,{className:`text-text-primary`,children:u}),`”? Claude won't present a page that still contains this text in this project. It only applies to pages, and this page's status doesn't change (you can retire the stance later in the Ledger). Why are you ruling it out? (required)`]}),(0,V.jsx)(`textarea`,{id:M,rows:2,autoFocus:!0,value:v,onChange:e=>y(e.target.value),onKeyDown:e=>{e.key===`Enter`&&(e.metaKey||e.ctrlKey)&&(e.preventDefault(),j()),e.key===`Escape`&&(e.preventDefault(),k())},placeholder:`Your reason (Claude sees it when the gate refuses this text)…`,className:`w-full px-2 py-1.5 bg-surface-primary border border-border-default rounded text-2xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet resize-none`}),S&&(0,V.jsx)(`p`,{className:`mt-1 text-2xs text-accent-red`,role:`alert`,children:S}),(0,V.jsxs)(`div`,{className:`flex gap-1.5 mt-1.5 justify-end`,children:[(0,V.jsx)(`button`,{type:`button`,onClick:k,className:`px-2 py-1 text-2xs text-text-muted hover:text-text-secondary cursor-pointer`,children:`Cancel`}),(0,V.jsx)(`button`,{type:`button`,title:c??(A?void 0:`Say why first`),onClick:()=>void j(),disabled:b||!!c||!A,className:`px-2 py-1 text-2xs text-text-inverse bg-accent-red hover:bg-accent-red/80 rounded press-scale cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`,children:`Rule it out`})]})]})}var oe={script:A,sanitize:R};function H(){let e=typeof navigator<`u`&&navigator.platform||``;return/Mac|iPhone|iPad|iPod/.test(e)?`⌘I`:`Ctrl+I`}function se(e){return(e.metaKey||e.ctrlKey)&&!e.altKey&&!e.shiftKey&&(e.key===`i`||e.key===`I`)}function ce(e){return e.filter(e=>y(`page`,e)).slice().sort((e,t)=>e.createdAt.localeCompare(t.createdAt))}function U({anchor:e}){let t=e.quote.trim();return(0,V.jsxs)(`div`,{className:`space-y-0.5 text-2xs text-text-muted`,"data-testid":`page-anchor-context`,children:[(0,V.jsxs)(`div`,{className:`flex flex-wrap items-center gap-1.5`,children:[(0,V.jsx)(`span`,{className:`px-1.5 py-0.5 rounded bg-surface-elevated text-text-secondary`,children:b(e.kind)}),t?(0,V.jsxs)(`span`,{className:`text-text-primary italic break-words`,children:[`“`,t,`”`]}):(0,V.jsx)(`code`,{className:`font-mono break-all`,children:e.locator})]}),e.table&&(e.table.row||e.table.col)&&(0,V.jsxs)(`div`,{children:[e.table.row&&(0,V.jsxs)(V.Fragment,{children:[`Row `,(0,V.jsx)(`span`,{className:`text-text-secondary`,children:e.table.row})]}),e.table.row&&e.table.col&&` · `,e.table.col&&(0,V.jsxs)(V.Fragment,{children:[`Column `,(0,V.jsx)(`span`,{className:`text-text-secondary`,children:e.table.col})]})]}),e.nodeId&&(0,V.jsxs)(`div`,{children:[`Node `,(0,V.jsx)(`code`,{className:`font-mono`,children:e.nodeId})]}),e.href&&(0,V.jsxs)(`div`,{className:`break-all`,children:[`Link to `,(0,V.jsx)(`code`,{className:`font-mono`,children:e.href})]}),t&&(0,V.jsxs)(`div`,{className:`break-all`,children:[`at `,(0,V.jsx)(`code`,{className:`font-mono`,children:e.locator})]})]})}function W({artifact:e}){let t=c(e.content),n=(0,D.useRef)(null),r=o(e=>e.active),i=x(e.status,r),a=i===`closed`||i===`frozen`,u=l(e.fileWatch),p=(0,D.useMemo)(()=>new Set((l(e.fileWatch).recorded?.orphaned??[]).map(e=>e.commentId)),[e.fileWatch]),m=v(e.id),{rows:h,remember:g}=T(s(t=>t.owningSession(e.id))),y=(0,D.useMemo)(()=>new Set(h.map(e=>e.description)),[h]),b=(0,D.useMemo)(()=>ce(m),[m]),O=(0,D.useMemo)(()=>b.map(e=>e.target.htmlAnchor),[b]),[k,A]=(0,D.useState)(null),[j,M]=(0,D.useState)(0),[N,P]=(0,D.useState)(!1),F=(0,D.useRef)(null),[I,L]=(0,D.useState)(0),R=(0,D.useRef)(null),z=(0,D.useRef)(e.id);z.current=e.id;let B=(0,D.useCallback)(e=>!e||e!==n.current||!e.isConnected||document.activeElement!==e||e.closest(`[inert]`)?!1:s.getState().selectedArtifactId===z.current,[]),W=(0,D.useRef)(B);W.current=B;let[G,K]=(0,D.useState)(null),[q,le]=(0,D.useState)(!1),[J,Y]=(0,D.useState)(!0),X=(0,D.useCallback)(e=>{n.current?.contentWindow?.postMessage(e,`*`)},[]),Z=(0,D.useCallback)(()=>X({dp:`pins`,anchors:O}),[X,O]),Q=(0,D.useCallback)(()=>X({dp:`mode`,annotate:J,scripts:q}),[X,J,q]),$=(0,D.useRef)({sendPins:Z,sendMode:Q});$.current={sendPins:Z,sendMode:Q};let ue=(0,D.useRef)(!0);ue.current=J;let de=(0,D.useRef)(q);de.current=q;let fe=(0,D.useRef)(null),pe=(0,D.useId)();(0,D.useEffect)(()=>{function t(t){let r=n.current,i=r?.contentWindow,o=te(t,i);if(o){if(a||!ue.current||!W.current(r))return;F.current=r,A({...o,version:e.version}),P(!1),M(e=>e+1),L(e=>e+1);return}if(re(t,i)){$.current.sendMode(),$.current.sendPins();return}if(ie(t,i)){!a&&!de.current&&W.current(r)&&Y(e=>!e);return}let s=ne(t,i);s&&K(s)}return window.addEventListener(`message`,t),()=>window.removeEventListener(`message`,t)},[e.version,a]),(0,D.useEffect)(()=>{if(a)return;function e(e){if(e.defaultPrevented||e.repeat||!se(e))return;let t=e.target,n=t?.tagName;if(n===`INPUT`||n===`TEXTAREA`||n===`SELECT`||t?.isContentEditable===!0)return;let r=fe.current;!r||!r.isConnected||r.closest(`[inert]`)||s.getState().selectedArtifactId===z.current&&(e.preventDefault(),Y(e=>!e))}return window.addEventListener(`keydown`,e),()=>window.removeEventListener(`keydown`,e)},[a]),(0,D.useEffect)(()=>{Z()},[Z]),(0,D.useEffect)(()=>{Q()},[Q]),(0,D.useEffect)(()=>{K(null)},[q]),(0,D.useEffect)(()=>{!I||!B(F.current)||R.current?.querySelector(`textarea`)?.focus?.()},[I,B]);let me=(0,D.useCallback)(e=>le(e),[]),he=t=>{let n=O[t];n&&(X({dp:`focus`,index:t}),a||(F.current=null,A({...n,version:e.version}),P(!0),M(e=>e+1)))},ge=k?m.filter(e=>{if(C(e.target.htmlAnchor,k))return!0;let t=b.find(t=>t.id===e.parentCommentId);return!!t&&C(t.target.htmlAnchor,k)}):[];return(0,V.jsxs)(`div`,{className:`space-y-3`,"data-testid":`page-artifact`,ref:fe,children:[t.summary&&(0,V.jsx)(`div`,{className:`px-4 py-3 bg-accent-blue-dim/20 border border-accent-blue/20 rounded-lg`,children:(0,V.jsx)(_,{text:t.summary,className:`prose-field text-sm text-text-primary space-y-2`})}),(t.sourcePath||t.concept)&&(0,V.jsxs)(`div`,{className:`flex flex-wrap items-center gap-2 text-2xs text-text-muted`,children:[t.concept&&(0,V.jsx)(w,{name:t.concept.name,explanation:t.concept.oneLineExplanation}),t.sourcePath&&(0,V.jsxs)(`span`,{children:[`From `,(0,V.jsx)(`code`,{className:`font-mono text-text-secondary`,children:t.sourcePath})]})]}),u.recorded&&(0,V.jsxs)(`div`,{className:`text-2xs text-text-muted`,"data-testid":`page-file-recorded`,children:[`Recorded automatically from `,(0,V.jsx)(`code`,{className:`font-mono text-text-secondary`,children:u.recorded.sourcePath}),` after a save, replacing v`,u.recorded.fromVersion,`.`,u.recorded.orphaned.length+(u.recorded.orphanedOverflow??0)>0&&(0,V.jsxs)(V.Fragment,{children:[` `,u.recorded.orphaned.length+(u.recorded.orphanedOverflow??0),` earlier comment(s) point at text that is no longer on the page.`]})]}),u.refused&&!a&&(0,V.jsxs)(`div`,{className:`px-3 py-2 rounded-lg border border-accent-amber/40 bg-accent-amber/10 text-xs text-text-primary`,role:`status`,"data-testid":`page-file-refused`,children:[`A later save to`,` `,(0,V.jsx)(`code`,{className:`font-mono`,children:u.refused.sourcePath}),u.refused.cause===`gate`?(0,V.jsxs)(V.Fragment,{children:[` was not recorded: `,u.refused.message,`. You are still looking at v`,e.version,`.`]}):(0,V.jsxs)(V.Fragment,{children:[` could not be recorded: `,u.refused.message,`. You are still looking at v`,e.version,`.`]})]}),!a&&(0,V.jsxs)(`div`,{className:`flex flex-wrap items-center gap-2 text-2xs text-text-muted`,"data-testid":`page-pointing-bar`,children:[(0,V.jsxs)(`button`,{type:`button`,onClick:()=>Y(e=>!e),"aria-pressed":J,"aria-describedby":pe,"aria-keyshortcuts":`Control+I Meta+I`,className:`px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary`,title:(J?`Clicks point at the page (${H()} to switch). Hold ⌘/Ctrl to let one click through; switch off to let every click reach the page.`:`Clicks reach the page (${H()} to switch). Switch on to point at things.`)+` After Run, use this toggle or press ${H()} outside the page.`,children:[J?`Pointing: on`:`Pointing: off`,(0,V.jsx)(`kbd`,{className:`ml-1 font-mono text-[9px] text-text-muted`,children:H()})]}),(0,V.jsxs)(`span`,{id:pe,"data-testid":`page-pointing-hint`,children:[J?`Click anything on the page, or select text, to comment on that spot. In-page links, summaries, radio/checkbox tabs and form fields still work — Alt/Option-click to comment on one.`:`Pointing is off: clicks go to the page. Turn it on to comment on a spot.`,q&&` Scripts are running: to switch pointing, use this toggle or press ${H()} outside the page.`]})]}),(0,V.jsx)(ee,{html:t.html,maxBytes:d,staticFirst:!0,noun:`page`,frameClassName:`w-full h-[70vh] min-h-[420px] rounded border border-border-default bg-white`,annotation:oe,iframeRef:n,onRunningChange:me}),k&&!a&&(0,V.jsxs)(`div`,{className:`p-3 rounded-lg border border-accent-blue/30 bg-surface-elevated space-y-2`,ref:R,"data-testid":`page-anchor-composer`,children:[(0,V.jsxs)(`div`,{className:`flex items-start gap-2`,children:[(0,V.jsx)(`div`,{className:`flex-1 min-w-0`,children:(0,V.jsx)(U,{anchor:k})}),(0,V.jsx)(`button`,{type:`button`,onClick:()=>A(null),className:`text-2xs text-text-muted hover:text-text-secondary`,children:`Close`})]}),(0,V.jsx)(S,{artifactId:e.id,comments:ge,target:{htmlAnchor:k},roomy:!0,focusOnOpen:N,placeholder:`Comment on this spot… (⌘⏎ to send)`,textareaLabel:`Comment on the selected spot`,secondarySubmitLabel:`Ask`,secondarySubmitTitle:`Post as a question about this spot — the agent owes you an answer`},j),(0,V.jsx)(`div`,{className:`flex justify-end`,"data-testid":`page-rule-out`,children:(0,V.jsx)(ae,{artifactId:e.id,anchor:k,ruledOut:(()=>{let e=f(k.quote);return e&&y.has(e)?e:void 0})(),onRecorded:t=>g({description:t,sourceArtifactId:e.id})},j)})]}),b.length>0&&(0,V.jsxs)(`div`,{className:`space-y-1.5`,"data-testid":`page-annotations`,children:[(0,V.jsx)(`h3`,{className:`text-2xs font-semibold text-text-muted uppercase tracking-wide`,children:`On the page`}),(0,V.jsx)(`ol`,{className:`space-y-1.5`,children:b.map((e,t)=>{let n=e.target.htmlAnchor,r=G?G[t]===!1:p.has(e.id);return(0,V.jsx)(`li`,{children:(0,V.jsxs)(`button`,{type:`button`,onClick:()=>he(t),className:`w-full text-left flex gap-2 p-2 rounded border border-border-default hover:bg-surface-elevated`,"data-testid":`page-annotation`,children:[(0,V.jsx)(`span`,{className:`shrink-0 w-5 h-5 rounded-full bg-accent-amber text-[11px] font-semibold text-black flex items-center justify-center`,children:t+1}),(0,V.jsxs)(`span`,{className:`flex-1 min-w-0 space-y-1`,children:[(0,V.jsx)(U,{anchor:n}),e.ruleOut&&y.has(e.ruleOut.description)&&(0,V.jsxs)(`span`,{className:`block text-2xs text-accent-red`,"data-testid":`page-annotation-ruled-out`,children:[`Ruled out: Claude won't present a page that still contains “`,e.ruleOut.description,`”`]}),e.ruleOut&&!y.has(e.ruleOut.description)&&(0,V.jsx)(`span`,{className:`block text-2xs text-text-muted`,"data-testid":`page-annotation-ruled-out-retired`,children:`Was ruled out; that stance has since been retired`}),r&&(0,V.jsx)(`span`,{className:`block text-2xs text-accent-amber`,"data-testid":`page-anchor-missing`,children:`Not found in this version`}),(0,V.jsx)(`span`,{className:`block text-xs text-text-primary line-clamp-3`,children:e.content})]})]})},e.id)})})]}),(0,V.jsx)(E,{artifact:e})]})}export{W as PageArtifact};
