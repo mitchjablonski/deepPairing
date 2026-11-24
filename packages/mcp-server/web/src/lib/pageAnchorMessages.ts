@@ -50,3 +50,11 @@ export function isReadyMessage(event: FrameMessage, frame: Window | null | undef
   const d = fromFrame(event, frame);
   return !!d && d.dp === "ready";
 }
+
+/** #714 — `{dp:"toggle-pointing"}` from this frame: the reviewer pressed the
+ *  pointing shortcut while focus was inside the page. It can only flip the
+ *  pointing mode (the parent also requires the frame to own focus). */
+export function isTogglePointingMessage(event: FrameMessage, frame: Window | null | undefined): boolean {
+  const d = fromFrame(event, frame);
+  return !!d && d.dp === "toggle-pointing";
+}
