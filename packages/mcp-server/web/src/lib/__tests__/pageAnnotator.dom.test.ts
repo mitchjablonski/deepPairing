@@ -684,3 +684,77 @@ describe("annotator script string", () => {
     expect(() => new Function(ANNOTATOR_SCRIPT)).not.toThrow();
   });
 });
+
+describe("annotator main — version change marks (#714 gap 2)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  let scrolled: Element[];
+  const origScroll = Element.prototype.scrollIntoView;
+  beforeEach(() => {
+    document.body.innerHTML = PAGE;
+    posted = [];
+    scrolled = [];
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(
+      document,
+      window,
+      window,
+      makeCore(),
+    ) as () => void;
+  });
+  afterEach(() => {
+    uninstall();
+    Element.prototype.scrollIntoView = origScroll;
+    vi.restoreAllMocks();
+  });
+
+  const send = (data: unknown, source: unknown = window) =>
+    window.dispatchEvent(new MessageEvent("message", { data, source: source as MessageEventSource }));
+  const statuses = () => posted.filter((m) => m?.dp === "changes-status").map((m) => m.found);
+  const marks = [
+    { kind: "changed", tag: "p", text: "Second bold paragraph.", occurrence: 0 },
+    { kind: "added", tag: "tr", text: "Write-through purgeNone", occurrence: 0 },
+    { kind: "added", tag: "p", text: "Gone from this page", occurrence: 0 },
+  ];
+
+  it("draws change bars from {dp:'changes'} (textContent only) and reports which were found", () => {
+    send({ dp: "changes", marks, show: true });
+    const boxes = Array.from(document.querySelectorAll("dp-annotator-change"));
+    expect(boxes.map((b) => b.getAttribute("data-dp-change-kind")).sort()).toEqual(["added", "changed"]);
+    expect(boxes.every((b) => b.textContent === "+" || b.textContent === "~")).toBe(true);
+    expect(statuses().at(-1)).toEqual([true, true, false]);
+  });
+
+  it("hides the bars when show is false, and drops malformed or spoofed marks", () => {
+    send({ dp: "changes", marks, show: false });
+    expect(document.querySelectorAll("dp-annotator-change")).toHaveLength(0);
+    send({ dp: "changes", marks: [{ kind: "changed", tag: "p><img", text: "x", occurrence: 0 }, { kind: "evil", tag: "p", text: "First paragraph.", occurrence: 0 }, { kind: "added", tag: "p", text: "First paragraph.", occurrence: -1 }], show: true });
+    expect(document.querySelectorAll("dp-annotator-change")).toHaveLength(0);
+    expect(statuses().at(-1)).toEqual([false, false, false]);
+    // From anyone but the parent: ignored.
+    send({ dp: "changes", marks, show: true }, null);
+    expect(document.querySelectorAll("dp-annotator-change")).toHaveLength(0);
+  });
+
+  it("navigates: {dp:'focus-change'} scrolls the frame to that change", () => {
+    send({ dp: "changes", marks, show: true });
+    send({ dp: "focus-change", index: 1 });
+    expect(scrolled.at(-1)).toBe(document.querySelectorAll("tbody tr")[1]);
+    send({ dp: "focus-change", index: 0 });
+    expect(scrolled.at(-1)).toBe(document.querySelectorAll("section p")[1]);
+    const before = scrolled.length;
+    send({ dp: "focus-change", index: 2 }); // not on the page: nothing to scroll to
+    send({ dp: "focus-change", index: 9 });
+    expect(scrolled.length).toBe(before);
+  });
+
+  it("re-finds a mark by occurrence among same-text elements", () => {
+    document.body.innerHTML = "<p>Same</p><p>Same</p><p>Same</p>";
+    send({ dp: "changes", marks: [{ kind: "added", tag: "p", text: "Same", occurrence: 2 }], show: true });
+    send({ dp: "focus-change", index: 0 });
+    expect(scrolled.at(-1)).toBe(document.querySelectorAll("p")[2]);
+  });
+});

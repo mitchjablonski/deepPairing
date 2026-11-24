@@ -4,7 +4,7 @@
  * anchor that parses against the shared schema (every field capped).
  */
 import { describe, it, expect } from "vitest";
-import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage, isTogglePointingMessage } from "../pageAnchorMessages";
+import { acceptAnchorMessage, acceptChangesStatus, acceptPinsStatus, buildChangesMessage, isReadyMessage, isTogglePointingMessage } from "../pageAnchorMessages";
 
 const frame = { name: "page-frame" } as unknown as Window;
 const otherFrame = { name: "other-frame" } as unknown as Window;
@@ -76,5 +76,24 @@ describe("isTogglePointingMessage (#714)", () => {
     expect(isTogglePointingMessage({ source: frame, data: { dp: "toggle-pointing" } }, null)).toBe(false);
     expect(isTogglePointingMessage({ source: frame, data: { dp: "ready" } }, frame)).toBe(false);
     expect(isTogglePointingMessage({ source: frame, data: "toggle-pointing" }, frame)).toBe(false);
+  });
+});
+
+describe("version change marks (#714 gap 2)", () => {
+  it("buildChangesMessage validates every mark and drops malformed ones", () => {
+    const good = { kind: "changed", tag: "p", text: "New tail", occurrence: 0 };
+    const msg = buildChangesMessage(
+      [good, { kind: "changed", tag: "p><script", text: "x", occurrence: 0 }, { ...good, text: "x".repeat(281) }, { ...good, occurrence: 1.5 }, { ...good, extra: "<b>" }],
+      true,
+    );
+    expect(msg).toEqual({ dp: "changes", marks: [good], show: true });
+    expect(buildChangesMessage(Array.from({ length: 400 }, () => good), false).marks).toHaveLength(300);
+  });
+
+  it("acceptChangesStatus takes a boolean list only from this frame", () => {
+    expect(acceptChangesStatus({ source: frame, data: { dp: "changes-status", found: [true, false] } }, frame)).toEqual([true, false]);
+    expect(acceptChangesStatus({ source: otherFrame, data: { dp: "changes-status", found: [true] } }, frame)).toBeNull();
+    expect(acceptChangesStatus({ source: frame, data: { dp: "changes-status", found: ["yes"] } }, frame)).toBeNull();
+    expect(acceptChangesStatus({ source: frame, data: { dp: "changes-status", found: new Array(301).fill(true) } }, frame)).toBeNull();
   });
 });

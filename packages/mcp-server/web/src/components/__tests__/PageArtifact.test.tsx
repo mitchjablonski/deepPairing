@@ -782,3 +782,98 @@ describe("PageArtifact — rule this out (#680 slice 4)", () => {
     expect(screen.queryByTestId("page-rule-out-recorded")).not.toBeInTheDocument();
   });
 });
+
+describe("PageArtifact — what changed since the previous version (#714 gap 2)", () => {
+  const V1_HTML =
+    "<h2>Storage</h2><p>We store rows in Postgres.</p>" +
+    "<h2>Costs</h2><p>About $40 a month.</p><p>Plus egress.</p><p>Plus support.</p>" +
+    "<h2>Rollout</h2><ul><li>Canary 5%</li></ul>";
+  const V2_HTML =
+    "<h2>Storage</h2><p>We store rows in SQLite.</p>" +
+    "<h2>Costs</h2><p>About $40 a month.</p>" +
+    "<h2>Rollout</h2><ul><li>Canary 5%</li><li>Then 100%</li></ul>" +
+    "<h2>Risks</h2><p>Lock contention.</p>";
+  const v1: Artifact = { ...pageArtifact, id: "art_pg_v1", version: 1, status: "superseded", content: { title: "Plan", html: V1_HTML } };
+  const v2: Artifact = {
+    ...pageArtifact,
+    id: "art_pg_v2",
+    version: 2,
+    parentId: v1.id,
+    agentReasoning: "Switched storage to SQLite and added a risks section",
+    content: { title: "Plan", html: V2_HTML },
+  };
+  beforeEach(() => {
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+  });
+
+  it("v2+: the Changes toggle defaults on, lists the sections, and shows the revise reason", () => {
+    render(<PageArtifact artifact={v2} />);
+    const toggle = screen.getByTestId("page-changes-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveTextContent("Changes since v1: on");
+    expect(screen.getByTestId("page-change-summary-line")).toHaveTextContent(
+      "Changed: Storage, Rollout; Added: Risks; Removed: 2 paragraphs under Costs",
+    );
+    expect(screen.getByTestId("page-revise-reason")).toHaveTextContent("Why v2: Switched storage to SQLite and added a risks section");
+    // Removed blocks can't be marked in the frame: they're listed as text.
+    expect(within(screen.getByTestId("page-changes-removed")).getByText(/Plus egress\. · Plus support\./)).toBeInTheDocument();
+    expect(screen.getByTestId("page-changes-count")).toHaveTextContent("4 changes");
+  });
+
+  it("v1: no toggle, no changes panel", () => {
+    const first: Artifact = { ...pageArtifact, id: "art_pg_first", content: { title: "Plan", html: V1_HTML } };
+    render(<PageArtifact artifact={first} />);
+    expect(screen.queryByTestId("page-changes-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-version-changes")).not.toBeInTheDocument();
+  });
+
+  it("sends validated change locators on ready, navigates between them, and turns them off", async () => {
+    render(<PageArtifact artifact={v2} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "ready" });
+    const sent = win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "changes");
+    expect(sent.at(-1)).toEqual({
+      dp: "changes",
+      show: true,
+      marks: [
+        { kind: "changed", tag: "p", text: "We store rows in SQLite.", occurrence: 0 },
+        { kind: "added", tag: "li", text: "Then 100%", occurrence: 0 },
+        { kind: "added", tag: "h2", text: "Risks", occurrence: 0 },
+        { kind: "added", tag: "p", text: "Lock contention.", occurrence: 0 },
+      ],
+    });
+    // The frame says the second one is missing: navigation skips it.
+    fromFrame(win, { dp: "changes-status", found: [true, false, true, true] });
+    expect(screen.getByTestId("page-changes-count")).toHaveTextContent("3 changes");
+    await userEvent.click(screen.getByRole("button", { name: "Next change" }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-change", index: 0 }, "*");
+    await userEvent.click(screen.getByRole("button", { name: "Next change" }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-change", index: 2 }, "*");
+    await userEvent.click(screen.getByRole("button", { name: "Previous change" }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-change", index: 0 }, "*");
+
+    await userEvent.click(screen.getByTestId("page-changes-toggle"));
+    expect(screen.getByTestId("page-changes-toggle")).toHaveAttribute("aria-pressed", "false");
+    expect(win.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ dp: "changes", show: false }), "*");
+    expect(screen.queryByTestId("page-changes-nav")).not.toBeInTheDocument();
+  });
+
+  it("a file-watch version shows the watch notice in place of its boilerplate reason", () => {
+    const v3: Artifact = {
+      ...v2,
+      id: "art_pg_v3",
+      version: 3,
+      parentId: v2.id,
+      agentReasoning: "Recorded automatically from docs/plan.html after a save.",
+      content: { title: "Plan", html: V2_HTML.replace("Lock contention.", "Lock contention under load.") },
+      fileWatch: { recorded: { at: new Date().toISOString(), sourcePath: "docs/plan.html", fromArtifactId: v2.id, fromVersion: 2, carriedCount: 0, orphaned: [] } },
+    };
+    useArtifactStore.getState().addArtifact(v3);
+    render(<PageArtifact artifact={v3} />);
+    const panel = screen.getByTestId("page-version-changes");
+    expect(within(panel).getByTestId("page-file-recorded")).toHaveTextContent(/replacing v2/);
+    expect(within(panel).queryByTestId("page-revise-reason")).not.toBeInTheDocument();
+    expect(within(panel).getByTestId("page-change-summary-line")).toHaveTextContent("Changed: Risks");
+  });
+});

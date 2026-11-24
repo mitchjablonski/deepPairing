@@ -12,7 +12,17 @@ import { useArtifactStore } from "../../stores/artifact";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
-import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage, isTogglePointingMessage } from "../../lib/pageAnchorMessages";
+import {
+  acceptAnchorMessage,
+  acceptChangesStatus,
+  acceptPinsStatus,
+  buildChangesMessage,
+  isReadyMessage,
+  isTogglePointingMessage,
+} from "../../lib/pageAnchorMessages";
+import { usePageVersionDiff } from "../../hooks/usePageVersionDiff";
+import { PageChangeSummary } from "./PageChangeSummary";
+import type { ChangeLocator } from "../../lib/pageVersionDiff";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
@@ -20,6 +30,7 @@ import { pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
+const NO_MARKS: ChangeLocator[] = [];
 
 /** #714 — the pointing toggle's shortcut, as shown on this platform. */
 function pointingShortcutLabel(): string {
@@ -149,6 +160,16 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const [running, setRunning] = useState(false);
   const [annotate, setAnnotate] = useState(true);
 
+  // #714 gap 2 — what changed since the previous version: a block diff of the
+  // two versions' PARSED text (DOMParser, inert; nothing runs), highlighted in
+  // the frame behind a toggle that starts on for any version with a
+  // predecessor. Removed blocks can't be shown in the frame; they're listed.
+  const versionChanges = usePageVersionDiff(artifact);
+  const marks = versionChanges?.diff.marks ?? NO_MARKS;
+  const [showChanges, setShowChanges] = useState(true);
+  const [changesFound, setChangesFound] = useState<boolean[] | null>(null);
+  const [changeIndex, setChangeIndex] = useState(-1);
+
   const postToFrame = useCallback((msg: unknown) => {
     // "*" — the frame's origin is opaque ("null"); nothing sent here is secret
     // (anchors the human already made on this page, never comment text).
@@ -162,11 +183,16 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // `scripts` tells the annotator whether the page's own scripts run (buttons
   // only have an action then).
   const sendMode = useCallback(() => postToFrame({ dp: "mode", annotate, scripts: running }), [postToFrame, annotate, running]);
+  // Locators only (tag + clipped text + occurrence), each Zod-validated.
+  const sendChanges = useCallback(
+    () => postToFrame(buildChangesMessage(marks, showChanges && marks.length > 0)),
+    [postToFrame, marks, showChanges],
+  );
 
   // Keep the latest senders and the EFFECTIVE pointing mode in refs so the one
   // message listener never goes stale.
-  const sendersRef = useRef({ sendPins, sendMode });
-  sendersRef.current = { sendPins, sendMode };
+  const sendersRef = useRef({ sendPins, sendMode, sendChanges });
+  sendersRef.current = { sendPins, sendMode, sendChanges };
   const pointingRef = useRef(true);
   pointingRef.current = annotate;
   const runningRef = useRef(running);
@@ -198,6 +224,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       if (isReadyMessage(event, frame)) {
         sendersRef.current.sendMode();
         sendersRef.current.sendPins();
+        sendersRef.current.sendChanges();
         return;
       }
       if (isTogglePointingMessage(event, frame)) {
@@ -210,7 +237,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         return;
       }
       const status = acceptPinsStatus(event, frame);
-      if (status) setFound(status);
+      if (status) {
+        setFound(status);
+        return;
+      }
+      const changeStatus = acceptChangesStatus(event, frame);
+      if (changeStatus) setChangesFound(changeStatus);
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -243,9 +275,13 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   useEffect(() => {
     sendMode();
   }, [sendMode]);
+  useEffect(() => {
+    sendChanges();
+  }, [sendChanges]);
   // A remounted frame (Run) reports fresh pin status after its "ready".
   useEffect(() => {
     setFound(null);
+    setChangesFound(null);
   }, [running]);
 
   // Frame-initiated focus: re-check ownership at the moment of moving it.
@@ -255,6 +291,24 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   }, [frameFocusNonce, frameOwnsFocus]);
 
   const onRunningChange = useCallback((r: boolean) => setRunning(r), []);
+
+  /** Step to the next/previous change the frame could find (all of them until
+   *  it reports) and scroll the frame to it. */
+  const stepChange = (dir: 1 | -1) => {
+    const n = marks.length;
+    if (!n) return;
+    for (let k = 1; k <= n; k++) {
+      const i = (((changeIndex < 0 ? (dir === 1 ? -1 : 0) : changeIndex) + dir * k) % n + n) % n;
+      if (changesFound && changesFound[i] === false) continue;
+      setChangeIndex(i);
+      postToFrame({ dp: "focus-change", index: i });
+      return;
+    }
+  };
+  const visibleChanges = changesFound ? changesFound.filter(Boolean).length : marks.length;
+  // The revise reason, shown on the version it explains. A file-watch version's
+  // reason is the watch's own boilerplate, said better by its notice.
+  const reviseReason = artifact.version > 1 && !fileWatch.recorded ? artifact.agentReasoning?.trim() : "";
 
   const focusComment = (index: number) => {
     const anchor = anchors[index];
@@ -294,12 +348,77 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
           )}
         </div>
       )}
-      {fileWatch.recorded && (
-        <div className="text-2xs text-text-muted" data-testid="page-file-recorded">
-          Recorded automatically from <code className="font-mono text-text-secondary">{fileWatch.recorded.sourcePath}</code> after
-          a save, replacing v{fileWatch.recorded.fromVersion}.
-          {fileWatch.recorded.orphaned.length + (fileWatch.recorded.orphanedOverflow ?? 0) > 0 && (
-            <> {fileWatch.recorded.orphaned.length + (fileWatch.recorded.orphanedOverflow ?? 0)} earlier comment(s) point at text that is no longer on the page.</>
+      {(reviseReason || fileWatch.recorded || versionChanges) && (
+        <div
+          className="px-3 py-2 rounded-lg border border-accent-violet/30 bg-accent-violet/5 space-y-1.5"
+          data-testid="page-version-changes"
+        >
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            {reviseReason && (
+              <p className="text-xs text-text-primary" data-testid="page-revise-reason">
+                <span className="font-semibold text-accent-violet">Why v{artifact.version}:</span> {reviseReason}
+              </p>
+            )}
+            {fileWatch.recorded && (
+              <div className="text-2xs text-text-muted" data-testid="page-file-recorded">
+                Recorded automatically from <code className="font-mono text-text-secondary">{fileWatch.recorded.sourcePath}</code> after
+                a save, replacing v{fileWatch.recorded.fromVersion}.
+                {fileWatch.recorded.orphaned.length + (fileWatch.recorded.orphanedOverflow ?? 0) > 0 && (
+                  <> {fileWatch.recorded.orphaned.length + (fileWatch.recorded.orphanedOverflow ?? 0)} earlier comment(s) point at text that is no longer on the page.</>
+                )}
+              </div>
+            )}
+          </div>
+          {versionChanges && (
+            <>
+              <div className="flex flex-wrap items-center gap-2 text-2xs text-text-muted" data-testid="page-changes-bar">
+                <button
+                  type="button"
+                  onClick={() => setShowChanges((v) => !v)}
+                  aria-pressed={showChanges}
+                  className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary"
+                  title="Mark the blocks that are new or reworded since the previous version"
+                  data-testid="page-changes-toggle"
+                >
+                  Changes since v{versionChanges.parent.version}: {showChanges ? "on" : "off"}
+                </button>
+                {showChanges && marks.length > 0 && (
+                  <span className="inline-flex items-center gap-1" data-testid="page-changes-nav">
+                    <span data-testid="page-changes-count">
+                      {visibleChanges} {visibleChanges === 1 ? "change" : "changes"}
+                      {changeIndex >= 0 && visibleChanges > 0 ? ` (${changeIndex + 1} of ${marks.length})` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => stepChange(-1)}
+                      disabled={visibleChanges === 0}
+                      aria-label="Previous change"
+                      className="px-1 rounded border border-border-default hover:bg-surface-elevated disabled:opacity-40"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stepChange(1)}
+                      disabled={visibleChanges === 0}
+                      aria-label="Next change"
+                      className="px-1 rounded border border-border-default hover:bg-surface-elevated disabled:opacity-40"
+                    >
+                      ›
+                    </button>
+                  </span>
+                )}
+                <PageChangeSummary summary={versionChanges.summary} truncated={versionChanges.diff.truncated} variant="line" />
+              </div>
+              {(versionChanges.summary.removed.length > 0 || versionChanges.summary.removedSections.length > 0) && (
+                <details className="text-2xs" data-testid="page-changes-removed">
+                  <summary className="cursor-pointer text-text-muted">Removed since v{versionChanges.parent.version} (not on the page any more)</summary>
+                  <div className="pt-1">
+                    <PageChangeSummary summary={{ ...versionChanges.summary, changedSections: [], addedSections: [] }} title={null} />
+                  </div>
+                </details>
+              )}
+            </>
           )}
         </div>
       )}

@@ -31,6 +31,14 @@
  * switches between annotating clicks and letting them through to the page (after
  * Run). Messages are accepted only from `parent`.
  *
+ * #714 gap 2 — `{dp:"changes", marks, show}` carries the blocks that changed
+ * since the previous version, as `{kind, tag, text, occurrence}` locators the
+ * companion computed from the parsed (never executed) HTML. Each is checked
+ * field by field, re-found by tag + clipped text, and drawn as a change bar
+ * (DOM APIs and textContent only) while `show` is true; `{dp:"changes-status",
+ * found}` reports which were found and `{dp:"focus-change", index}` scrolls to
+ * one.
+ *
  * Written as plain JS inside `String.raw` (so no `${` or backticks below) and
  * split into a CORE (pure helpers: locator building, quote extraction,
  * re-finding) and a MAIN (event wiring), so jsdom tests can evaluate the exact
@@ -458,6 +466,57 @@ function pickBest(list) {
   return best && !tied ? { el: best.el, range: best.range } : null;
 }
 
+/** #714 gap 2 — a version-change locator {tag, text, occurrence}, computed by
+ *  the companion from the parsed (never executed) page. clippedText MUST read
+ *  text exactly as the companion's pageVersionDiff.clippedText does. */
+var CHANGE_SKIP = "script,style,noscript,template,iframe,frame,frameset,object,embed,applet,portal,[data-dp-annotator]";
+function clippedText(el, max) {
+  var walker = document.createTreeWalker(el, 4, null), text = "", lastSpace = true, n, done = false;
+  while (!done && (n = walker.nextNode())) {
+    var p = n.parentElement;
+    if (p && p.closest && p.closest(CHANGE_SKIP)) continue;
+    var raw = n.nodeValue || "";
+    for (var i = 0; i < raw.length; i++) {
+      var ch = raw.charAt(i);
+      if (isWs(ch)) { if (!lastSpace) { text += " "; lastSpace = true; } }
+      else { text += ch; lastSpace = false; }
+      if (text.length > max) { done = true; break; }
+    }
+  }
+  var t = norm(text);
+  if (!t && el.getAttribute) t = norm(el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("value") || "");
+  return clip(t, max);
+}
+/** Re-find each locator: the occurrence-th element of its tag whose clipped
+ *  text equals its text, else the first such element (the page changed after
+ *  Run), else null. Each tag's elements are read once per call. */
+function findChanges(list) {
+  var byTag = {}, out = [];
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i];
+    if (!c) { out.push(null); continue; }
+    var idx = Object.prototype.hasOwnProperty.call(byTag, c.tag) ? byTag[c.tag] : null;
+    if (!idx) {
+      idx = [];
+      var els = document.getElementsByTagName(c.tag);
+      for (var j = 0; j < els.length; j++) {
+        if (els[j].closest && els[j].closest(CHANGE_SKIP)) continue;
+        idx.push({ el: els[j], text: clippedText(els[j], LIMITS.quote) });
+      }
+      byTag[c.tag] = idx;
+    }
+    var seen = 0, first = null, hit = null;
+    for (var k = 0; k < idx.length; k++) {
+      if (idx[k].text !== c.text) continue;
+      if (!first) first = idx[k].el;
+      if (seen === c.occurrence) { hit = idx[k].el; break; }
+      seen++;
+    }
+    out.push(hit || first);
+  }
+  return out;
+}
+
 return {
   LIMITS: LIMITS,
   LINK_SEL: LINK_SEL,
@@ -474,7 +533,9 @@ return {
   linkAnchor: linkAnchor,
   nodeAnchor: nodeAnchor,
   cellAnchor: cellAnchor,
-  mermaidNodeId: mermaidNodeId
+  mermaidNodeId: mermaidNodeId,
+  clippedText: clippedText,
+  findChanges: findChanges
 };
 `;
 
@@ -484,6 +545,8 @@ export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
 var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0;
+// #714 gap 2 — version-change marks (validated locators) and their toggle.
+var changes = [], showChanges = false, lastChangesFound = null;
 function own(el) { return !!(el && el.closest && el.closest("[data-dp-annotator]")); }
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
 function important(el, styles) {
@@ -663,17 +726,83 @@ function drawPins() {
   }
   return found;
 }
+var CHANGE_COLORS = { added: "#16a34a", changed: "#8b5cf6", hinted: "#0891b2" };
+var CHANGE_GLYPHS = { added: "+", changed: "~", hinted: "*" };
+var CHANGE_KINDS = { added: 1, changed: 1, hinted: 1 };
+var TAG_RE = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
+/** A locator from the parent, checked field by field (the parent built it
+ *  from a Zod-validated message, but the frame trusts nothing): null if bad. */
+function validChange(c) {
+  if (!c || typeof c !== "object") return null;
+  if (typeof c.kind !== "string" || !Object.prototype.hasOwnProperty.call(CHANGE_KINDS, c.kind)) return null;
+  if (typeof c.tag !== "string" || !TAG_RE.test(c.tag)) return null;
+  if (typeof c.text !== "string" || !c.text || c.text.length > core.LIMITS.quote) return null;
+  var o = c.occurrence;
+  if (typeof o !== "number" || o < 0 || o > 1000000 || Math.floor(o) !== o) return null;
+  return { kind: c.kind, tag: c.tag, text: c.text, occurrence: o };
+}
+/** Change bars, drawn under the pins (inserted first in the layer), with DOM
+ *  APIs and textContent only. Re-resolved on every draw, like the pins. */
+function drawChanges() {
+  var l = ensureLayer();
+  var olds = l.querySelectorAll("dp-annotator-change");
+  for (var i = 0; i < olds.length; i++) olds[i].remove();
+  var found = [];
+  if (!showChanges || !changes.length) return found;
+  var els = [];
+  try { els = core.findChanges(changes); } catch (e) { els = []; }
+  for (var j = 0; j < changes.length; j++) {
+    var el = changes[j] ? els[j] || null : null;
+    found.push(!!el);
+    if (!el || !el.getBoundingClientRect) continue;
+    var color = CHANGE_COLORS[changes[j].kind];
+    var box = mk("dp-annotator-change");
+    box.setAttribute("data-dp-change", String(j));
+    box.setAttribute("data-dp-change-kind", changes[j].kind);
+    important(box, { position: "absolute", display: "block", "box-sizing": "border-box", "border-left": "4px solid " + color,
+      outline: "1px dashed " + color, background: "transparent", "pointer-events": "none", margin: "0", padding: "0" });
+    place(box, el.getBoundingClientRect());
+    var tag = mk("dp-annotator-change-tag");
+    tag.textContent = CHANGE_GLYPHS[changes[j].kind];
+    important(tag, { position: "absolute", left: "-14px", top: "-2px", display: "block", width: "10px", height: "14px",
+      color: color, font: "700 12px/14px system-ui, sans-serif", "text-align": "center" });
+    box.appendChild(tag);
+    l.insertBefore(box, l.firstChild);
+  }
+  return found;
+}
+function focusChange(index) {
+  if (!showChanges || typeof index !== "number" || index < 0 || index >= changes.length) return;
+  var i = Math.floor(index);
+  if (!changes[i]) return;
+  var els = [];
+  try { els = core.findChanges([changes[i]]); } catch (e) { els = []; }
+  var el = els[0];
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  reconcile(false);
+  var box = layer ? layer.querySelector("dp-annotator-change[data-dp-change=\"" + i + "\"]") : null;
+  if (box) {
+    var color = CHANGE_COLORS[changes[i].kind];
+    important(box, { outline: "3px solid " + color });
+    setTimeout(function () { important(box, { outline: "1px dashed " + color }); }, 1600);
+  }
+}
 /** Redraw and tell the parent when which anchors are found has changed. */
-function reconcile(force) {
+function reconcile(force, forceChanges) {
   pending = 0;
+  var cf = drawChanges();
   var found = drawPins();
   if (force || !samePins(lastFound, found)) {
     lastFound = found;
     post({ dp: "pins-status", found: found });
   }
+  if (forceChanges || !samePins(lastChangesFound, cf)) {
+    lastChangesFound = cf;
+    post({ dp: "changes-status", found: cf });
+  }
 }
 function schedule() {
-  if (!current.length || pending) return;
+  if ((!current.length && !(showChanges && changes.length)) || pending) return;
   pending = setTimeout(function () { reconcile(false); }, 120);
 }
 function focusPin(index) {
@@ -731,6 +860,15 @@ function onMessage(e) {
     reconcile(true);
   } else if (d.dp === "focus") {
     focusPin(d.index);
+  } else if (d.dp === "changes") {
+    var list = Array.isArray(d.marks) ? d.marks.slice(0, 300) : [];
+    changes = [];
+    for (var ci = 0; ci < list.length; ci++) changes.push(validChange(list[ci]));
+    // A slot that failed validation stays null (never found), so indexes line up.
+    showChanges = d.show === true;
+    reconcile(false, true);
+  } else if (d.dp === "focus-change") {
+    focusChange(d.index);
   } else if (d.dp === "mode") {
     annotate = d.annotate !== false;
     scripts = d.scripts === true;

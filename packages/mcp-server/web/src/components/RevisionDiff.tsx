@@ -3,6 +3,8 @@ import type { Artifact, PlanVisual, PlanVisualFile } from "@deeppairing/shared";
 import { coercePlanContent, coerceSpecContent, coerceDecisionContent, coerceExplainerContent, coerceDebriefContent, coercePageContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { VisualBody } from "./ArtifactVisuals";
+import { usePageVersionDiff } from "../hooks/usePageVersionDiff";
+import { PageChangeSummary } from "./artifacts/PageChangeSummary";
 
 /**
  * Revision diff — closes the "interact more" loop. When an artifact is revised
@@ -78,22 +80,11 @@ function bodyOf(a: Artifact): { title: string; items: DiffItem[] } | null {
       })),
     };
   }
+  // #680 / #714 gap 2 — a PAGE is diffed by PageVersionDiff (block level).
   // #193 E2 — an EXPLAINER is a section-list; SKILL steers superseding one over
   // re-posting, so a revision must show its structural delta. Keyed by heading,
   // detail = the section body (+ overview as its own entry) so a reworded step
   // reads as "changed", a new/dropped step as +/−.
-  // #680 — a PAGE revision: the summary and whether the page itself changed.
-  // The HTML is compared, never rendered here (the live frame is below).
-  if (a.type === "page") {
-    const c = coercePageContent(a.content);
-    return {
-      title: "Page",
-      items: [
-        { key: "summary", label: "Summary", detail: norm(c.summary ?? "") },
-        { key: "html", label: "Page content", detail: c.html },
-      ],
-    };
-  }
   if (a.type === "explainer") {
     const c = coerceExplainerContent(a.content);
     const items: DiffItem[] = [
@@ -186,6 +177,28 @@ function BodyDiff({ old, next }: { old: Artifact; next: Artifact }) {
   );
 }
 
+/** #714 gap 2 — a page revision: which sections changed, were added or lost
+ *  text (block-level diff of the two versions' parsed text), plus the summary
+ *  line when it changed. */
+function PageVersionDiff({ artifact }: { artifact: Artifact }) {
+  const changes = usePageVersionDiff(artifact);
+  const summaryChanged = changes
+    ? norm(coercePageContent(changes.parent.content).summary ?? "") !== norm(coercePageContent(artifact.content).summary ?? "")
+    : false;
+  if (!changes) return null;
+  return (
+    <div className="space-y-2">
+      {summaryChanged && (
+        <div className="text-2xs flex items-baseline gap-1.5" data-testid="page-summary-changed">
+          <span className="text-accent-amber font-bold w-3 shrink-0">~</span>
+          <span className="text-text-primary">Summary</span>
+        </div>
+      )}
+      <PageChangeSummary summary={changes.summary} truncated={changes.diff.truncated} />
+    </div>
+  );
+}
+
 /** Did a matched visual's payload actually change? (Compares the field that
  *  matters for its kind; file_map is handled separately via a real diff.) */
 function visualChanged(a: PlanVisual, b: PlanVisual): boolean {
@@ -228,7 +241,7 @@ export function RevisionDiff({ artifact }: { artifact: Artifact }) {
               <span className="font-semibold text-accent-amber">Revised:</span> {artifact.agentReasoning}
             </div>
           )}
-          <BodyDiff old={parent} next={artifact} />
+          {artifact.type === "page" ? <PageVersionDiff artifact={artifact} /> : <BodyDiff old={parent} next={artifact} />}
           <VisualsDiff oldVisuals={visualsOf(parent)} newVisuals={visualsOf(artifact)} artifactId={artifact.id} />
         </div>
       )}

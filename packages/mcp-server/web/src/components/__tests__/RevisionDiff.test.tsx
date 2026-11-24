@@ -281,3 +281,32 @@ describe("RevisionDiff", () => {
     expect(screen.getByText(/Needs eyes · the expiry check/)).toBeInTheDocument(); // removed
   });
 });
+
+describe("RevisionDiff — page (#714 gap 2)", () => {
+  it("lists the sections a page revision changed, added and removed, with the reason", () => {
+    const v1 = mkArtifact({
+      id: "p1",
+      type: "page",
+      version: 1,
+      status: "superseded",
+      content: { title: "P", html: "<h2>Storage</h2><p>Postgres.</p><h2>Costs</h2><p>$40.</p><p>Egress.</p>" },
+    });
+    const v2 = mkArtifact({
+      id: "p2",
+      type: "page",
+      version: 2,
+      parentId: "p1",
+      agentReasoning: "Moved to SQLite",
+      content: { title: "P", html: "<h2>Storage</h2><p>SQLite.</p><h2>Costs</h2><p>$40.</p><h2>Risks</h2><p>Locks.</p>" },
+    });
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    render(<RevisionDiff artifact={v2} />);
+    expect(screen.getByText(/Moved to SQLite/)).toBeInTheDocument();
+    expect(screen.getByTestId("page-change-changed")).toHaveTextContent("Changed: Storage");
+    expect(screen.getByTestId("page-change-added")).toHaveTextContent("Added: Risks");
+    expect(screen.getByTestId("page-change-removed")).toHaveTextContent("Removed 1 paragraph under Costs");
+    expect(screen.getByTestId("page-change-removed")).toHaveTextContent("Egress.");
+    expect(screen.queryByText(/Page content/)).not.toBeInTheDocument();
+  });
+});
