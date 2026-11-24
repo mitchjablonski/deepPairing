@@ -9,7 +9,7 @@ import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
-import { ParentSupersededError, type FileStore } from "../store/file-store.js";
+import { ParentSupersededError, ReservedVerdictFeedbackIdError, type FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import type { PreflightTrace } from "@deeppairing/shared";
 import { AutonomyLevelSchema, decisionCanAcceptAnswer, DetailDensitySchema, PAGE_HTML_MAX_BYTES, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
@@ -1144,7 +1144,15 @@ export function createDaemonRoutes(
     // store's late-follow-up stamp by smuggling it through this route.
     delete (params as { verdictFeedback?: boolean }).verdictFeedback;
     const requestedId = params.id;
-    const comment = r.store.addComment(params);
+    let comment: ReturnType<FileStore["addComment"]>;
+    try {
+      comment = r.store.addComment(params);
+    } catch (error) {
+      if (error instanceof ReservedVerdictFeedbackIdError) {
+        return c.json({ error: error.message, code: ERROR_CODES.validation_error }, 409);
+      }
+      throw error;
+    }
     // U0.1 — only broadcast when addComment created a new record. Dedupe
     // returns the existing comment whose id differs from the one we asked
     // for; the original already broadcast.
