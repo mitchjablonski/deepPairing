@@ -933,3 +933,185 @@ describe("PageArtifact — what changed since the previous version (#714 gap 2)"
     expect(await within(panel).findByText(/Changed: Storage, Rollout; Added: Risks/)).toBeInTheDocument();
   });
 });
+
+// --- #714 gaps 4+5: outline rail and "Wants from you" ------------------------
+describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
+  const OUTLINE = {
+    dp: "outline",
+    headings: [
+      { level: 1, text: "Cache invalidation", locator: "h1" },
+      { level: 2, text: "Options", locator: "#options > h2:nth-of-type(1)" },
+      { level: 3, text: "TTL expiry", locator: "#ttl" },
+    ],
+    pins: [] as number[],
+    changes: [] as number[],
+  };
+  const ASKS = {
+    dp: "asks",
+    asks: [
+      { kind: "decision", id: "decide-ttl", text: "Decide: a 60s TTL, or invalidate on write?", locator: "#decide-ttl" },
+      { kind: "question", id: "ask-budget", text: "Is one more Redis instance in budget?", locator: "#ask-budget" },
+    ],
+  };
+  const human = (id: string, anchor: Record<string, unknown>, extra: Partial<Comment> = {}): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id, htmlAnchor: anchor as any },
+    parentCommentId: null,
+    author: "human",
+    content: `note ${id}`,
+    acknowledged: false,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, Number(id.replace(/\D/g, "")) || 0)).toISOString(),
+    ...extra,
+  });
+
+  it("renders nothing until the frame reports headings or asks", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    expect(screen.queryByTestId("page-outline-rail")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-outline-disclosure")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-asks")).not.toBeInTheDocument();
+  });
+
+  it("renders the outline as a rail and a disclosure, as text, and jumps the frame to a heading", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { ...OUTLINE, headings: [...OUTLINE.headings, { level: 2, text: "<img src=x onerror=alert(1)>", locator: "h2" }] });
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(rail).toHaveAttribute("aria-label", "Page outline");
+    const entries = within(rail).getAllByTestId("page-outline-entry");
+    expect(entries.map((e) => e.textContent)).toEqual(["Cache invalidation", "Options", "TTL expiry", "<img src=x onerror=alert(1)>"]);
+    expect(entries.map((e) => e.getAttribute("data-level"))).toEqual(["1", "2", "3", "2"]);
+    // Frame text is never markup.
+    expect(rail.querySelector("img")).toBeNull();
+    expect(screen.getByTestId("page-outline-disclosure")).toBeInTheDocument();
+    await userEvent.click(within(rail).getByRole("button", { name: /Go to Options/ }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-heading", index: 1, locator: "#options > h2:nth-of-type(1)" }, "*");
+    expect(within(rail).getByRole("button", { name: /Go to Options/ })).toHaveAttribute("aria-current", "location");
+    // Keyboard: entries are buttons in tab order; Enter jumps too.
+    within(rail).getByRole("button", { name: /Go to TTL expiry/ }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-heading", index: 2, locator: "#ttl" }, "*");
+  });
+
+  it("highlights the section the frame reports as current (reading progress)", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, OUTLINE);
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(within(rail).getByTestId("page-outline-progress")).toHaveTextContent("Top of the page (3 sections)");
+    fromFrame(win, { dp: "outline-active", index: 2 });
+    expect(within(rail).getByRole("button", { name: /TTL expiry, you are here/ })).toHaveAttribute("aria-current", "location");
+    expect(within(rail).getByTestId("page-outline-progress")).toHaveTextContent("Section 3 of 3: TTL expiry");
+    // Out of range or from another source: ignored.
+    fromFrame(win, { dp: "outline-active", index: 999 });
+    fromFrame({ postMessage: vi.fn() }, { dp: "outline-active", index: 0 });
+    expect(within(rail).getByTestId("page-outline-progress")).toHaveTextContent("Section 3 of 3");
+    // The outline shrinks before the frame re-reports where you are: no crash.
+    fromFrame(win, { ...OUTLINE, headings: OUTLINE.headings.slice(0, 1) });
+    expect(within(screen.getByTestId("page-outline-rail")).getByTestId("page-outline-progress")).toHaveTextContent("Top of the page (1 section)");
+  });
+
+  it("badges open comments per section (resolved and not-found ones excluded) and ignores a stale pin report", () => {
+    const comments = [
+      human("cmt_1", { kind: "element", locator: "#ttl > p", quote: "a" }),
+      human("cmt_2", { kind: "element", locator: "#ttl > p:nth-of-type(2)", quote: "b" }),
+      human("cmt_3", { kind: "element", locator: "h1", quote: "Cache invalidation" }, { humanResolvedAt: new Date().toISOString() }),
+      human("cmt_4", { kind: "element", locator: "#options", quote: "c" }),
+      human("cmt_5", { kind: "text", locator: "p", quote: "gone" }),
+    ];
+    for (const c of comments) useArtifactStore.getState().addComment(c);
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    // A report for a different pin list (4 pins, not 5) is not counted.
+    fromFrame(win, { ...OUTLINE, pins: [2, 2, 0, 1] });
+    expect(screen.queryAllByTestId("page-outline-comments")).toHaveLength(0);
+    fromFrame(win, { ...OUTLINE, pins: [2, 2, 0, 1, 1] });
+    const rail = screen.getByTestId("page-outline-rail");
+    const badges = within(rail).getAllByTestId("page-outline-entry").map((e) => within(e).queryByTestId("page-outline-comments")?.textContent ?? "");
+    expect(badges).toEqual(["", "1", "2"]);
+    expect(within(rail).getByRole("button", { name: "Go to TTL expiry, 2 open comments" })).toBeInTheDocument();
+  });
+
+  it("badges changed blocks per section from the version diff (while changes are shown)", async () => {
+    const v1: Artifact = { ...pageArtifact, id: "art_ol_v1", version: 1, status: "superseded", content: { title: "P", html: "<h2>A</h2><p>one</p><h2>B</h2><p>two</p>" } };
+    const v2: Artifact = { ...pageArtifact, id: "art_ol_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<h2>A</h2><p>one!</p><h2>B</h2><p>two!</p><p>three</p>" } };
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    render(<PageArtifact artifact={v2} />);
+    await screen.findByTestId("page-changes-count");
+    const win = fakeFrameWindow();
+    const headings = [{ level: 2, text: "A", locator: "h2:nth-of-type(1)" }, { level: 2, text: "B", locator: "h2:nth-of-type(2)" }];
+    fromFrame(win, { dp: "outline", headings, pins: [], changes: [0, 1, 1] });
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(within(rail).getAllByTestId("page-outline-changes").map((b) => b.textContent)).toEqual(["~1", "~2"]);
+    expect(within(rail).getByRole("button", { name: "Go to B, 2 changed blocks" })).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("page-changes-toggle"));
+    expect(within(rail).queryAllByTestId("page-outline-changes")).toHaveLength(0);
+  });
+
+  it("shows 'Wants from you (N)' with kind, text, open/answered state, and Jump scrolls the frame", async () => {
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "text", locator: "#ask-budget > strong:nth-of-type(1)", quote: "budget" }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, ASKS);
+    const strip = screen.getByTestId("page-asks");
+    expect(within(strip).getByText("Wants from you (2)")).toBeInTheDocument();
+    const items = within(strip).getAllByTestId("page-ask");
+    expect(items.map((i) => within(i).getByTestId("page-ask-state").textContent)).toEqual(["Open", "Answered"]);
+    expect(within(items[0]!).getByText("Decide")).toBeInTheDocument();
+    expect(within(items[1]!).getByText("Question")).toBeInTheDocument();
+    expect(within(strip).getByTestId("page-asks-tally")).toHaveTextContent("1 open · 1 answered");
+    await userEvent.click(within(items[0]!).getByRole("button", { name: /Show on the page/ }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-ask", index: 0, locator: "#decide-ttl" }, "*");
+    // Display-only: nothing was created by the report.
+    expect(useArtifactStore.getState().comments[pageArtifact.id]).toHaveLength(1);
+  });
+
+  it("Reply opens the composer pre-anchored to the ask; submitting marks it answered", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      return {
+        ok: true,
+        json: async () => ({
+          comment: {
+            id: "cmt_srv_ask", sessionId: "sess_1", target: body.target, parentCommentId: null, author: "human",
+            content: body.content, acknowledged: false, createdAt: new Date().toISOString(),
+          },
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, ASKS);
+    const first = screen.getAllByTestId("page-ask")[0]!;
+    await userEvent.click(within(first).getByRole("button", { name: /Reply to/ }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-ask", index: 0, locator: "#decide-ttl" }, "*");
+    const composer = screen.getByTestId("page-anchor-composer");
+    expect(within(composer).getByText(/Decide: a 60s TTL, or invalidate on write\?/)).toBeInTheDocument();
+    const box = within(composer).getByLabelText("Comment on the selected spot");
+    expect(document.activeElement).toBe(box);
+    await userEvent.type(box, "Invalidate on write");
+    await userEvent.click(within(composer).getByRole("button", { name: "Send" }));
+    const post = fetchMock.mock.calls.find(([u, init]: any[]) => String(u).includes("/api/comments") && init?.method === "POST") as any;
+    expect(JSON.parse(post[1].body).target.htmlAnchor).toEqual({
+      kind: "element", locator: "#decide-ttl", quote: "Decide: a 60s TTL, or invalidate on write?", version: pageArtifact.version,
+    });
+    expect(await within(screen.getAllByTestId("page-ask")[0]!).findByText("Answered")).toBeInTheDocument();
+  });
+
+  it("a read-only page lists asks without Reply; malformed or foreign ask reports are ignored", () => {
+    const retracted: Artifact = { ...pageArtifact, id: "art_page_ro", status: "retracted" };
+    useArtifactStore.getState().addArtifact(retracted);
+    render(<PageArtifact artifact={retracted} />);
+    const win = fakeFrameWindow();
+    fromFrame({ postMessage: vi.fn() }, ASKS);
+    fromFrame(win, { dp: "asks", asks: [{ ...ASKS.asks[0], kind: "approve" }] });
+    expect(screen.queryByTestId("page-asks")).not.toBeInTheDocument();
+    fromFrame(win, ASKS);
+    const strip = screen.getByTestId("page-asks");
+    expect(within(strip).queryByRole("button", { name: /Reply to/ })).not.toBeInTheDocument();
+    expect(within(strip).getAllByRole("button", { name: /Show on the page/ })).toHaveLength(2);
+  });
+});

@@ -205,6 +205,17 @@ export {
 } from "./schemas/page-rule-out.js";
 
 export {
+  PAGE_DECISION_ATTR,
+  PAGE_QUESTION_ATTR,
+  PAGE_ASK_LIMITS,
+  anchorTargetsAsk,
+  cssEscapeIdent,
+  isPageAskAnswered,
+  type PageAskKind,
+  type PageAskRef,
+} from "./schemas/page-asks.js";
+
+export {
   EvidenceSchema,
   EvidenceInputSchema,
   EvidenceLocatorSchema,

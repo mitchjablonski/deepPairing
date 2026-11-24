@@ -4,11 +4,12 @@ import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { decisionFeedback } from "./decision-feedback.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage, undeliveredFileWatchRefs } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, coercePageContent, errorMessage, undeliveredFileWatchRefs } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { formatWorkerStops, workerStopClause, type WorkerStopBatch } from "../../store/worker-stop-notices.js";
 import { collectPageWatchNotices } from "./page-watch-feedback.js";
+import { openPageAsks, pageAsksFor, type PageAskScan } from "../page-asks.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
 import { briefEchoOf } from "../brief-ref.js";
@@ -104,6 +105,37 @@ function changesetReviewField(a: Artifact): {
   } = { reviewState, filesReviewed, filesTotal: files.length };
   if (Object.keys(reviewReasons).length > 0) out.reviewReasons = reviewReasons;
   return out;
+}
+
+/**
+ * #714 gap 5 — the asks a pending `page` marks (data-dp-decision /
+ * data-dp-question) that no human comment is anchored to yet, so the agent can
+ * see what its pair still owes. The page text is scanned once per version
+ * (linear, memoized by artifact id); comments are read across the version
+ * chain, as the companion shows them, so an answer on v1 still answers the
+ * same ask on v2. Best-effort: any failure reports nothing rather than
+ * breaking the poll.
+ */
+async function pageOpenAsksField(
+  a: Artifact,
+  allArtifacts: Artifact[],
+  store: ToolContext["store"],
+): Promise<PageAskScan[]> {
+  if (a.type !== "page") return [];
+  try {
+    const asks = pageAsksFor(a.id, coercePageContent(a.content).html);
+    if (asks.length === 0) return [];
+    const byId = new Map(allArtifacts.map((x) => [x.id, x] as const));
+    const comments = [];
+    const seen = new Set<string>();
+    for (let cur: Artifact | undefined = a; cur && !seen.has(cur.id) && seen.size < 50; cur = cur.parentId ? byId.get(cur.parentId) : undefined) {
+      seen.add(cur.id);
+      comments.push(...((await store.getCommentsForArtifact(cur.id)) ?? []));
+    }
+    return openPageAsks(asks, comments);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -1142,6 +1174,26 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   if (workerStopsNotice) parts.push(workerStopsNotice);
 
   // Check for draft artifacts still awaiting human review
+  // #714 gap 5 — the asks each pending page still has open (spread on its
+  // pendingArtifacts entry and named in one prose line, only when present).
+  const pageOpenAsks = new Map<string, PageAskScan[]>();
+  for (const a of pendingArts) {
+    if (a.type !== "page") continue;
+    const open = await pageOpenAsksField(a, postWakeArtifacts, store);
+    if (open.length > 0) pageOpenAsks.set(a.id, open);
+  }
+  for (const [id, open] of pageOpenAsks) {
+    const page = pendingArts.find((a) => a.id === id)!;
+    const clipAsk = (t: string) => (t.length > 100 ? `${t.slice(0, 99)}…` : t);
+    const named = open
+      .slice(0, 5)
+      .map((q) => `${q.id ? `#${q.id} ` : ""}(${q.kind}) "${clipAsk(q.text)}"`)
+      .join("; ");
+    parts.push(
+      `📝 Page "${page.title}" has ${open.length} open ask${open.length === 1 ? "" : "s"} your pair hasn't answered yet: ${named}${open.length > 5 ? `; and ${open.length - 5} more` : ""}. They answer by commenting on the ask in the companion.`,
+    );
+  }
+
   // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
@@ -1657,6 +1709,11 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       // stays byte-for-byte unchanged. Lets a structured-only client render the
       // "reviewing a colleague's PR — nothing to apply" posture.
       ...changesetExternalField(a),
+      // #714 gap 5 — a pending page's still-unanswered asks, spread only when
+      // there are some, so every other entry stays byte-for-byte unchanged.
+      ...(pageOpenAsks.has(a.id)
+        ? { openAsks: pageOpenAsks.get(a.id)!.map((q) => ({ ...(q.id ? { id: q.id } : {}), kind: q.kind, text: q.text })) }
+        : {}),
     })),
     questions: structuredQuestions,
     comments: structuredComments,

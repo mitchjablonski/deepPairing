@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HtmlAnchorSchema, type HtmlAnchor } from "@deeppairing/shared";
+import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, type HtmlAnchor } from "@deeppairing/shared";
 import { LOCATOR_TEXT_MAX, MAX_CHANGE_MARKS } from "./pageVersionDiff";
 
 /**
@@ -101,4 +101,88 @@ export function acceptChangesStatus(event: FrameMessage, frame: Window | null | 
   const found = d.found;
   if (!Array.isArray(found) || found.length > MAX_CHANGE_MARKS || !found.every((f) => typeof f === "boolean")) return null;
   return found as boolean[];
+}
+
+/** #714 gap 4 — outline bounds; the annotator caps the same way. */
+export const OUTLINE_MAX_HEADINGS = 200;
+export const OUTLINE_TEXT_MAX = 120;
+
+const LocatorSchema = z.string().min(1).max(HTML_ANCHOR_LIMITS.locator);
+/** A section index (-1 = before the first heading or not found on the page). */
+const SectionIndexSchema = z.number().int().min(-1).max(OUTLINE_MAX_HEADINGS - 1);
+
+export const PageOutlineHeadingSchema = z
+  .object({
+    level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    text: z.string().min(1).max(OUTLINE_TEXT_MAX),
+    locator: LocatorSchema,
+  })
+  .strict();
+export type PageOutlineHeading = z.infer<typeof PageOutlineHeadingSchema>;
+
+export const PageOutlineMessageSchema = z
+  .object({
+    dp: z.literal("outline"),
+    headings: z.array(PageOutlineHeadingSchema).max(OUTLINE_MAX_HEADINGS),
+    /** Per pin (same order as the pins the parent sent): its section. */
+    pins: z.array(SectionIndexSchema).max(500),
+    /** Per change mark (same order as the marks the parent sent): its section. */
+    changes: z.array(SectionIndexSchema).max(MAX_CHANGE_MARKS),
+  })
+  .strict()
+  .superRefine((m, ctx) => {
+    for (const [key, list] of [["pins", m.pins], ["changes", m.changes]] as const) {
+      if (list.some((i) => i >= m.headings.length)) ctx.addIssue({ code: "custom", path: [key], message: "section index out of range" });
+    }
+  });
+export type PageOutlineMessage = z.infer<typeof PageOutlineMessageSchema>;
+
+/** A valid `{dp:"outline"}` from this frame → the parsed outline; else null.
+ *  Display-only: after Run agent script could forge one. */
+export function acceptOutlineMessage(event: FrameMessage, frame: Window | null | undefined): PageOutlineMessage | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "outline") return null;
+  const parsed = PageOutlineMessageSchema.safeParse(d);
+  return parsed.success ? parsed.data : null;
+}
+
+/** A valid `{dp:"outline-active", index}` from this frame → index (-1 = above
+ *  the first heading); else null. */
+export function acceptOutlineActive(event: FrameMessage, frame: Window | null | undefined): number | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "outline-active") return null;
+  const parsed = SectionIndexSchema.safeParse(d.index);
+  return parsed.success ? parsed.data : null;
+}
+
+/** #714 gap 5 — an ask the page marks (data-dp-decision / data-dp-question). */
+export const PageAskSchema = z
+  .object({
+    kind: z.enum(["decision", "question"]),
+    text: z.string().max(PAGE_ASK_LIMITS.text),
+    locator: LocatorSchema,
+    id: z.string().min(1).max(PAGE_ASK_LIMITS.id).optional(),
+  })
+  .strict();
+export type PageAsk = z.infer<typeof PageAskSchema>;
+
+export const PageAsksMessageSchema = z
+  .object({ dp: z.literal("asks"), asks: z.array(PageAskSchema).max(PAGE_ASK_LIMITS.max) })
+  .strict();
+
+/** A valid `{dp:"asks", asks}` from this frame → the asks; else null.
+ *  Display-only: an ask never creates a comment by itself. */
+export function acceptAsksMessage(event: FrameMessage, frame: Window | null | undefined): PageAsk[] | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "asks") return null;
+  const parsed = PageAsksMessageSchema.safeParse(d);
+  return parsed.success ? parsed.data.asks : null;
+}
+
+/** The element anchor a "Reply" to an ask opens the composer at: the same
+ *  shape a click on the ask posts (locator + its text prefix as the quote),
+ *  re-validated so a spoofed ask can't produce an invalid anchor. */
+export function askAnchor(ask: PageAsk): HtmlAnchor | null {
+  const parsed = HtmlAnchorSchema.safeParse({ kind: "element", locator: ask.locator, quote: ask.text });
+  return parsed.success ? parsed.data : null;
 }

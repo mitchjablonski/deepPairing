@@ -14,19 +14,27 @@ import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
 import {
   acceptAnchorMessage,
+  acceptAsksMessage,
   acceptChangesStatus,
+  acceptOutlineActive,
+  acceptOutlineMessage,
   acceptPinsStatus,
+  askAnchor,
   buildChangesMessage,
   isReadyMessage,
   isTogglePointingMessage,
+  type PageAsk,
+  type PageOutlineMessage,
 } from "../../lib/pageAnchorMessages";
+import { PageOutline } from "./PageOutline";
+import { PageAsksStrip } from "./PageAsksStrip";
 import { usePageLineage, usePageVersionDiff } from "../../hooks/usePageVersionDiff";
 import { PageChangeLine, PageRemovedList } from "./PageChangeSummary";
 import type { ChangeLocator } from "../../lib/pageVersionDiff";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
-import { pageRuleOutKey } from "@deeppairing/shared";
+import { isPageAskAnswered, pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -158,6 +166,16 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   frameOwnsFocusRef.current = frameOwnsFocus;
   const [found, setFound] = useState<boolean[] | null>(null);
   const [running, setRunning] = useState(false);
+  // #714 gaps 4+5 — the page's outline and asks, as the frame reports them
+  // (display-only hints: validated, rendered as text, never acted on alone).
+  const [outline, setOutline] = useState<PageOutlineMessage | null>(null);
+  const [activeSection, setActiveSection] = useState(-1);
+  const [asks, setAsks] = useState<PageAsk[]>([]);
+  useEffect(() => {
+    setOutline(null);
+    setActiveSection(-1);
+    setAsks([]);
+  }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
 
   // #714 gap 2 — what changed since the previous version: a block diff of the
@@ -252,6 +270,21 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         setFound(status);
         return;
       }
+      const reportedOutline = acceptOutlineMessage(event, frame);
+      if (reportedOutline) {
+        setOutline(reportedOutline);
+        return;
+      }
+      const active = acceptOutlineActive(event, frame);
+      if (active !== null) {
+        setActiveSection(active);
+        return;
+      }
+      const reportedAsks = acceptAsksMessage(event, frame);
+      if (reportedAsks) {
+        setAsks(reportedAsks);
+        return;
+      }
       // Trust model: once the page's own scripts run they share the frame and
       // could forge this report, so it is ignored then; the companion's own
       // computed count stands.
@@ -337,6 +370,64 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       setExplicitOpen(true);
       setOpenNonce((n) => n + 1);
     }
+  };
+
+  // #714 gap 4 — per-section badges. The frame says which section each pin
+  // and change mark sits in; the companion decides what counts: a comment the
+  // reviewer hasn't resolved whose spot is on this version, a change mark from
+  // its own diff. A report for a different pin/mark list is ignored until the
+  // frame re-reports.
+  const headings = outline?.headings ?? [];
+  const sectionCounts = useMemo(() => {
+    const n = outline?.headings.length ?? 0;
+    const comments = new Array<number>(n).fill(0);
+    const changes = new Array<number>(n).fill(0);
+    if (!outline) return { comments, changes };
+    if (outline.pins.length === anchored.length) {
+      anchored.forEach((c, i) => {
+        const s = outline.pins[i]!;
+        if (s < 0 || c.humanResolvedAt || (found && found[i] === false)) return;
+        comments[s] = (comments[s] ?? 0) + 1;
+      });
+    }
+    if (outline.changes.length === marks.length) {
+      outline.changes.forEach((s) => {
+        if (s >= 0) changes[s] = (changes[s] ?? 0) + 1;
+      });
+    }
+    return { comments, changes };
+  }, [outline, anchored, found, marks]);
+  const jumpToHeading = (index: number) => {
+    const h = headings[index];
+    if (!h) return;
+    setActiveSection(index);
+    postToFrame({ dp: "focus-heading", index, locator: h.locator });
+  };
+
+  // #714 gap 5 — an ask is answered once a human comment is anchored to it.
+  const askAnswered = useMemo(() => asks.map((a) => isPageAskAnswered(a, anchored)), [asks, anchored]);
+  const jumpToAsk = (index: number) => {
+    const ask = asks[index];
+    if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });
+  };
+  /** Reply = the same flow as clicking the ask in the frame: the composer
+   *  opens anchored to it (focused, since the reviewer asked for it). */
+  const replyToAsk = (index: number) => {
+    const ask = asks[index];
+    const anchor = ask ? askAnchor(ask) : null;
+    if (!ask || !anchor || readOnly) return;
+    postToFrame({ dp: "focus-ask", index, locator: ask.locator });
+    acceptingFrame.current = null;
+    setDraft({ ...anchor, version: artifact.version });
+    setExplicitOpen(true);
+    setOpenNonce((n) => n + 1);
+  };
+  const outlineProps = {
+    headings,
+    commentCounts: sectionCounts.comments,
+    changeCounts: showChanges ? sectionCounts.changes : [],
+    active: activeSection,
+    onJump: jumpToHeading,
   };
 
   const draftComments = draft
@@ -513,16 +604,35 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
           </span>
         </div>
       )}
-      <PrototypeFrame
-        html={page.html}
-        maxBytes={PAGE_HTML_MAX_BYTES}
-        staticFirst
-        noun="page"
-        frameClassName="w-full h-[70vh] min-h-[420px] rounded border border-border-default bg-white"
-        annotation={PAGE_ANNOTATION}
-        iframeRef={iframeRef}
-        onRunningChange={onRunningChange}
-      />
+      <PageAsksStrip asks={asks} answered={askAnswered} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
+      {/* #714 gap 4 — the outline: a sticky rail beside the frame when the
+          panel is wide, a collapsible disclosure above it when narrow. */}
+      <div className="@container">
+        {headings.length > 0 && (
+          <div className="@3xl:hidden mb-2">
+            <PageOutline {...outlineProps} variant="disclosure" />
+          </div>
+        )}
+        <div className="flex items-start gap-3">
+          {headings.length > 0 && (
+            <div className="hidden @3xl:block w-56 shrink-0 self-stretch">
+              <PageOutline {...outlineProps} variant="rail" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <PrototypeFrame
+              html={page.html}
+              maxBytes={PAGE_HTML_MAX_BYTES}
+              staticFirst
+              noun="page"
+              frameClassName="w-full h-[70vh] min-h-[420px] rounded border border-border-default bg-white"
+              annotation={PAGE_ANNOTATION}
+              iframeRef={iframeRef}
+              onRunningChange={onRunningChange}
+            />
+          </div>
+        </div>
+      </div>
 
       {draft && !readOnly && (
         <div

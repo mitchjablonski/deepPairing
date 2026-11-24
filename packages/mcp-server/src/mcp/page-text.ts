@@ -32,12 +32,12 @@
  */
 
 /** Elements whose content is dropped (when closed). */
-const DROP_ELEMENTS = ["script", "style", "template", "title"] as const;
+export const DROP_ELEMENTS = ["script", "style", "template", "title"] as const;
 /** RCDATA elements whose content is literal text (no tags, no comments). */
-const TEXT_ELEMENTS = ["textarea", "xmp"] as const;
+export const TEXT_ELEMENTS = ["textarea", "xmp"] as const;
 
 /** Tags that start a new visual block (their text becomes its own string). */
-const BLOCK_TAGS = new Set([
+export const BLOCK_TAGS = new Set([
   "address", "article", "aside", "blockquote", "br", "caption", "dd", "details", "div", "dl", "dt",
   "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr",
   "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot",
@@ -53,7 +53,7 @@ const NAMED_ENTITIES: Record<string, string> = {
   rsquo: "'", lsquo: "'", rdquo: "\"", ldquo: "\"", middot: "·", times: "×", rarr: "→", larr: "←",
 };
 
-function decodeEntities(s: string): string {
+export function decodeEntities(s: string): string {
   return s.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,8});/gi, (m, body: string) => {
     if (body[0] === "#") {
       const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
@@ -65,7 +65,7 @@ function decodeEntities(s: string): string {
 }
 
 /** True when `lower[at..]` opens the element `tag` (`<tag` + a delimiter). */
-function opensElement(lower: string, at: number, tag: string): boolean {
+export function opensElement(lower: string, at: number, tag: string): boolean {
   if (!lower.startsWith(tag, at + 1)) return false;
   const next = lower.charCodeAt(at + 1 + tag.length);
   // End of input, whitespace, `>` or `/` ends the tag name.

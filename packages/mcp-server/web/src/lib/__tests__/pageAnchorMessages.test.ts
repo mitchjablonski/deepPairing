@@ -4,7 +4,18 @@
  * anchor that parses against the shared schema (every field capped).
  */
 import { describe, it, expect } from "vitest";
-import { acceptAnchorMessage, acceptChangesStatus, acceptPinsStatus, buildChangesMessage, isReadyMessage, isTogglePointingMessage } from "../pageAnchorMessages";
+import {
+  acceptAnchorMessage,
+  acceptAsksMessage,
+  acceptChangesStatus,
+  acceptOutlineActive,
+  acceptOutlineMessage,
+  acceptPinsStatus,
+  askAnchor,
+  buildChangesMessage,
+  isReadyMessage,
+  isTogglePointingMessage,
+} from "../pageAnchorMessages";
 
 const frame = { name: "page-frame" } as unknown as Window;
 const otherFrame = { name: "other-frame" } as unknown as Window;
@@ -96,5 +107,64 @@ describe("version change marks (#714 gap 2)", () => {
     expect(acceptChangesStatus({ source: otherFrame, data: { dp: "changes-status", found: [true] } }, frame)).toBeNull();
     expect(acceptChangesStatus({ source: frame, data: { dp: "changes-status", found: ["yes"] } }, frame)).toBeNull();
     expect(acceptChangesStatus({ source: frame, data: { dp: "changes-status", found: new Array(301).fill(true) } }, frame)).toBeNull();
+  });
+});
+
+describe("outline / asks messages (#714 gaps 4+5)", () => {
+  const outline = {
+    dp: "outline",
+    headings: [
+      { level: 1, text: "Profile cache", locator: "h1" },
+      { level: 2, text: "Options", locator: "#options > h2:nth-of-type(1)" },
+    ],
+    pins: [1, -1],
+    changes: [0],
+  };
+  const asks = { dp: "asks", asks: [{ kind: "decision", id: "decide-ttl", text: "Decide: a 60s TTL?", locator: "#decide-ttl" }] };
+
+  it("accepts a valid outline, active index and asks from this frame only", () => {
+    expect(acceptOutlineMessage({ source: frame, data: outline }, frame)).toEqual(outline);
+    expect(acceptOutlineMessage({ source: otherFrame, data: outline }, frame)).toBeNull();
+    expect(acceptOutlineMessage({ source: null, data: outline }, frame)).toBeNull();
+    expect(acceptOutlineActive({ source: frame, data: { dp: "outline-active", index: 1 } }, frame)).toBe(1);
+    expect(acceptOutlineActive({ source: frame, data: { dp: "outline-active", index: -1 } }, frame)).toBe(-1);
+    expect(acceptOutlineActive({ source: otherFrame, data: { dp: "outline-active", index: 1 } }, frame)).toBeNull();
+    expect(acceptAsksMessage({ source: frame, data: asks }, frame)).toEqual(asks.asks);
+    expect(acceptAsksMessage({ source: otherFrame, data: asks }, frame)).toBeNull();
+  });
+
+  it.each([
+    ["a level-4 heading", { ...outline, headings: [{ level: 4, text: "x", locator: "h4" }], pins: [], changes: [] }],
+    ["an empty heading text", { ...outline, headings: [{ level: 2, text: "", locator: "h2" }], pins: [], changes: [] }],
+    ["an over-long heading", { ...outline, headings: [{ level: 2, text: "x".repeat(121), locator: "h2" }], pins: [], changes: [] }],
+    ["an over-long locator", { ...outline, headings: [{ level: 2, text: "x", locator: "x".repeat(513) }], pins: [], changes: [] }],
+    ["too many headings", { ...outline, headings: Array.from({ length: 201 }, () => ({ level: 2, text: "x", locator: "h2" })), pins: [], changes: [] }],
+    ["a section index past the headings", { ...outline, pins: [2] }],
+    ["a non-integer section", { ...outline, changes: [0.5] }],
+    ["an extra field", { ...outline, html: "<b>x</b>" }],
+    ["a heading with markup fields", { ...outline, headings: [{ level: 2, text: "x", locator: "h2", html: "<img>" }], pins: [], changes: [] }],
+  ])("rejects a malformed outline: %s", (_label, data) => {
+    expect(acceptOutlineMessage({ source: frame, data }, frame)).toBeNull();
+  });
+
+  it.each([
+    ["an unknown kind", { dp: "asks", asks: [{ ...asks.asks[0], kind: "approve" }] }],
+    ["an over-long text", { dp: "asks", asks: [{ ...asks.asks[0], text: "x".repeat(201) }] }],
+    ["an empty id", { dp: "asks", asks: [{ ...asks.asks[0], id: "" }] }],
+    ["no locator", { dp: "asks", asks: [{ kind: "question", text: "x" }] }],
+    ["too many asks", { dp: "asks", asks: Array.from({ length: 51 }, () => asks.asks[0]) }],
+    ["an extra field", { dp: "asks", asks: [{ ...asks.asks[0], commentId: "cmt_1" }] }],
+  ])("rejects malformed asks: %s", (_label, data) => {
+    expect(acceptAsksMessage({ source: frame, data }, frame)).toBeNull();
+  });
+
+  it("rejects a bad active index", () => {
+    for (const index of [200, -2, 1.5, "1", null]) {
+      expect(acceptOutlineActive({ source: frame, data: { dp: "outline-active", index } }, frame)).toBeNull();
+    }
+  });
+
+  it("askAnchor builds the element anchor a click on the ask would post", () => {
+    expect(askAnchor(asks.asks[0] as any)).toEqual({ kind: "element", locator: "#decide-ttl", quote: "Decide: a 60s TTL?" });
   });
 });
