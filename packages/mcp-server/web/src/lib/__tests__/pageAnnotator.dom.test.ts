@@ -859,6 +859,15 @@ describe("annotator change marks — caching, ownership and parity (#714 gap 2 r
     expect(finds).toBe(1);
   });
 
+  it("a mutation inside authored [data-dp-annotator] content still invalidates the cache", async () => {
+    document.body.innerHTML = "<div data-dp-annotator><p>Authored</p></div>";
+    send({ dp: "changes", marks: [{ kind: "changed", tag: "p", text: "Authored", occurrence: 0 }], show: true });
+    expect(finds).toBe(1);
+    document.querySelector("[data-dp-annotator]")!.appendChild(document.createElement("p")).textContent = "more";
+    await wait(200);
+    expect(finds).toBe(2);
+  });
+
   it("authored data-dp-annotator content is still found and marked", () => {
     document.body.innerHTML = "<p data-dp-annotator>Authored</p>";
     send({ dp: "changes", marks: [{ kind: "changed", tag: "p", text: "Authored", occurrence: 0 }], show: true });
@@ -878,6 +887,8 @@ describe("clippedText parity: annotator core vs companion diff (#714 gap 2)", ()
     "<div><script>var x = 1;</script><style>p{}</style><noscript>ns</noscript><template>t</template><iframe>f</iframe>kept</div>",
     "<p data-dp-annotator>authored</p>",
     `<p>${"long ".repeat(100)}</p>`,
+    "<table><tr><td></td><td></td><td>40</td></tr></table>",
+    "<p>Budget <input value=\"40\"> <input type=submit> <input type=button value=\"Go\"> <input type=hidden value=\"h\"> <input type=checkbox value=\"c\"></p>",
   ];
   it("both read every fixture identically", () => {
     const core = makeCore() as any;

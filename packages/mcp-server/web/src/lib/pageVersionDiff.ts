@@ -72,9 +72,13 @@ export interface PageBlock {
   section: string;
   /** Which section, by identity: the index of its heading block (-1 = top). */
   sectionId: number;
+  /** Its heading with the enclosing headings: "Option A › Pros". */
+  sectionPath?: string;
   heading: boolean;
-  /** Loose text owned by a non-block parent (or body). */
+  /** A run of loose text, owned by its nearest non-inline parent (or body). */
   synthetic?: boolean;
+  /** Its owner is too big to outline (body/main/a region): listed, not highlighted. */
+  unlocatable?: boolean;
   /** Parsed element, for building a frame locator. Absent in pure tests. */
   el?: Element;
 }
@@ -118,6 +122,8 @@ export interface PageVersionDiff extends PageBlockDiff {
   changeMarksTotal: number;
   /** `data-dp-changed` author hints, before the cap. */
   hintMarksTotal: number;
+  /** Detected changes in a run of loose text too big to outline (listed, not highlighted). */
+  unhighlightable: number;
 }
 
 // --- text reading ------------------------------------------------------------
@@ -138,9 +144,28 @@ function inSkip(el: Element | null): boolean {
 
 const isCell = (tag: string) => tag === "td" || tag === "th";
 
+/** Is this cell after another cell in its row? (Every such cell starts with
+ *  " | ", even when the cells before it are empty.) */
+function laterCell(e: Element): boolean {
+  for (let s = e.previousElementSibling; s; s = s.previousElementSibling) if (isCell(s.localName.toLowerCase())) return true;
+  return false;
+}
+
+const BUTTON_INPUTS: Record<string, string> = { submit: "Submit", reset: "Reset", button: "" };
+const TEXT_INPUTS = new Set(["", "text", "search", "email", "url", "tel", "number"]);
+/** What an <input> shows as text: a button's value (or its default label), a
+ *  text-like field's value ATTRIBUTE (never live typing: both sides read the
+ *  same markup). Everything else shows no text. */
+function inputText(e: Element): string {
+  const type = (e.getAttribute("type") ?? "").trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(BUTTON_INPUTS, type)) return e.getAttribute("value") ?? BUTTON_INPUTS[type]!;
+  if (TEXT_INPUTS.has(type)) return e.getAttribute("value") ?? "";
+  return "";
+}
+
 /** A text accumulator with the shared rules: whitespace collapsed, `<br>` is a
- *  space, and each table cell after the first in a row starts with " | " (so a
- *  value moving between adjacent cells reads as a change). */
+ *  space, each table cell after the first in its row starts with " | ", and an
+ *  input contributes its rendered label/value. */
 class TextBuf {
   text = "";
   lastSpace = true;
@@ -148,7 +173,6 @@ class TextBuf {
     if (!this.lastSpace) { this.text += " "; this.lastSpace = true; }
   }
   cell(): void {
-    if (!this.text) return;
     this.space();
     this.text += "| ";
     this.lastSpace = true;
@@ -160,6 +184,14 @@ class TextBuf {
       else { this.text += ch; this.lastSpace = false; }
       if (this.text.length > max) return true;
     }
+    return false;
+  }
+  /** The shared per-element rule. Returns true when `max` was exceeded. */
+  element(e: Element, max = Infinity): boolean {
+    const tag = e.localName.toLowerCase();
+    if (tag === "br") this.space();
+    else if (isCell(tag)) { if (laterCell(e)) this.cell(); }
+    else if (tag === "input") return this.chars(inputText(e), max);
     return false;
   }
 }
@@ -183,11 +215,8 @@ export function clippedText(el: Element, max = LOCATOR_TEXT_MAX): string {
   let n: Node | null;
   while ((n = walker.nextNode())) {
     if (n.nodeType === 1) {
-      const e = n as Element;
-      if (inSkip(e)) continue;
-      const tag = e.localName.toLowerCase();
-      if (tag === "br") buf.space();
-      else if (isCell(tag)) buf.cell();
+      if (inSkip(n as Element)) continue;
+      if (buf.element(n as Element, max)) break;
       continue;
     }
     if (inSkip(n.parentElement)) continue;
@@ -211,29 +240,49 @@ export function parsePageHtml(html: string): Document | null {
   }
 }
 
-/** Every block in document order, with its own text and section. */
+/** A synthetic owner this big is not outlined in the frame (it would frame a
+ *  whole region, not the change): body/html/main, more than this many blocks
+ *  inside, or more than one heading (it spans sections). The change is still
+ *  listed and counted as not highlightable. */
+const MAX_OWNER_BLOCKS = 3;
+
+interface Entry {
+  el: Element;
+  buf: TextBuf;
+  pos: number;
+  synthetic: boolean;
+}
+
+/** Every block in document order, with its own text and section. Loose text
+ *  is split into RUNS: each contiguous stretch of loose text between
+ *  block-level elements is its own synthetic block at the position it occurs,
+ *  so a run after "## Beta" belongs to Beta even when Alpha's run shares the
+ *  same parent. */
 export function extractPageBlocks(doc: Document, limit = MAX_BLOCKS): { blocks: PageBlock[]; truncated: boolean } {
   const body = doc.body ?? doc.documentElement;
   if (!body) return { blocks: [], truncated: false };
   const all = Array.from(body.getElementsByTagName("*"));
-  // Bottom-up: does an element contain anything block-level? One pass in
-  // reverse document order (children are visited before their parents).
-  const hasBlockDesc = new Set<Element>();
+  // Bottom-up: how many blocks does an element contain? One pass in reverse
+  // document order (children are visited before their parents).
+  const blockDesc = new Map<Element, number>();
+  const headingDesc = new Map<Element, number>();
   const isBlock = new Set<Element>();
   for (let i = all.length - 1; i >= 0; i--) {
     const el = all[i]!;
     const tag = el.localName.toLowerCase();
     if (inSkip(el)) continue;
-    const block = BLOCK_TAGS.has(tag) || (CONTAINER_TAGS.has(tag) && !hasBlockDesc.has(el));
+    const inside = blockDesc.get(el) ?? 0;
+    const block = BLOCK_TAGS.has(tag) || (CONTAINER_TAGS.has(tag) && inside === 0);
     if (block) isBlock.add(el);
-    if ((block || hasBlockDesc.has(el)) && el.parentElement) hasBlockDesc.add(el.parentElement);
+    const up = inside + (block ? 1 : 0);
+    const hUp = (headingDesc.get(el) ?? 0) + (HEADING_TAGS.has(tag) ? 1 : 0);
+    if (el.parentElement) {
+      if (up) blockDesc.set(el.parentElement, (blockDesc.get(el.parentElement) ?? 0) + up);
+      if (hUp) headingDesc.set(el.parentElement, (headingDesc.get(el.parentElement) ?? 0) + hUp);
+    }
   }
-  // One walk in document order: each text node goes to its nearest block; loose
-  // text to its nearest non-inline ancestor (a synthetic block, placed where
-  // its first loose text is).
-  const bufs = new Map<Element, TextBuf>();
-  const pos = new Map<Element, number>();
-  const synthetic = new Set<Element>();
+  const entries: Entry[] = [];
+  const byEl = new Map<Element, Entry>();
   const ownerOf = (start: Element | null): Element | null => {
     for (let p = start; p; p = p.parentElement) if (isBlock.has(p)) return p;
     return null;
@@ -243,60 +292,84 @@ export function extractPageBlocks(doc: Document, limit = MAX_BLOCKS): { blocks: 
     while (p && p !== body && INLINE_TAGS.has(p.localName.toLowerCase())) p = p.parentElement;
     return p ?? body;
   };
-  const bufFor = (el: Element): TextBuf => {
-    let b = bufs.get(el);
-    if (!b) bufs.set(el, (b = new TextBuf()));
-    return b;
-  };
+  let run: Entry | null = null;
   let counter = 0;
   const walker = doc.createTreeWalker(body, 5 /* SHOW_ELEMENT | SHOW_TEXT */);
   let n: Node | null;
+  /** The entry loose content at `parent` goes to: the current run when it is
+   *  the same owner and unbroken, else a new run here. */
+  const runFor = (parent: Element | null): Entry => {
+    const owner = looseOwner(parent);
+    if (!run || run.el !== owner) {
+      run = { el: owner, buf: new TextBuf(), pos: counter, synthetic: true };
+      entries.push(run);
+    }
+    return run;
+  };
   while ((n = walker.nextNode())) {
     counter++;
     if (n.nodeType === 1) {
       const e = n as Element;
       if (inSkip(e)) continue;
-      if (isBlock.has(e)) pos.set(e, counter);
       const tag = e.localName.toLowerCase();
-      if (tag === "br" || isCell(tag)) {
-        const owner = ownerOf(e.parentElement) ?? looseOwner(e.parentElement);
-        const b = bufs.get(owner);
-        if (b) { if (tag === "br") b.space(); else b.cell(); }
+      if (isBlock.has(e)) {
+        const entry: Entry = { el: e, buf: new TextBuf(), pos: counter, synthetic: false };
+        entries.push(entry);
+        byEl.set(e, entry);
+      }
+      // Any block-level element ends the current loose run.
+      if (!INLINE_TAGS.has(tag) && tag !== "br" && tag !== "input") run = null;
+      if (tag === "br" || isCell(tag) || tag === "input") {
+        const owner = ownerOf(e.parentElement);
+        if (owner) byEl.get(owner)!.buf.element(e);
+        else if (tag === "input" ? inputText(e).trim() : run) runFor(e.parentElement).buf.element(e);
       }
       continue;
     }
     const parent = n.parentElement;
     if (inSkip(parent)) continue;
     const raw = n.nodeValue ?? "";
-    let owner = ownerOf(parent);
-    if (!owner) {
-      if (!raw.trim()) continue;
-      owner = looseOwner(parent);
-      if (!synthetic.has(owner)) { synthetic.add(owner); pos.set(owner, counter); }
-    }
-    bufFor(owner).chars(raw);
+    const owner = ownerOf(parent);
+    if (owner) { byEl.get(owner)!.buf.chars(raw); continue; }
+    if (!raw.trim() && !run) continue;
+    runFor(parent).buf.chars(raw);
   }
-  const ordered = [...pos.entries()].sort((x, y) => x[1] - y[1]).map(([el]) => el);
+  entries.sort((x, y) => x.pos - y.pos);
   const blocks: PageBlock[] = [];
   let section = "";
   let sectionId = -1;
   let truncated = false;
-  for (const el of ordered) {
-    let text = normText(bufs.get(el)?.text ?? "");
-    const isSynthetic = synthetic.has(el) && !isBlock.has(el);
-    if (!text && !isSynthetic) {
+  const stack: Array<{ level: number; text: string }> = [];
+  let sectionPath = "";
+  for (const entry of entries) {
+    const el = entry.el;
+    let text = normText(entry.buf.text);
+    if (!text && !entry.synthetic) {
       const imgs = el.getElementsByTagName("img");
       for (let i = 0; i < imgs.length && !text; i++) if (!inSkip(imgs[i]!)) text = normText(imgs[i]!.getAttribute("alt") || "");
     }
     if (!text) continue;
     if (blocks.length >= limit) { truncated = true; break; }
     const tag = el.localName.toLowerCase();
-    const heading = HEADING_TAGS.has(tag);
+    const heading = !entry.synthetic && HEADING_TAGS.has(tag);
     if (heading) {
       section = text.length > SECTION_LABEL_MAX ? `${text.slice(0, SECTION_LABEL_MAX - 1)}…` : text;
       sectionId = blocks.length;
+      const level = Number(tag.slice(1));
+      while (stack.length && stack[stack.length - 1]!.level >= level) stack.pop();
+      stack.push({ level, text: section });
+      sectionPath = stack.map((h) => h.text).join(" › ");
     }
-    blocks.push({ tag, text, section, sectionId, heading, ...(isSynthetic ? { synthetic: true } : {}), el });
+    const block: PageBlock = { tag, text, section, sectionId, sectionPath, heading, el };
+    if (entry.synthetic) {
+      block.synthetic = true;
+      if (
+        tag === "body" || tag === "html" || tag === "main" ||
+        (blockDesc.get(el) ?? 0) > MAX_OWNER_BLOCKS || (headingDesc.get(el) ?? 0) > 1) {
+        block.unlocatable = true;
+      }
+    }
+    blocks.push(block);
   }
   return { blocks, truncated };
 }
@@ -314,9 +387,8 @@ export function visibleText(doc: Document): string {
       const e = n as Element;
       if (inSkip(e)) continue;
       const tag = e.localName.toLowerCase();
-      if (tag === "br") buf.space();
-      else if (isCell(tag)) buf.cell();
-      else if (BLOCK_TAGS.has(tag) || CONTAINER_TAGS.has(tag)) buf.space();
+      if (BLOCK_TAGS.has(tag) || CONTAINER_TAGS.has(tag)) buf.space();
+      buf.element(e);
       continue;
     }
     if (inSkip(n.parentElement)) continue;
@@ -431,26 +503,33 @@ export function alignKeys(a: string[], b: string[]): Array<[number, number]> {
 
 const keyOf = (b: PageBlock): string => `${b.tag}\u0001${b.text}`;
 
-/** Classify each block as added / changed / moved / removed. */
+/** Classify each block as added / changed / moved / removed.
+ *
+ * Section membership is compared by IDENTITY: matched heading pairs (aligned,
+ * moved, or reworded in place) map old sections to new ones, and every matched
+ * non-heading pair — aligned ones included — whose old section doesn't map to
+ * its new section is a "moved" change. So items moving together across a
+ * heading are caught even when alignment kept them and moved the heading, and
+ * a move between two sections that share a name ("Pros" under two options) is
+ * caught too. */
 export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): PageBlockDiff {
   const a = oldBlocks.map(keyOf);
   const b = newBlocks.map(keyOf);
-  const pairs = alignKeys(a, b);
+  const aligned = alignKeys(a, b);
   const oldDone = new Uint8Array(a.length);
   const newDone = new Uint8Array(b.length);
-  for (const [i, j] of pairs) { oldDone[i] = 1; newDone[j] = 1; }
-  const changeAt = new Map<number, PageBlockChange>();
+  for (const [i, j] of aligned) { oldDone[i] = 1; newDone[j] = 1; }
+  /** Every same-text pair (aligned or moved): classified once headings map. */
+  const same: Array<[number, number]> = [...aligned];
 
-  // Reorder tolerance: the same block anywhere else in the old version moved.
-  // Within its section that's quiet (counted); into another section it is a
-  // change the reviewer must see (an item moving from "Approved" to "Rejected").
-  let moved = 0;
+  // Reorder tolerance: the same block anywhere else in the old version.
   const leftover = new Map<string, number[]>();
   for (let i = 0; i < a.length; i++) {
     if (oldDone[i]) continue;
     const l = leftover.get(a[i]!);
     if (l) l.push(i); else leftover.set(a[i]!, [i]);
   }
+  const movedPairs = new Set<number>();
   for (let j = 0; j < b.length; j++) {
     if (newDone[j]) continue;
     const l = leftover.get(b[j]!);
@@ -458,14 +537,15 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
     const i = l.shift()!;
     oldDone[i] = 1;
     newDone[j] = 1;
-    const o = oldBlocks[i]!, nb = newBlocks[j]!;
-    if (!nb.heading && o.section !== nb.section) changeAt.set(j, { kind: "moved", block: nb, previous: o });
-    else moved++;
+    same.push([i, j]);
+    movedPairs.add(j);
   }
 
   // Pair the rest inside each gap between aligned pairs.
+  const changeAt = new Map<number, PageBlockChange>();
   const removed: PageBlock[] = [];
-  const bounds: Array<[number, number]> = [[-1, -1], ...pairs, [a.length, b.length]];
+  const headingMap = new Map<number, number>();
+  const bounds: Array<[number, number]> = [[-1, -1], ...aligned, [a.length, b.length]];
   for (let g = 0; g + 1 < bounds.length; g++) {
     const [a0, b0] = bounds[g]!;
     const [a1, b1] = bounds[g + 1]!;
@@ -475,6 +555,11 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
     for (let j = b0 + 1; j < b1; j++) if (!newDone[j]) news.push(j);
     if (!olds.length && !news.length) continue;
     const paired = new Set<number>();
+    const pair = (i: number, j: number) => {
+      paired.add(i);
+      changeAt.set(j, { kind: "changed", block: newBlocks[j]!, previous: oldBlocks[i]! });
+      if (oldBlocks[i]!.heading && newBlocks[j]!.heading) headingMap.set(i, j);
+    };
     // 1. Same tag under the same heading.
     const bySection = new Map<string, number[]>();
     for (const i of olds) {
@@ -489,23 +574,32 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
       const q = bySection.get(`${nb.tag}\u0001${nb.heading ? "" : nb.section}`);
       let hit: number | undefined;
       while (q && q.length && hit === undefined) { const i = q.shift()!; if (!paired.has(i)) hit = i; }
-      if (hit !== undefined) {
-        paired.add(hit);
-        changeAt.set(j, { kind: "changed", block: nb, previous: oldBlocks[hit]! });
-      } else unpairedNew.push(j);
+      if (hit !== undefined) pair(hit, j);
+      else unpairedNew.push(j);
     }
     // 2. Same position in the gap, same tag.
     const unpairedOld = olds.filter((i) => !paired.has(i));
     const k = Math.min(unpairedOld.length, unpairedNew.length);
     for (let x = 0; x < k; x++) {
       const i = unpairedOld[x]!, j = unpairedNew[x]!;
-      if (oldBlocks[i]!.tag === newBlocks[j]!.tag) {
-        paired.add(i);
-        changeAt.set(j, { kind: "changed", block: newBlocks[j]!, previous: oldBlocks[i]! });
-      }
+      if (oldBlocks[i]!.tag === newBlocks[j]!.tag) pair(i, j);
     }
     for (const j of unpairedNew) if (!changeAt.has(j)) changeAt.set(j, { kind: "added", block: newBlocks[j]! });
     for (const i of olds) if (!paired.has(i)) removed.push(oldBlocks[i]!);
+  }
+
+  // Map sections by identity, then classify every same-text pair.
+  for (const [i, j] of same) if (oldBlocks[i]!.heading && newBlocks[j]!.heading) headingMap.set(i, j);
+  const sameSection = (o: PageBlock, nb: PageBlock): boolean => {
+    if (o.sectionId < 0 || nb.sectionId < 0) return o.sectionId < 0 && nb.sectionId < 0;
+    return headingMap.get(o.sectionId) === nb.sectionId;
+  };
+  let moved = 0;
+  for (const [i, j] of same) {
+    const o = oldBlocks[i]!, nb = newBlocks[j]!;
+    if (nb.heading) { if (movedPairs.has(j)) moved++; continue; }
+    if (!sameSection(o, nb)) changeAt.set(j, { kind: "moved", block: nb, previous: o });
+    else if (movedPairs.has(j)) moved++;
   }
   const changes = [...changeAt.entries()].sort((x, y) => x[0] - y[0]).map(([, c]) => c);
   return { changes, removed, moved };
@@ -573,14 +667,15 @@ function computeUncached(oldHtml: string, newHtml: string): PageVersionDiff | nu
   const d = identical ? { changes: [], removed: [], moved: 0 } : diffPageBlocks(o.blocks, n.blocks);
   const empty = d.changes.length === 0 && d.removed.length === 0 && d.moved === 0;
   const textChangedOutsideBlocks = !identical && empty && visibleText(oldDoc) !== visibleText(newDoc);
-  // A synthetic block owned by body/html can't be outlined usefully.
+  // A run of loose text whose owner is a whole region can't be outlined
+  // usefully: it is listed in the summary and counted as not highlightable.
   const changeTargets: Array<{ el: Element; kind: ChangeKind }> = [];
   const seen = new Set<Element>();
+  let unhighlightable = 0;
   for (const c of d.changes) {
     const el = c.block.el;
-    if (!el || seen.has(el)) continue;
-    const tag = el.localName.toLowerCase();
-    if (tag === "body" || tag === "html") continue;
+    if (!el || c.block.unlocatable) { unhighlightable++; continue; }
+    if (seen.has(el)) continue;
     seen.add(el);
     changeTargets.push({ el, kind: c.kind });
   }
@@ -600,6 +695,7 @@ function computeUncached(oldHtml: string, newHtml: string): PageVersionDiff | nu
     marks: locate(newDoc, capped),
     changeMarksTotal: changeTargets.length,
     hintMarksTotal: hintTargets.length,
+    unhighlightable,
   };
 }
 
@@ -672,7 +768,14 @@ export function summarizePageDiff(diff: PageBlockDiff & Partial<Pick<PageVersion
     if (c.kind === "added" && c.block.heading && !addedSections.includes(c.block.section)) addedSections.push(c.block.section);
   }
   for (const c of diff.changes) {
-    if (c.kind === "moved" && c.previous) movedAcross.push({ text: c.block.text, from: c.previous.section, to: c.block.section });
+    if (c.kind === "moved" && c.previous) {
+      const ambiguous = c.previous.section === c.block.section;
+      movedAcross.push({
+        text: c.block.text,
+        from: ambiguous ? c.previous.sectionPath || c.previous.section : c.previous.section,
+        to: ambiguous ? c.block.sectionPath || c.block.section : c.block.section,
+      });
+    }
     const s = c.block.section;
     if (addedSections.includes(s) || changedSections.includes(s)) continue;
     changedSections.push(s);
@@ -732,7 +835,7 @@ function clipQuote(t: string, n = 60): string {
 
 export const STATE_COPY: Record<Exclude<PageDiffState, "changes">, string> = {
   identical: "Page content unchanged.",
-  "markup-only": "Markup or styling only: the visible text did not change.",
+  "markup-only": "No change found in the compared text (attributes, styling and live form state aren't compared).",
   "outside-blocks": "Text changed outside recognised blocks.",
 };
 

@@ -470,31 +470,54 @@ function pickBest(list) {
  *  the companion from the parsed (never executed) page. clippedText MUST read
  *  text exactly as the companion's pageVersionDiff.clippedText does (a parity
  *  test runs both on shared fixtures): whitespace collapsed, br is a space,
- *  each table cell after the first starts with " | ", and empty text falls
+ *  each table cell after the first in its row starts with " | " (even after
+ *  empty cells), an input adds its rendered label/value, and empty text falls
  *  back to alt/aria-label/title/value, then a descendant image's alt. Our own
  *  layer is skipped by its element name, never by an attribute an author
  *  could also write. Must equal pageVersionDiff's TEXT_SKIP_SELECTOR. */
 var CHANGE_SKIP = "script,style,noscript,template,iframe,frame,frameset,object,embed,applet,portal,dp-annotator-layer";
 function inChangeSkip(el) { return !!(el && el.closest && el.closest(CHANGE_SKIP)); }
+function laterCell(e) {
+  for (var s = e.previousElementSibling; s; s = s.previousElementSibling) {
+    var st = String(s.localName).toLowerCase();
+    if (st === "td" || st === "th") return true;
+  }
+  return false;
+}
+var BUTTON_INPUTS = { submit: "Submit", reset: "Reset", button: "" };
+var TEXT_INPUTS = { "": 1, text: 1, search: 1, email: 1, url: 1, tel: 1, number: 1 };
+/** What an input shows as text: a button's value attribute (or its default
+ *  label), a text-like field's value ATTRIBUTE (never live typing). */
+function inputText(e) {
+  var type = String(e.getAttribute("type") || "").trim().toLowerCase();
+  var v = e.getAttribute("value");
+  if (Object.prototype.hasOwnProperty.call(BUTTON_INPUTS, type)) return v !== null ? v : BUTTON_INPUTS[type];
+  if (Object.prototype.hasOwnProperty.call(TEXT_INPUTS, type)) return v !== null ? v : "";
+  return "";
+}
 function clippedText(el, max) {
   var walker = document.createTreeWalker(el, 5, null), text = "", lastSpace = true, n;
   function space() { if (!lastSpace) { text += " "; lastSpace = true; } }
-  outer: while ((n = walker.nextNode())) {
-    if (n.nodeType === 1) {
-      if (inChangeSkip(n)) continue;
-      var tag = String(n.localName).toLowerCase();
-      if (tag === "br") space();
-      else if ((tag === "td" || tag === "th") && text) { space(); text += "| "; lastSpace = true; }
-      continue;
-    }
-    if (inChangeSkip(n.parentElement)) continue;
-    var raw = n.nodeValue || "";
+  function chars(raw) {
     for (var i = 0; i < raw.length; i++) {
       var ch = raw.charAt(i);
       if (isWs(ch)) space();
       else { text += ch; lastSpace = false; }
-      if (text.length > max) break outer;
+      if (text.length > max) return true;
     }
+    return false;
+  }
+  while ((n = walker.nextNode())) {
+    if (n.nodeType === 1) {
+      if (inChangeSkip(n)) continue;
+      var tag = String(n.localName).toLowerCase();
+      if (tag === "br") space();
+      else if (tag === "td" || tag === "th") { if (laterCell(n)) { space(); text += "| "; lastSpace = true; } }
+      else if (tag === "input" && chars(inputText(n))) break;
+      continue;
+    }
+    if (inChangeSkip(n.parentElement)) continue;
+    if (chars(n.nodeValue || "")) break;
   }
   var t = norm(text);
   if (!t && el.getAttribute) t = norm(el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("value") || "");

@@ -429,6 +429,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
                     {versionChanges.diff.hintMarksTotal > 0
                       ? ` · ${versionChanges.diff.hintMarksTotal} author ${versionChanges.diff.hintMarksTotal === 1 ? "hint" : "hints"}`
                       : ""}
+                    {versionChanges.diff.unhighlightable > 0 ? ` · ${versionChanges.diff.unhighlightable} not highlightable` : ""}
                     {totalCandidates > marks.length ? `; showing ${marks.length} of ${totalCandidates}` : ""})
                   </span>
                   <button
@@ -449,6 +450,11 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
                   >
                     ›
                   </button>
+                </span>
+              )}
+              {versionChanges && marks.length === 0 && versionChanges.diff.unhighlightable > 0 && (
+                <span data-testid="page-changes-unhighlightable">
+                  ({versionChanges.diff.unhighlightable} {versionChanges.diff.unhighlightable === 1 ? "change" : "changes"} not highlightable)
                 </span>
               )}
               {versionChanges && <PageChangeLine summary={versionChanges.summary} truncated={versionChanges.diff.truncated} />}

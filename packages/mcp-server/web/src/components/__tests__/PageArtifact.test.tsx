@@ -881,6 +881,17 @@ describe("PageArtifact — what changed since the previous version (#714 gap 2)"
     expect(screen.getByTestId("page-changes-count")).toHaveTextContent("5 highlights");
   });
 
+  it("counts changes it can't outline (loose text in a whole region), so the counter agrees with the summary", async () => {
+    const md = (b: string) => `<main><h2>Alpha</h2>text A<h2>Beta</h2>${b}</main><p>Card</p>`;
+    const a: Artifact = { ...pageArtifact, id: "art_md1", version: 1, status: "superseded", content: { title: "MD", html: md("text B") } };
+    const b: Artifact = { ...pageArtifact, id: "art_md2", version: 2, parentId: a.id, content: { title: "MD", html: md("text B edited") } };
+    useArtifactStore.getState().addArtifact(a);
+    useArtifactStore.getState().addArtifact(b);
+    render(<PageArtifact artifact={b} />);
+    expect(await screen.findByTestId("page-change-summary-line")).toHaveTextContent("Changed: Beta");
+    expect(screen.getByTestId("page-changes-unhighlightable")).toHaveTextContent("(1 change not highlightable)");
+  });
+
   it("discloses the cap: showing 300 of the true total", async () => {
     const many = (w: string) => Array.from({ length: 320 }, (_, i) => `<p>${w} ${i}</p>`).join("");
     const a: Artifact = { ...pageArtifact, id: "art_cap1", version: 1, status: "superseded", content: { title: "Big", html: many("old") } };

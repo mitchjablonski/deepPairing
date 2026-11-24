@@ -16,6 +16,7 @@ import {
   type PageBlock,
 } from "../pageVersionDiff";
 
+const MARKUP_ONLY = "No change found in the compared text (attributes, styling and live form state aren't compared).";
 const blocksOf = (html: string) => extractPageBlocks(parsePageHtml(html)!).blocks;
 const diffOf = (a: string, b: string) => diffPageBlocks(blocksOf(a), blocksOf(b));
 /** The summary line the reviewer reads for this pair. */
@@ -95,16 +96,16 @@ describe("the reviewer is never told 'nothing changed' when text did (probe case
   });
 
   it("says 'markup or styling only' when the HTML differs but no text does", () => {
-    expect(lineFor("<p>Hi</p>", "<p class=\"big\" style=\"color:red\">Hi</p>")).toBe("Markup or styling only: the visible text did not change.");
+    expect(lineFor("<p>Hi</p>", "<p class=\"big\" style=\"color:red\">Hi</p>")).toBe(MARKUP_ONLY);
   });
 
   it("backstop: blocks equal but the visible text differs → 'Text changed outside recognised blocks'", () => {
-    // Loose body text on either side of a paragraph vs. both before it: the
-    // synthetic body block reads "XY" both times, but the page reads differently.
-    const a = "X<p>para</p>Y";
-    const b = "XY<p>para</p>";
-    expect(diffOf(a, b).changes).toEqual([]);
-    expect(lineFor(a, b)).toBe("Text changed outside recognised blocks.");
+    // Loose-text runs make this hard to reach from markup (that is the point);
+    // the summary still never falls back to "unchanged" when the flag is set.
+    const s = summarizePageDiff({ changes: [], removed: [], moved: 0, identical: false, textChangedOutsideBlocks: true });
+    expect(formatPageDiffSummary(s)).toBe("Text changed outside recognised blocks.");
+    // Loose text moving across a paragraph is now a real (run) change.
+    expect(lineFor("X<p>para</p>Y", "XY<p>para</p>")).toMatch(/^Changed:/);
   });
 });
 
@@ -162,7 +163,7 @@ describe("diffPageBlocks", () => {
     const d = diffOf(V1, v2);
     expect(d.changes).toEqual([]);
     expect(d.removed).toEqual([]);
-    expect(lineFor(V1, v2)).toBe("Markup or styling only: the visible text did not change.");
+    expect(lineFor(V1, v2)).toBe(MARKUP_ONLY);
   });
 
   it("a removed section lists its heading AND its paragraphs", () => {
@@ -249,3 +250,63 @@ describe("computePageVersionDiff — frame locators and counts", () => {
     expect(d.changeMarksTotal).toBe(400);
   });
 });
+
+describe("#718 round 3 — loose-text runs, section identity, control values", () => {
+  const MD = (b: string) => `<h2>Alpha</h2>text A<h2>Beta</h2>${b}`;
+  for (const [where, wrap] of [
+    ["body", (x: string) => x],
+    ["<main>", (x: string) => `<main>${x}</main>`],
+    ["a wrapper div", (x: string) => `<div class="doc">${x}</div>`],
+  ] as Array<[string, (x: string) => string]>) {
+    it(`Markdown-style loose text in ${where}: an edit under Beta is credited to Beta, and not outlined`, () => {
+      const d = computePageVersionDiff(wrap(MD("text B")), wrap(MD("text B edited")))!;
+      expect(formatPageDiffSummary(summarizePageDiff(d))).toBe("Changed: Beta");
+      expect(d.marks).toEqual([]);
+      expect(d.unhighlightable).toBe(1);
+    });
+  }
+
+  it("each run of loose text is its own block, positioned where it occurs", () => {
+    expect(blocksOf(MD("text B")).map((b) => [b.tag, b.text, b.section])).toEqual([
+      ["h2", "Alpha", "Alpha"],
+      ["body", "text A", "Alpha"],
+      ["h2", "Beta", "Beta"],
+      ["body", "text B", "Beta"],
+    ]);
+  });
+
+  it("two same-text items moving together across a heading are both flagged", () => {
+    const a = "<h2>Approved</h2><ul><li>Add index</li><li>Retry</li><li>Retry</li></ul><h2>Rejected</h2><ul><li>Rewrite</li></ul>";
+    const b = "<h2>Approved</h2><ul><li>Add index</li></ul><h2>Rejected</h2><ul><li>Rewrite</li><li>Retry</li><li>Retry</li></ul>";
+    const d = diffOf(a, b);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.block.section])).toEqual([
+      ["moved", "Retry", "Rejected"],
+      ["moved", "Retry", "Rejected"],
+    ]);
+  });
+
+  it("a move between two sections that share a name is located and labelled by path", () => {
+    const a = "<h2>Option A</h2><h3>Pros</h3><ul><li>Fast</li><li>Cheap</li></ul><h2>Option B</h2><h3>Pros</h3><ul><li>Safe</li></ul>";
+    const b = "<h2>Option A</h2><h3>Pros</h3><ul><li>Cheap</li></ul><h2>Option B</h2><h3>Pros</h3><ul><li>Safe</li><li>Fast</li></ul>";
+    const d = computePageVersionDiff(a, b)!;
+    expect(d.marks).toEqual([{ kind: "moved", tag: "li", text: "Fast", occurrence: 0 }]);
+    expect(formatPageDiffSummary(summarizePageDiff(d))).toBe("Changed: Pros; Moved: “Fast” from Option A › Pros to Option B › Pros");
+  });
+
+  it("a submit button's value is visible text", () => {
+    expect(lineFor("<form><input type=submit value=\"Approve\"></form>", "<form><input type=submit value=\"Reject\"></form>")).toMatch(/^Changed:/);
+    expect(lineFor("<p><input type=submit></p>", "<p><input type=reset></p>")).toMatch(/^Changed:/);
+  });
+
+  it("a text input's value attribute is visible text", () => {
+    expect(lineFor("<p>Budget <input value=\"40\"></p>", "<p>Budget <input value=\"80\"></p>")).toMatch(/^Changed:/);
+    // A hidden field is not visible text.
+    expect(lineFor("<p>x<input type=hidden value=1></p>", "<p>x<input type=hidden value=2></p>")).toBe(MARKUP_ONLY);
+  });
+
+  it("leading empty cells keep their separators", () => {
+    expect(blocksOf("<table><tr><td></td><td></td><td>40</td></tr></table>").map((b) => b.text)).toEqual(["| | 40"]);
+    expect(lineFor("<table><tr><td></td><td>40</td><td></td></tr></table>", "<table><tr><td></td><td></td><td>40</td></tr></table>")).toMatch(/^Changed:/);
+  });
+});
+
