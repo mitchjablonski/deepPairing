@@ -26,7 +26,14 @@
 /** Pages larger than this (UTF-8 bytes) should carry section ids. */
 export const PAGE_LINT_LONG_PAGE_BYTES = 16 * 1024;
 
-export type PageLintCode = "external_asset" | "no_headings" | "no_section_ids";
+/** Advisory warning codes. These are NOT error codes (`ERROR_CODES`): a
+ *  warning never refuses anything, so they live here as their own set. */
+export const PAGE_LINT_CODES = {
+  external_asset: "external_asset",
+  no_headings: "no_headings",
+  no_section_ids: "no_section_ids",
+} as const;
+export type PageLintCode = (typeof PAGE_LINT_CODES)[keyof typeof PAGE_LINT_CODES];
 
 export interface PageLintWarning {
   code: PageLintCode;
@@ -285,7 +292,7 @@ export function lintPage(html: string): PageLintWarning[] {
     const sources = [...blocked].map(([source, count]) => ({ source, count }));
     const total = sources.reduce((sum, s) => sum + s.count, 0);
     warnings.push({
-      code: "external_asset",
+      code: PAGE_LINT_CODES.external_asset,
       count: total,
       sources,
       message:
@@ -296,13 +303,13 @@ export function lintPage(html: string): PageLintWarning[] {
   }
   if (headings === 0) {
     warnings.push({
-      code: "no_headings",
+      code: PAGE_LINT_CODES.no_headings,
       message: "The page has no headings (<h1>-<h6>). Add an <h1> and an <h2> per section so your pair can skim it.",
     });
   }
   if (sectionIds === 0 && Buffer.byteLength(html, "utf8") > PAGE_LINT_LONG_PAGE_BYTES) {
     warnings.push({
-      code: "no_section_ids",
+      code: PAGE_LINT_CODES.no_section_ids,
       message: `The page is over ${PAGE_LINT_LONG_PAGE_BYTES / 1024} KiB but no <section> or heading has an id. Wrap each part in <section id="..."> so your pair can navigate it and comments stay anchored across revisions.`,
     });
   }
