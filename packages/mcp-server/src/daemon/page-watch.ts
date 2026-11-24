@@ -52,8 +52,8 @@ import { relocatePageComments } from "../mcp/page-anchor-relocate.js";
  * (wrapper unregistered) and dispose (daemon exit) close everything.
  */
 
-export const PAGE_WATCH_QUIET_MS = 2_000;
-export const PAGE_WATCH_MIN_INTERVAL_MS = 10_000;
+import { PAGE_WATCH_MIN_INTERVAL_MS, PAGE_WATCH_QUIET_MS } from "../page-watch-timing.js";
+export { PAGE_WATCH_MIN_INTERVAL_MS, PAGE_WATCH_QUIET_MS };
 export const PAGE_WATCH_POLL_MS = 1_000;
 
 /** The subset of fs.FSWatcher the watch uses (injectable for tests). */

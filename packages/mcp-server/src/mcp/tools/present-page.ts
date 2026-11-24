@@ -7,7 +7,7 @@ import { validatePresentPageInput, pageTooLargeError, type ToolErrorResponse } f
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { resolveProjectRoot } from "../../project-root.js";
-import { lintPage, formatPageLintWarnings, type PageLintWarning } from "../page-lint.js";
+import { safeLintPage, formatPageLintWarnings } from "../page-lint.js";
 import { TOOL_ERROR_CODES, TOOL_ERROR_RETRYABLE } from "../../error-codes.js";
 import type { CreateArtifactParams } from "../../store/store-interface.js";
 import type { ToolContext, ToolResult } from "./types.js";
@@ -266,8 +266,7 @@ export async function presentPage(
   // #714 gap 6 — non-blocking authoring lint. Runs after the gate and the
   // write, so it can never change what is refused or stored; a lint bug must
   // never cost the agent its result.
-  let warnings: PageLintWarning[] = [];
-  try { warnings = lintPage(html); } catch { warnings = []; }
+  const warnings = safeLintPage(html);
   const from = sourcePath ? ` from ${sourcePath}` : "";
   // #680 slice 3 — the daemon watches a file-backed page while it is under review.
   const watchNote = sourcePath

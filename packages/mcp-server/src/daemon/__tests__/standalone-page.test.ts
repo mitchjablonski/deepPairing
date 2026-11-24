@@ -151,9 +151,11 @@ describe("authenticated standalone page revision", () => {
           acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged.",
         },
       });
-      expect(await (await revise(operation, ["cmt_current", "cmt_old"])).json()).toMatchObject({
-        structuredContent: { ...success.structuredContent, replayed: true },
-      });
+      // A replay returns the stored receipt; lint warnings ride only the fresh result (#714 gap 6).
+      const { warnings: _freshWarnings, ...stored } = success.structuredContent;
+      const replayed = await (await revise(operation, ["cmt_current", "cmt_old"])).json();
+      expect(replayed).toMatchObject({ structuredContent: { ...stored, replayed: true } });
+      expect(replayed.structuredContent.warnings).toBeUndefined();
       expect(await (await revise(operation, ["cmt_old"])).json()).toMatchObject({
         isError: true, structuredContent: { code: "standalone_operation_conflict" },
       });
@@ -952,7 +954,7 @@ describe("authenticated standalone page", () => {
   });
 });
 
-describe("standalone present page lint warnings (#714 gap 6)", () => {
+describe("standalone present page and revise-page lint warnings (#714 gap 6)", () => {
   it("carries non-blocking warnings beside the artifactId, and none for a clean page", async () => {
     const f = fixture();
     try {
@@ -967,6 +969,21 @@ describe("standalone present page lint warnings (#714 gap 6)", () => {
 
       const clean = await (await f.present(daemon, randomUUID(), page("<h1>Plan</h1><p>Clean</p>"))).json();
       expect(clean.structuredContent.warnings).toBeUndefined();
+
+      // revise-page (the CLI spreads structuredContent into its JSON) lints too,
+      // on a fresh revision only; a same-UUID replay returns the stored receipt.
+      const parentId = clean.structuredContent.artifactId as string;
+      const operation = randomUUID();
+      const revised = await (await f.revise(daemon, operation, parentId, '<p>v2</p><img src="//x.test/a.png">')).json();
+      expect(revised.isError).toBeFalsy();
+      expect(revised.structuredContent.warnings.map((w: { code: string }) => w.code)).toEqual(["external_asset", "no_headings"]);
+      expect(revised.content[0].text).toContain("Page warnings (non-blocking");
+      const replay = await (await f.revise(daemon, operation, parentId, '<p>v2</p><img src="//x.test/a.png">')).json();
+      expect(replay.structuredContent.replayed).toBe(true);
+      expect(replay.structuredContent.warnings).toBeUndefined();
+      const cleanRevision = await (await f.revise(daemon, randomUUID(), revised.structuredContent.artifactId, "<h1>Plan</h1><p>v3</p>")).json();
+      expect(cleanRevision.isError).toBeFalsy();
+      expect(cleanRevision.structuredContent.warnings).toBeUndefined();
     } finally {
       f.dispose();
     }

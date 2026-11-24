@@ -73,4 +73,19 @@ describe("page-authoring guidance (#714 gap 6)", () => {
     expect(skill).toContain("page-authoring.ts");
     expect(skill).toMatch(/non-blocking warnings/);
   });
+
+  it("the watch timing is single-sourced and the guide never loads the daemon watch", async () => {
+    const timing = await import("../page-watch-timing.js");
+    const watch = await import("../daemon/page-watch.js");
+    expect(watch.PAGE_WATCH_QUIET_MS).toBe(timing.PAGE_WATCH_QUIET_MS);
+    expect(watch.PAGE_WATCH_MIN_INTERVAL_MS).toBe(timing.PAGE_WATCH_MIN_INTERVAL_MS);
+    const src = (rel: string) => fs.readFileSync(path.join(repoRoot, "packages", "mcp-server", "src", rel), "utf8");
+    // Only the timing module defines the values.
+    expect(src("daemon/page-watch.ts")).not.toMatch(/PAGE_WATCH_(QUIET|MIN_INTERVAL)_MS\s*=/);
+    // The guide (and the authoring module it renders) import no daemon module.
+    for (const rel of ["cli/standalone-guide.ts", "page-authoring.ts"]) expect(src(rel)).not.toMatch(/from "\.\.?\/daemon\/page-watch/);
+    expect(src("cli/standalone-guide.ts")).toContain('from "../page-watch-timing.js"');
+    expect(guide).toContain(`about ${timing.PAGE_WATCH_QUIET_MS / 1000}s of quiet, at most one per ${timing.PAGE_WATCH_MIN_INTERVAL_MS / 1000}s`);
+    expect(guide).toMatch(/appear on the first present only/);
+  });
 });

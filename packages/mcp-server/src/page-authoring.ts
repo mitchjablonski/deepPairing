@@ -88,9 +88,10 @@ export function renderPageAuthoringGuide(): string {
 ${bullets(PAGE_STRUCTURE_RULES)}
   Constraints, because the page renders in a locked-down frame:
 ${bullets(PAGE_CONSTRAINT_RULES)}
-  Present returns non-blocking "warnings" for external assets, a page with no
-  headings, and a long page with no section ids. Fix them and present again
-  with a new UUID. Warnings never refuse a page.
+  Present and revise-page return non-blocking "warnings" for external assets,
+  a page with no headings, and a long page with no section ids. Fix them in
+  the next version. Warnings never refuse a page. A watched file save is
+  recorded in the background, so it returns no warnings.
   Minimal skeleton:
 ${PAGE_SKELETON_HTML.split("\n").map((line) => `    ${line}`).join("\n")}`;
 }
@@ -102,7 +103,7 @@ ${PAGE_SKELETON_HTML.split("\n").map((line) => `    ${line}`).join("\n")}`;
 export const PAGE_AUTHORING_TOOL_NOTE =
   "Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline everything, data: URIs are fine). Its scripts run only when your pair clicks Run, so the page must read well without them. " +
   `Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, inline SVG diagrams (Mermaid source is not rendered), <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. ` +
-  "The result lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.";
+  "The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.";
 
 /** Greedy word wrap with a first-line and a continuation indent. */
 function wrap(text: string, width: number, first: string, rest: string): string {

@@ -280,3 +280,9 @@ export function formatPageLintWarnings(warnings: readonly PageLintWarning[]): st
   if (warnings.length === 0) return "";
   return `\n\nPage warnings (non-blocking; the page was presented):\n${warnings.map((w) => `- ${w.message}`).join("\n")}`;
 }
+
+/** Lint a page without ever throwing (a lint bug must not cost a tool result). */
+export function safeLintPage(html: unknown): PageLintWarning[] {
+  if (typeof html !== "string") return [];
+  try { return lintPage(html); } catch { return []; }
+}

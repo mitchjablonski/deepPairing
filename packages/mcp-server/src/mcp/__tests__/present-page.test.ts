@@ -356,6 +356,24 @@ describe("present_page — non-blocking authoring lint (#714 gap 6)", () => {
     expect(res.structuredContent?.warnings).toBeUndefined();
   });
 
+  it("a page revise_artifact gets the same non-blocking warnings; a clean revision gets none", async () => {
+    await callTool("present_page", { title: "Plan", html: "<h1>Plan</h1><p>v1</p>" });
+    const v1 = pages()[0]!.id;
+    const res = await callTool("revise_artifact", {
+      artifactId: v1, mode: "supersede", reason: "add a chart",
+      content: { html: '<p>v2</p><script src="https://cdn.example.com/chart.js"></script>' },
+    });
+    expect(res.isError).toBeFalsy();
+    expect(res.text).toContain("Superseded");
+    expect(res.text).toContain("Page warnings (non-blocking; the page was presented)");
+    expect((res.structuredContent?.warnings as Array<{ code: string }>).map((w) => w.code)).toEqual(["external_asset", "no_headings"]);
+    const v2 = pages().find((p) => p.status === "draft")!.id;
+    const clean = await callTool("revise_artifact", { artifactId: v2, mode: "supersede", reason: "inline it", content: { html: "<h1>Plan</h1><p>v3</p>" } });
+    expect(clean.isError).toBeFalsy();
+    expect(clean.text).not.toContain("Page warnings");
+    expect(clean.structuredContent?.warnings).toBeUndefined();
+  });
+
   it("the lint never changes the gate: a page with warnings is still refused on a rejected approach", async () => {
     store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });
     const res = await callTool("present_page", {

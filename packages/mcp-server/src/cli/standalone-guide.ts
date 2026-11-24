@@ -15,7 +15,7 @@ import { cliInvocation } from "../cli-invocation.js";
 import { MAX_COMMENTS, MAX_RESPONSE_BYTES } from "../daemon/page-feedback.js";
 import { SERVER_VERSION } from "../version.js";
 import { PAGE_CONSTRAINT_RULES, PAGE_SKELETON_HTML, PAGE_STRUCTURE_RULES, renderPageAuthoringGuide } from "../page-authoring.js";
-import { PAGE_WATCH_MIN_INTERVAL_MS, PAGE_WATCH_QUIET_MS } from "../daemon/page-watch.js";
+import { PAGE_WATCH_MIN_INTERVAL_MS, PAGE_WATCH_QUIET_MS } from "../page-watch-timing.js";
 
 /**
  * Every CLI command the guide tells the agent to run. The guide test checks
@@ -142,7 +142,8 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   Keep the artifactId: you read the human's comments with it. A rejection in
   the companion becomes rejection memory and is enforced when you next
   present (see REFUSALS). "warnings" lists authoring problems (step 3a);
-  they never refuse the page.
+  they never refuse the page, and appear on the first present only (a
+  same-UUID replay returns the receipt without them).
   The receipt only confirms the page was created. Give the human the
   companionUrl and tell them the page is ready, then wait for them to
   review it. An empty read-page-feedback result right after presenting means
