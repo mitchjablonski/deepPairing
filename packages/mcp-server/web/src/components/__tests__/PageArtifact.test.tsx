@@ -1029,8 +1029,32 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     fromFrame(win, { ...OUTLINE, pins: [2, 2, 0, 1, 1] });
     const rail = screen.getByTestId("page-outline-rail");
     const badges = within(rail).getAllByTestId("page-outline-entry").map((e) => within(e).queryByTestId("page-outline-comments")?.textContent ?? "");
-    expect(badges).toEqual(["", "1", "2"]);
+    // Rolled up: a heading counts its subsections up to the next heading of
+    // the same or higher level (own counts are 0 / 1 / 2).
+    expect(badges).toEqual(["3", "3", "2"]);
+    expect(within(rail).getByRole("button", { name: "Go to Cache invalidation, 3 open comments (0 in this section, 3 in subsections)" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Go to Options, 3 open comments (1 in this section, 2 in subsections)" })).toBeInTheDocument();
     expect(within(rail).getByRole("button", { name: "Go to TTL expiry, 2 open comments" })).toBeInTheDocument();
+  });
+
+  it("rolls change counts up to the next heading of the same or higher level", async () => {
+    const v1: Artifact = { ...pageArtifact, id: "art_ru_v1", version: 1, status: "superseded", content: { title: "P", html: "<h2>A</h2><p>a</p><h3>A1</h3><p>b</p><h2>B</h2><p>c</p>" } };
+    const v2: Artifact = { ...pageArtifact, id: "art_ru_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<h2>A</h2><p>a!</p><h3>A1</h3><p>b!</p><h2>B</h2><p>c!</p>" } };
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    render(<PageArtifact artifact={v2} />);
+    await screen.findByTestId("page-changes-count");
+    const win = fakeFrameWindow();
+    const headings = [
+      { level: 2, text: "A", locator: "h2:nth-of-type(1)" },
+      { level: 3, text: "A1", locator: "h3" },
+      { level: 2, text: "B", locator: "h2:nth-of-type(2)" },
+    ];
+    fromFrame(win, { dp: "outline", headings, pins: [], changes: [0, 1, 2] });
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(within(rail).getAllByTestId("page-outline-changes").map((b) => b.textContent)).toEqual(["~2", "~1", "~1"]);
+    expect(within(rail).getByRole("button", { name: "Go to A, 2 changed blocks (1 in this section, 1 in subsections)" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Go to B, 1 changed block" })).toBeInTheDocument();
   });
 
   it("badges changed blocks per section from the version diff (while changes are shown)", async () => {

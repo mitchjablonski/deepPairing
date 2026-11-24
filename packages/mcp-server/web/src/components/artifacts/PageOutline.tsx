@@ -2,8 +2,9 @@ import type { PageOutlineHeading } from "../../lib/pageAnchorMessages";
 
 /**
  * #714 gap 4 — the page's skim map: its h1–h3 headings as a clickable outline,
- * each with the open comments and changed blocks in that section, and the
- * section the reader is in highlighted (reading progress).
+ * each with the open comments and changed blocks in that section and its
+ * subsections (rolled up to the next heading of the same or higher level),
+ * and the section the reader is in highlighted (reading progress).
  *
  * Everything shown is frame-reported text, a display-only hint, rendered as
  * React text nodes only. Clicking an entry only scrolls the frame.
@@ -11,9 +12,10 @@ import type { PageOutlineHeading } from "../../lib/pageAnchorMessages";
 
 export interface PageOutlineProps {
   headings: PageOutlineHeading[];
-  /** Open anchored comments per heading index. */
+  /** Open anchored comments per heading index, in that section only (up to
+   *  the next heading of any level); the outline rolls them up. */
   commentCounts: number[];
-  /** Changed blocks per heading index (from the version diff). */
+  /** Changed blocks per heading index (from the version diff), section only. */
   changeCounts: number[];
   /** The section the reader is in (-1 = above the first heading). */
   active: number;
@@ -24,18 +26,47 @@ export interface PageOutlineProps {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+export interface RolledCount {
+  /** In this section and every subsection. */
+  total: number;
+  /** In this section only (before its first subheading). */
+  own: number;
+}
+
+/** Roll per-section counts up: a heading's total includes every following
+ *  heading of a deeper level, up to the next heading of the same or higher
+ *  level. O(n²) over at most 200 headings. */
+export function rollUpCounts(headings: ReadonlyArray<{ level: number }>, own: readonly number[]): RolledCount[] {
+  return headings.map((h, i) => {
+    const mine = own[i] ?? 0;
+    let total = mine;
+    for (let j = i + 1; j < headings.length && headings[j]!.level > h.level; j++) total += own[j] ?? 0;
+    return { total, own: mine };
+  });
+}
+
+/** "5 open comments (2 in this section, 3 in subsections)"; the parenthesis
+ *  only when subsections contribute. */
+function countLabel(c: RolledCount, one: string, many: string): string {
+  if (c.total === 0) return "";
+  const sub = c.total - c.own;
+  return sub > 0 ? `${plural(c.total, one, many)} (${c.own} in this section, ${sub} in subsections)` : plural(c.total, one, many);
+}
+
 function OutlineList({ headings, commentCounts, changeCounts, active, onJump, variant }: PageOutlineProps) {
   const minLevel = Math.min(...headings.map((h) => h.level));
+  const commentRoll = rollUpCounts(headings, commentCounts);
+  const changeRoll = rollUpCounts(headings, changeCounts);
   return (
     <ol className="space-y-0.5" data-testid={`page-outline-list-${variant}`}>
       {headings.map((h, i) => {
-        const comments = commentCounts[i] ?? 0;
-        const changes = changeCounts[i] ?? 0;
+        const comments = commentRoll[i]!.total;
+        const changes = changeRoll[i]!.total;
         const current = i === active;
         const label = [
           h.text,
-          comments > 0 ? plural(comments, "open comment", "open comments") : "",
-          changes > 0 ? plural(changes, "changed block", "changed blocks") : "",
+          countLabel(commentRoll[i]!, "open comment", "open comments"),
+          countLabel(changeRoll[i]!, "changed block", "changed blocks"),
           current ? "you are here" : "",
         ]
           .filter(Boolean)

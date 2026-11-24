@@ -118,13 +118,18 @@ describe("openPageAsks", () => {
     ...extra,
   });
 
-  it("an ask with a human comment anchored on it, inside it, or quoting it is answered", () => {
+  it("an ask with a human comment anchored on it (by #id) or inside it is answered", () => {
     expect(openPageAsks(asks, [comment({ locator: "#decide-ttl", quote: "Decide: a 60s TTL" })]).map((a) => a.id)).toEqual(["ask-budget"]);
     expect(openPageAsks(asks, [comment({ locator: "#ask-budget > strong:nth-of-type(1)", quote: "Question:" })]).map((a) => a.id)).toEqual(["decide-ttl"]);
-    expect(openPageAsks(asks, [comment({ locator: "body > p:nth-of-type(9)", quote: "one more Redis instance in budget" })]).map((a) => a.id)).toEqual(["decide-ttl"]);
   });
 
-  it("an agent comment, a reply, a look-alike id or a short quote does not answer an ask", () => {
+  it("a comment on a TL;DR that restates the question does not answer it (no text fallback)", () => {
+    const restated = comment({ locator: "#tldr > p:nth-of-type(1)", quote: "Question: is one more Redis instance in budget?" });
+    const partial = comment({ locator: "body > p:nth-of-type(9)", quote: "one more Redis instance in budget" });
+    expect(openPageAsks(asks, [restated, partial]).map((a) => a.id)).toEqual(["decide-ttl", "ask-budget"]);
+  });
+
+  it("an agent comment, a reply, a look-alike id or a bare quote does not answer an ask", () => {
     const open = openPageAsks(asks, [
       comment({ locator: "#decide-ttl", quote: "" }, { author: "agent" }),
       comment({ locator: "#decide-ttl", quote: "" }, { parentCommentId: "cmt_root" }),

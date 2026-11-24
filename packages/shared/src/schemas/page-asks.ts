@@ -6,7 +6,7 @@
  * The companion collects them from the frame (display-only hints) and the MCP
  * server scans them from the page text; both decide "answered" with the SAME
  * rule, kept here so the two can't drift: an ask is answered once a human
- * comment is anchored to it.
+ * comment is anchored to the ask's element (its locator or `#id`) or inside it.
  */
 
 /** Marks a callout that asks the human to decide something. */
@@ -56,35 +56,21 @@ export function cssEscapeIdent(value: string): string {
   return out;
 }
 
-function norm(s: string): string {
-  return s.replace(/\s+/g, " ").trim();
-}
-
-/** A text fallback only counts for a quote at least this long, so a short
- *  common word elsewhere on the page never marks an ask answered. */
-const MIN_QUOTE_MATCH = 12;
-
 /** Is `locator` this element or inside it? (`a` or `a > …`, never `ab`.) */
 function atOrInside(locator: string, base: string): boolean {
   return locator === base || locator.startsWith(base + " > ");
 }
 
 /**
- * Is this anchor on the ask? Yes when its locator is the ask's element (by the
- * frame's locator or `#id`) or inside it, or, failing that, when its quote is
- * a substantial part of the ask's text (an anchor on a child without a stable
- * path, or a text selection in the ask).
+ * Is this anchor on the ask? Only when its locator is the ask's element (by
+ * the frame's locator or `#id`) or something inside it. There is deliberately
+ * no text fallback: a comment on text that merely repeats the ask (a TL;DR
+ * restating the question) must not mark it answered, because a false
+ * "answered" hides an open ask from both the human and the agent.
  */
 export function anchorTargetsAsk(ask: PageAskRef, anchor: { locator: string; quote: string }): boolean {
-  const bases: string[] = [];
-  if (ask.locator) bases.push(ask.locator);
-  if (ask.id) bases.push("#" + cssEscapeIdent(ask.id));
-  for (const b of bases) if (atOrInside(anchor.locator, b)) return true;
-  const q = norm(anchor.quote);
-  const t = norm(ask.text);
-  if (q.length < MIN_QUOTE_MATCH || t.length < MIN_QUOTE_MATCH) return false;
-  // The ask's text is clipped; an anchor on the whole element quotes more of it.
-  return t.includes(q) || q.startsWith(t);
+  if (ask.locator && atOrInside(anchor.locator, ask.locator)) return true;
+  return !!ask.id && atOrInside(anchor.locator, "#" + cssEscapeIdent(ask.id));
 }
 
 /** Answered = some HUMAN root comment is anchored to the ask. */
