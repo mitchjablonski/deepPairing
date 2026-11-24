@@ -531,8 +531,10 @@ Words to the agent:
   diagrams (Mermaid source is not rendered), `<details>` for depth, and each
   ask in an element marked `data-dp-decision` or `data-dp-question` with an
   id. The result lists non-blocking warnings (external assets, no headings, a
-  long page without section ids); fix them in the next version. (Source of
-  truth: `packages/mcp-server/src/page-authoring.ts`.) It is a
+  long page without section ids); fix them in the next version. For in-page
+  navigation use `#id` links, `<details>` and radio/checkbox tabs, which keep
+  working while your pair comments; `:target`-based CSS never switches there.
+  (Source of truth: `packages/mcp-server/src/page-authoring.ts`.) It is a
   reviewable draft: approve, request changes, or reject with a reason. The
   rejection gate reads the page's visible text, title, summary and concept
   like any other present_* call; a match is refused with the stored reason,

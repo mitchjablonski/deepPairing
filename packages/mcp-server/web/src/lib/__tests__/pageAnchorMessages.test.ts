@@ -4,7 +4,7 @@
  * anchor that parses against the shared schema (every field capped).
  */
 import { describe, it, expect } from "vitest";
-import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage } from "../pageAnchorMessages";
+import { acceptAnchorMessage, acceptPinsStatus, isReadyMessage, isTogglePointingMessage } from "../pageAnchorMessages";
 
 const frame = { name: "page-frame" } as unknown as Window;
 const otherFrame = { name: "other-frame" } as unknown as Window;
@@ -65,5 +65,16 @@ describe("acceptPinsStatus / isReadyMessage", () => {
   it("recognizes ready only from this frame", () => {
     expect(isReadyMessage({ source: frame, data: { dp: "ready" } }, frame)).toBe(true);
     expect(isReadyMessage({ source: otherFrame, data: { dp: "ready" } }, frame)).toBe(false);
+  });
+});
+
+describe("isTogglePointingMessage (#714)", () => {
+  it("accepts the shortcut only from this frame, and only as its own dp type", () => {
+    expect(isTogglePointingMessage({ source: frame, data: { dp: "toggle-pointing" } }, frame)).toBe(true);
+    expect(isTogglePointingMessage({ source: otherFrame, data: { dp: "toggle-pointing" } }, frame)).toBe(false);
+    expect(isTogglePointingMessage({ source: null, data: { dp: "toggle-pointing" } }, frame)).toBe(false);
+    expect(isTogglePointingMessage({ source: frame, data: { dp: "toggle-pointing" } }, null)).toBe(false);
+    expect(isTogglePointingMessage({ source: frame, data: { dp: "ready" } }, frame)).toBe(false);
+    expect(isTogglePointingMessage({ source: frame, data: "toggle-pointing" }, frame)).toBe(false);
   });
 });
