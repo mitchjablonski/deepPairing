@@ -66,7 +66,7 @@ export function isTogglePointingMessage(event: FrameMessage, frame: Window | nul
  *  same way the annotator re-checks it. */
 export const PageChangeMarkSchema = z
   .object({
-    kind: z.enum(["added", "changed", "hinted"]),
+    kind: z.enum(["added", "changed", "moved", "hinted"]),
     tag: z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,63}$/),
     text: z.string().min(1).max(LOCATOR_TEXT_MAX),
     occurrence: z.number().int().min(0).max(1_000_000),

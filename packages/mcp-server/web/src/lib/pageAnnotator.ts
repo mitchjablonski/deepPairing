@@ -468,30 +468,48 @@ function pickBest(list) {
 
 /** #714 gap 2 — a version-change locator {tag, text, occurrence}, computed by
  *  the companion from the parsed (never executed) page. clippedText MUST read
- *  text exactly as the companion's pageVersionDiff.clippedText does. */
-var CHANGE_SKIP = "script,style,noscript,template,iframe,frame,frameset,object,embed,applet,portal,[data-dp-annotator]";
+ *  text exactly as the companion's pageVersionDiff.clippedText does (a parity
+ *  test runs both on shared fixtures): whitespace collapsed, br is a space,
+ *  each table cell after the first starts with " | ", and empty text falls
+ *  back to alt/aria-label/title/value, then a descendant image's alt. Our own
+ *  layer is skipped by its element name, never by an attribute an author
+ *  could also write. Must equal pageVersionDiff's TEXT_SKIP_SELECTOR. */
+var CHANGE_SKIP = "script,style,noscript,template,iframe,frame,frameset,object,embed,applet,portal,dp-annotator-layer";
+function inChangeSkip(el) { return !!(el && el.closest && el.closest(CHANGE_SKIP)); }
 function clippedText(el, max) {
-  var walker = document.createTreeWalker(el, 4, null), text = "", lastSpace = true, n, done = false;
-  while (!done && (n = walker.nextNode())) {
-    var p = n.parentElement;
-    if (p && p.closest && p.closest(CHANGE_SKIP)) continue;
+  var walker = document.createTreeWalker(el, 5, null), text = "", lastSpace = true, n;
+  function space() { if (!lastSpace) { text += " "; lastSpace = true; } }
+  outer: while ((n = walker.nextNode())) {
+    if (n.nodeType === 1) {
+      if (inChangeSkip(n)) continue;
+      var tag = String(n.localName).toLowerCase();
+      if (tag === "br") space();
+      else if ((tag === "td" || tag === "th") && text) { space(); text += "| "; lastSpace = true; }
+      continue;
+    }
+    if (inChangeSkip(n.parentElement)) continue;
     var raw = n.nodeValue || "";
     for (var i = 0; i < raw.length; i++) {
       var ch = raw.charAt(i);
-      if (isWs(ch)) { if (!lastSpace) { text += " "; lastSpace = true; } }
+      if (isWs(ch)) space();
       else { text += ch; lastSpace = false; }
-      if (text.length > max) { done = true; break; }
+      if (text.length > max) break outer;
     }
   }
   var t = norm(text);
   if (!t && el.getAttribute) t = norm(el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("value") || "");
+  if (!t && el.getElementsByTagName) {
+    var imgs = el.getElementsByTagName("img");
+    for (var k = 0; k < imgs.length && !t; k++) if (!inChangeSkip(imgs[k])) t = norm(imgs[k].getAttribute("alt") || "");
+  }
   return clip(t, max);
 }
 /** Re-find each locator: the occurrence-th element of its tag whose clipped
  *  text equals its text, else the first such element (the page changed after
- *  Run), else null. Each tag's elements are read once per call. */
-function findChanges(list) {
-  var byTag = {}, out = [];
+ *  Run), else null. Each tag's text index is built once and kept in cache
+ *  (the caller drops it when the page itself changes). */
+function findChanges(list, cache) {
+  var byTag = cache && typeof cache === "object" ? cache : {}, out = [];
   for (var i = 0; i < list.length; i++) {
     var c = list[i];
     if (!c) { out.push(null); continue; }
@@ -500,14 +518,14 @@ function findChanges(list) {
       idx = [];
       var els = document.getElementsByTagName(c.tag);
       for (var j = 0; j < els.length; j++) {
-        if (els[j].closest && els[j].closest(CHANGE_SKIP)) continue;
+        if (inChangeSkip(els[j])) continue;
         idx.push({ el: els[j], text: clippedText(els[j], LIMITS.quote) });
       }
       byTag[c.tag] = idx;
     }
     var seen = 0, first = null, hit = null;
     for (var k = 0; k < idx.length; k++) {
-      if (idx[k].text !== c.text) continue;
+      if (idx[k].text !== c.text || !idx[k].el.isConnected) continue;
       if (!first) first = idx[k].el;
       if (seen === c.occurrence) { hit = idx[k].el; break; }
       seen++;
@@ -534,6 +552,7 @@ return {
   nodeAnchor: nodeAnchor,
   cellAnchor: cellAnchor,
   mermaidNodeId: mermaidNodeId,
+  CHANGE_SKIP: CHANGE_SKIP,
   clippedText: clippedText,
   findChanges: findChanges
 };
@@ -757,9 +776,9 @@ function drawPins() {
   }
   return found;
 }
-var CHANGE_COLORS = { added: "#16a34a", changed: "#8b5cf6", hinted: "#0891b2" };
-var CHANGE_GLYPHS = { added: "+", changed: "~", hinted: "*" };
-var CHANGE_KINDS = { added: 1, changed: 1, hinted: 1 };
+var CHANGE_COLORS = { added: "#16a34a", changed: "#8b5cf6", moved: "#2563eb", hinted: "#0891b2" };
+var CHANGE_GLYPHS = { added: "+", changed: "~", moved: "\u2195", hinted: "*" };
+var CHANGE_KINDS = { added: 1, changed: 1, moved: 1, hinted: 1 };
 var TAG_RE = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
 /** A locator from the parent, checked field by field (the parent built it
  *  from a Zod-validated message, but the frame trusts nothing): null if bad. */
@@ -774,17 +793,42 @@ function validChange(c) {
 }
 /** Change bars, drawn under the pins (inserted first in the layer), with DOM
  *  APIs and textContent only. Re-resolved on every draw, like the pins. */
+var changeEls = null, changeIndex = {}, changeBoxes = null;
+/** Drop the resolved change targets and the per-tag text index: the page's
+ *  own DOM changed (never our layer), or new marks arrived. */
+function invalidateChanges() { changeEls = null; changeIndex = {}; changeBoxes = null; }
+function changesFound() {
+  var found = [];
+  for (var j = 0; j < changes.length; j++) found.push(!!(changes[j] && changeEls && changeEls[j]));
+  return found;
+}
+/** Change bars, drawn under the pins (inserted first in the layer) with mk()
+ *  (so they are ours by reference) and textContent only. A scroll or resize
+ *  only re-places them; the targets are re-found only after the page's own
+ *  DOM changes (invalidateChanges). */
 function drawChanges() {
-  var l = ensureLayer();
+  var l = ensureLayer(), b;
+  if (showChanges && changeEls && changeBoxes) {
+    var stale = false;
+    for (b = 0; b < changeBoxes.length; b++) {
+      if (!changeBoxes[b].box.isConnected || !changeBoxes[b].el.isConnected) { stale = true; break; }
+    }
+    if (!stale) {
+      for (b = 0; b < changeBoxes.length; b++) place(changeBoxes[b].box, changeBoxes[b].el.getBoundingClientRect());
+      return changesFound();
+    }
+    invalidateChanges();
+  }
   var olds = l.querySelectorAll("dp-annotator-change");
   for (var i = 0; i < olds.length; i++) olds[i].remove();
-  var found = [];
-  if (!showChanges || !changes.length) return found;
-  var els = [];
-  try { els = core.findChanges(changes); } catch (e) { els = []; }
+  changeBoxes = null;
+  if (!showChanges || !changes.length) return [];
+  if (!changeEls) {
+    try { changeEls = core.findChanges(changes, changeIndex); } catch (e) { changeEls = []; }
+  }
+  changeBoxes = [];
   for (var j = 0; j < changes.length; j++) {
-    var el = changes[j] ? els[j] || null : null;
-    found.push(!!el);
+    var el = changes[j] ? changeEls[j] || null : null;
     if (!el || !el.getBoundingClientRect) continue;
     var color = CHANGE_COLORS[changes[j].kind];
     var box = mk("dp-annotator-change");
@@ -799,18 +843,17 @@ function drawChanges() {
       color: color, font: "700 12px/14px system-ui, sans-serif", "text-align": "center" });
     box.appendChild(tag);
     l.insertBefore(box, l.firstChild);
+    changeBoxes.push({ box: box, el: el });
   }
-  return found;
+  return changesFound();
 }
 function focusChange(index) {
   if (!showChanges || typeof index !== "number" || index < 0 || index >= changes.length) return;
   var i = Math.floor(index);
   if (!changes[i]) return;
-  var els = [];
-  try { els = core.findChanges([changes[i]]); } catch (e) { els = []; }
-  var el = els[0];
-  if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
   reconcile(false);
+  var el = changeEls ? changeEls[i] : null;
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
   var box = layer ? layer.querySelector("dp-annotator-change[data-dp-change=\"" + i + "\"]") : null;
   if (box) {
     var color = CHANGE_COLORS[changes[i].kind];
@@ -870,7 +913,7 @@ var mo = null, ro = null;
 function observe() {
   try {
     if (typeof window.MutationObserver === "function") {
-      mo = new window.MutationObserver(function (records) { if (relevant(records)) schedule(); });
+      mo = new window.MutationObserver(function (records) { if (relevant(records)) { invalidateChanges(); schedule(); } });
       mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     }
   } catch (e) { mo = null; }
@@ -897,6 +940,7 @@ function onMessage(e) {
     for (var ci = 0; ci < list.length; ci++) changes.push(validChange(list[ci]));
     // A slot that failed validation stays null (never found), so indexes line up.
     showChanges = d.show === true;
+    invalidateChanges();
     reconcile(false, true);
   } else if (d.dp === "focus-change") {
     focusChange(d.index);

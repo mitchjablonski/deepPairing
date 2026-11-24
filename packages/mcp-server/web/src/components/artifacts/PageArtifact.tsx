@@ -20,8 +20,8 @@ import {
   isReadyMessage,
   isTogglePointingMessage,
 } from "../../lib/pageAnchorMessages";
-import { usePageVersionDiff } from "../../hooks/usePageVersionDiff";
-import { PageChangeSummary } from "./PageChangeSummary";
+import { usePageLineage, usePageVersionDiff } from "../../hooks/usePageVersionDiff";
+import { PageChangeLine, PageRemovedList } from "./PageChangeSummary";
 import type { ChangeLocator } from "../../lib/pageVersionDiff";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
@@ -164,11 +164,22 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // two versions' PARSED text (DOMParser, inert; nothing runs), highlighted in
   // the frame behind a toggle that starts on for any version with a
   // predecessor. Removed blocks can't be shown in the frame; they're listed.
-  const versionChanges = usePageVersionDiff(artifact);
+  // The base defaults to the immediate predecessor; the reviewer may pick any
+  // earlier loaded version (the file watch can land several auto-saves
+  // between two reviews).
+  const lineage = usePageLineage(artifact);
+  const [basePick, setBasePick] = useState<{ forId: string; baseId: string } | null>(null);
+  const pickedBase = basePick && basePick.forId === artifact.id ? lineage.find((l) => l.artifact.id === basePick.baseId) : undefined;
+  const baseEntry = pickedBase ?? lineage[0];
+  const { changes: versionChanges, pending: changesPending } = usePageVersionDiff(artifact, baseEntry?.artifact);
   const marks = versionChanges?.diff.marks ?? NO_MARKS;
   const [showChanges, setShowChanges] = useState(true);
   const [changesFound, setChangesFound] = useState<boolean[] | null>(null);
   const [changeIndex, setChangeIndex] = useState(-1);
+  useEffect(() => {
+    setChangesFound(null);
+    setChangeIndex(-1);
+  }, [marks]);
 
   const postToFrame = useCallback((msg: unknown) => {
     // "*" — the frame's origin is opaque ("null"); nothing sent here is secret
@@ -241,8 +252,11 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         setFound(status);
         return;
       }
+      // Trust model: once the page's own scripts run they share the frame and
+      // could forge this report, so it is ignored then; the companion's own
+      // computed count stands.
       const changeStatus = acceptChangesStatus(event, frame);
-      if (changeStatus) setChangesFound(changeStatus);
+      if (changeStatus && !runningRef.current) setChangesFound(changeStatus);
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -305,7 +319,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       return;
     }
   };
-  const visibleChanges = changesFound ? changesFound.filter(Boolean).length : marks.length;
+  const visibleHighlights = changesFound ? changesFound.filter(Boolean).length : marks.length;
+  const totalCandidates = versionChanges ? versionChanges.diff.changeMarksTotal + versionChanges.diff.hintMarksTotal : 0;
+  const summaryChanged =
+    !!baseEntry && (coercePageContent(baseEntry.artifact.content).summary ?? "").trim() !== (page.summary ?? "").trim();
   // The revise reason, shown on the version it explains. A file-watch version's
   // reason is the watch's own boilerplate, said better by its notice.
   const reviseReason = artifact.version > 1 && !fileWatch.recorded ? artifact.agentReasoning?.trim() : "";
@@ -348,7 +365,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
           )}
         </div>
       )}
-      {(reviseReason || fileWatch.recorded || versionChanges) && (
+      {(reviseReason || fileWatch.recorded || baseEntry) && (
         <div
           className="px-3 py-2 rounded-lg border border-accent-violet/30 bg-accent-violet/5 space-y-1.5"
           data-testid="page-version-changes"
@@ -369,56 +386,84 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
               </div>
             )}
           </div>
-          {versionChanges && (
-            <>
-              <div className="flex flex-wrap items-center gap-2 text-2xs text-text-muted" data-testid="page-changes-bar">
-                <button
-                  type="button"
-                  onClick={() => setShowChanges((v) => !v)}
-                  aria-pressed={showChanges}
-                  className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary"
-                  title="Mark the blocks that are new or reworded since the previous version"
-                  data-testid="page-changes-toggle"
-                >
-                  Changes since v{versionChanges.parent.version}: {showChanges ? "on" : "off"}
-                </button>
-                {showChanges && marks.length > 0 && (
-                  <span className="inline-flex items-center gap-1" data-testid="page-changes-nav">
-                    <span data-testid="page-changes-count">
-                      {visibleChanges} {visibleChanges === 1 ? "change" : "changes"}
-                      {changeIndex >= 0 && visibleChanges > 0 ? ` (${changeIndex + 1} of ${marks.length})` : ""}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => stepChange(-1)}
-                      disabled={visibleChanges === 0}
-                      aria-label="Previous change"
-                      className="px-1 rounded border border-border-default hover:bg-surface-elevated disabled:opacity-40"
-                    >
-                      ‹
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => stepChange(1)}
-                      disabled={visibleChanges === 0}
-                      aria-label="Next change"
-                      className="px-1 rounded border border-border-default hover:bg-surface-elevated disabled:opacity-40"
-                    >
-                      ›
-                    </button>
-                  </span>
-                )}
-                <PageChangeSummary summary={versionChanges.summary} truncated={versionChanges.diff.truncated} variant="line" />
-              </div>
-              {(versionChanges.summary.removed.length > 0 || versionChanges.summary.removedSections.length > 0) && (
-                <details className="text-2xs" data-testid="page-changes-removed">
-                  <summary className="cursor-pointer text-text-muted">Removed since v{versionChanges.parent.version} (not on the page any more)</summary>
-                  <div className="pt-1">
-                    <PageChangeSummary summary={{ ...versionChanges.summary, changedSections: [], addedSections: [] }} title={null} />
-                  </div>
-                </details>
+          {baseEntry && (
+            <div className="flex flex-wrap items-center gap-2 text-2xs text-text-muted" data-testid="page-changes-bar">
+              <button
+                type="button"
+                onClick={() => setShowChanges((v) => !v)}
+                aria-pressed={showChanges}
+                className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary"
+                title="Mark the blocks that are new, reworded or moved to another section since the version you compare with"
+                data-testid="page-changes-toggle"
+              >
+                Changes since v{baseEntry.artifact.version}: {showChanges ? "on" : "off"}
+              </button>
+              {lineage.length > 1 && (
+                <label className="inline-flex items-center gap-1">
+                  <span>Compare with</span>
+                  <select
+                    aria-label="Compare with"
+                    value={baseEntry.artifact.id}
+                    onChange={(e) => setBasePick({ forId: artifact.id, baseId: e.target.value })}
+                    className="bg-surface-elevated border border-border-default rounded px-1 py-0.5 text-text-secondary"
+                    data-testid="page-compare-with"
+                  >
+                    {lineage.map((l) => (
+                      <option key={l.artifact.id} value={l.artifact.id}>
+                        v{l.artifact.version}
+                        {l.autoSave ? " (auto-save)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
-            </>
+              {changesPending && <span data-testid="page-changes-pending">Comparing…</span>}
+              {versionChanges && showChanges && marks.length > 0 && (
+                <span className="inline-flex items-center gap-1" data-testid="page-changes-nav">
+                  <span data-testid="page-changes-count">
+                    {visibleHighlights} {visibleHighlights === 1 ? "highlight" : "highlights"}
+                    {changeIndex >= 0 && visibleHighlights > 0 ? ` (at ${changeIndex + 1})` : ""}
+                  </span>
+                  <span className="text-text-muted" data-testid="page-changes-breakdown">
+                    ({versionChanges.diff.changeMarksTotal} {versionChanges.diff.changeMarksTotal === 1 ? "change" : "changes"}
+                    {versionChanges.diff.hintMarksTotal > 0
+                      ? ` · ${versionChanges.diff.hintMarksTotal} author ${versionChanges.diff.hintMarksTotal === 1 ? "hint" : "hints"}`
+                      : ""}
+                    {totalCandidates > marks.length ? `; showing ${marks.length} of ${totalCandidates}` : ""})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => stepChange(-1)}
+                    disabled={visibleHighlights === 0}
+                    aria-label="Previous highlight"
+                    className="px-1 rounded border border-border-default hover:bg-surface-elevated disabled:opacity-40"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepChange(1)}
+                    disabled={visibleHighlights === 0}
+                    aria-label="Next highlight"
+                    className="px-1 rounded border border-border-default hover:bg-surface-elevated disabled:opacity-40"
+                  >
+                    ›
+                  </button>
+                </span>
+              )}
+              {versionChanges && <PageChangeLine summary={versionChanges.summary} truncated={versionChanges.diff.truncated} />}
+              {summaryChanged && <span data-testid="page-summary-changed">The summary above was updated too.</span>}
+            </div>
+          )}
+          {versionChanges && (versionChanges.summary.removed.length > 0 || versionChanges.summary.removedSections.length > 0) && (
+            <details className="text-2xs" data-testid="page-changes-removed">
+              <summary className="cursor-pointer text-text-muted">
+                Removed since v{versionChanges.base.version} (not on the page any more)
+              </summary>
+              <div className="pt-1">
+                <PageRemovedList summary={versionChanges.summary} />
+              </div>
+            </details>
           )}
         </div>
       )}

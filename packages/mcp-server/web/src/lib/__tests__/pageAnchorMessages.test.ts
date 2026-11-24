@@ -88,6 +88,7 @@ describe("version change marks (#714 gap 2)", () => {
     );
     expect(msg).toEqual({ dp: "changes", marks: [good], show: true });
     expect(buildChangesMessage(Array.from({ length: 400 }, () => good), false).marks).toHaveLength(300);
+    expect(buildChangesMessage([{ ...good, kind: "moved" }, { ...good, kind: "hinted" }], true).marks.map((m) => m.kind)).toEqual(["moved", "hinted"]);
   });
 
   it("acceptChangesStatus takes a boolean list only from this frame", () => {

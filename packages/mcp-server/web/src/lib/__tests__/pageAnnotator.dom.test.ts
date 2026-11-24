@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HtmlAnchorSchema } from "@deeppairing/shared";
 import { ANNOTATOR_CORE_SOURCE, ANNOTATOR_MAIN_SOURCE, ANNOTATOR_SCRIPT } from "../pageAnnotator";
+import { clippedText as diffClippedText, TEXT_SKIP_SELECTOR } from "../pageVersionDiff";
 
 type Core = {
   buildLocator(el: Element): string;
@@ -772,7 +773,7 @@ describe("annotator main — version change marks (#714 gap 2)", () => {
   const statuses = () => posted.filter((m) => m?.dp === "changes-status").map((m) => m.found);
   const marks = [
     { kind: "changed", tag: "p", text: "Second bold paragraph.", occurrence: 0 },
-    { kind: "added", tag: "tr", text: "Write-through purgeNone", occurrence: 0 },
+    { kind: "added", tag: "tr", text: "Write-through purge | None", occurrence: 0 },
     { kind: "added", tag: "p", text: "Gone from this page", occurrence: 0 },
   ];
 
@@ -812,5 +813,81 @@ describe("annotator main — version change marks (#714 gap 2)", () => {
     send({ dp: "changes", marks: [{ kind: "added", tag: "p", text: "Same", occurrence: 2 }], show: true });
     send({ dp: "focus-change", index: 0 });
     expect(scrolled.at(-1)).toBe(document.querySelectorAll("p")[2]);
+  });
+});
+
+describe("annotator change marks — caching, ownership and parity (#714 gap 2 review)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  let finds: number;
+  beforeEach(() => {
+    document.body.innerHTML = PAGE;
+    posted = [];
+    finds = 0;
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    const core = makeCore() as any;
+    const real = core.findChanges;
+    core.findChanges = (list: unknown, cache: unknown) => { finds++; return real(list, cache); };
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, core) as () => void;
+  });
+  afterEach(() => {
+    uninstall();
+    vi.restoreAllMocks();
+  });
+  const send = (data: unknown) => window.dispatchEvent(new MessageEvent("message", { data, source: window }));
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("a scroll only re-places the bars; a page mutation re-finds them", async () => {
+    send({ dp: "changes", marks: [{ kind: "moved", tag: "p", text: "First paragraph.", occurrence: 0 }], show: true });
+    expect(finds).toBe(1);
+    const box = document.querySelector("dp-annotator-change")!;
+    expect(box.getAttribute("data-dp-change-kind")).toBe("moved");
+    window.dispatchEvent(new Event("scroll"));
+    await wait(200);
+    expect(finds).toBe(1);
+    expect(document.querySelector("dp-annotator-change")).toBe(box);
+    document.body.appendChild(document.createElement("p")).textContent = "page changed";
+    await wait(200);
+    expect(finds).toBe(2);
+  });
+
+  it("drawing bars never re-triggers a redraw (bars are ours by reference)", async () => {
+    send({ dp: "changes", marks: [{ kind: "added", tag: "p", text: "First paragraph.", occurrence: 0 }], show: true });
+    await wait(250);
+    expect(finds).toBe(1);
+  });
+
+  it("authored data-dp-annotator content is still found and marked", () => {
+    document.body.innerHTML = "<p data-dp-annotator>Authored</p>";
+    send({ dp: "changes", marks: [{ kind: "changed", tag: "p", text: "Authored", occurrence: 0 }], show: true });
+    expect(posted.filter((m) => m?.dp === "changes-status").at(-1)?.found).toEqual([true]);
+  });
+});
+
+describe("clippedText parity: annotator core vs companion diff (#714 gap 2)", () => {
+  const FIXTURES = [
+    "<p>  Hello   <b>bold</b>\n world </p>",
+    "<table><tr><td>40</td><td></td><th>x</th></tr></table>",
+    "<p>Ship<br>Monday</p>",
+    "<figure><img alt=\"Latency chart\"></figure>",
+    "<div><h3>Card</h3>Ship on <i>Monday</i></div>",
+    "<div aria-label=\"Labelled\"></div>",
+    "<p>a&nbsp;b &amp; c</p>",
+    "<div><script>var x = 1;</script><style>p{}</style><noscript>ns</noscript><template>t</template><iframe>f</iframe>kept</div>",
+    "<p data-dp-annotator>authored</p>",
+    `<p>${"long ".repeat(100)}</p>`,
+  ];
+  it("both read every fixture identically", () => {
+    const core = makeCore() as any;
+    for (const html of FIXTURES) {
+      document.body.innerHTML = html;
+      const el = document.body.firstElementChild!;
+      expect(core.clippedText(el, 280)).toBe(diffClippedText(el, 280));
+    }
+  });
+  it("skip lists are the same string", () => {
+    expect((makeCore() as any).CHANGE_SKIP).toBe(TEXT_SKIP_SELECTOR);
   });
 });

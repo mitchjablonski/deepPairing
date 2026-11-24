@@ -793,35 +793,41 @@ describe("PageArtifact — what changed since the previous version (#714 gap 2)"
     "<h2>Rollout</h2><ul><li>Canary 5%</li></ul>";
   const V2_HTML =
     "<h2>Storage</h2><p>We store rows in SQLite.</p>" +
-    "<h2>Costs</h2><p>About $40 a month.</p>" +
-    "<h2>Rollout</h2><ul><li>Canary 5%</li><li>Then 100%</li></ul>" +
+    "<h2>Costs</h2><p data-dp-changed>About $40 a month.</p>" +
+    "<h2>Rollout</h2><ul><li>Canary 5%</li><li data-dp-changed>Then 100%</li></ul>" +
     "<h2>Risks</h2><p>Lock contention.</p>";
-  const v1: Artifact = { ...pageArtifact, id: "art_pg_v1", version: 1, status: "superseded", content: { title: "Plan", html: V1_HTML } };
+  const v1: Artifact = { ...pageArtifact, id: "art_pg_v1", version: 1, status: "superseded", content: { title: "Plan", html: V1_HTML, summary: "Old summary" } };
   const v2: Artifact = {
     ...pageArtifact,
     id: "art_pg_v2",
     version: 2,
     parentId: v1.id,
     agentReasoning: "Switched storage to SQLite and added a risks section",
-    content: { title: "Plan", html: V2_HTML },
+    content: { title: "Plan", html: V2_HTML, summary: "New summary" },
   };
   beforeEach(() => {
     useArtifactStore.getState().addArtifact(v1);
     useArtifactStore.getState().addArtifact(v2);
   });
 
-  it("v2+: the Changes toggle defaults on, lists the sections, and shows the revise reason", () => {
+  it("v2+: the toggle defaults on, the summary lists sections, and the reason is shown", async () => {
     render(<PageArtifact artifact={v2} />);
     const toggle = screen.getByTestId("page-changes-toggle");
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(toggle).toHaveTextContent("Changes since v1: on");
-    expect(screen.getByTestId("page-change-summary-line")).toHaveTextContent(
+    // The diff lands off the render path.
+    expect(await screen.findByTestId("page-change-summary-line")).toHaveTextContent(
       "Changed: Storage, Rollout; Added: Risks; Removed: 2 paragraphs under Costs",
     );
     expect(screen.getByTestId("page-revise-reason")).toHaveTextContent("Why v2: Switched storage to SQLite and added a risks section");
+    expect(screen.getByTestId("page-summary-changed")).toBeInTheDocument();
     // Removed blocks can't be marked in the frame: they're listed as text.
-    expect(within(screen.getByTestId("page-changes-removed")).getByText(/Plus egress\. · Plus support\./)).toBeInTheDocument();
-    expect(screen.getByTestId("page-changes-count")).toHaveTextContent("4 changes");
+    const removed = screen.getByTestId("page-changes-removed");
+    expect(within(removed).getByText("Plus egress.")).toBeInTheDocument();
+    expect(within(removed).getByText("Plus support.")).toBeInTheDocument();
+    // Honest counting: highlights, split into detected changes and author hints.
+    expect(screen.getByTestId("page-changes-count")).toHaveTextContent("5 highlights");
+    expect(screen.getByTestId("page-changes-breakdown")).toHaveTextContent("(4 changes · 1 author hint)");
   });
 
   it("v1: no toggle, no changes panel", () => {
@@ -831,8 +837,9 @@ describe("PageArtifact — what changed since the previous version (#714 gap 2)"
     expect(screen.queryByTestId("page-version-changes")).not.toBeInTheDocument();
   });
 
-  it("sends validated change locators on ready, navigates between them, and turns them off", async () => {
+  it("sends validated change locators on ready, navigates between highlights, and turns them off", async () => {
     render(<PageArtifact artifact={v2} />);
+    await screen.findByTestId("page-changes-count");
     const win = fakeFrameWindow();
     fromFrame(win, { dp: "ready" });
     const sent = win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "changes");
@@ -844,16 +851,17 @@ describe("PageArtifact — what changed since the previous version (#714 gap 2)"
         { kind: "added", tag: "li", text: "Then 100%", occurrence: 0 },
         { kind: "added", tag: "h2", text: "Risks", occurrence: 0 },
         { kind: "added", tag: "p", text: "Lock contention.", occurrence: 0 },
+        { kind: "hinted", tag: "p", text: "About $40 a month.", occurrence: 0 },
       ],
     });
     // The frame says the second one is missing: navigation skips it.
-    fromFrame(win, { dp: "changes-status", found: [true, false, true, true] });
-    expect(screen.getByTestId("page-changes-count")).toHaveTextContent("3 changes");
-    await userEvent.click(screen.getByRole("button", { name: "Next change" }));
+    fromFrame(win, { dp: "changes-status", found: [true, false, true, true, true] });
+    expect(screen.getByTestId("page-changes-count")).toHaveTextContent("4 highlights");
+    await userEvent.click(screen.getByRole("button", { name: "Next highlight" }));
     expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-change", index: 0 }, "*");
-    await userEvent.click(screen.getByRole("button", { name: "Next change" }));
+    await userEvent.click(screen.getByRole("button", { name: "Next highlight" }));
     expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-change", index: 2 }, "*");
-    await userEvent.click(screen.getByRole("button", { name: "Previous change" }));
+    await userEvent.click(screen.getByRole("button", { name: "Previous highlight" }));
     expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-change", index: 0 }, "*");
 
     await userEvent.click(screen.getByTestId("page-changes-toggle"));
@@ -862,7 +870,32 @@ describe("PageArtifact — what changed since the previous version (#714 gap 2)"
     expect(screen.queryByTestId("page-changes-nav")).not.toBeInTheDocument();
   });
 
-  it("a file-watch version shows the watch notice in place of its boilerplate reason", () => {
+  it("ignores the frame's changes-status once the page's scripts run (the companion's count stands)", async () => {
+    const scripted: Artifact = { ...v2, id: "art_pg_v2s", content: { title: "Plan", html: `${V2_HTML}<script>1</script>` } };
+    useArtifactStore.getState().addArtifact(scripted);
+    render(<PageArtifact artifact={scripted} />);
+    await screen.findByTestId("page-changes-count");
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "changes-status", found: [false, false, false, false, false] });
+    expect(screen.getByTestId("page-changes-count")).toHaveTextContent("5 highlights");
+  });
+
+  it("discloses the cap: showing 300 of the true total", async () => {
+    const many = (w: string) => Array.from({ length: 320 }, (_, i) => `<p>${w} ${i}</p>`).join("");
+    const a: Artifact = { ...pageArtifact, id: "art_cap1", version: 1, status: "superseded", content: { title: "Big", html: many("old") } };
+    const b: Artifact = { ...pageArtifact, id: "art_cap2", version: 2, parentId: a.id, content: { title: "Big", html: many("new") } };
+    useArtifactStore.getState().addArtifact(a);
+    useArtifactStore.getState().addArtifact(b);
+    render(<PageArtifact artifact={b} />);
+    expect(await screen.findByTestId("page-changes-breakdown")).toHaveTextContent("(320 changes; showing 300 of 320)");
+  });
+
+  it("compare with: defaults to the immediate predecessor, offers earlier loaded versions (auto-saves marked)", async () => {
+    const recorded = (from: Artifact) => ({
+      recorded: { at: new Date().toISOString(), sourcePath: "docs/plan.html", fromArtifactId: from.id, fromVersion: from.version, carriedCount: 0, orphaned: [] },
+    });
+    const v2a: Artifact = { ...v2, status: "superseded", fileWatch: recorded(v1) };
     const v3: Artifact = {
       ...v2,
       id: "art_pg_v3",
@@ -870,13 +903,22 @@ describe("PageArtifact — what changed since the previous version (#714 gap 2)"
       parentId: v2.id,
       agentReasoning: "Recorded automatically from docs/plan.html after a save.",
       content: { title: "Plan", html: V2_HTML.replace("Lock contention.", "Lock contention under load.") },
-      fileWatch: { recorded: { at: new Date().toISOString(), sourcePath: "docs/plan.html", fromArtifactId: v2.id, fromVersion: 2, carriedCount: 0, orphaned: [] } },
+      fileWatch: recorded(v2a),
     };
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2a);
     useArtifactStore.getState().addArtifact(v3);
     render(<PageArtifact artifact={v3} />);
     const panel = screen.getByTestId("page-version-changes");
+    // A file-watch version: the watch notice, not its boilerplate reason.
     expect(within(panel).getByTestId("page-file-recorded")).toHaveTextContent(/replacing v2/);
     expect(within(panel).queryByTestId("page-revise-reason")).not.toBeInTheDocument();
-    expect(within(panel).getByTestId("page-change-summary-line")).toHaveTextContent("Changed: Risks");
+    expect(await within(panel).findByTestId("page-change-summary-line")).toHaveTextContent("Changed: Risks");
+    const select = screen.getByLabelText("Compare with") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["v2 (auto-save)", "v1"]);
+    await userEvent.selectOptions(select, v1.id);
+    expect(screen.getByTestId("page-changes-toggle")).toHaveTextContent("Changes since v1");
+    expect(await within(panel).findByText(/Changed: Storage, Rollout; Added: Risks/)).toBeInTheDocument();
   });
 });

@@ -1,8 +1,11 @@
 /**
  * #714 gap 2 — what changed between two versions of a `page` artifact, at the
  * level a skimming reviewer reads: blocks (headings, paragraphs, list items,
- * table rows, figures, code blocks, quotes, definitions, and leaf sections),
- * each keyed under its nearest preceding heading.
+ * table rows, captions, figures, code blocks, quotes, definitions, summaries,
+ * buttons/labels/legends, and leaf sections), each keyed under its nearest
+ * preceding heading. Text that sits outside every recognised block (a card's
+ * loose line after its heading, loose body text) becomes a SYNTHETIC block
+ * owned by its nearest non-inline parent, so no visible text goes unseen.
  *
  * Computed in the COMPANION, never in the frame, and never by running the page:
  * both versions are parsed with `DOMParser` ("text/html" documents are inert —
@@ -17,15 +20,17 @@
  *  - a gap too big for the table with no unique anchors (or too deep) falls back
  *    to an in-order greedy match, linear in the gap.
  * So a 2 MiB page (capped at MAX_BLOCKS blocks a side) never goes quadratic.
- * Unmatched blocks whose exact text survives elsewhere count as MOVED (no
- * highlight); the rest pair up inside each gap as CHANGED (same heading, else
+ * Unmatched blocks whose exact text survives elsewhere are MOVED: counted and
+ * disclosed, and flagged as a change when they landed under a different
+ * heading. The rest pair up inside each gap as CHANGED (same heading, else
  * same position, same tag) or stay ADDED / REMOVED.
  *
  * The frame is told which blocks to highlight with LOCATORS it can re-find
  * without trusting us with markup: `{tag, text, occurrence}` — the element
- * name, its first LOCATOR_TEXT_MAX characters of normalized text, and which of
- * the same-tag same-text elements it is. The annotator computes the same text
- * the same way (`clippedText` in pageAnnotator.ts; keep the two in step).
+ * name, its first LOCATOR_TEXT_MAX characters of visible text, and which of
+ * the same-tag same-text elements it is. The annotator reads text with the
+ * same rules (`clippedText` in pageAnnotator.ts); a parity test evaluates both
+ * on shared fixtures.
  */
 
 /** Matches the frame annotator's LIMITS.quote — the locator text clip. */
@@ -41,13 +46,23 @@ const MAX_HINTS = 50;
 const MAX_DEPTH = 32;
 const SECTION_LABEL_MAX = 80;
 
-const BLOCK_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "tr", "figure", "pre", "blockquote", "dt", "dd"]);
+const BLOCK_TAGS = new Set([
+  "h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "tr", "figure", "pre", "blockquote", "dt", "dd",
+  "summary", "caption", "button", "label", "legend",
+]);
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 /** Section-like containers: a block only when nothing block-level is inside. */
 const CONTAINER_TAGS = new Set(["div", "section", "article", "aside", "header", "footer", "main", "nav", "details"]);
-/** Text under these never counts: not rendered, or removed by the sanitizer
- *  before Run. Mirrored by CHANGE_SKIP in the annotator. */
-export const TEXT_SKIP_SELECTOR = "script,style,noscript,template,iframe,frame,frameset,object,embed,applet,portal,[data-dp-annotator]";
+/** Inline elements never own loose text; their nearest non-inline ancestor does. */
+const INLINE_TAGS = new Set([
+  "a", "abbr", "b", "bdi", "bdo", "cite", "code", "data", "del", "dfn", "em", "font", "i", "ins", "kbd", "mark",
+  "q", "s", "samp", "small", "span", "strong", "sub", "sup", "time", "u", "var", "wbr", "img", "svg",
+]);
+/** Text under these never counts: not rendered, removed by the sanitizer before
+ *  Run, or our own annotator layer in the frame. The annotator's CHANGE_SKIP is
+ *  this exact string (asserted by the parity test). The layer is matched by its
+ *  element name, never by an attribute an author could also write. */
+export const TEXT_SKIP_SELECTOR = "script,style,noscript,template,iframe,frame,frameset,object,embed,applet,portal,dp-annotator-layer";
 
 export interface PageBlock {
   tag: string;
@@ -55,42 +70,57 @@ export interface PageBlock {
   text: string;
   /** Nearest preceding heading's text ("" before the first heading). A heading's section is itself. */
   section: string;
+  /** Which section, by identity: the index of its heading block (-1 = top). */
+  sectionId: number;
   heading: boolean;
+  /** Loose text owned by a non-block parent (or body). */
+  synthetic?: boolean;
   /** Parsed element, for building a frame locator. Absent in pure tests. */
   el?: Element;
 }
 
+export type ChangeKind = "added" | "changed" | "moved" | "hinted";
+
 export interface ChangeLocator {
-  kind: "added" | "changed" | "hinted";
+  kind: ChangeKind;
   tag: string;
   text: string;
   occurrence: number;
 }
 
 export interface PageBlockChange {
-  kind: "added" | "changed";
+  /** "moved" = the same text, now under a different heading. */
+  kind: "added" | "changed" | "moved";
   block: PageBlock;
-  /** The old block a "changed" one replaced. */
+  /** The old block a "changed" or "moved" one came from. */
   previous?: PageBlock;
 }
 
 export interface PageBlockDiff {
-  /** Added and changed blocks, in the new version's order. */
+  /** Added, changed and moved-across-sections blocks, in the new version's order. */
   changes: PageBlockChange[];
   /** Old blocks with no counterpart, in the old version's order. */
   removed: PageBlock[];
-  /** Blocks whose exact text moved elsewhere (not highlighted). */
+  /** Blocks whose exact text moved within the same section (not highlighted). */
   moved: number;
 }
 
 export interface PageVersionDiff extends PageBlockDiff {
   /** A side had more than MAX_BLOCKS blocks: the tail was not compared. */
   truncated: boolean;
-  /** What to highlight in the frame: changes first, then agent hints. */
+  /** The two HTML strings are byte-identical. */
+  identical: boolean;
+  /** No block changed, but the page's full visible text did. */
+  textChangedOutsideBlocks: boolean;
+  /** What to highlight in the frame (capped at MAX_CHANGE_MARKS): changes, then author hints. */
   marks: ChangeLocator[];
+  /** Detected changes that could be highlighted, before the cap. */
+  changeMarksTotal: number;
+  /** `data-dp-changed` author hints, before the cap. */
+  hintMarksTotal: number;
 }
 
-// --- normalization -----------------------------------------------------------
+// --- text reading ------------------------------------------------------------
 
 /** Same as the annotator's `norm`: JS `\s` (which covers NBSP) collapsed to one
  *  space, trimmed. Entities are already decoded by the parser. */
@@ -102,36 +132,69 @@ function isWs(ch: string): boolean {
   return ch === " " || ch === "\n" || ch === "\t" || ch === "\r" || ch === "\f";
 }
 
-function skipped(node: Node): boolean {
-  const p = node.parentElement;
-  return !!p && !!p.closest(TEXT_SKIP_SELECTOR);
+function inSkip(el: Element | null): boolean {
+  return !!el && !!el.closest(TEXT_SKIP_SELECTOR);
 }
 
-/** The first `max` characters of an element's normalized visible text, read
- *  exactly as the annotator's `clippedText` reads it in the frame (stops
- *  walking once it has enough). Empty text falls back to alt/aria-label/title/
- *  value, as the annotator's elementText does. */
-export function clippedText(el: Element, max = LOCATOR_TEXT_MAX): string {
-  const doc = el.ownerDocument;
-  const walker = doc.createTreeWalker(el, 4 /* SHOW_TEXT */);
-  let text = "";
-  let lastSpace = true;
-  let n: Node | null;
-  outer: while ((n = walker.nextNode())) {
-    if (skipped(n)) continue;
-    const raw = n.nodeValue ?? "";
+const isCell = (tag: string) => tag === "td" || tag === "th";
+
+/** A text accumulator with the shared rules: whitespace collapsed, `<br>` is a
+ *  space, and each table cell after the first in a row starts with " | " (so a
+ *  value moving between adjacent cells reads as a change). */
+class TextBuf {
+  text = "";
+  lastSpace = true;
+  space(): void {
+    if (!this.lastSpace) { this.text += " "; this.lastSpace = true; }
+  }
+  cell(): void {
+    if (!this.text) return;
+    this.space();
+    this.text += "| ";
+    this.lastSpace = true;
+  }
+  chars(raw: string, max = Infinity): boolean {
     for (let i = 0; i < raw.length; i++) {
       const ch = raw.charAt(i);
-      if (isWs(ch)) {
-        if (!lastSpace) { text += " "; lastSpace = true; }
-      } else { text += ch; lastSpace = false; }
-      if (text.length > max) break outer;
+      if (isWs(ch)) this.space();
+      else { this.text += ch; this.lastSpace = false; }
+      if (this.text.length > max) return true;
     }
+    return false;
   }
-  let t = normText(text);
+}
+
+function altOf(el: Element): string {
+  let t = normText(el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("value") || "");
   if (!t) {
-    t = normText(el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("value") || "");
+    const imgs = el.getElementsByTagName("img");
+    for (let i = 0; i < imgs.length && !t; i++) if (!inSkip(imgs[i]!)) t = normText(imgs[i]!.getAttribute("alt") || "");
   }
+  return t;
+}
+
+/** The first `max` characters of an element's visible text, read exactly as
+ *  the annotator's `clippedText` reads it in the frame (stops once it has
+ *  enough). Empty text falls back to alt/aria-label/title/value, then to a
+ *  descendant image's alt. */
+export function clippedText(el: Element, max = LOCATOR_TEXT_MAX): string {
+  const walker = el.ownerDocument.createTreeWalker(el, 5 /* SHOW_ELEMENT | SHOW_TEXT */);
+  const buf = new TextBuf();
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    if (n.nodeType === 1) {
+      const e = n as Element;
+      if (inSkip(e)) continue;
+      const tag = e.localName.toLowerCase();
+      if (tag === "br") buf.space();
+      else if (isCell(tag)) buf.cell();
+      continue;
+    }
+    if (inSkip(n.parentElement)) continue;
+    if (buf.chars(n.nodeValue ?? "", max)) break;
+  }
+  let t = normText(buf.text);
+  if (!t) t = altOf(el);
   return t.length > max ? t.slice(0, max) : t;
 }
 
@@ -160,42 +223,106 @@ export function extractPageBlocks(doc: Document, limit = MAX_BLOCKS): { blocks: 
   for (let i = all.length - 1; i >= 0; i--) {
     const el = all[i]!;
     const tag = el.localName.toLowerCase();
-    if (el.closest(TEXT_SKIP_SELECTOR)) continue;
+    if (inSkip(el)) continue;
     const block = BLOCK_TAGS.has(tag) || (CONTAINER_TAGS.has(tag) && !hasBlockDesc.has(el));
     if (block) isBlock.add(el);
     if ((block || hasBlockDesc.has(el)) && el.parentElement) hasBlockDesc.add(el.parentElement);
   }
-  // Own text: each text node goes to its nearest block ancestor.
-  const own = new Map<Element, string[]>();
-  const walker = doc.createTreeWalker(body, 4 /* SHOW_TEXT */);
+  // One walk in document order: each text node goes to its nearest block; loose
+  // text to its nearest non-inline ancestor (a synthetic block, placed where
+  // its first loose text is).
+  const bufs = new Map<Element, TextBuf>();
+  const pos = new Map<Element, number>();
+  const synthetic = new Set<Element>();
+  const ownerOf = (start: Element | null): Element | null => {
+    for (let p = start; p; p = p.parentElement) if (isBlock.has(p)) return p;
+    return null;
+  };
+  const looseOwner = (start: Element | null): Element => {
+    let p = start;
+    while (p && p !== body && INLINE_TAGS.has(p.localName.toLowerCase())) p = p.parentElement;
+    return p ?? body;
+  };
+  const bufFor = (el: Element): TextBuf => {
+    let b = bufs.get(el);
+    if (!b) bufs.set(el, (b = new TextBuf()));
+    return b;
+  };
+  let counter = 0;
+  const walker = doc.createTreeWalker(body, 5 /* SHOW_ELEMENT | SHOW_TEXT */);
   let n: Node | null;
   while ((n = walker.nextNode())) {
-    if (skipped(n)) continue;
-    let p = n.parentElement;
-    while (p && !isBlock.has(p)) p = p.parentElement;
-    if (!p) continue;
-    let parts = own.get(p);
-    if (!parts) own.set(p, (parts = []));
-    parts.push(n.nodeValue ?? "");
+    counter++;
+    if (n.nodeType === 1) {
+      const e = n as Element;
+      if (inSkip(e)) continue;
+      if (isBlock.has(e)) pos.set(e, counter);
+      const tag = e.localName.toLowerCase();
+      if (tag === "br" || isCell(tag)) {
+        const owner = ownerOf(e.parentElement) ?? looseOwner(e.parentElement);
+        const b = bufs.get(owner);
+        if (b) { if (tag === "br") b.space(); else b.cell(); }
+      }
+      continue;
+    }
+    const parent = n.parentElement;
+    if (inSkip(parent)) continue;
+    const raw = n.nodeValue ?? "";
+    let owner = ownerOf(parent);
+    if (!owner) {
+      if (!raw.trim()) continue;
+      owner = looseOwner(parent);
+      if (!synthetic.has(owner)) { synthetic.add(owner); pos.set(owner, counter); }
+    }
+    bufFor(owner).chars(raw);
   }
+  const ordered = [...pos.entries()].sort((x, y) => x[1] - y[1]).map(([el]) => el);
   const blocks: PageBlock[] = [];
   let section = "";
+  let sectionId = -1;
   let truncated = false;
-  for (const el of all) {
-    if (!isBlock.has(el)) continue;
-    let text = normText((own.get(el) ?? []).join(""));
-    if (!text) {
-      const alt = el.querySelector("img[alt]")?.getAttribute("alt");
-      text = alt ? normText(alt) : "";
+  for (const el of ordered) {
+    let text = normText(bufs.get(el)?.text ?? "");
+    const isSynthetic = synthetic.has(el) && !isBlock.has(el);
+    if (!text && !isSynthetic) {
+      const imgs = el.getElementsByTagName("img");
+      for (let i = 0; i < imgs.length && !text; i++) if (!inSkip(imgs[i]!)) text = normText(imgs[i]!.getAttribute("alt") || "");
     }
     if (!text) continue;
+    if (blocks.length >= limit) { truncated = true; break; }
     const tag = el.localName.toLowerCase();
     const heading = HEADING_TAGS.has(tag);
-    if (heading) section = text.length > SECTION_LABEL_MAX ? `${text.slice(0, SECTION_LABEL_MAX - 1)}…` : text;
-    if (blocks.length >= limit) { truncated = true; break; }
-    blocks.push({ tag, text, section, heading, el });
+    if (heading) {
+      section = text.length > SECTION_LABEL_MAX ? `${text.slice(0, SECTION_LABEL_MAX - 1)}…` : text;
+      sectionId = blocks.length;
+    }
+    blocks.push({ tag, text, section, sectionId, heading, ...(isSynthetic ? { synthetic: true } : {}), el });
   }
   return { blocks, truncated };
+}
+
+/** The page's whole visible text, read with the shared rules: the backstop
+ *  that keeps "nothing changed" honest when no block caught a change. */
+export function visibleText(doc: Document): string {
+  const body = doc.body ?? doc.documentElement;
+  if (!body) return "";
+  const walker = doc.createTreeWalker(body, 5);
+  const buf = new TextBuf();
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    if (n.nodeType === 1) {
+      const e = n as Element;
+      if (inSkip(e)) continue;
+      const tag = e.localName.toLowerCase();
+      if (tag === "br") buf.space();
+      else if (isCell(tag)) buf.cell();
+      else if (BLOCK_TAGS.has(tag) || CONTAINER_TAGS.has(tag)) buf.space();
+      continue;
+    }
+    if (inSkip(n.parentElement)) continue;
+    buf.chars(n.nodeValue ?? "");
+  }
+  return normText(buf.text);
 }
 
 // --- alignment -------------------------------------------------------------------
@@ -304,7 +431,7 @@ export function alignKeys(a: string[], b: string[]): Array<[number, number]> {
 
 const keyOf = (b: PageBlock): string => `${b.tag}\u0001${b.text}`;
 
-/** Classify each block as added / changed / removed (moved blocks unflagged). */
+/** Classify each block as added / changed / moved / removed. */
 export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): PageBlockDiff {
   const a = oldBlocks.map(keyOf);
   const b = newBlocks.map(keyOf);
@@ -312,8 +439,11 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
   const oldDone = new Uint8Array(a.length);
   const newDone = new Uint8Array(b.length);
   for (const [i, j] of pairs) { oldDone[i] = 1; newDone[j] = 1; }
+  const changeAt = new Map<number, PageBlockChange>();
 
   // Reorder tolerance: the same block anywhere else in the old version moved.
+  // Within its section that's quiet (counted); into another section it is a
+  // change the reviewer must see (an item moving from "Approved" to "Rejected").
   let moved = 0;
   const leftover = new Map<string, number[]>();
   for (let i = 0; i < a.length; i++) {
@@ -324,11 +454,16 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
   for (let j = 0; j < b.length; j++) {
     if (newDone[j]) continue;
     const l = leftover.get(b[j]!);
-    if (l && l.length) { const i = l.shift()!; oldDone[i] = 1; newDone[j] = 1; moved++; }
+    if (!l || !l.length) continue;
+    const i = l.shift()!;
+    oldDone[i] = 1;
+    newDone[j] = 1;
+    const o = oldBlocks[i]!, nb = newBlocks[j]!;
+    if (!nb.heading && o.section !== nb.section) changeAt.set(j, { kind: "moved", block: nb, previous: o });
+    else moved++;
   }
 
   // Pair the rest inside each gap between aligned pairs.
-  const changeAt = new Map<number, PageBlockChange>();
   const removed: PageBlock[] = [];
   const bounds: Array<[number, number]> = [[-1, -1], ...pairs, [a.length, b.length]];
   for (let g = 0; g + 1 < bounds.length; g++) {
@@ -380,7 +515,7 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
 
 /** Which of the same-tag, same-clipped-text elements each target is, counted
  *  over EVERY element of that tag (as the annotator counts them). */
-function locate(doc: Document, targets: Array<{ el: Element; kind: ChangeLocator["kind"] }>): ChangeLocator[] {
+function locate(doc: Document, targets: Array<{ el: Element; kind: ChangeKind }>): ChangeLocator[] {
   // Per tag, one pass: each element's clipped text and its occurrence index.
   const byTag = new Map<string, Map<Element, { text: string; occurrence: number }>>();
   const out: ChangeLocator[] = [];
@@ -393,7 +528,7 @@ function locate(doc: Document, targets: Array<{ el: Element; kind: ChangeLocator
       const els = doc.getElementsByTagName(tag);
       for (let i = 0; i < els.length; i++) {
         const e = els[i]!;
-        if (e.closest(TEXT_SKIP_SELECTOR)) continue;
+        if (inSkip(e)) continue;
         const text = clippedText(e);
         const occurrence = seen.get(text) ?? 0;
         seen.set(text, occurrence + 1);
@@ -412,8 +547,13 @@ function locate(doc: Document, targets: Array<{ el: Element; kind: ChangeLocator
 
 const cache: Array<{ oldHtml: string; newHtml: string; diff: PageVersionDiff | null }> = [];
 
-/** Diff two page versions (memoized on the last few pairs: the page header and
- *  RevisionDiff ask for the same pair). Null when the HTML can't be parsed. */
+/** A cached result for this pair, or undefined (never computes). */
+export function peekPageVersionDiff(oldHtml: string, newHtml: string): PageVersionDiff | null | undefined {
+  return cache.find((c) => c.oldHtml === oldHtml && c.newHtml === newHtml)?.diff;
+}
+
+/** Diff two page versions (memoized on the last few pairs). Null when the HTML
+ *  can't be parsed. */
 export function computePageVersionDiff(oldHtml: string, newHtml: string): PageVersionDiff | null {
   const hit = cache.find((c) => c.oldHtml === oldHtml && c.newHtml === newHtml);
   if (hit) return hit.diff;
@@ -427,24 +567,40 @@ function computeUncached(oldHtml: string, newHtml: string): PageVersionDiff | nu
   const oldDoc = parsePageHtml(oldHtml);
   const newDoc = parsePageHtml(newHtml);
   if (!oldDoc || !newDoc) return null;
+  const identical = oldHtml === newHtml;
   const o = extractPageBlocks(oldDoc);
   const n = extractPageBlocks(newDoc);
-  const d = diffPageBlocks(o.blocks, n.blocks);
-  const targets: Array<{ el: Element; kind: ChangeLocator["kind"] }> = [];
+  const d = identical ? { changes: [], removed: [], moved: 0 } : diffPageBlocks(o.blocks, n.blocks);
+  const empty = d.changes.length === 0 && d.removed.length === 0 && d.moved === 0;
+  const textChangedOutsideBlocks = !identical && empty && visibleText(oldDoc) !== visibleText(newDoc);
+  // A synthetic block owned by body/html can't be outlined usefully.
+  const changeTargets: Array<{ el: Element; kind: ChangeKind }> = [];
   const seen = new Set<Element>();
   for (const c of d.changes) {
-    if (targets.length >= MAX_CHANGE_MARKS) break;
-    if (c.block.el && !seen.has(c.block.el)) { seen.add(c.block.el); targets.push({ el: c.block.el, kind: c.kind }); }
+    const el = c.block.el;
+    if (!el || seen.has(el)) continue;
+    const tag = el.localName.toLowerCase();
+    if (tag === "body" || tag === "html") continue;
+    seen.add(el);
+    changeTargets.push({ el, kind: c.kind });
   }
   // #714 — the agent may also mark what it changed: honoured as extra marks.
-  const hinted = Array.from(newDoc.querySelectorAll("[data-dp-changed]")).slice(0, MAX_HINTS);
-  for (const el of hinted) {
-    if (targets.length >= MAX_CHANGE_MARKS) break;
-    if (seen.has(el) || el.closest(TEXT_SKIP_SELECTOR)) continue;
+  const hintTargets: Array<{ el: Element; kind: ChangeKind }> = [];
+  for (const el of Array.from(newDoc.querySelectorAll("[data-dp-changed]")).slice(0, MAX_HINTS)) {
+    if (seen.has(el) || inSkip(el)) continue;
     seen.add(el);
-    targets.push({ el, kind: "hinted" });
+    hintTargets.push({ el, kind: "hinted" });
   }
-  return { ...d, truncated: o.truncated || n.truncated, marks: locate(newDoc, targets) };
+  const capped = [...changeTargets, ...hintTargets].slice(0, MAX_CHANGE_MARKS);
+  return {
+    ...d,
+    truncated: o.truncated || n.truncated,
+    identical,
+    textChangedOutsideBlocks,
+    marks: locate(newDoc, capped),
+    changeMarksTotal: changeTargets.length,
+    hintMarksTotal: hintTargets.length,
+  };
 }
 
 // --- summary -----------------------------------------------------------------------
@@ -460,53 +616,105 @@ const NOUNS: Record<string, [string, string]> = {
   dd: ["definition", "definitions"],
 };
 
+function nounFor(tags: Set<string>, count: number): string {
+  const tag = tags.size === 1 ? [...tags][0]! : "";
+  const [one, many] = NOUNS[tag] ?? ["block", "blocks"];
+  return count === 1 ? one : many;
+}
+
 export interface RemovedGroup {
   /** The old heading the blocks sat under ("" = before any heading). */
   section: string;
+  /** Which old section (its heading's block index; -1 = top). Groups are by identity, not name. */
+  sectionId: number;
   count: number;
   noun: string;
   /** The removed text, for the reviewer to read (plain text). */
   texts: string[];
 }
 
+export interface RemovedSection {
+  section: string;
+  sectionId: number;
+  /** The removed section's body text (its heading excluded). */
+  texts: string[];
+  noun: string;
+}
+
+export interface MovedAcross {
+  text: string;
+  from: string;
+  to: string;
+}
+
+export type PageDiffState = "identical" | "markup-only" | "outside-blocks" | "changes";
+
 export interface PageDiffSummary {
+  state: PageDiffState;
   changedSections: string[];
   addedSections: string[];
-  removedSections: string[];
+  removedSections: RemovedSection[];
   removed: RemovedGroup[];
-  /** Number of highlights the frame can show (changed + added blocks). */
+  movedAcross: MovedAcross[];
+  /** Blocks that moved within their section (not highlighted). */
+  movedCount: number;
+  /** Detected changes (added + changed + moved across sections). */
   changeCount: number;
 }
 
 const TOP = "";
 
-export function summarizePageDiff(diff: PageBlockDiff): PageDiffSummary {
+export function summarizePageDiff(diff: PageBlockDiff & Partial<Pick<PageVersionDiff, "identical" | "textChangedOutsideBlocks">>): PageDiffSummary {
   const addedSections: string[] = [];
   const changedSections: string[] = [];
-  const removedSections: string[] = [];
+  const movedAcross: MovedAcross[] = [];
   for (const c of diff.changes) {
     if (c.kind === "added" && c.block.heading && !addedSections.includes(c.block.section)) addedSections.push(c.block.section);
   }
   for (const c of diff.changes) {
+    if (c.kind === "moved" && c.previous) movedAcross.push({ text: c.block.text, from: c.previous.section, to: c.block.section });
     const s = c.block.section;
     if (addedSections.includes(s) || changedSections.includes(s)) continue;
     changedSections.push(s);
   }
-  for (const r of diff.removed) if (r.heading && !removedSections.includes(r.section)) removedSections.push(r.section);
-  const groups = new Map<string, { tags: Set<string>; texts: string[] }>();
+  // Removed headings take their removed body text with them; the rest is
+  // grouped by old section IDENTITY (two sections may share a name).
+  const removedHeadingIds = new Set(diff.removed.filter((r) => r.heading).map((r) => r.sectionId));
+  const sections = new Map<number, RemovedSection & { tags: Set<string> }>();
   for (const r of diff.removed) {
-    if (r.heading || removedSections.includes(r.section)) continue;
-    let g = groups.get(r.section);
-    if (!g) groups.set(r.section, (g = { tags: new Set(), texts: [] }));
+    if (r.heading) sections.set(r.sectionId, { section: r.section, sectionId: r.sectionId, texts: [], noun: "", tags: new Set() });
+  }
+  const groups = new Map<number, { section: string; tags: Set<string>; texts: string[] }>();
+  for (const r of diff.removed) {
+    if (r.heading) continue;
+    if (removedHeadingIds.has(r.sectionId)) {
+      const s = sections.get(r.sectionId)!;
+      s.texts.push(r.text);
+      s.tags.add(r.tag);
+      continue;
+    }
+    let g = groups.get(r.sectionId);
+    if (!g) groups.set(r.sectionId, (g = { section: r.section, tags: new Set(), texts: [] }));
     g.tags.add(r.tag);
     g.texts.push(r.text);
   }
-  const removed: RemovedGroup[] = [...groups.entries()].map(([section, g]) => {
-    const tag = g.tags.size === 1 ? [...g.tags][0]! : "";
-    const [one, many] = NOUNS[tag] ?? ["block", "blocks"];
-    return { section, count: g.texts.length, noun: g.texts.length === 1 ? one : many, texts: g.texts };
-  });
-  return { changedSections, addedSections, removedSections, removed, changeCount: diff.changes.length };
+  const removedSections: RemovedSection[] = [...sections.values()].map(({ tags, ...s }) => ({ ...s, noun: nounFor(tags, s.texts.length) }));
+  const removed: RemovedGroup[] = [...groups.entries()].map(([sectionId, g]) => ({
+    section: g.section,
+    sectionId,
+    count: g.texts.length,
+    noun: nounFor(g.tags, g.texts.length),
+    texts: g.texts,
+  }));
+  const any = diff.changes.length > 0 || diff.removed.length > 0 || diff.moved > 0;
+  const state: PageDiffState = any
+    ? "changes"
+    : diff.identical
+      ? "identical"
+      : diff.textChangedOutsideBlocks
+        ? "outside-blocks"
+        : "markup-only";
+  return { state, changedSections, addedSections, removedSections, removed, movedAcross, movedCount: diff.moved, changeCount: diff.changes.length };
 }
 
 export function sectionLabel(section: string): string {
@@ -518,18 +726,38 @@ function list(names: string[], max = 6): string {
   return names.length > max ? `${shown.join(", ")} and ${names.length - max} more` : shown.join(", ");
 }
 
+function clipQuote(t: string, n = 60): string {
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
+export const STATE_COPY: Record<Exclude<PageDiffState, "changes">, string> = {
+  identical: "Page content unchanged.",
+  "markup-only": "Markup or styling only: the visible text did not change.",
+  "outside-blocks": "Text changed outside recognised blocks.",
+};
+
 /** "Changed: Storage, Rollout; Added: Risks; Removed: 2 paragraphs under Costs".
  *  Plain text: render it as a text node, never as markup. */
 export function formatPageDiffSummary(s: PageDiffSummary): string {
+  if (s.state !== "changes") return STATE_COPY[s.state];
   const parts: string[] = [];
   if (s.changedSections.length) parts.push(`Changed: ${list(s.changedSections)}`);
   if (s.addedSections.length) parts.push(`Added: ${list(s.addedSections)}`);
+  if (s.movedAcross.length) {
+    const shown = s.movedAcross.slice(0, 3).map((m) => `“${clipQuote(m.text)}” from ${sectionLabel(m.from)} to ${sectionLabel(m.to)}`);
+    if (s.movedAcross.length > 3) shown.push(`${s.movedAcross.length - 3} more`);
+    parts.push(`Moved: ${shown.join(", ")}`);
+  }
   const removed: string[] = [];
-  if (s.removedSections.length) removed.push(`${s.removedSections.length === 1 ? "section" : "sections"} ${list(s.removedSections)}`);
+  for (const r of s.removedSections.slice(0, 4)) {
+    removed.push(`section ${sectionLabel(r.section)}${r.texts.length ? ` (${r.texts.length} ${r.noun})` : ""}`);
+  }
+  if (s.removedSections.length > 4) removed.push(`${s.removedSections.length - 4} more sections`);
   for (const g of s.removed.slice(0, 4)) {
     removed.push(`${g.count} ${g.noun} ${g.section === TOP ? "at the top of the page" : `under ${g.section}`}`);
   }
   if (s.removed.length > 4) removed.push(`more in ${s.removed.length - 4} other sections`);
   if (removed.length) parts.push(`Removed: ${removed.join(", ")}`);
+  if (s.movedCount) parts.push(`${s.movedCount} ${s.movedCount === 1 ? "block" : "blocks"} moved`);
   return parts.join("; ");
 }
