@@ -7,6 +7,7 @@ import { validatePresentPageInput, pageTooLargeError, type ToolErrorResponse } f
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { resolveProjectRoot } from "../../project-root.js";
+import { lintPage, formatPageLintWarnings, type PageLintWarning } from "../page-lint.js";
 import { TOOL_ERROR_CODES, TOOL_ERROR_RETRYABLE } from "../../error-codes.js";
 import type { CreateArtifactParams } from "../../store/store-interface.js";
 import type { ToolContext, ToolResult } from "./types.js";
@@ -262,6 +263,11 @@ export async function presentPage(
 
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "page", input.title, id);
+  // #714 gap 6 — non-blocking authoring lint. Runs after the gate and the
+  // write, so it can never change what is refused or stored; a lint bug must
+  // never cost the agent its result.
+  let warnings: PageLintWarning[] = [];
+  try { warnings = lintPage(html); } catch { warnings = []; }
   const from = sourcePath ? ` from ${sourcePath}` : "";
   // #680 slice 3 — the daemon watches a file-backed page while it is under review.
   const watchNote = sourcePath
@@ -273,8 +279,9 @@ export async function presentPage(
       text:
         `Page "${artifact.title}" presented for review (${id})${from}. ` +
         `Your pair reviews it at localhost:${reviewPort}, in a sandboxed frame with no network; scripts run only when they click Run. ` +
-        `Call check_feedback for their verdict and comments.${watchNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their verdict and comments.${watchNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${formatPageLintWarnings(warnings)}${await ctx.helpers.getPassiveFeedback()}`,
     }],
+    ...(warnings.length > 0 ? { structuredContent: { warnings } } : {}),
   };
 }
 

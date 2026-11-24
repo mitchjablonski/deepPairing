@@ -951,3 +951,24 @@ describe("authenticated standalone page", () => {
     }
   });
 });
+
+describe("standalone present page lint warnings (#714 gap 6)", () => {
+  it("carries non-blocking warnings beside the artifactId, and none for a clean page", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const res = await f.present(daemon, randomUUID(), page('<p>No heading</p><script src="https://cdn.example.com/x.js"></script>'));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.isError).toBeFalsy();
+      expect(typeof body.structuredContent.artifactId).toBe("string");
+      expect(body.structuredContent.warnings.map((w: { code: string }) => w.code)).toEqual(["external_asset", "no_headings"]);
+
+      const clean = await (await f.present(daemon, randomUUID(), page("<h1>Plan</h1><p>Clean</p>"))).json();
+      expect(clean.structuredContent.warnings).toBeUndefined();
+    } finally {
+      f.dispose();
+    }
+  });
+});

@@ -14,6 +14,8 @@ import { DECISION_NON_ANSWERABLE_STATUSES, PAGE_HTML_MAX_BYTES } from "@deeppair
 import { cliInvocation } from "../cli-invocation.js";
 import { MAX_COMMENTS, MAX_RESPONSE_BYTES } from "../daemon/page-feedback.js";
 import { SERVER_VERSION } from "../version.js";
+import { PAGE_CONSTRAINT_RULES, PAGE_SKELETON_HTML, PAGE_STRUCTURE_RULES, renderPageAuthoringGuide } from "../page-authoring.js";
+import { PAGE_WATCH_MIN_INTERVAL_MS, PAGE_WATCH_QUIET_MS } from "../daemon/page-watch.js";
 
 /**
  * Every CLI command the guide tells the agent to run. The guide test checks
@@ -89,6 +91,9 @@ OUTPUT
 
 In the commands below, \`deeppairing\` means:
   ${invocation}
+From a source checkout the CLI is the built file
+packages/mcp-server/dist/cli/init.js (run it with node). dist/standalone.js
+next to it is the MCP server, not this CLI: never run it for these commands.
 
 WHEN TO PRESENT
 - Present options when there is a real fork the human would want to weigh
@@ -96,7 +101,8 @@ WHEN TO PRESENT
   architecture choice, anything costly to undo, anything touching migrations,
   CI, secrets, auth or infrastructure.
 - Present a page when the human should read or annotate something richer than
-  a sentence: a plan, a design, a report, a diagram. Write it as HTML.
+  a sentence: a plan, a design, a report, a diagram. Write it as HTML
+  that reads without scripts or network (see 3a).
 - Otherwise just proceed. Routine work, obvious fixes and choices with one
   sensible answer don't need a review. Don't ask about what you can decide.
 
@@ -127,21 +133,31 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
 
 3. PRESENT A PAGE
   deeppairing present page --session-id <sessionId> --request-id <uuid> --path page.html --title "Title" [--summary S] [--concept C]
-  --path  names a file inside the project. While it is under review the file
-          is watched, and each save records a new version the human sees.
-  --file  sends any readable file once, inline; it is not watched.
-  Use exactly one of them. Pages are capped at ${pageCapMiB} MiB.
-    -> {"sessionId","requestId","artifactId","companionUrl",...}
+  deeppairing present page --session-id <sessionId> --request-id <uuid> --file page.html --title "Title" [--summary S] [--concept C]
+  Use exactly one of --path or --file. They start two different flows
+  (step 5): --path names a file inside the project and the page is WATCHED;
+  --file sends any readable file once, inline, and is not watched. Pages are
+  capped at ${pageCapMiB} MiB.
+    -> {"sessionId","requestId","artifactId","companionUrl",...,"warnings"?}
   Keep the artifactId: you read the human's comments with it. A rejection in
   the companion becomes rejection memory and is enforced when you next
-  present (see REFUSALS).
+  present (see REFUSALS). "warnings" lists authoring problems (step 3a);
+  they never refuse the page.
+  The receipt only confirms the page was created. Give the human the
+  companionUrl and tell them the page is ready, then wait for them to
+  review it. An empty read-page-feedback result right after presenting means
+  they haven't reviewed yet, not that they have no comments.
+
+3a. WRITE A REVIEWABLE PAGE
+${renderPageAuthoringGuide()}
 
 4. READ PAGE FEEDBACK
   deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>
   After presenting a page, this reads the human's anchored comments on that
   exact page version, newest first. It is passive: reading never
   acknowledges anything, so repeated reads return the same comments while
-  they remain unacknowledged.
+  they remain unacknowledged. It does not wait: if the human hasn't
+  reviewed yet, it returns no comments.
     -> {"sessionId","artifact":{"id","version","status"},"successor"?,
         "comments":[...],"omittedComments"}
   Each comment has id, content (the human's words), parentCommentId (set on
@@ -157,7 +173,22 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   Only anchored human comments are included. Page notes without an anchor
   and file-watch notices are not.
 
-5. REVISE AN INLINE PAGE
+5. REVISE A PAGE
+  How you ship a new version depends on how you presented the page.
+
+  5a. WATCHED PAGE (presented with --path)
+  Edit the source file. Don't run revise-page on it. While the page is under
+  review the daemon watches the file, and a save records a new version after
+  about ${PAGE_WATCH_QUIET_MS / 1000}s of quiet, at most one per ${PAGE_WATCH_MIN_INTERVAL_MS / 1000}s. This is asynchronous and gated:
+  a save that leaves the page unchanged records nothing, and a save whose
+  text matches a rejected approach is refused and records nothing. To find
+  the new version, read the ORIGINAL page:
+  deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>
+  and follow successor.id once it appears. No successor yet means the save
+  hasn't been recorded (or was unchanged or refused). A watched save can't
+  acknowledge comments by ID.
+
+  5b. INLINE PAGE (presented with --file)
   deeppairing revise-page --session-id <sessionId> --artifact-id <artifactId> --request-id <uuid> --file page.html --reason "What changed" [--ack-comment-id <commentId> ...]
   Supply the replacement HTML for the current inline page. The revision goes
   through the page rejection checks and keeps the page metadata. A successful
@@ -197,9 +228,14 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
   - Retrying unchanged input (a timeout, a crash, output you never saw): reuse
     the SAME UUID. You get the original artifact back with "replayed": true,
     never a duplicate card.
-  - Changed anything (the file's content, a flag): use a NEW UUID. Reusing a
-    UUID with different input is refused with standalone_operation_conflict.
-    For a revision, changing the set of comment IDs counts as changed input.
+  - Changed anything (a flag, or the bytes of a --file page or revision):
+    use a NEW UUID. Reusing a UUID with different input is refused with
+    standalone_operation_conflict. For a revision, changing the set of
+    comment IDs counts as changed input.
+  - A --path present binds the path, not the bytes: editing the watched file
+    is not changed input. Replaying that present's UUID after an edit returns
+    the original page, with currentArtifactId and currentVersion naming the
+    newer version once the watch has recorded one.
 
 8. REFUSALS
   A refused present or revision prints {"isError":true,"code":"...","message":"..."} and
@@ -214,10 +250,11 @@ ${indent(JSON.stringify(OPTIONS_EXAMPLE, null, 2), 4)}
     the input.
 
 THE LOOP
-  open (or resume) -> present -> give the human the companionUrl ->
-  read-decision --wait-ms 30000, repeated while timed_out (or
-  read-page-feedback for a page) -> act on the choice or the comments, or
-  change the approach after a rejection and present again.
+  open (or resume) -> present -> give the human the companionUrl and wait
+  for their review -> read-decision --wait-ms 30000, repeated while
+  timed_out (or read-page-feedback for a page, once they have reviewed) ->
+  act on the choice or the comments, or change the approach after a
+  rejection and present again.
 
 NOTE, CLAUDE CODE ONLY (skip this unless you are Claude Code)
   The deepPairing Claude Code plugin adds MCP tools for the same loop and a
@@ -237,6 +274,11 @@ export function standaloneGuideJson(invocation: string = cliInvocation()) {
     nonAnswerableStatuses: [...DECISION_NON_ANSWERABLE_STATUSES],
     refusalCode: "rejected_approach_blocked",
     optionsExample: OPTIONS_EXAMPLE,
+    pageAuthoring: {
+      structure: [...PAGE_STRUCTURE_RULES],
+      constraints: [...PAGE_CONSTRAINT_RULES],
+      skeleton: PAGE_SKELETON_HTML,
+    },
     guide: renderStandaloneGuide(invocation),
   };
 }
