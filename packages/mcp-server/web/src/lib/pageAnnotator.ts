@@ -482,7 +482,7 @@ return {
  *  listeners and returns an uninstall function. */
 export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
-var annotate = true, suppressClick = false, hoverBox = null, layer = null;
+var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0;
 function own(el) { return !!(el && el.closest && el.closest("[data-dp-annotator]")); }
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
@@ -518,28 +518,43 @@ function targetEl(e) {
 }
 function hideHover() { if (hoverBox) important(hoverBox, { display: "none" }); }
 /** #714 — what the page's own controls should keep doing while pointing: a
- *  same-document "#hash" link (scrolls) and native controls (a summary opens
- *  its details, a label/radio/checkbox switches CSS-only tabs, form fields take
- *  input). Returns the element whose default action wins, or null. Alt/Option-
- *  click still points at it. */
-var PASS_SEL = "summary, label, input, select, textarea, button, option, optgroup";
+ *  same-document "#hash" link with a target (scrolls) and native controls (a
+ *  summary opens its details, a label/radio/checkbox switches radio/checkbox
+ *  tabs, form fields take input). Buttons only once the page's scripts run:
+ *  before Run a button has no default action (no scripts, no allow-forms), so
+ *  a click on it points as before. A label passes only for a click on its own
+ *  text or inline content, never on block content inside it (a label-wrapped
+ *  card stays commentable). Alt/Option-click still points at any of these. */
+var PASS_SEL = "summary, input, select, textarea, option, optgroup";
+var BUTTON_SEL = "button, input[type=button], input[type=submit], input[type=reset], input[type=image]";
+var BLOCK_TAGS = /^(address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|img|li|main|nav|ol|p|pre|section|svg|table|ul|video|canvas)$/;
+var XLINK = "http://www.w3.org/1999/xlink";
+/** The link a click is inside: HTML a/area[href], or an SVG <a> with
+ *  xlink:href (core.LINK_SEL misses those, and they navigate too). */
+function closestLink(t) {
+  if (!t || !t.closest) return null;
+  var link = t.closest(core.LINK_SEL);
+  if (link) return link;
+  for (var n = t; n && n.nodeType === 1; n = n.parentElement) {
+    if (n.localName === "a" && n.getAttributeNS && n.getAttributeNS(XLINK, "href") !== null) return n;
+  }
+  return null;
+}
+function hrefOf(link) {
+  var h = link.getAttribute ? link.getAttribute("href") : null;
+  if (h === null && link.getAttributeNS) h = link.getAttributeNS(XLINK, "href");
+  return h;
+}
 function sameDocHash(link) {
-  var h = link && link.getAttribute ? link.getAttribute("href") : null;
+  var h = link ? hrefOf(link) : null;
   if (typeof h !== "string") return null;
   h = h.trim();
   return h.charAt(0) === "#" ? h : null;
 }
-function passTarget(t) {
-  if (!t || !t.closest) return null;
-  var link = t.closest(core.LINK_SEL);
-  if (link) return sameDocHash(link) !== null ? link : null;
-  return t.closest(PASS_SEL);
-}
-/** Scroll the frame to a "#hash" target ourselves. The browser can't be left
- *  to do it: a srcdoc document resolves even "#x" against the COMPANION's URL,
- *  so the default action would navigate the frame away from the page. Opens
- *  any closed details around the target, as a fragment navigation does. */
-function scrollToHash(h) {
+/** Where a "#hash" leads: an element, "top" (for "#" / "#top" with no such
+ *  id), or null — no target (a "#!/route" hashbang, a stale id), in which case
+ *  the click points at the link rather than doing nothing. */
+function hashTarget(h) {
   var raw = h.slice(1), id = raw;
   try { id = decodeURIComponent(raw); } catch (e) { id = raw; }
   var el = id ? (document.getElementById(id) || document.getElementById(raw)) : null;
@@ -547,14 +562,38 @@ function scrollToHash(h) {
     var named = document.getElementsByName(id);
     for (var i = 0; i < named.length; i++) if (named[i].localName === "a") { el = named[i]; break; }
   }
-  if (!el) {
-    if (!id || id.toLowerCase() === "top") { try { window.scrollTo(0, 0); } catch (e2) { /* ignore */ } }
-    return;
-  }
-  for (var d = el.parentElement; d; d = d.parentElement) {
+  if (el) return el;
+  return !id || id.toLowerCase() === "top" ? "top" : null;
+}
+function passLabel(t) {
+  var label = t.closest("label");
+  if (!label) return null;
+  for (var n = t; n && n !== label; n = n.parentElement) if (BLOCK_TAGS.test(n.localName)) return null;
+  return label;
+}
+function passTarget(t) {
+  if (!t || !t.closest) return null;
+  var link = closestLink(t);
+  if (link) { var h = sameDocHash(link); return h !== null && hashTarget(h) ? link : null; }
+  if (t.closest(BUTTON_SEL)) return scripts ? t.closest(BUTTON_SEL) : null;
+  return t.closest(PASS_SEL) || passLabel(t);
+}
+/** Scroll the frame to a "#hash" target ourselves. The browser can't be left
+ *  to do it: a srcdoc document resolves even "#x" against the COMPANION's URL,
+ *  so the default action would navigate the frame away from the page. Opens
+ *  any closed details around the target, as a fragment navigation does. */
+function goTo(target) {
+  if (target === "top") { try { window.scrollTo(0, 0); } catch (e2) { /* ignore */ } return; }
+  for (var d = target.parentElement; d; d = d.parentElement) {
     if (d.localName === "details" && !d.open) d.open = true;
   }
-  if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "start" });
+  if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "start" });
+}
+function editable(t) {
+  if (!t || t.nodeType !== 1) return false;
+  if (t.isContentEditable) return true;
+  var n = t.localName;
+  return n === "input" || n === "textarea" || n === "select";
 }
 var lastHover = null;
 function paintHover(t, alt, interact) {
@@ -577,7 +616,10 @@ function onMove(e) { paintHover(targetEl(e), !!e.altKey, !!(e.ctrlKey || e.metaK
 function onKey(e) {
   if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I")) {
     // The companion's pointing shortcut, forwarded: while the reviewer is in
-    // the frame, the companion never sees the keystroke.
+    // the frame, the companion never sees the keystroke. Never while typing
+    // in the page, never on autorepeat, and only before Run (after Run agent
+    // script shares this frame, so the parent ignores it then anyway).
+    if (e.repeat || scripts || editable(targetEl(e))) return;
     e.preventDefault();
     post({ dp: "toggle-pointing" });
     return;
@@ -691,6 +733,7 @@ function onMessage(e) {
     focusPin(d.index);
   } else if (d.dp === "mode") {
     annotate = d.annotate !== false;
+    scripts = d.scripts === true;
     if (!annotate) hideHover();
   }
 }
@@ -719,25 +762,30 @@ function onClick(e) {
   if (!t || own(t)) return;
   var pointing = annotate && !e.ctrlKey && !e.metaKey;
   var forceAnchor = pointing && !!e.altKey;
-  var link = t.closest ? t.closest(core.LINK_SEL) : null;
+  var link = closestLink(t);
   if (link) {
     // Interact mode still lets the page's own click handlers see the event;
     // only the navigation is cancelled.
     e.preventDefault();
     var hash = sameDocHash(link);
-    if (hash !== null && !forceAnchor) {
+    var target = hash !== null && !forceAnchor ? hashTarget(hash) : null;
+    if (target) {
       if (pointing && suppressClick) { suppressClick = false; return; }
-      scrollToHash(hash);
+      goTo(target);
       return;
     }
     if (!pointing) return;
     e.stopPropagation();
     if (suppressClick) { suppressClick = false; return; }
-    post({ dp: "anchor", anchor: core.linkAnchor(link) });
+    // An SVG xlink link isn't one core can re-find as a link; point at it as
+    // an element instead.
+    var la = null;
+    try { la = link.matches && link.matches(core.LINK_SEL) ? core.linkAnchor(link) : core.elementAnchor(link); } catch (err0) { la = null; }
+    if (la) post({ dp: "anchor", anchor: la });
     return;
   }
   if (!pointing) return;
-  if (!forceAnchor && t.closest && t.closest(PASS_SEL)) {
+  if (!forceAnchor && passTarget(t)) {
     // A click that ended a text selection (already posted as a text anchor)
     // stays swallowed, so selecting a label's words doesn't also flip it.
     if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); }
@@ -751,8 +799,7 @@ function onClick(e) {
   if (a) post({ dp: "anchor", anchor: a });
 }
 function onAuxClick(e) {
-  var t = targetEl(e);
-  if (t && t.closest && t.closest(core.LINK_SEL)) e.preventDefault();
+  if (closestLink(targetEl(e))) e.preventDefault();
 }
 function onResize() { schedule(); }
 /** Capture phase so an inner scroll container (a wide table, a diagram) is

@@ -335,7 +335,7 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
     const win = fakeFrameWindow();
     await userEvent.click(screen.getByRole("button", { name: /pointing: on/i }));
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false }, "*");
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: true }, "*");
     fromFrame(win, { dp: "anchor", anchor: cellAnchor });
     expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /pointing: off/i }));
@@ -396,7 +396,7 @@ describe("PageArtifact — pointing toggle and shortcut (#714)", () => {
     expect(screen.getByRole("button", { name: /run page scripts/i })).toBeInTheDocument();
     const win = fakeFrameWindow();
     await userEvent.click(screen.getByRole("button", { name: /pointing: on/i }));
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false }, "*");
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: false }, "*");
     fromFrame(win, { dp: "anchor", anchor: cellAnchor });
     expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
   });
@@ -409,7 +409,7 @@ describe("PageArtifact — pointing toggle and shortcut (#714)", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, cancelable: true }));
     });
     expect(screen.getByRole("button", { name: /pointing: off/i })).toHaveAttribute("aria-pressed", "false");
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false }, "*");
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: false }, "*");
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", metaKey: true, cancelable: true }));
     });
@@ -440,6 +440,56 @@ describe("PageArtifact — pointing toggle and shortcut (#714)", () => {
     expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
     fromFrame(win, { dp: "toggle-pointing" });
     expect(screen.getByRole("button", { name: /pointing: off/i })).toBeInTheDocument();
+  });
+
+  it("ties the hint to the toggle with aria-describedby", () => {
+    render(<PageArtifact artifact={plain} />);
+    const toggle = screen.getByRole("button", { name: /pointing: on/i });
+    const hint = screen.getByTestId("page-pointing-hint");
+    expect(hint.id).not.toBe("");
+    expect(toggle).toHaveAttribute("aria-describedby", hint.id);
+    expect(hint).toHaveTextContent(/radio\/checkbox tabs/);
+  });
+
+  it("REVIEW: after Run a focused frame's toggle-pointing is ignored (agent script shares the frame); button and shortcut still work", async () => {
+    select(pageArtifact.id);
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "toggle-pointing" });
+    expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, cancelable: true }));
+    });
+    expect(screen.getByRole("button", { name: /pointing: off/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /pointing: off/i }));
+    expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
+  });
+
+  it("REVIEW: the shortcut is left alone while typing in a companion field, and on autorepeat", () => {
+    select(plain.id);
+    render(<PageArtifact artifact={plain} />);
+    for (const tag of ["textarea", "input", "select"]) {
+      const field = document.createElement(tag);
+      document.body.appendChild(field);
+      const ev = new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true, cancelable: true });
+      act(() => {
+        field.dispatchEvent(ev);
+      });
+      expect(ev.defaultPrevented).toBe(false);
+      field.remove();
+    }
+    const editableDiv = document.createElement("div");
+    editableDiv.contentEditable = "true";
+    document.body.appendChild(editableDiv);
+    act(() => {
+      editableDiv.dispatchEvent(new KeyboardEvent("keydown", { key: "i", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    editableDiv.remove();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, repeat: true, cancelable: true }));
+    });
+    expect(screen.getByRole("button", { name: /pointing: on/i })).toBeInTheDocument();
   });
 
   it("a read-only page shows no pointing toggle", () => {

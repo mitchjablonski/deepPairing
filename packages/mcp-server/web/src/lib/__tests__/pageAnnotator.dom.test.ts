@@ -557,6 +557,103 @@ describe("annotator main — pointing keeps the page navigable (#714)", () => {
     expect(anchors()).toEqual([]);
   });
 
+  it("REVIEW: Cmd/Ctrl+I is left to the page while typing in its fields, on autorepeat, and after Run", () => {
+    const input = document.createElement("input");
+    const ta = document.createElement("textarea");
+    const ce = document.createElement("div");
+    ce.contentEditable = "true";
+    document.body.append(input, ta, ce);
+    for (const el of [input, ta, ce]) {
+      const ev = new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true, cancelable: true });
+      el.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(false);
+    }
+    const rep = new KeyboardEvent("keydown", { key: "i", ctrlKey: true, repeat: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(rep);
+    expect(rep.defaultPrevented).toBe(false);
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: true }, source: window }));
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "toggle-pointing")).toHaveLength(0);
+  });
+
+  const svgLink = () => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const a = document.createElementNS("http://www.w3.org/2000/svg", "a");
+    a.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "https://example.com/svg-out");
+    const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    text.textContent = "SVG link";
+    a.appendChild(text);
+    svg.appendChild(a);
+    document.body.appendChild(svg);
+    return text;
+  };
+
+  it("REVIEW: an SVG xlink:href link never navigates with pointing off, with Ctrl/Cmd held, or on middle-click", () => {
+    const text = svgLink();
+    setMode(false);
+    expect(click(text).defaultPrevented).toBe(true);
+    setMode(true);
+    expect(click(text, { ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(click(text, { metaKey: true }).defaultPrevented).toBe(true);
+    const aux = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+    text.dispatchEvent(aux);
+    expect(aux.defaultPrevented).toBe(true);
+    expect(anchors()).toEqual([]);
+  });
+
+  it("REVIEW: a plain click on an SVG xlink link (pointing on) is prevented and points at it", () => {
+    const text = svgLink();
+    expect(click(text).defaultPrevented).toBe(true);
+    expect(anchors()).toHaveLength(1);
+    expect(HtmlAnchorSchema.safeParse(anchors()[0]).success).toBe(true);
+  });
+
+  it("REVIEW: a hashbang or target-less #hash link points at the link instead of doing nothing", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<a id=\"bang\" href=\"#!/route\">Route</a><a id=\"stale\" href=\"#gone\">Gone</a>",
+    );
+    expect(click(document.getElementById("bang")!).defaultPrevented).toBe(true);
+    expect(click(document.getElementById("stale")!).defaultPrevented).toBe(true);
+    expect(scrolled).toEqual([]);
+    expect(anchors().map((a) => a.href)).toEqual(["#!/route", "#gone"]);
+    // "#top" with no such id still scrolls to the top rather than anchoring.
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    click(document.getElementById("toc-top")!);
+    expect(scrollTo).toHaveBeenCalledWith(0, 0);
+    expect(anchors()).toHaveLength(2);
+  });
+
+  it("REVIEW: before Run a button has no action, so a click on it points; after Run it passes through", () => {
+    document.body.insertAdjacentHTML("beforeend", "<button id=\"opt\">Option A</button><input id=\"sub\" type=\"submit\" value=\"Go\">");
+    expect(click(document.getElementById("opt")!).defaultPrevented).toBe(true);
+    expect(click(document.getElementById("sub")!).defaultPrevented).toBe(true);
+    expect(anchors()).toHaveLength(2);
+    expect(anchors()[0]).toMatchObject({ kind: "element", quote: "Option A" });
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: true }, source: window }));
+    expect(click(document.getElementById("opt")!).defaultPrevented).toBe(false);
+    expect(anchors()).toHaveLength(2);
+  });
+
+  it("REVIEW: a label-wrapped card: block content points, the label text and its control switch", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      "<label id=\"card\"><input type=\"radio\" name=\"plan\" id=\"plan-a\"> <b id=\"card-title\">Plan A</b>" +
+        "<div><p id=\"card-body\">Cheaper, slower rollout.</p></div></label>",
+    );
+    const radio = document.getElementById("plan-a") as HTMLInputElement;
+    const body = click(document.getElementById("card-body")!);
+    expect(body.defaultPrevented).toBe(true);
+    expect(radio.checked).toBe(false);
+    expect(anchors()).toEqual([expect.objectContaining({ kind: "element", quote: "Cheaper, slower rollout." })]);
+    expect(click(document.getElementById("card-title")!).defaultPrevented).toBe(false);
+    expect(radio.checked).toBe(true);
+    radio.checked = false;
+    expect(click(radio).defaultPrevented).toBe(false);
+    expect(radio.checked).toBe(true);
+    expect(anchors()).toHaveLength(1);
+  });
+
   it("Cmd/Ctrl+I inside the frame asks the parent to toggle pointing", () => {
     const ev = new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true, cancelable: true });
     document.body.dispatchEvent(ev);

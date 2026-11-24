@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Artifact, Comment, HtmlAnchor } from "@deeppairing/shared";
 import { coercePageContent, PAGE_HTML_MAX_BYTES, readFileWatch } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
@@ -159,7 +159,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // page with no scripts never shows Run, and its own links, details and
   // CSS-only tabs work either way (the annotator lets native controls keep
   // their default action unless Alt/Option is held).
-  const sendMode = useCallback(() => postToFrame({ dp: "mode", annotate }), [postToFrame, annotate]);
+  // `scripts` tells the annotator whether the page's own scripts run (buttons
+  // only have an action then).
+  const sendMode = useCallback(() => postToFrame({ dp: "mode", annotate, scripts: running }), [postToFrame, annotate, running]);
 
   // Keep the latest senders and the EFFECTIVE pointing mode in refs so the one
   // message listener never goes stale.
@@ -167,7 +169,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   sendersRef.current = { sendPins, sendMode };
   const pointingRef = useRef(true);
   pointingRef.current = annotate;
+  const runningRef = useRef(running);
+  runningRef.current = running;
   const rootRef = useRef<HTMLDivElement>(null);
+  const hintId = useId();
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -196,9 +201,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         return;
       }
       if (isTogglePointingMessage(event, frame)) {
-        // The shortcut pressed inside the frame: honoured only while the
-        // reviewer is actually in THIS page's frame.
-        if (!readOnly && frameOwnsFocusRef.current(element)) setAnnotate((a) => !a);
+        // The shortcut pressed inside the frame: honoured only from the
+        // trusted pre-Run document (after Run agent script shares the frame's
+        // identity and could flip it) and only while the reviewer is actually
+        // in THIS page's frame. After Run the toggle and the companion-level
+        // shortcut still work.
+        if (!readOnly && !runningRef.current && frameOwnsFocusRef.current(element)) setAnnotate((a) => !a);
         return;
       }
       const status = acceptPinsStatus(event, frame);
@@ -213,9 +221,11 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   useEffect(() => {
     if (readOnly) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.defaultPrevented || !isPointingShortcut(e)) return;
+      if (e.defaultPrevented || e.repeat || !isPointingShortcut(e)) return;
+      // Never while typing: the reviewer's own text fields keep the chord.
       const target = e.target as HTMLElement | null;
-      if (target?.isContentEditable === true) return;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable === true) return;
       const root = rootRef.current;
       if (!root || !root.isConnected || root.closest("[inert]")) return;
       if (useArtifactStore.getState().selectedArtifactId !== artifactIdRef.current) return;
@@ -312,6 +322,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             type="button"
             onClick={() => setAnnotate((a) => !a)}
             aria-pressed={annotate}
+            aria-describedby={hintId}
             aria-keyshortcuts="Control+I Meta+I"
             className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary"
             title={
@@ -323,9 +334,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             {annotate ? "Pointing: on" : "Pointing: off"}
             <kbd className="ml-1 font-mono text-[9px] text-text-muted">{pointingShortcutLabel()}</kbd>
           </button>
-          <span data-testid="page-pointing-hint">
+          <span id={hintId} data-testid="page-pointing-hint">
             {annotate
-              ? "Click anything on the page, or select text, to comment on that spot. In-page links, summaries, tabs and form controls still work — Alt/Option-click to comment on one."
+              ? "Click anything on the page, or select text, to comment on that spot. In-page links, summaries, radio/checkbox tabs and form fields still work — Alt/Option-click to comment on one."
               : "Pointing is off: clicks go to the page. Turn it on to comment on a spot."}
           </span>
         </div>
