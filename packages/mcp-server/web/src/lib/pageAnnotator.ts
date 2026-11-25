@@ -27,7 +27,13 @@
  * numbered outline pin, then reports which were found (`{dp:"pins-status",
  * found}`) so the parent can say "not found in this version". Pins are built
  * ONLY with DOM APIs and `textContent` — nothing the parent sends is ever parsed
- * as HTML. `{dp:"focus", index}` scrolls to a pin; `{dp:"mode", annotate}`
+ * as HTML. #714 gap 7: the pins message also carries `states` (open |
+ * addressed: the pin's colour) and `ids` (the comment id per pin). A pin's
+ * BADGE is a small click target, only while pointing is on and the page's
+ * scripts aren't running (so it never takes a click the page would handle):
+ * a click posts `{dp:"pin-click", id}` and hovering posts `{dp:"pin-hover",
+ * id, x, y}` / `{dp:"pin-hover", id:null}`. The parent renders the preview
+ * text; the frame never receives comment text. `{dp:"focus", index}` scrolls to a pin; `{dp:"mode", annotate}`
  * switches between annotating clicks and letting them through to the page (after
  * Run). Messages are accepted only from `parent`.
  *
@@ -678,6 +684,13 @@ export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
 var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0, pinEls = [];
+// #714 gap 7 — per pin: its colour state and the comment id a click on its
+// badge reports back (validated here; nothing else from the parent is used).
+var pinStates = [], pinIds = [], hoverPin = null;
+var PIN_COLORS = { open: "#f59e0b", addressed: "#9ca3af" };
+/** Badge element → comment id, by reference: an authored element named like
+ *  our badge can never pose as a pin (ownership is never read from markup). */
+var badgeIds = typeof WeakMap === "function" ? new WeakMap() : null;
 // #714 gap 2 — version-change marks (validated locators) and their toggle.
 var changes = [], showChanges = false, lastChangesFound = null;
 /** Our own nodes, by reference: an authored element can carry the marker
@@ -839,7 +852,14 @@ function paintHover(t, alt, interact) {
   important(hoverBox, { display: "block" });
   place(hoverBox, (pass || t).getBoundingClientRect());
 }
-function onMove(e) { paintHover(targetEl(e), !!e.altKey, !!(e.ctrlKey || e.metaKey)); }
+function onMove(e) {
+  var t = targetEl(e);
+  var pid = badgesLive() ? pinIdOf(t) : null;
+  setHoverPin(pid, pid !== null ? t : null);
+  paintHover(t, !!e.altKey, !!(e.ctrlKey || e.metaKey));
+}
+/** The pointer left the frame: drop any pin preview. */
+function onOut(e) { if (!e.relatedTarget && hoverPin !== null) setHoverPin(null, null); }
 function onKey(e) {
   if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I")) {
     // The companion's pointing shortcut, forwarded: while the reviewer is in
@@ -863,10 +883,38 @@ function samePins(a, b) {
 /** Re-resolve every anchor against the CURRENT document and redraw. Nothing
  *  about a target (element or rectangle) is cached between draws, so a pin
  *  follows its content after the page changes. */
+/** #714 gap 7 — a pin's badge is a click target only while a click there
+ *  would have POINTED anyway (pointing on, page scripts not running): it never
+ *  takes a click the page itself would have handled. The layer and the pin's
+ *  outline stay pointer-events:none. */
+function badgesLive() { return annotate && !scripts; }
+function pinIdOf(t) {
+  if (!badgeIds || !t || t.nodeType !== 1) return null;
+  var id = badgeIds.get(t);
+  return typeof id === "string" ? id : null;
+}
+function syncBadges() {
+  var live = badgesLive();
+  var bs = layer ? layer.querySelectorAll("dp-annotator-badge") : [];
+  for (var i = 0; i < bs.length; i++) {
+    if (pinIdOf(bs[i]) !== null) important(bs[i], { "pointer-events": live ? "auto" : "none", cursor: live ? "pointer" : "default" });
+  }
+  if (!live) setHoverPin(null, null);
+}
+/** Tell the parent which pin the pointer is over (it renders the preview
+ *  from its own data; the frame never holds comment text). */
+function setHoverPin(id, el) {
+  if (id === hoverPin) return;
+  hoverPin = id;
+  if (id === null || !el) { post({ dp: "pin-hover", id: null }); return; }
+  var r = el.getBoundingClientRect();
+  post({ dp: "pin-hover", id: id, x: r.left, y: r.bottom });
+}
 function drawPins() {
   var l = ensureLayer();
   var olds = l.querySelectorAll("dp-annotator-pin");
   for (var i = 0; i < olds.length; i++) olds[i].remove();
+  var hoverStill = false;
   var found = [];
   pinEls = [];
   for (var j = 0; j < current.length; j++) {
@@ -877,21 +925,31 @@ function drawPins() {
     if (!hit) continue;
     var r = rectOf(hit);
     if (!r) continue;
+    var state = pinStates[j] === "addressed" ? "addressed" : "open";
+    var color = PIN_COLORS[state];
     var pin = mk("dp-annotator-pin");
     pin.setAttribute("data-dp-pin", String(j));
-    important(pin, { position: "absolute", display: "block", "box-sizing": "border-box", outline: "2px solid #f59e0b",
+    pin.setAttribute("data-dp-pin-state", state);
+    important(pin, { position: "absolute", display: "block", "box-sizing": "border-box", outline: pinOutline(state),
       background: "transparent", "pointer-events": "none", margin: "0", padding: "0" });
     place(pin, r);
     var badge = mk("dp-annotator-badge");
     badge.textContent = String(j + 1);
+    var id = pinIds[j], live = !!id && !!badgeIds && badgesLive();
+    if (id && badgeIds) badgeIds.set(badge, id);
+    if (id && id === hoverPin && live) hoverStill = true;
     important(badge, { position: "absolute", left: "-10px", top: "-10px", display: "block", "box-sizing": "border-box",
-      "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: "#f59e0b",
-      color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center" });
+      "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: color,
+      color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center",
+      "pointer-events": live ? "auto" : "none", cursor: live ? "pointer" : "default" });
     pin.appendChild(badge);
     l.appendChild(pin);
   }
+  // A preview whose pin is gone (or no longer clickable) is withdrawn.
+  if (hoverPin !== null && !hoverStill) setHoverPin(null, null);
   return found;
 }
+function pinOutline(state) { return state === "addressed" ? "1px dashed " + PIN_COLORS.addressed : "2px solid " + PIN_COLORS.open; }
 var CHANGE_COLORS = { added: "#16a34a", changed: "#8b5cf6", moved: "#2563eb", hinted: "#0891b2" };
 var CHANGE_GLYPHS = { added: "+", changed: "~", moved: "\u2195", hinted: "*" };
 var CHANGE_KINDS = { added: 1, changed: 1, moved: 1, hinted: 1 };
@@ -1005,8 +1063,9 @@ function focusPin(index) {
   reconcile(false);
   var pin = layer ? layer.querySelector("dp-annotator-pin[data-dp-pin=\"" + i + "\"]") : null;
   if (pin) {
+    var st = pinStates[i] === "addressed" ? "addressed" : "open";
     important(pin, { outline: "3px solid #ef4444" });
-    setTimeout(function () { important(pin, { outline: "2px solid #f59e0b" }); }, 1600);
+    setTimeout(function () { important(pin, { outline: pinOutline(st) }); }, 1600);
   }
 }
 
@@ -1168,6 +1227,13 @@ function onMessage(e) {
   if (!d || typeof d !== "object") return;
   if (d.dp === "pins") {
     current = Array.isArray(d.anchors) ? d.anchors.slice(0, 500) : [];
+    var sts = Array.isArray(d.states) ? d.states : [], ids = Array.isArray(d.ids) ? d.ids : [];
+    pinStates = []; pinIds = [];
+    for (var pi = 0; pi < current.length; pi++) {
+      pinStates.push(sts[pi] === "addressed" ? "addressed" : "open");
+      var pid = ids[pi];
+      pinIds.push(typeof pid === "string" && pid.length > 0 && pid.length <= 128 ? pid : null);
+    }
     reconcile(true);
     scheduleOutline();
   } else if (d.dp === "focus") {
@@ -1191,9 +1257,17 @@ function onMessage(e) {
     annotate = d.annotate !== false;
     scripts = d.scripts === true;
     if (!annotate) hideHover();
+    syncBadges();
   }
 }
 function onMouseDown() { suppressClick = false; }
+/** Where a pointer event happened, in frame-viewport px (the parent uses it
+ *  only to place the narrow floating composer near the spot). */
+function pointOf(e) {
+  var x = e && typeof e.clientX === "number" && isFinite(e.clientX) ? e.clientX : 0;
+  var y = e && typeof e.clientY === "number" && isFinite(e.clientY) ? e.clientY : 0;
+  return { x: x, y: y };
+}
 function onMouseUp(e) {
   if (!annotate || e.ctrlKey || e.metaKey) return;
   var t = targetEl(e);
@@ -1202,7 +1276,7 @@ function onMouseUp(e) {
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
   var a = null;
   try { a = core.textAnchor(sel.getRangeAt(0)); } catch (err) { a = null; }
-  if (a) { suppressClick = true; post({ dp: "anchor", anchor: a }); }
+  if (a) { suppressClick = true; post({ dp: "anchor", anchor: a, at: pointOf(e) }); }
 }
 /** #714 — pointing never breaks the page's own navigation:
  *  - a link NEVER navigates the frame (it is something to point at, not a way
@@ -1216,6 +1290,17 @@ function onMouseUp(e) {
 function onClick(e) {
   var t = targetEl(e);
   if (!t) return;
+  // #714 gap 7 — a click on a pin's badge (one of OUR nodes, matched by
+  // reference) tells the parent which comment it is. Display-only: the parent
+  // scrolls to and highlights that comment; nothing is posted or changed.
+  var pinId = pinIdOf(t);
+  if (pinId !== null) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (suppressClick) { suppressClick = false; return; }
+    if (badgesLive()) post({ dp: "pin-click", id: pinId });
+    return;
+  }
   var link = closestLink(t);
   // The navigation guard runs before anything else, our own nodes included:
   // no link is ever allowed to navigate the frame.
@@ -1240,7 +1325,7 @@ function onClick(e) {
     // an element instead.
     var la = null;
     try { la = link.matches && link.matches(core.LINK_SEL) ? core.linkAnchor(link) : core.elementAnchor(link); } catch (err0) { la = null; }
-    if (la) post({ dp: "anchor", anchor: la });
+    if (la) post({ dp: "anchor", anchor: la, at: pointOf(e) });
     return;
   }
   if (!pointing) return;
@@ -1264,7 +1349,7 @@ function onClick(e) {
   if (suppressClick) { suppressClick = false; return; }
   var a = null;
   try { a = core.anchorForTarget(t); } catch (err) { a = null; }
-  if (a) post({ dp: "anchor", anchor: a });
+  if (a) post({ dp: "anchor", anchor: a, at: pointOf(e) });
 }
 function onAuxClick(e) {
   if (closestLink(targetEl(e))) e.preventDefault();
@@ -1288,6 +1373,7 @@ window.addEventListener("auxclick", onAuxClick, true);
 window.addEventListener("mousedown", onMouseDown, true);
 window.addEventListener("mouseup", onMouseUp, true);
 window.addEventListener("mousemove", onMove, true);
+window.addEventListener("mouseout", onOut, true);
 window.addEventListener("keydown", onKey, true);
 window.addEventListener("keyup", onKey, true);
 window.addEventListener("message", onMessage);
@@ -1301,6 +1387,7 @@ return function uninstall() {
   window.removeEventListener("mousedown", onMouseDown, true);
   window.removeEventListener("mouseup", onMouseUp, true);
   window.removeEventListener("mousemove", onMove, true);
+  window.removeEventListener("mouseout", onOut, true);
   window.removeEventListener("keydown", onKey, true);
   window.removeEventListener("keyup", onKey, true);
   window.removeEventListener("message", onMessage);

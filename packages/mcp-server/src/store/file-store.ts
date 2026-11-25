@@ -1508,9 +1508,16 @@ export class FileStore implements IStore {
       const { artifacts, merged, filePath, diskBytes } = this.readDurablePageRevisionFeedback(parentId, proof, false);
       verifyRevision(artifacts);
       const selected = new Set(proof.commentIds);
-      const updated = merged.map((comment) =>
-        selected.has(comment.id) && !comment.acknowledged ? { ...comment, acknowledged: true } : comment,
-      );
+      // #714 gap 7 — also record WHICH revision addressed each comment, so the
+      // companion can say "Addressed in vN" rather than the drain's "seen".
+      // verifyRevision proved exactly one durable successor.
+      const successor = artifacts.find((artifact) => artifact.parentId === parentId);
+      const addressedIn = successor ? { artifactId: successor.id, version: successor.version } : undefined;
+      const updated = merged.map((comment) => {
+        if (!selected.has(comment.id)) return comment;
+        const stamp = addressedIn && !comment.addressedIn ? { addressedIn } : {};
+        return comment.acknowledged && !("addressedIn" in stamp) ? comment : { ...comment, acknowledged: true, ...stamp };
+      });
       this.writePageRevisionComments(updated, filePath, diskBytes);
       return updated.filter((comment) => selected.has(comment.id));
     });

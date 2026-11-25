@@ -196,3 +196,71 @@ export function askAnchor(ask: PageAsk): HtmlAnchor | null {
   const parsed = HtmlAnchorSchema.safeParse({ kind: "element", locator: ask.locator, quote: ask.text });
   return parsed.success ? parsed.data : null;
 }
+
+// --- #714 gap 7: the review queue's pins ---------------------------------------
+
+/** How a pin is drawn: open (amber) or addressed (greyed). An orphaned comment
+ *  has no pin: its spot isn't on the page. */
+export const PinStateSchema = z.enum(["open", "addressed"]);
+export type PinStateValue = z.infer<typeof PinStateSchema>;
+/** Comment ids are opaque server strings; the frame only echoes one back. */
+const PinIdSchema = z.string().min(1).max(128);
+
+/** The `{dp:"pins"}` message for the frame. Anchors go down as stored (the
+ *  annotator re-checks every field); states and ids are validated here. Never
+ *  any comment TEXT: the hover preview is rendered by the parent. */
+export function buildPinsMessage(
+  anchors: readonly HtmlAnchor[],
+  states: readonly PinStateValue[],
+  ids: readonly string[],
+): { dp: "pins"; anchors: HtmlAnchor[]; states: PinStateValue[]; ids: string[] } {
+  const n = Math.min(anchors.length, MAX_PINS);
+  const outStates: PinStateValue[] = [];
+  const outIds: string[] = [];
+  for (let i = 0; i < n; i++) {
+    outStates.push(PinStateSchema.safeParse(states[i]).success ? (states[i] as PinStateValue) : "open");
+    const id = ids[i];
+    // An id that fails the bound becomes "" — the annotator then gives that
+    // pin no hit target (nothing to report back).
+    outIds.push(typeof id === "string" && PinIdSchema.safeParse(id).success ? id : "");
+  }
+  return { dp: "pins", anchors: anchors.slice(0, n), states: outStates, ids: outIds };
+}
+
+/** A valid `{dp:"pin-click", id}` from this frame → the id; else null. The
+ *  parent only ever scrolls to / highlights that comment's row: a pin click
+ *  never posts or changes anything. */
+export function acceptPinClick(event: FrameMessage, frame: Window | null | undefined): string | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "pin-click") return null;
+  const parsed = PinIdSchema.safeParse(d.id);
+  return parsed.success ? parsed.data : null;
+}
+
+/** A frame-viewport point (CSS px), bounded so a forged report can't push a
+ *  preview anywhere absurd; the parent clamps to the frame box as well. */
+const FramePointSchema = z.object({ x: z.number().finite().min(-10_000).max(100_000), y: z.number().finite().min(-10_000).max(100_000) }).strict();
+export type FramePoint = z.infer<typeof FramePointSchema>;
+
+/** `{dp:"pin-hover", id, x, y}` (pointer over a pin) or `{dp:"pin-hover",
+ *  id:null}` (left it) from this frame; else undefined. */
+export function acceptPinHover(
+  event: FrameMessage,
+  frame: Window | null | undefined,
+): { id: string; at: FramePoint } | { id: null } | undefined {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "pin-hover") return undefined;
+  if (d.id === null) return { id: null };
+  const id = PinIdSchema.safeParse(d.id);
+  const at = FramePointSchema.safeParse({ x: d.x, y: d.y });
+  return id.success && at.success ? { id: id.data, at: at.data } : undefined;
+}
+
+/** The point an `{dp:"anchor"}` was made at (`at`, frame viewport px), when
+ *  present and valid; used only to place the narrow floating composer. */
+export function acceptAnchorPoint(event: FrameMessage, frame: Window | null | undefined): FramePoint | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "anchor") return null;
+  const parsed = FramePointSchema.safeParse(d.at);
+  return parsed.success ? parsed.data : null;
+}

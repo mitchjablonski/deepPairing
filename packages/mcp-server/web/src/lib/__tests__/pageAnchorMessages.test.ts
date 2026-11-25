@@ -6,7 +6,11 @@
 import { describe, it, expect } from "vitest";
 import {
   acceptAnchorMessage,
+  acceptAnchorPoint,
   acceptAsksMessage,
+  acceptPinClick,
+  acceptPinHover,
+  buildPinsMessage,
   acceptChangesStatus,
   acceptOutlineActive,
   acceptOutlineMessage,
@@ -169,5 +173,45 @@ describe("outline / asks messages (#714 gaps 4+5)", () => {
 
   it("askAnchor builds the element anchor a click on the ask would post", () => {
     expect(askAnchor(asks.asks[0] as any)).toEqual({ kind: "element", locator: "#decide-ttl", quote: "Decide: a 60s TTL?" });
+  });
+});
+
+describe("#714 gap 7 — pins down, pin clicks and hovers up", () => {
+  const el = { kind: "element", locator: "h1", quote: "Title" } as const;
+
+  it("buildPinsMessage lines states and ids up with the anchors; a bad state reads open, a bad id gets no hit target", () => {
+    expect(buildPinsMessage([el, el, el], ["open", "addressed", "bogus" as any], ["c1", "c2", "x".repeat(129)])).toEqual({
+      dp: "pins",
+      anchors: [el, el, el],
+      states: ["open", "addressed", "open"],
+      ids: ["c1", "c2", ""],
+    });
+    // Missing entries are filled, never shifted.
+    expect(buildPinsMessage([el, el], [], ["c1"])).toEqual({ dp: "pins", anchors: [el, el], states: ["open", "open"], ids: ["c1", ""] });
+  });
+
+  it("acceptPinClick takes a bounded id string, from this frame only", () => {
+    expect(acceptPinClick({ source: frame, data: { dp: "pin-click", id: "c1" } }, frame)).toBe("c1");
+    expect(acceptPinClick({ source: otherFrame, data: { dp: "pin-click", id: "c1" } }, frame)).toBeNull();
+    expect(acceptPinClick({ source: frame, data: { dp: "pin-click", id: 1 } }, frame)).toBeNull();
+    expect(acceptPinClick({ source: frame, data: { dp: "pin-click", id: "" } }, frame)).toBeNull();
+    expect(acceptPinClick({ source: frame, data: { dp: "pin-click", id: "x".repeat(129) } }, frame)).toBeNull();
+    expect(acceptPinClick({ source: frame, data: { dp: "anchor", id: "c1" } }, frame)).toBeNull();
+  });
+
+  it("acceptPinHover: an id with finite bounded coordinates, or id:null to clear", () => {
+    expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: "c1", x: 5, y: 6 } }, frame)).toEqual({ id: "c1", at: { x: 5, y: 6 } });
+    expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: null } }, frame)).toEqual({ id: null });
+    expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: "c1", x: Infinity, y: 6 } }, frame)).toBeUndefined();
+    expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: "c1", x: 1e9, y: 6 } }, frame)).toBeUndefined();
+    expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: "c1" } }, frame)).toBeUndefined();
+    expect(acceptPinHover({ source: otherFrame, data: { dp: "pin-hover", id: null } }, frame)).toBeUndefined();
+  });
+
+  it("acceptAnchorPoint reads an anchor's optional `at`, and the anchor itself still parses without it", () => {
+    expect(acceptAnchorPoint({ source: frame, data: { dp: "anchor", anchor, at: { x: 1, y: 2 } } }, frame)).toEqual({ x: 1, y: 2 });
+    expect(acceptAnchorPoint({ source: frame, data: { dp: "anchor", anchor } }, frame)).toBeNull();
+    expect(acceptAnchorPoint({ source: frame, data: { dp: "anchor", anchor, at: { x: "1", y: 2 } } }, frame)).toBeNull();
+    expect(acceptAnchorMessage({ source: frame, data: { dp: "anchor", anchor, at: { x: 1, y: 2 } } }, frame)).toEqual(anchor);
   });
 });

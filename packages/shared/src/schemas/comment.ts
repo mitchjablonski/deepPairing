@@ -241,6 +241,20 @@ export const CommentRuleOutSchema = z.object({
 });
 export type CommentRuleOut = z.infer<typeof CommentRuleOutSchema>;
 
+/**
+ * #714 gap 7 — stamped on an anchored page comment when the agent revised the
+ * page and named this comment as addressed (standalone `revise-page
+ * --ack-comment-id`). `artifactId`/`version` are the revision that addressed
+ * it, so the companion can say "Addressed in vN" instead of conflating it with
+ * the MCP drain-on-read `acknowledged` bit. Server-set only (the public comment
+ * routes never accept it); optional, so older records load unchanged.
+ */
+export const CommentAddressedInSchema = z.object({
+  artifactId: z.string().min(1).max(256),
+  version: z.number().int().positive(),
+});
+export type CommentAddressedIn = z.infer<typeof CommentAddressedInSchema>;
+
 export const CommentSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
@@ -262,6 +276,8 @@ export const CommentSchema = z.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  // #714 gap 7 — the page revision that addressed this comment (see above).
+  addressedIn: CommentAddressedInSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: z.string().nullable().optional(),
   /**

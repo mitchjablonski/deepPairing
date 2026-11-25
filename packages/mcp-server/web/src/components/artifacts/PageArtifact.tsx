@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import type { Artifact, Comment, HtmlAnchor } from "@deeppairing/shared";
 import { coercePageContent, PAGE_HTML_MAX_BYTES, readFileWatch } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
@@ -14,6 +14,12 @@ import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
 import {
   acceptAnchorMessage,
+  acceptAnchorPoint,
+  acceptPinClick,
+  acceptPinHover,
+  buildPinsMessage,
+  type FramePoint,
+  type PinStateValue,
   acceptAsksMessage,
   acceptChangesStatus,
   acceptOutlineActive,
@@ -32,10 +38,86 @@ import { usePageAskVersions } from "../../hooks/usePageAskVersions";
 import { usePageLineage, usePageVersionDiff } from "../../hooks/usePageVersionDiff";
 import { PageChangeLine, PageRemovedList } from "./PageChangeSummary";
 import type { ChangeLocator } from "../../lib/pageVersionDiff";
-import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
+import { isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
+import { AnchorContext, PageReviewQueue, type QueueFilterChoice } from "./PageReviewQueue";
+import {
+  buildQueue,
+  deriveCommentState,
+  pinState,
+  queueCounts,
+  stateFilter,
+  stateLabel,
+  threadReplies,
+} from "../../lib/pageReviewQueue";
+import { commentPriorVersion } from "../../stores/artifact";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
 import { commentAnswersAsk, pageRuleOutKey } from "@deeppairing/shared";
+
+/** #714 gap 7 — the review rail sits beside the frame once the panel is at
+ *  least this wide (with the outline rail on the left, the frame keeps ~600px). */
+export const REVIEW_RAIL_MIN_WIDTH = 1152;
+
+/** Is the element at least `min` px wide? A container query in JS: the
+ *  composer must exist exactly once (one draft writer, one focus target), so
+ *  rail-vs-below can't be a CSS show/hide of two copies. No ResizeObserver
+ *  (old engines, jsdom) → narrow, the layout that always fits. */
+function useWideContainer(ref: RefObject<HTMLElement | null>, min: number): boolean {
+  const [wide, setWide] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver !== "function") return;
+    const check = () => setWide(el.getBoundingClientRect().width >= min);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref, min]);
+  return wide;
+}
+
+interface FrameBox {
+  /** The iframe's box inside its wrapper (px). */
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  wrapHeight: number;
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+
+/** #714 gap 8 — where the narrow floating composer goes: next to the spot
+ *  the reviewer clicked, on the side away from it (below a spot in the top
+ *  half, above one in the bottom half), so the spot stays visible. Opened
+ *  from the companion (no point): docked to the bottom of the frame, while
+ *  the frame centres the spot. */
+export function floatingComposerStyle(box: FrameBox, point: FramePoint | null): CSSProperties {
+  const width = Math.min(448, Math.max(200, box.width - 16));
+  const gap = 12;
+  if (!point) {
+    return {
+      left: box.left + 8,
+      width,
+      bottom: box.wrapHeight - (box.top + box.height) + 8,
+      maxHeight: Math.max(160, box.height * 0.45),
+      overflowY: "auto",
+    };
+  }
+  const y = clamp(point.y, 0, box.height);
+  const x = clamp(point.x, 0, box.width);
+  const left = box.left + clamp(x - 24, 8, Math.max(8, box.width - width - 8));
+  if (y < box.height / 2) {
+    return { left, width, top: box.top + y + gap, maxHeight: Math.max(160, box.height - y - gap - 8), overflowY: "auto" };
+  }
+  return { left, width, bottom: box.wrapHeight - (box.top + y) + gap, maxHeight: Math.max(160, y - gap - 8), overflowY: "auto" };
+}
+
+/** The hover preview's text: the comment, clipped. */
+function snippet(text: string): string {
+  const t = text.trim().replace(/\s+/g, " ");
+  return t.length > 200 ? `${t.slice(0, 200)}…` : t;
+}
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -61,32 +143,6 @@ export function anchoredPageComments(comments: Comment[]): Comment[] {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-function AnchorContext({ anchor }: { anchor: HtmlAnchor }) {
-  const quote = anchor.quote.trim();
-  return (
-    <div className="space-y-0.5 text-2xs text-text-muted" data-testid="page-anchor-context">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="px-1.5 py-0.5 rounded bg-surface-elevated text-text-secondary">{htmlAnchorKindLabel(anchor.kind)}</span>
-        {quote ? (
-          <span className="text-text-primary italic break-words">“{quote}”</span>
-        ) : (
-          <code className="font-mono break-all">{anchor.locator}</code>
-        )}
-      </div>
-      {anchor.table && (anchor.table.row || anchor.table.col) && (
-        <div>
-          {anchor.table.row && <>Row <span className="text-text-secondary">{anchor.table.row}</span></>}
-          {anchor.table.row && anchor.table.col && " · "}
-          {anchor.table.col && <>Column <span className="text-text-secondary">{anchor.table.col}</span></>}
-        </div>
-      )}
-      {anchor.nodeId && <div>Node <code className="font-mono">{anchor.nodeId}</code></div>}
-      {anchor.href && <div className="break-all">Link to <code className="font-mono">{anchor.href}</code></div>}
-      {quote && <div className="break-all">at <code className="font-mono">{anchor.locator}</code></div>}
-    </div>
-  );
-}
-
 /**
  * #680 — viewer for `page` artifacts: an agent-authored HTML page presented
  * for review.
@@ -109,6 +165,15 @@ function AnchorContext({ anchor }: { anchor: HtmlAnchor }) {
  * Slice 4 — with a spot selected, "Rule this out" (PageRuleOutControl) records
  * the spot's text as a rejected stance with your reason; the page stays under
  * review and the gate refuses later pages containing that text.
+ *
+ * #714 gaps 7+8 — the anchored comments are a review queue (PageReviewQueue):
+ * Open / Addressed / Orphaned filters with counts, honest per-comment states
+ * (lib/pageReviewQueue), reply counts, and pins coloured by state. A pin's
+ * badge in the frame is clickable (display-only: it highlights and reveals its
+ * row here, never posts) and hovering it shows the comment's snippet, rendered
+ * here from the store. The composer sits in the right-hand review rail on a
+ * wide panel, or floats over the frame beside the clicked spot on a narrow
+ * one, so the spot stays in view; Escape returns focus to the frame.
  *
  * The footer is the standard ArtifactStatusActions: Respond / Ask, Request
  * changes, Reject (with the "name the pattern" capture, so a reject feeds
@@ -140,6 +205,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const liveStances = useMemo(() => new Set(rememberedRows.map((r) => r.description)), [rememberedRows]);
   const anchored = useMemo(() => anchoredPageComments(comments), [comments]);
   const anchors = useMemo(() => anchored.map((c) => c.target.htmlAnchor as HtmlAnchor), [anchored]);
+  const pinIds = useMemo(() => anchored.map((c) => c.id), [anchored]);
+  // #714 gap 7 — pin colours. Derived WITHOUT the frame's found report (an
+  // orphaned comment has no pin to colour), and keyed by value, so a
+  // pins-status report never re-sends the pins (no feedback loop).
+  const pinStatesKey = anchored.map((c) => pinState(deriveCommentState(c, threadReplies(c, comments), false))).join(",");
+  const pinStates = useMemo(() => (pinStatesKey ? (pinStatesKey.split(",") as PinStateValue[]) : []), [pinStatesKey]);
 
   const [draft, setDraft] = useState<HtmlAnchor | null>(null);
   const [openNonce, setOpenNonce] = useState(0);
@@ -167,6 +238,50 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   frameOwnsFocusRef.current = frameOwnsFocus;
   const [found, setFound] = useState<boolean[] | null>(null);
   const [running, setRunning] = useState(false);
+  // #714 gaps 7+8 — the review queue and the composer beside its anchor.
+  const queue = useMemo(
+    () => buildQueue(anchored, comments, (c, i) => (found ? found[i] === false : serverOrphans.has(c.id))),
+    [anchored, comments, found, serverOrphans],
+  );
+  const counts = useMemo(() => queueCounts(queue), [queue]);
+  // null = automatic: Open while anything is open, else All.
+  const [filterPick, setFilterPick] = useState<QueueFilterChoice | null>(null);
+  const filter: QueueFilterChoice = filterPick ?? (counts.open > 0 ? "open" : "all");
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [reveal, setReveal] = useState({ nonce: 0, focus: false });
+  const [hover, setHover] = useState<{ id: string; at: FramePoint } | null>(null);
+  // Where in the frame the current draft's spot was clicked (frame viewport
+  // px), for the narrow floating composer; null = opened from the companion.
+  const [draftPoint, setDraftPoint] = useState<FramePoint | null>(null);
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const wide = useWideContainer(containerRef, REVIEW_RAIL_MIN_WIDTH);
+  const allArtifacts = useArtifactStore((s) => s.artifacts);
+  // Where the iframe sits inside its wrapper, measured when something has to
+  // be placed over it (the pin preview, the floating composer).
+  const frameWrapRef = useRef<HTMLDivElement>(null);
+  const [frameBox, setFrameBox] = useState<FrameBox | null>(null);
+  useLayoutEffect(() => {
+    if (!hover && !draft) return;
+    const wrap = frameWrapRef.current;
+    const f = iframeRef.current;
+    if (!wrap || !f) {
+      setFrameBox(null);
+      return;
+    }
+    const w = wrap.getBoundingClientRect();
+    const r = f.getBoundingClientRect();
+    setFrameBox(
+      r.height > 0 ? { top: r.top - w.top, left: r.left - w.left, width: r.width, height: r.height, wrapHeight: w.height } : null,
+    );
+  }, [hover, draft, draftPoint, wide, running]);
+  const floatingStyle = useMemo(
+    () => (draft && !wide && frameBox ? floatingComposerStyle(frameBox, draftPoint) : null),
+    [draft, wide, frameBox, draftPoint],
+  );
   // #714 gaps 4+5 — the page's outline and asks, as the frame reports them
   // (display-only hints: validated, rendered as text, never acted on alone).
   const [outline, setOutline] = useState<PageOutlineMessage | null>(null);
@@ -207,7 +322,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     // (anchors the human already made on this page, never comment text).
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
-  const sendPins = useCallback(() => postToFrame({ dp: "pins", anchors }), [postToFrame, anchors]);
+  // Anchors, colour states and comment ids, never comment text (the hover
+  // preview is rendered here, from the store).
+  const sendPins = useCallback(
+    () => postToFrame(buildPinsMessage(anchors, pinStates, pinIds)),
+    [postToFrame, anchors, pinStates, pinIds],
+  );
   // #714 — pointing is the reviewer's choice before Run as well as after: a
   // page with no scripts never shows Run, and its own links, details and
   // CSS-only tabs work either way (the annotator lets native controls keep
@@ -248,6 +368,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         if (readOnly || !pointingRef.current || !frameOwnsFocusRef.current(element)) return;
         acceptingFrame.current = element;
         setDraft({ ...anchor, version: artifact.version });
+        setDraftPoint(acceptAnchorPoint(event, frame));
         setExplicitOpen(false);
         setOpenNonce((n) => n + 1);
         setFrameFocusNonce((n) => n + 1);
@@ -271,6 +392,27 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       const status = acceptPinsStatus(event, frame);
       if (status) {
         setFound(status);
+        return;
+      }
+      // #714 gap 7 — a pin clicked in the frame: scroll to and highlight its
+      // comment in the queue. Display-only (nothing is posted or changed), and
+      // ignored once the page's own scripts run (they could forge it), like
+      // the other frame reports.
+      const pinClick = acceptPinClick(event, frame);
+      if (pinClick !== null) {
+        if (runningRef.current) return;
+        const entry = queueRef.current.find((e) => e.comment.id === pinClick);
+        if (!entry) return;
+        const bucket = stateFilter(entry.state);
+        if (filterRef.current !== "all" && filterRef.current !== bucket) setFilterPick(bucket);
+        setHighlightId(entry.comment.id);
+        setReveal((r) => ({ nonce: r.nonce + 1, focus: frameOwnsFocusRef.current(element) }));
+        return;
+      }
+      const pinHover = acceptPinHover(event, frame);
+      if (pinHover) {
+        if (runningRef.current) return;
+        setHover(pinHover.id === null ? null : pinHover);
         return;
       }
       // #714 gaps 4+5 — outline, reading progress and asks follow the same
@@ -339,12 +481,20 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   useEffect(() => {
     setFound(null);
     setChangesFound(null);
+    setHover(null);
   }, [running]);
+  useEffect(() => {
+    setHighlightId(null);
+    setHover(null);
+    setFilterPick(null);
+  }, [artifact.id]);
 
   // Frame-initiated focus: re-check ownership at the moment of moving it.
   useEffect(() => {
     if (!frameFocusNonce || !frameOwnsFocus(acceptingFrame.current)) return;
-    composerBoxRef.current?.querySelector("textarea")?.focus?.();
+    // preventScroll: the composer sits beside the frame (rail) or over it near
+    // the spot (floating), so focusing it must not scroll the spot away.
+    composerBoxRef.current?.querySelector("textarea")?.focus?.({ preventScroll: true });
   }, [frameFocusNonce, frameOwnsFocus]);
 
   const onRunningChange = useCallback((r: boolean) => setRunning(r), []);
@@ -374,8 +524,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     const anchor = anchors[index];
     if (!anchor) return;
     postToFrame({ dp: "focus", index });
+    setHighlightId(anchored[index]?.id ?? null);
     if (!readOnly) {
       acceptingFrame.current = null;
+      setDraftPoint(null);
       setDraft({ ...anchor, version: artifact.version });
       setExplicitOpen(true);
       setOpenNonce((n) => n + 1);
@@ -396,7 +548,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     if (outline.pins.length === anchored.length) {
       anchored.forEach((c, i) => {
         const s = outline.pins[i]!;
-        if (s < 0 || c.humanResolvedAt || (found && found[i] === false)) return;
+        // Only comments still OPEN in the review queue (#714 gap 7).
+        if (s < 0 || queue[i]?.state.kind !== "open") return;
         comments[s] = (comments[s] ?? 0) + 1;
       });
     }
@@ -406,7 +559,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       });
     }
     return { comments, changes };
-  }, [outline, anchored, found, marks]);
+  }, [outline, anchored, queue, marks]);
   const jumpToHeading = (index: number) => {
     const h = headings[index];
     if (!h) return;
@@ -464,6 +617,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     if (!ask || !anchor || readOnly) return;
     postToFrame({ dp: "focus-ask", index, locator: ask.locator });
     acceptingFrame.current = null;
+    setDraftPoint(null);
     setDraft({ ...anchor, version: artifact.version });
     setExplicitOpen(true);
     setOpenNonce((n) => n + 1);
@@ -484,6 +638,99 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         return !!root && sameHtmlAnchor(root.target.htmlAnchor, draft);
       })
     : [];
+
+  /** Close the composer; Escape (and Close) hand focus back to the frame so
+   *  the reviewer can keep pointing. The typed text stays saved as a draft
+   *  for that spot (useDraft), so reopening it restores the text. */
+  const closeComposer = () => {
+    setDraft(null);
+    setDraftPoint(null);
+    iframeRef.current?.focus?.();
+  };
+  const onComposerKeyDown = (e: ReactKeyboardEvent) => {
+    // A nested control that handles its own Escape (Rule this out's confirm
+    // step) marks it handled first; stopPropagation keeps the app-level
+    // Escape handler from moving focus elsewhere.
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeComposer();
+  };
+  const composer =
+    draft && !readOnly ? (
+      <div
+        className={`p-3 rounded-lg border border-accent-blue/30 bg-surface-elevated space-y-2 ${wide ? "" : "shadow-xl"}`}
+        ref={composerBoxRef}
+        role="group"
+        aria-label="Comment composer"
+        onKeyDown={onComposerKeyDown}
+        data-testid="page-anchor-composer"
+        data-placement={wide ? "rail" : floatingStyle ? "floating" : "below"}
+      >
+        <div className="flex items-start gap-2">
+          <div className="flex-1 min-w-0">
+            <AnchorContext anchor={draft} />
+          </div>
+          <button
+            type="button"
+            onClick={closeComposer}
+            title="Close (Esc) and return to the page"
+            className="text-2xs text-text-muted hover:text-text-secondary"
+          >
+            Close
+          </button>
+        </div>
+        <CommentThread
+          key={openNonce}
+          artifactId={artifact.id}
+          comments={draftComments}
+          target={{ htmlAnchor: draft }}
+          roomy
+          focusOnOpen={explicitOpen}
+          placeholder="Comment on this spot… (⌘⏎ to send, Esc to return to the page)"
+          textareaLabel="Comment on the selected spot"
+          secondarySubmitLabel="Ask"
+          secondarySubmitTitle="Post as a question about this spot — the agent owes you an answer"
+        />
+        {/* #680 slice 4 — record this spot's text as a rejected stance. Inline
+            under the composer (never over it); opens its own confirm step. */}
+        <div className="flex justify-end" data-testid="page-rule-out">
+          <PageRuleOutControl
+            key={openNonce}
+            artifactId={artifact.id}
+            anchor={draft}
+            ruledOut={(() => {
+              const phrase = pageRuleOutKey(draft.quote);
+              return phrase && liveStances.has(phrase) ? phrase : undefined;
+            })()}
+            onRecorded={(description) => remember({ description, sourceArtifactId: artifact.id })}
+          />
+        </div>
+      </div>
+    ) : null;
+  const queueEl = (variant: "rail" | "below") => (
+    <PageReviewQueue
+      entries={queue}
+      counts={counts}
+      filter={filter}
+      onFilter={setFilterPick}
+      highlightId={highlightId}
+      revealNonce={reveal.nonce}
+      focusRow={reveal.focus}
+      onSelect={focusComment}
+      fromVersion={(c) => commentPriorVersion(allArtifacts, c, artifact.id)}
+      liveStances={liveStances}
+      variant={variant}
+    />
+  );
+  const hoverEntry = hover ? queue.find((e) => e.comment.id === hover.id) : undefined;
+  const hoverStyle: CSSProperties | undefined =
+    hover && hoverEntry
+      ? {
+          left: Math.max(0, (frameBox?.left ?? 0) + Math.min(hover.at.x, Math.max(0, (frameBox?.width ?? 0) - 240))),
+          top: (frameBox?.top ?? 0) + Math.max(0, Math.min(hover.at.y + 4, frameBox?.height ?? hover.at.y + 4)),
+        }
+      : undefined;
 
   return (
     <div className="space-y-3" data-testid="page-artifact" ref={rootRef}>
@@ -652,8 +899,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       )}
       <PageAsksStrip asks={asks} answered={askAnswered} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
       {/* #714 gap 4 — the outline: a sticky rail beside the frame when the
-          panel is wide, a collapsible disclosure above it when narrow. */}
-      <div className="@container">
+          panel is wide, a collapsible disclosure above it when narrow.
+          #714 gaps 7+8 — the review rail (composer + comment queue) on the
+          right once the panel is wide enough for both rails; narrower, the
+          composer floats over the frame near its spot and the queue sits
+          below. */}
+      <div className="@container" ref={containerRef} data-review-layout={wide ? "rail" : "below"}>
         {headings.length > 0 && (
           <div className="@3xl:hidden mb-2">
             <PageOutline {...outlineProps} variant="disclosure" />
@@ -665,7 +916,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
               <PageOutline {...outlineProps} variant="rail" />
             </div>
           )}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 relative" ref={frameWrapRef}>
             <PrototypeFrame
               html={page.html}
               maxBytes={PAGE_HTML_MAX_BYTES}
@@ -676,104 +927,50 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
               iframeRef={iframeRef}
               onRunningChange={onRunningChange}
             />
+            {hoverEntry && (
+              <div
+                role="tooltip"
+                className="absolute z-20 pointer-events-none max-w-xs px-2 py-1.5 rounded border border-border-default bg-surface-elevated shadow-lg text-2xs space-y-0.5"
+                style={hoverStyle}
+                data-testid="page-pin-preview"
+              >
+                <div className="flex items-center gap-1.5 text-text-muted">
+                  <span className="font-semibold text-text-secondary">#{hoverEntry.index + 1}</span>
+                  <span>{stateLabel(hoverEntry.state).text}</span>
+                  {hoverEntry.replies > 0 && (
+                    <span>
+                      · {hoverEntry.replies} {hoverEntry.replies === 1 ? "reply" : "replies"}
+                    </span>
+                  )}
+                </div>
+                <p className="text-text-primary line-clamp-3 break-words">{snippet(hoverEntry.comment.content)}</p>
+              </div>
+            )}
+            {composer && !wide && floatingStyle && (
+              <div className="absolute z-30" style={floatingStyle} data-testid="page-composer-floating">
+                {composer}
+              </div>
+            )}
           </div>
+          {wide && (
+            <aside
+              className="w-72 shrink-0 self-stretch"
+              aria-label="Review"
+              data-testid="page-review-rail"
+            >
+              <div className="sticky top-2 max-h-[calc(70vh+2rem)] overflow-y-auto space-y-3 pr-0.5">
+                {composer}
+                {queueEl("rail")}
+              </div>
+            </aside>
+          )}
         </div>
+        {/* Narrow, with no room measured to float it (the frame hasn't laid
+            out): the composer falls back to just under the frame. */}
+        {composer && !wide && !floatingStyle && <div className="mt-2">{composer}</div>}
       </div>
 
-      {draft && !readOnly && (
-        <div
-          className="p-3 rounded-lg border border-accent-blue/30 bg-surface-elevated space-y-2"
-          ref={composerBoxRef}
-          data-testid="page-anchor-composer"
-        >
-          <div className="flex items-start gap-2">
-            <div className="flex-1 min-w-0">
-              <AnchorContext anchor={draft} />
-            </div>
-            <button
-              type="button"
-              onClick={() => setDraft(null)}
-              className="text-2xs text-text-muted hover:text-text-secondary"
-            >
-              Close
-            </button>
-          </div>
-          <CommentThread
-            key={openNonce}
-            artifactId={artifact.id}
-            comments={draftComments}
-            target={{ htmlAnchor: draft }}
-            roomy
-            focusOnOpen={explicitOpen}
-            placeholder="Comment on this spot… (⌘⏎ to send)"
-            textareaLabel="Comment on the selected spot"
-            secondarySubmitLabel="Ask"
-            secondarySubmitTitle="Post as a question about this spot — the agent owes you an answer"
-          />
-          {/* #680 slice 4 — record this spot's text as a rejected stance. Inline
-              under the composer (never over it); opens its own confirm step. */}
-          <div className="flex justify-end" data-testid="page-rule-out">
-            <PageRuleOutControl
-              key={openNonce}
-              artifactId={artifact.id}
-              anchor={draft}
-              ruledOut={(() => {
-                const phrase = pageRuleOutKey(draft.quote);
-                return phrase && liveStances.has(phrase) ? phrase : undefined;
-              })()}
-              onRecorded={(description) => remember({ description, sourceArtifactId: artifact.id })}
-            />
-          </div>
-        </div>
-      )}
-
-      {anchored.length > 0 && (
-        <div className="space-y-1.5" data-testid="page-annotations">
-          <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide">On the page</h3>
-          <ol className="space-y-1.5">
-            {anchored.map((c, i) => {
-              const anchor = c.target.htmlAnchor as HtmlAnchor;
-              // The frame's live re-find decides once it reports; until then (or
-              // if the frame never loads) the server's file-watch re-anchoring
-              // marks the comments whose text is gone from this version.
-              const missing = found ? found[i] === false : serverOrphans.has(c.id);
-              return (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    onClick={() => focusComment(i)}
-                    className="w-full text-left flex gap-2 p-2 rounded border border-border-default hover:bg-surface-elevated"
-                    data-testid="page-annotation"
-                  >
-                    <span className="shrink-0 w-5 h-5 rounded-full bg-accent-amber text-[11px] font-semibold text-black flex items-center justify-center">
-                      {i + 1}
-                    </span>
-                    <span className="flex-1 min-w-0 space-y-1">
-                      <AnchorContext anchor={anchor} />
-                      {c.ruleOut && liveStances.has(c.ruleOut.description) && (
-                        <span className="block text-2xs text-accent-red" data-testid="page-annotation-ruled-out">
-                          Ruled out: Claude won't present a page that still contains “{c.ruleOut.description}”
-                        </span>
-                      )}
-                      {c.ruleOut && !liveStances.has(c.ruleOut.description) && (
-                        <span className="block text-2xs text-text-muted" data-testid="page-annotation-ruled-out-retired">
-                          Was ruled out; that stance has since been retired
-                        </span>
-                      )}
-                      {missing && (
-                        <span className="block text-2xs text-accent-amber" data-testid="page-anchor-missing">
-                          Not found in this version
-                        </span>
-                      )}
-                      <span className="block text-xs text-text-primary line-clamp-3">{c.content}</span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      )}
+      {!wide && queueEl("below")}
       <ArtifactStatusActions artifact={artifact} />
     </div>
   );

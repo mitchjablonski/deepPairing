@@ -317,7 +317,7 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     const win = fakeFrameWindow();
     fromFrame(win, { dp: "ready" });
     expect(win.postMessage).toHaveBeenCalledWith(
-      { dp: "pins", anchors: [{ kind: "text", locator: "p", quote: "a sentence from v1" }] },
+      { dp: "pins", anchors: [{ kind: "text", locator: "p", quote: "a sentence from v1" }], states: ["open"], ids: ["cmt_old"] },
       "*",
     );
     fromFrame(win, { dp: "pins-status", found: [false] });
@@ -1263,5 +1263,244 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     const strip = screen.getByTestId("page-asks");
     expect(within(strip).queryByRole("button", { name: /Reply to/ })).not.toBeInTheDocument();
     expect(within(strip).getAllByRole("button", { name: /Show on the page/ })).toHaveLength(2);
+  });
+});
+
+// --- #714 gaps 7+8: the review queue and the composer beside its anchor ------
+
+describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)", () => {
+  const at = (n: number) => new Date(Date.UTC(2026, 10, 20, 10, n)).toISOString();
+  const root = (id: string, n: number, quote: string, extra: Partial<Comment> = {}): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id, htmlAnchor: { kind: "text", locator: "p", quote } },
+    parentCommentId: null,
+    author: "human",
+    content: `comment on ${quote}`,
+    acknowledged: false,
+    createdAt: at(n),
+    ...extra,
+  });
+  const reply = (id: string, parent: string, n: number, author: "human" | "agent"): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id },
+    parentCommentId: parent,
+    author,
+    content: `${author} reply`,
+    acknowledged: false,
+    createdAt: at(n),
+  });
+  /** open (not seen), open (seen by agent, 1 human reply), addressed in a
+   *  revision, answered by the agent (1 agent reply), and one whose spot is
+   *  gone (orphaned once the frame reports). */
+  function seed() {
+    const add = useArtifactStore.getState().addComment;
+    add(root("c_open", 1, "alpha"));
+    add(root("c_seen", 2, "beta", { acknowledged: true }));
+    add(reply("r_seen", "c_seen", 3, "human"));
+    add(root("c_rev", 4, "gamma", { acknowledged: true, addressedIn: { artifactId: "art_page_v2", version: 2 } }));
+    add(root("c_ans", 5, "delta"));
+    add(reply("r_ans", "c_ans", 6, "agent"));
+    add(root("c_gone", 7, "epsilon"));
+  }
+  const rows = () => screen.getAllByTestId("page-annotation");
+  const ids = () => rows().map((r) => r.getAttribute("data-comment-id"));
+
+  it("filters Open / Addressed / Orphaned with counts, and says each state in its own words", async () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    const filters = screen.getByTestId("page-queue-filters");
+    expect(within(filters).getByTestId("page-queue-filter-open")).toHaveTextContent("Open 2");
+    expect(within(filters).getByTestId("page-queue-filter-addressed")).toHaveTextContent("Addressed 2");
+    expect(within(filters).getByTestId("page-queue-filter-orphaned")).toHaveTextContent("Orphaned 1");
+    expect(within(filters).getByTestId("page-queue-filter-all")).toHaveTextContent("All 5");
+    // Open is the default while anything is open.
+    expect(within(filters).getByTestId("page-queue-filter-open")).toHaveAttribute("aria-pressed", "true");
+    expect(ids()).toEqual(["c_open", "c_seen"]);
+    expect(within(rows()[0]!).getByTestId("page-annotation-state")).toHaveTextContent(/^Open$/);
+    expect(within(rows()[1]!).getByTestId("page-annotation-state")).toHaveTextContent("Seen by agent");
+    expect(within(rows()[1]!).getByTestId("page-annotation-replies")).toHaveTextContent("1 reply");
+
+    await userEvent.click(within(filters).getByTestId("page-queue-filter-addressed"));
+    expect(ids()).toEqual(["c_rev", "c_ans"]);
+    expect(within(rows()[0]!).getByTestId("page-annotation-state")).toHaveTextContent("Addressed in v2");
+    expect(within(rows()[1]!).getByTestId("page-annotation-state")).toHaveTextContent("Answered by the agent");
+    expect(within(rows()[1]!).getByTestId("page-annotation-replies")).toHaveTextContent("1 reply");
+    // Pin numbers keep the frame's numbering, whatever the filter.
+    expect(within(rows()[0]!).getByTestId("page-annotation-pin")).toHaveTextContent("3");
+
+    await userEvent.click(within(filters).getByTestId("page-queue-filter-orphaned"));
+    expect(ids()).toEqual(["c_gone"]);
+    expect(within(rows()[0]!).getByTestId("page-anchor-missing")).toHaveTextContent("Not found in this version");
+  });
+
+  it("sends each pin's colour state and comment id in the pins message (never comment text)", () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "ready" });
+    const pins = win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "pins").pop() as any;
+    expect(pins.states).toEqual(["open", "open", "addressed", "addressed", "open"]);
+    expect(pins.ids).toEqual(["c_open", "c_seen", "c_rev", "c_ans", "c_gone"]);
+    expect(JSON.stringify(pins)).not.toContain("comment on");
+    // A found report doesn't re-send the pins (no feedback loop).
+    const before = win.postMessage.mock.calls.filter((c) => (c[0] as any)?.dp === "pins").length;
+    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    expect(win.postMessage.mock.calls.filter((c) => (c[0] as any)?.dp === "pins").length).toBe(before);
+  });
+
+  it("a pin click highlights and reveals its comment (switching filter if needed), and posts nothing", async () => {
+    seed();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fetchMock.mockClear();
+    fromFrame(win, { dp: "pin-click", id: "c_rev" });
+    // c_rev is addressed: the queue switches to Addressed to show it.
+    expect(screen.getByTestId("page-queue-filter-addressed")).toHaveAttribute("aria-pressed", "true");
+    const row = rows().find((r) => r.getAttribute("data-comment-id") === "c_rev")!;
+    expect(row).toHaveAttribute("aria-current", "true");
+    expect(scroll).toHaveBeenCalled();
+    // The reviewer was in the frame, so focus follows to the row.
+    expect(document.activeElement).toBe(row);
+    // Display-only: no composer opened, no request made.
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Unknown ids and malformed reports are ignored.
+    fromFrame(win, { dp: "pin-click", id: "c_nope" });
+    fromFrame(win, { dp: "pin-click", id: 3 });
+    expect(rows().find((r) => r.getAttribute("aria-current") === "true")?.getAttribute("data-comment-id")).toBe("c_rev");
+    delete (Element.prototype as any).scrollIntoView;
+  });
+
+  it("ignores pin clicks and pin hovers once the page's scripts run", async () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pin-click", id: "c_rev" });
+    fromFrame(win, { dp: "pin-hover", id: "c_open", x: 10, y: 10 });
+    expect(screen.getByTestId("page-queue-filter-open")).toHaveAttribute("aria-pressed", "true");
+    expect(rows().some((r) => r.getAttribute("aria-current") === "true")).toBe(false);
+    expect(screen.queryByTestId("page-pin-preview")).not.toBeInTheDocument();
+  });
+
+  it("a pin hover shows the comment's snippet as parent-rendered text; leaving clears it", () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pin-hover", id: "c_seen", x: 40, y: 60 });
+    const preview = screen.getByTestId("page-pin-preview");
+    expect(preview).toHaveTextContent("#2");
+    expect(preview).toHaveTextContent("Seen by agent");
+    expect(preview).toHaveTextContent("1 reply");
+    expect(preview).toHaveTextContent("comment on beta");
+    fromFrame(win, { dp: "pin-hover", id: null });
+    expect(screen.queryByTestId("page-pin-preview")).not.toBeInTheDocument();
+    // Malformed coordinates are ignored.
+    fromFrame(win, { dp: "pin-hover", id: "c_seen", x: "40", y: 60 });
+    expect(screen.queryByTestId("page-pin-preview")).not.toBeInTheDocument();
+  });
+
+  it("outline badges count only comments still open in the queue", () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    fromFrame(win, {
+      dp: "outline",
+      headings: [{ level: 1, text: "Only section", locator: "h1" }],
+      pins: [0, 0, 0, 0, -1],
+      changes: [],
+    });
+    expect(within(screen.getByTestId("page-outline-rail")).getByTestId("page-outline-comments")).toHaveTextContent("2");
+  });
+
+  describe("composer placement", () => {
+    function stubLayout(width: number, height: number) {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          disconnect() {}
+          unobserve() {}
+        },
+      );
+      return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+        x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}),
+      } as DOMRect);
+    }
+
+    it("wide panel: the composer and the queue sit in the right-hand review rail", () => {
+      const spy = stubLayout(1400, 800);
+      try {
+        seed();
+        render(<PageArtifact artifact={pageArtifact} />);
+        const win = fakeFrameWindow();
+        fromFrame(win, { dp: "anchor", anchor: cellAnchor, at: { x: 100, y: 100 } });
+        const rail = screen.getByTestId("page-review-rail");
+        const composer = within(rail).getByTestId("page-anchor-composer");
+        expect(composer).toHaveAttribute("data-placement", "rail");
+        expect(within(rail).getByTestId("page-annotations")).toHaveAttribute("data-variant", "rail");
+        expect(screen.getAllByTestId("page-anchor-composer")).toHaveLength(1);
+        expect(document.activeElement).toBe(within(composer).getByLabelText("Comment on the selected spot", { selector: "textarea" }));
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("narrow panel: the composer floats over the frame on the far side of the clicked spot", () => {
+      const spy = stubLayout(600, 600);
+      try {
+        render(<PageArtifact artifact={pageArtifact} />);
+        const win = fakeFrameWindow();
+        fromFrame(win, { dp: "anchor", anchor: cellAnchor, at: { x: 100, y: 100 } });
+        const floating = screen.getByTestId("page-composer-floating");
+        expect(within(floating).getByTestId("page-anchor-composer")).toHaveAttribute("data-placement", "floating");
+        // A spot in the top half: the card opens just below it.
+        expect(floating.style.top).toBe("112px");
+        expect(floating.style.bottom).toBe("");
+        expect(screen.queryByTestId("page-review-rail")).not.toBeInTheDocument();
+        // A spot in the bottom half: the card opens above it.
+        fromFrame(win, { dp: "anchor", anchor: { ...cellAnchor, quote: "None" }, at: { x: 100, y: 500 } });
+        const again = screen.getByTestId("page-composer-floating");
+        expect(again.style.top).toBe("");
+        expect(again.style.bottom).toBe("112px");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("with no layout measured, the composer falls back to just under the frame", () => {
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+      expect(screen.getByTestId("page-anchor-composer")).toHaveAttribute("data-placement", "below");
+    });
+
+    it("Escape closes the composer and hands focus back to the frame; Close does the same", async () => {
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+      const textarea = screen.getByLabelText("Comment on the selected spot", { selector: "textarea" });
+      expect(document.activeElement).toBe(textarea);
+      await userEvent.type(textarea, "keep me");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(frame());
+      // The text is kept as this spot's draft.
+      fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+      expect(screen.getByLabelText("Comment on the selected spot", { selector: "textarea" })).toHaveValue("keep me");
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(frame());
+    });
   });
 });
