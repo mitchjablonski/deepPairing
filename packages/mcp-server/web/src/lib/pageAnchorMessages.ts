@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, type HtmlAnchor } from "@deeppairing/shared";
+import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, PAGE_DIRECTIVE_RE, PAGE_ERROR_CLASS_RE, PAGE_RESOURCE_KEY_RE, type HtmlAnchor } from "@deeppairing/shared";
 import { LOCATOR_TEXT_MAX, MAX_CHANGE_MARKS } from "./pageVersionDiff";
 
 /**
@@ -263,14 +263,21 @@ export const PAGE_DIAGNOSTICS_LIMITS = { samples: 3, text: 120, keys: 8, max: 99
 
 const DiagCountSchema = z.number().int().min(0).max(PAGE_DIAGNOSTICS_LIMITS.max);
 const DiagSampleSchema = z.string().min(1).max(PAGE_DIAGNOSTICS_LIMITS.text);
+/** An error CLASS name ("TypeError"; else "Error"): the only part of an
+ *  error that may reach the agent. */
+const ErrorClassSchema = z.string().refine((v) => v === "Error" || PAGE_ERROR_CLASS_RE.test(v));
 const DiagMessagesSchema = z
-  .object({ count: DiagCountSchema, samples: z.array(DiagSampleSchema).max(PAGE_DIAGNOSTICS_LIMITS.samples) })
+  .object({
+    count: DiagCountSchema,
+    samples: z.array(DiagSampleSchema).max(PAGE_DIAGNOSTICS_LIMITS.samples),
+    classes: z.array(z.object({ key: ErrorClassSchema, count: DiagCountSchema.min(1) }).strict()).max(PAGE_DIAGNOSTICS_LIMITS.keys),
+  })
   .strict();
 /** A resource is named only by tag + loading attribute ("img src"): the shape
  *  admits no URL, even from a forged report. */
-const ResourceKeySchema = z.string().regex(/^[a-z][a-z0-9-]{0,31} (?:src|srcset|href|xlink:href|poster|data)$/);
+const ResourceKeySchema = z.string().regex(PAGE_RESOURCE_KEY_RE);
 /** A CSP block is named only by its directive ("img-src", "connect-src"). */
-const DirectiveKeySchema = z.string().regex(/^[a-z][a-z-]{0,39}$/);
+const DirectiveKeySchema = z.string().regex(PAGE_DIRECTIVE_RE);
 
 export const PageDiagnosticsMessageSchema = z
   .object({
@@ -287,7 +294,8 @@ export type PageDiagnostics = Omit<PageDiagnosticsMessage, "dp">;
 /** A valid `{dp:"diagnostics"}` from this frame → the report; else null.
  *  DISPLAY-ONLY, and the one frame report still accepted after Run (that is
  *  when script errors happen): it can only ever render a passive banner (as
- *  text) and a bounded note to the agent about its own page. It never opens
+ *  text) and a bounded note to the agent about its own page, built from the
+ *  closed page-issues grammar (never the samples). It never opens
  *  the composer, changes a filter, focuses anything, or posts a comment. */
 export function acceptDiagnosticsMessage(event: FrameMessage, frame: Window | null | undefined): PageDiagnostics | null {
   const d = fromFrame(event, frame);

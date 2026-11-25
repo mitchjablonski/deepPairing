@@ -53,7 +53,7 @@ import {
 import { commentPriorVersion } from "../../stores/artifact";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { PageRenderIssues } from "./PageRenderIssues";
-import { diagnosticsAgentSummary, hasDiagnostics } from "../../lib/pageDiagnostics";
+import { diagnosticsAgentSummary, diagnosticsWakeKey, hasDiagnostics } from "../../lib/pageDiagnostics";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
 import { commentAnswersAsk, pageRuleOutKey } from "@deeppairing/shared";
 
@@ -97,12 +97,12 @@ function snippet(text: string): string {
   return t.length > 200 ? `${t.slice(0, 200)}…` : t;
 }
 
-/** #714 gap 12 — the render-issue summary last reported to the agent, per
- *  page artifact id, so re-mounting a page (or re-selecting it) doesn't
- *  re-post the same report. After a reload it is posted again, and the store
- *  re-delivers it only if the summary changed (its upsert keeps an
- *  acknowledged, identical report acknowledged). */
-const reportedRenderIssues: Record<string, string> = {};
+/** #714 gap 12 — the render-issue report last posted per page artifact id:
+ *  a new set of kinds/keys posts at once; a count-only change at most once a
+ *  minute. The daemon decides what re-arms or wakes the agent (the kinds/keys
+ *  set, at most once per page per five minutes). */
+const reportedRenderIssues: Record<string, { key: string; text: string; at: number }> = {};
+const RENDER_ISSUES_COUNT_REPOST_MS = 60_000;
 /** How long a frame's diagnostics must hold still before they're reported. */
 const RENDER_ISSUES_REPORT_DELAY_MS = 1500;
 
@@ -496,14 +496,18 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   useEffect(() => {
     if (readOnly || !hasDiagnostics(diagnostics)) return;
     const summary = diagnosticsAgentSummary(diagnostics, { version: artifact.version, running });
+    if (!summary) return;
     const id = artifact.id;
-    if (reportedRenderIssues[id] === summary) return;
+    const key = diagnosticsWakeKey(summary);
+    const last = reportedRenderIssues[id];
+    if (last && last.key === key && (last.text === summary || Date.now() - last.at < RENDER_ISSUES_COUNT_REPOST_MS)) return;
     const t = setTimeout(() => {
-      reportedRenderIssues[id] = summary;
-      void useArtifactStore.getState().reportRenderFailure(id, PAGE_RENDER_ISSUES_VISUAL_ID, summary, artifact.title || undefined);
+      reportedRenderIssues[id] = { key, text: summary, at: Date.now() };
+      // No title: the daemon names the page from its own record.
+      void useArtifactStore.getState().reportRenderFailure(id, PAGE_RENDER_ISSUES_VISUAL_ID, summary);
     }, RENDER_ISSUES_REPORT_DELAY_MS);
     return () => clearTimeout(t);
-  }, [diagnostics, readOnly, running, artifact.id, artifact.version, artifact.title]);
+  }, [diagnostics, readOnly, running, artifact.id, artifact.version]);
   useEffect(() => {
     setHighlightId(null);
     setHover(null);

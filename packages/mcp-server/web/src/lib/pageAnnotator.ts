@@ -540,15 +540,24 @@ function findAnchor(a) {
   var out = [];
   for (i = 0; i < cands.length; i++) {
     var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator, heads);
-    if (sc >= 0) out.push({ el: cands[i].el, range: null, score: sc });
+    if (sc >= 0) out.push({ el: cands[i].el, range: null, score: sc, fromLocator: cands[i].fromLocator });
   }
   return pickBest(out);
 }
+/** The single best-scored candidate; on a tie, the saved locator's element
+ *  if it is one of the tied (#714 gap 10: context can lift another candidate
+ *  to the locator's score, and "found where it was" beats "not found");
+ *  otherwise a tie is "not found". */
 function pickBest(list) {
-  var best = null, tied = false;
-  for (var i = 0; i < list.length; i++) {
+  var best = null, tied = false, i;
+  for (i = 0; i < list.length; i++) {
     if (!best || list[i].score > best.score) { best = list[i]; tied = false; }
     else if (list[i].score === best.score) tied = true;
+  }
+  if (best && tied) {
+    var loc = null;
+    for (i = 0; i < list.length; i++) if (list[i].score === best.score && list[i].fromLocator) loc = list[i];
+    if (loc) return { el: loc.el, range: loc.range };
   }
   return best && !tied ? { el: best.el, range: best.range } : null;
 }
@@ -1513,7 +1522,15 @@ var DIAG = { samples: 3, text: 120, keys: 8, max: 9999 };
 var DIAG_ATTRS = { img: ["src", "srcset"], source: ["src", "srcset"], video: ["src", "poster"], audio: ["src"], track: ["src"],
   script: ["src"], link: ["href"], iframe: ["src"], frame: ["src"], embed: ["src"], object: ["data"], input: ["src"],
   image: ["href", "xlink:href"], use: ["href", "xlink:href"] };
-var diag = { script: 0, rejection: 0, scriptSamples: [], rejectionSamples: [], resources: [], blocked: [] };
+var diag = { script: 0, rejection: 0, scriptSamples: [], rejectionSamples: [], scriptClasses: [], rejectionClasses: [], resources: [], blocked: [] };
+/** An error's CLASS name (the only part of an error the agent sees):
+ *  TypeError, RangeError, DOMException...; anything else is "Error". */
+var CLASS_RE = /^[A-Z][A-Za-z0-9]{0,40}(Error|Exception)$/;
+function errClass(name, message) {
+  if (typeof name === "string" && CLASS_RE.test(name)) return name;
+  var m = /^(?:Uncaught )?([A-Z][A-Za-z0-9]{0,40}(?:Error|Exception))\b/.exec(typeof message === "string" ? message : "");
+  return m && CLASS_RE.test(m[1]) ? m[1] : "Error";
+}
 var diagSeen = typeof WeakSet === "function" ? new WeakSet() : null, diagPending = 0, lastDiagJson = "";
 function redactDiag(v) {
   var t = core.norm(v);
@@ -1547,21 +1564,29 @@ function onDiagError(e) {
     diagKey(diag.resources, tag + " " + attr);
   } else {
     diag.script = diagBump(diag.script);
-    var m = "";
-    try { m = e && typeof e.message === "string" ? e.message : ""; } catch (x) { m = ""; }
+    var m = "", cls = "Error";
+    try {
+      m = e && typeof e.message === "string" ? e.message : "";
+      var er = e ? e.error : null;
+      cls = errClass(er && typeof er === "object" ? er.name : null, m);
+    } catch (x) { m = ""; cls = "Error"; }
     diagSample(diag.scriptSamples, m || "Script error");
+    diagKey(diag.scriptClasses, cls);
   }
   scheduleDiag();
 }
 function onDiagRejection(e) {
-  var m = "";
+  var m = "", cls = "Error";
   try {
     var r = e ? e.reason : undefined;
-    if (r && typeof r === "object" && typeof r.message === "string") m = (typeof r.name === "string" && r.name ? r.name + ": " : "") + r.message;
-    else m = String(r);
-  } catch (x) { m = "Unhandled rejection"; }
+    if (r && typeof r === "object" && typeof r.message === "string") {
+      m = (typeof r.name === "string" && r.name ? r.name + ": " : "") + r.message;
+      cls = errClass(r.name, "");
+    } else m = String(r);
+  } catch (x) { m = "Unhandled rejection"; cls = "Error"; }
   diag.rejection = diagBump(diag.rejection);
   diagSample(diag.rejectionSamples, m || "Unhandled rejection");
+  diagKey(diag.rejectionClasses, cls);
   scheduleDiag();
 }
 function onDiagCsp(e) {
@@ -1576,8 +1601,8 @@ function reportDiag() {
   diagPending = 0;
   if (!diag.script && !diag.rejection && !diag.resources.length && !diag.blocked.length) return;
   var msg = { dp: "diagnostics",
-    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice() },
-    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice() },
+    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: copyKeys(diag.scriptClasses) },
+    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice(), classes: copyKeys(diag.rejectionClasses) },
     resources: copyKeys(diag.resources), blocked: copyKeys(diag.blocked) };
   var json = JSON.stringify(msg);
   if (json !== lastDiagJson) { lastDiagJson = json; post(msg); }

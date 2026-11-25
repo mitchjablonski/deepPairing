@@ -18,6 +18,7 @@
 import { z } from "zod";
 import { CommentSuggestionSchema, HtmlAnchorSchema, SuggestionCounterSchema } from "./comment.js";
 import { RequestIntentSchema, RequestScopeSchema, RequestSourceSchema } from "./request.js";
+import { PAGE_RENDER_ISSUES_VISUAL_ID, parsePageRenderIssues } from "./page-render-issues.js";
 
 // G1 (#198b) — POST /api/requests. The human INITIATES a request to the agent
 // from the composer. `text` is the free-text fill-in; `intent` is one of the
@@ -276,18 +277,18 @@ export const RenderFailureBodySchema = z.object({
   error: z.string().min(1).max(500),
   /** The diagram's human title, when it has one. Optional + bounded. */
   title: z.string().max(200).optional(),
+}).superRefine((b, ctx) => {
+  // #714 gap 12 — under the reserved page-issues id the error must be the
+  // closed grammar (kinds, counts, class names, tag+attribute, directives):
+  // a forged post can't smuggle free page text to the agent this way.
+  if (b.visualId === PAGE_RENDER_ISSUES_VISUAL_ID && !parsePageRenderIssues(b.error)) {
+    ctx.addIssue({ code: "custom", path: ["error"], message: "page render issues must use the structured page-issues grammar (no free text)" });
+  }
 });
 export type RenderFailureBody = z.infer<typeof RenderFailureBodySchema>;
 
-/**
- * #714 gap 12 — the reserved `visualId` under which the companion reports a
- * `page` artifact's render issues (script errors, assets that didn't load,
- * requests the frame's policy blocked) on the same render-failure lane. A page
- * has no visuals, so the id can't collide with a real diagram. The `error` is
- * a bounded, redacted summary built in the companion: counts, a few clipped
- * messages, and tag + attribute / directive names, never a URL.
- */
-export const PAGE_RENDER_ISSUES_VISUAL_ID = "dp-page-render-issues";
+// #714 gap 12 — the reserved page-issues id and its closed grammar live in
+// page-render-issues.ts (exported from the package index).
 
 // POST /api/prompts — save a repair prompt for a decision.
 export const PromptBodySchema = z.object({

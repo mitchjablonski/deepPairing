@@ -4,7 +4,7 @@ import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { decisionFeedback } from "./decision-feedback.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, coercePageContent, errorMessage, undeliveredFileWatchRefs, PAGE_RENDER_ISSUES_VISUAL_ID } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, coercePageContent, errorMessage, undeliveredFileWatchRefs, PAGE_RENDER_ISSUES_VISUAL_ID, parsePageRenderIssues, describePageRenderIssues } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { formatWorkerStops, workerStopClause, type WorkerStopBatch } from "../../store/worker-stop-notices.js";
@@ -1150,7 +1150,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     visualId: f.visualId,
     ...(isPageIssue(f) ? { kind: "page" } : {}),
     ...(f.title ? { title: f.title } : {}),
-    error: f.error,
+    // A page entry carries only the closed grammar; anything else is withheld.
+    error: isPageIssue(f) && !parsePageRenderIssues(f.error) ? "[page render issues withheld]" : f.error,
   }));
   if (renderFailures.length > 0) {
     await store.acknowledgeRenderFailures?.(
@@ -1167,7 +1168,13 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     );
   }
   if (pageRenderIssues.length > 0) {
-    const lines = pageRenderIssues.map((f) => `- ${f.title ? `"${f.title}"` : "page"} (${f.artifactId}): ${f.error}`);
+    // Worded from the PARSED closed grammar only (kinds, counts, class names,
+    // tag+attribute, directives): no page text ever reaches the agent here.
+    const lines = pageRenderIssues.map((f) => {
+      const parsed = parsePageRenderIssues(f.error);
+      const what = parsed ? `the page reported ${describePageRenderIssues(parsed)}` : "the page reported render issues (details unavailable)";
+      return `- ${f.title ? `"${f.title}"` : "page"} (${f.artifactId}): ${what}`;
+    });
     parts.push(
       `🧯 Page render issues (${pageRenderIssues.length}) — your pair's review frame reported problems with your page:\n${lines.join("\n")}\n` +
         "The frame has no network: inline images, media and fonts as data: URIs (relative and external paths can't load), and fix script errors. Revise the page so it renders as you intended.",

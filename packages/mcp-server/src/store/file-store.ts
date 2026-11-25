@@ -31,7 +31,8 @@ import { isCrossTerminalVerdictFlip, stalePageVerdictSuccessor } from "./verdict
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult, RejectedApproachOrigin } from "./store-interface.js";
-import { isRejectedApproachOrigin } from "./store-interface.js";
+import { isRejectedApproachOrigin, PAGE_RENDER_ISSUES_WAKE_WINDOW_MS } from "./store-interface.js";
+import { PAGE_RENDER_ISSUES_VISUAL_ID, pageRenderIssuesWakeKey, parsePageRenderIssues } from "@deeppairing/shared";
 import { normalizeConceptKey } from "../mcp/preflight-validator.js";
 
 import { isPublishableStance } from "./stance-add.js";
@@ -1705,6 +1706,10 @@ export class FileStore implements IStore {
    * decision, deliberately out of scope.
    */
   recordRenderFailure(params: { artifactId: string; visualId: string; error: string; title?: string }): void {
+    if (params.visualId === PAGE_RENDER_ISSUES_VISUAL_ID) {
+      this.recordPageRenderIssues(params);
+      return;
+    }
     const safeError = scanForSecrets(params.error).length > 0
       ? "[render error withheld — a secret-shaped value was detected in it]"
       : params.error;
@@ -1744,8 +1749,74 @@ export class FileStore implements IStore {
     this.notifyFeedbackWaiters();
   }
 
+  /**
+   * #714 gap 12 — a page's render issues (reserved visual id). The error is
+   * the closed page-issues grammar (the route refuses anything else; a
+   * non-conforming text from any other writer is dropped here too). Arming is
+   * keyed on the SET of issue kinds/keys, never counts, and capped at one
+   * wake per page artifact per PAGE_RENDER_ISSUES_WAKE_WINDOW_MS:
+   *  - same key: the text (counts) is refreshed; no re-arm, no wake;
+   *  - new key, outside the window: re-armed and waiters woken now;
+   *  - new key, inside the window: re-armed at the window's end (hidden from
+   *    the unacknowledged list until then), with one deferred wake.
+   * A key change while the record is still pending only updates it.
+   */
+  private recordPageRenderIssues(params: { artifactId: string; visualId: string; error: string; title?: string }): void {
+    const parsed = parsePageRenderIssues(params.error);
+    // Outside the grammar, or secret-shaped (a class name is the one
+    // page-chosen token the grammar admits): not recorded.
+    if (!parsed || scanForSecrets(params.error).length > 0) return;
+    const wakeKey = pageRenderIssuesWakeKey(parsed);
+    const now = Date.now();
+    const at = new Date(now).toISOString();
+    const existing = this.renderFailures.find((r) => r.artifactId === params.artifactId && r.visualId === params.visualId);
+    if (!existing) {
+      this.renderFailures.push({
+        artifactId: params.artifactId,
+        visualId: params.visualId,
+        ...(params.title ? { title: params.title } : {}),
+        error: params.error,
+        at,
+        acknowledged: false,
+        wakeKey,
+        lastWakeAt: at,
+      });
+      this.scheduleFlush();
+      this.notifyFeedbackWaiters();
+      return;
+    }
+    existing.error = params.error;
+    if (params.title) existing.title = params.title;
+    existing.at = at;
+    const pending = !existing.acknowledged;
+    if (existing.wakeKey === wakeKey || pending) {
+      existing.wakeKey = wakeKey;
+      this.scheduleFlush();
+      return;
+    }
+    existing.wakeKey = wakeKey;
+    existing.acknowledged = false;
+    const last = existing.lastWakeAt ? Date.parse(existing.lastWakeAt) : NaN;
+    const armAt = Number.isFinite(last) ? last + PAGE_RENDER_ISSUES_WAKE_WINDOW_MS : now;
+    if (armAt <= now) {
+      delete existing.armAt;
+      existing.lastWakeAt = at;
+      this.scheduleFlush();
+      this.notifyFeedbackWaiters();
+      return;
+    }
+    existing.armAt = new Date(armAt).toISOString();
+    existing.lastWakeAt = existing.armAt;
+    this.scheduleFlush();
+    const timer = setTimeout(() => {
+      if (!this.disposed) this.notifyFeedbackWaiters();
+    }, armAt - now);
+    (timer as { unref?: () => void }).unref?.();
+  }
+
   getUnacknowledgedRenderFailures(): RenderFailureRecord[] {
-    return this.renderFailures.filter((r) => !r.acknowledged);
+    const now = Date.now();
+    return this.renderFailures.filter((r) => !r.acknowledged && !(r.armAt && Date.parse(r.armAt) > now));
   }
 
   acknowledgeRenderFailures(keys: Array<{ artifactId: string; visualId: string }>): void {

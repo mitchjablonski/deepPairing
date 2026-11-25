@@ -134,7 +134,6 @@ export {
   DetailDensitySchema,
   PersonaSchema,
   RenderFailureBodySchema,
-  PAGE_RENDER_ISSUES_VISUAL_ID,
   PromptBodySchema,
   SuggestionResolveBodySchema,
   SuggestionUpdateBodySchema,
@@ -522,3 +521,19 @@ export {
   SKELETON_ANCHOR_LIMITS,
   sanitizeSkeletonAnchor,
 } from "./skeleton.js";
+export {
+  PAGE_RENDER_ISSUES_VISUAL_ID,
+  PAGE_ERROR_CLASS_RE,
+  PAGE_RESOURCE_KEY_RE,
+  PAGE_DIRECTIVE_RE,
+  PAGE_RENDER_ISSUE_KINDS,
+  PAGE_RENDER_ISSUES_LIMITS,
+  pageErrorClass,
+  formatPageRenderIssues,
+  parsePageRenderIssues,
+  pageRenderIssuesWakeKey,
+  describePageRenderIssues,
+  type PageRenderIssueKind,
+  type PageRenderIssueItem,
+  type PageRenderIssues,
+} from "./schemas/page-render-issues.js";

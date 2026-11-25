@@ -1,3 +1,4 @@
+import { formatPageRenderIssues, pageRenderIssuesWakeKey, parsePageRenderIssues, type PageRenderIssueItem } from "@deeppairing/shared";
 import type { PageDiagnostics } from "./pageAnchorMessages";
 
 /**
@@ -5,9 +6,9 @@ import type { PageDiagnostics } from "./pageAnchorMessages";
  * assets that didn't load, requests the frame's policy blocked), as the
  * annotator reports them. Pure and type-only, so it is cheap to test.
  *
- * Everything here is TEXT for a passive banner and for the bounded note the
- * agent gets in check_feedback. Samples are redacted again here (a second gate
- * after the annotator's): after Run the page's own script could post a report.
+ * The banner text (with redacted samples, a second gate after the
+ * annotator's: after Run the page's own script could post a report) stays in
+ * the companion. The agent gets only the closed page-issues grammar.
  */
 
 /** CSP directives whose blocks also fire an `error` on the element (an img,
@@ -77,22 +78,25 @@ export function diagnosticsDetails(d: PageDiagnostics): string[] {
   return out;
 }
 
-/** The agent-facing summary (one line, at most 500 characters: the
- *  render-failure lane's cap). No URL ever: resources are tag + attribute,
- *  blocks are directive names, samples are redacted. */
-export function diagnosticsAgentSummary(d: PageDiagnostics, ctx: { version: number; running: boolean }): string {
-  const parts: string[] = [];
-  const samples = (list: readonly string[]) => list.map((s) => redactDiagnosticText(s, 80)).filter(Boolean).join(" | ");
-  if (d.scriptErrors.count > 0) {
-    const s = samples(d.scriptErrors.samples);
-    parts.push(`${plural(d.scriptErrors.count, "script error", "script errors")}${s ? ` (${s})` : ""}`);
-  }
-  if (d.rejections.count > 0) {
-    const s = samples(d.rejections.samples);
-    parts.push(`${plural(d.rejections.count, "unhandled rejection", "unhandled rejections")}${s ? ` (${s})` : ""}`);
-  }
-  if (d.resources.length > 0) parts.push(`didn't load: ${keyList(d.resources).replace(/×/g, "x")}`);
-  if (d.blocked.length > 0) parts.push(`blocked by the frame's no-network CSP: ${keyList(d.blocked).replace(/×/g, "x")}`);
-  const text = `v${ctx.version}, ${ctx.running ? "with the page's scripts running" : "before Run (scripts off)"}: ${parts.join("; ")}`;
-  return text.length > 500 ? `${text.slice(0, 499)}…` : text;
+/** The agent-facing summary: the closed page-issues grammar (kinds, counts,
+ *  error CLASS names, tag + attribute, directive names). NEVER a sample:
+ *  after Run an error message is whatever the page's script chose, which may
+ *  be text the reviewer typed into the page or an instruction aimed at the
+ *  agent. null when there is nothing to report. */
+export function diagnosticsAgentSummary(d: PageDiagnostics, ctx: { version: number; running: boolean }): string | null {
+  const items: PageRenderIssueItem[] = [
+    ...d.scriptErrors.classes.map((c) => ({ kind: "script" as const, key: c.key, count: c.count })),
+    ...d.rejections.classes.map((c) => ({ kind: "rejection" as const, key: c.key, count: c.count })),
+    ...d.resources.map((r) => ({ kind: "resource" as const, key: r.key, count: r.count })),
+    ...d.blocked.map((b) => ({ kind: "blocked" as const, key: b.key, count: b.count })),
+  ];
+  return formatPageRenderIssues({ version: ctx.version, running: ctx.running, items });
+}
+
+/** What makes a report worth re-posting at once: the set of kinds/keys
+ *  (counts alone are re-posted at most once a minute; the daemon re-arms the
+ *  agent on the same key anyway). */
+export function diagnosticsWakeKey(summary: string): string {
+  const parsed = parsePageRenderIssues(summary);
+  return parsed ? pageRenderIssuesWakeKey(parsed) : summary;
 }
