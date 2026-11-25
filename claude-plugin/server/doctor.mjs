@@ -15610,7 +15610,8 @@ var ArtifactStatusSchema = external_exports.enum([
 ]);
 var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
-  at: external_exports.string().datetime()
+  at: external_exports.string().datetime(),
+  feedbackCommentId: external_exports.string().min(1).optional()
 });
 var SecretWarningSchema = external_exports.object({
   /** The pattern prefix that matched, e.g. "AKIA", "sk-", "PEM". */
@@ -15909,6 +15910,8 @@ var CommentSchema = external_exports.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  /** Server-stamped only for the note owned by a page verdict history entry. */
+  verdictFeedback: external_exports.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: external_exports.string().nullable().optional(),
   /**
