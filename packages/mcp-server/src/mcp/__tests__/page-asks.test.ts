@@ -63,6 +63,25 @@ describe("extractPageAsks", () => {
     expect(extractPageAsks(html)).toEqual([{ id: "t&1", kind: "question", text: "Fish & chips <b>?" }]);
   });
 
+  it("skips asks inside containers the sanitizer drops (the human never sees them)", () => {
+    const html =
+      '<noscript><p id="ns" data-dp-question>In noscript?</p></noscript>' +
+      '<object data="x.svg"><p id="ob" data-dp-question>In object?</p></object>' +
+      '<iframe srcdoc="<p data-dp-question>x</p>"><p id="if" data-dp-question>In iframe?</p></iframe>' +
+      '<applet><p id="ap" data-dp-decision>A</p></applet><portal><p id="po" data-dp-decision>P</p></portal>' +
+      '<frameset><frame></frameset><embed src="x"><p id="seen" data-dp-question>Seen?</p>' +
+      '<noscript><p id="tail" data-dp-question>Unclosed noscript hides the rest</p>';
+    expect(extractPageAsks(html)).toEqual([{ id: "seen", kind: "question", text: "Seen?" }]);
+  });
+
+  it("keeps ids of children inside the innermost ask (not of nested asks)", () => {
+    const html = '<div id="o" data-dp-question>Q <em id="o-note">n</em><p id="i" data-dp-decision>D <b id="i-b">b</b></p></div><p id="after">x</p>';
+    expect(extractPageAsks(html)).toEqual([
+      { id: "o", kind: "question", text: "Q n D b", childIds: ["o-note"] },
+      { id: "i", kind: "decision", text: "D b", childIds: ["i-b"] },
+    ]);
+  });
+
   it("falls back to aria-label / title when the ask has no text", () => {
     expect(extractPageAsks('<button id="b" data-dp-decision aria-label="Ship it?"></button><img id="i" data-dp-question alt="Diagram right?">')).toEqual([
       { id: "b", kind: "decision", text: "Ship it?" },
@@ -127,6 +146,30 @@ describe("openPageAsks", () => {
     const restated = comment({ locator: "#tldr > p:nth-of-type(1)", quote: "Question: is one more Redis instance in budget?" });
     const partial = comment({ locator: "body > p:nth-of-type(9)", quote: "one more Redis instance in budget" });
     expect(openPageAsks(asks, [restated, partial]).map((a) => a.id)).toEqual(["decide-ttl", "ask-budget"]);
+  });
+
+  it("a comment on a child with its own id inside the ask answers it", () => {
+    const withChild = extractPageAsks('<p id="q" data-dp-question>Region? <em id="q-note">eu</em></p>');
+    expect(openPageAsks(withChild, [comment({ locator: "#q-note", quote: "eu" })])).toEqual([]);
+  });
+
+  it("an earlier version's answer counts for a reused id only if it quoted the ask's current text", () => {
+    const current = { artifactId: "art_v2", version: 2 };
+    const v2 = extractPageAsks('<div id="q1" data-dp-question>Which region?</div><div id="q2" data-dp-question>Which DB?</div>');
+    const onV1 = (locator: string, quote: string) => ({ ...comment({ locator, quote }), target: { artifactId: "art_v1", htmlAnchor: { locator, quote, version: 1 } } });
+    // q1 reused for a NEW question: the v1 answer quoted "Which DB?" → still open.
+    // q2 kept its id and its text → the v1 answer still counts.
+    const open = openPageAsks(v2, [onV1("#q1", "Which DB?"), onV1("#q2", "Which DB?")], current);
+    expect(open.map((a) => a.id)).toEqual(["q1"]);
+    // A same-version comment needs only the anchor match.
+    const same = { ...comment({ locator: "#q1", quote: "anything" }), target: { artifactId: "art_v2", htmlAnchor: { locator: "#q1", quote: "anything", version: 2 } } };
+    expect(openPageAsks(v2, [same], current).map((a) => a.id)).toEqual(["q2"]);
+    // An earlier-version comment quoting only a label of the ask doesn't count.
+    expect(openPageAsks(v2, [onV1("#q2", "Which")], current).map((a) => a.id)).toEqual(["q1", "q2"]);
+  });
+
+  it("a resolved comment does not answer an ask", () => {
+    expect(openPageAsks(asks, [comment({ locator: "#decide-ttl", quote: "" }, { humanResolvedAt: "2026-01-01T00:00:00.000Z" })]).map((a) => a.id)).toEqual(["decide-ttl", "ask-budget"]);
   });
 
   it("an agent comment, a reply, a look-alike id or a bare quote does not answer an ask", () => {

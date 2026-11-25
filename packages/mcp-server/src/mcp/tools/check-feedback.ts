@@ -116,6 +116,9 @@ function changesetReviewField(a: Artifact): {
  * same ask on v2. Best-effort: any failure reports nothing rather than
  * breaking the poll.
  */
+/** The most open asks listed per page in structuredContent. */
+const PAGE_OPEN_ASKS_MAX = 20;
+
 async function pageOpenAsksField(
   a: Artifact,
   allArtifacts: Artifact[],
@@ -132,7 +135,9 @@ async function pageOpenAsksField(
       seen.add(cur.id);
       comments.push(...((await store.getCommentsForArtifact(cur.id)) ?? []));
     }
-    return openPageAsks(asks, comments);
+    // Id-less asks can't be matched here (no DOM, no locator): they are
+    // reported as unverifiable, never as answered or as owed.
+    return openPageAsks(asks.filter((q) => q.id), comments, { artifactId: a.id, version: a.version }).concat(asks.filter((q) => !q.id));
   } catch {
     return [];
   }
@@ -1185,13 +1190,24 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   for (const [id, open] of pageOpenAsks) {
     const page = pendingArts.find((a) => a.id === id)!;
     const clipAsk = (t: string) => (t.length > 100 ? `${t.slice(0, 99)}…` : t);
-    const named = open
-      .slice(0, 5)
-      .map((q) => `${q.id ? `#${q.id} ` : ""}(${q.kind}) "${clipAsk(q.text)}"`)
-      .join("; ");
-    parts.push(
-      `📝 Page "${page.title}" has ${open.length} open ask${open.length === 1 ? "" : "s"} your pair hasn't answered yet: ${named}${open.length > 5 ? `; and ${open.length - 5} more` : ""}. They answer by commenting on the ask in the companion.`,
-    );
+    const owed = open.filter((q) => q.id);
+    const unverifiable = open.length - owed.length;
+    const lines: string[] = [];
+    if (owed.length > 0) {
+      const named = owed
+        .slice(0, 5)
+        .map((q) => `#${q.id} (${q.kind}) "${clipAsk(q.text)}"`)
+        .join("; ");
+      lines.push(
+        `📝 Page "${page.title}" has ${owed.length} open ask${owed.length === 1 ? "" : "s"} your pair hasn't answered yet: ${named}${owed.length > 5 ? `; and ${owed.length - 5} more` : ""}. They answer by commenting on the ask in the companion.`,
+      );
+    }
+    if (unverifiable > 0) {
+      lines.push(
+        `${unverifiable} ask${unverifiable === 1 ? " has" : "s have"} no id on page "${page.title}", so ${unverifiable === 1 ? "its answer" : "their answers"} can't be checked here — add ids, or check the companion.`,
+      );
+    }
+    parts.push(lines.join("\n"));
   }
 
   // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
@@ -1711,8 +1727,19 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       ...changesetExternalField(a),
       // #714 gap 5 — a pending page's still-unanswered asks, spread only when
       // there are some, so every other entry stays byte-for-byte unchanged.
+      // Capped at PAGE_OPEN_ASKS_MAX per page; id-less asks carry
+      // verifiable:false (their answers can't be checked server-side).
       ...(pageOpenAsks.has(a.id)
-        ? { openAsks: pageOpenAsks.get(a.id)!.map((q) => ({ ...(q.id ? { id: q.id } : {}), kind: q.kind, text: q.text })) }
+        ? {
+            openAsks: pageOpenAsks.get(a.id)!.slice(0, PAGE_OPEN_ASKS_MAX).map((q) => ({
+              ...(q.id ? { id: q.id } : { verifiable: false as const }),
+              kind: q.kind,
+              text: q.text,
+            })),
+            ...(pageOpenAsks.get(a.id)!.length > PAGE_OPEN_ASKS_MAX
+              ? { openAsksOmitted: pageOpenAsks.get(a.id)!.length - PAGE_OPEN_ASKS_MAX }
+              : {}),
+          }
         : {}),
     })),
     questions: structuredQuestions,

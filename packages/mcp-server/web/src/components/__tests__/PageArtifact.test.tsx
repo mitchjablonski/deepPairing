@@ -952,6 +952,7 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
       { kind: "decision", id: "decide-ttl", text: "Decide: a 60s TTL, or invalidate on write?", locator: "#decide-ttl" },
       { kind: "question", id: "ask-budget", text: "Is one more Redis instance in budget?", locator: "#ask-budget" },
     ],
+    pinAsks: [] as number[],
   };
   const human = (id: string, anchor: Record<string, unknown>, extra: Partial<Comment> = {}): Comment => ({
     id,
@@ -1125,13 +1126,84 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     expect(await within(screen.getAllByTestId("page-ask")[0]!).findByText("Answered")).toBeInTheDocument();
   });
 
+  const states = () => screen.getAllByTestId("page-ask").map((i) => within(i).getByTestId("page-ask-state").textContent);
+
+  it("an earlier version's answer counts for a reused id only if it quoted the ask's current text", () => {
+    const v1: Artifact = { ...pageArtifact, id: "art_ask_v1", version: 1, status: "superseded", content: { title: "P", html: "<p>v1</p>" } };
+    const v2: Artifact = { ...pageArtifact, id: "art_ask_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    const onV1 = (id: string, anchor: Record<string, unknown>): Comment => ({ ...human(id, anchor), target: { artifactId: v1.id, htmlAnchor: anchor as any } });
+    // q1 was "Which DB?" on v1 (answered there); v2 reuses id q1 for a new question.
+    useArtifactStore.getState().addComment(onV1("cmt_1", { kind: "element", locator: "#q1", quote: "Which DB?", version: 1 }));
+    // q2 kept its text: the v1 Reply quoted exactly it.
+    useArtifactStore.getState().addComment(onV1("cmt_2", { kind: "element", locator: "#q2", quote: "Is one more instance in budget?", version: 1 }));
+    render(<PageArtifact artifact={v2} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, {
+      dp: "asks",
+      asks: [
+        { kind: "question", id: "q1", text: "Which region?", locator: "#q1" },
+        { kind: "question", id: "q2", text: "Is one more instance in budget?", locator: "#q2" },
+      ],
+      pinAsks: [],
+    });
+    expect(states()).toEqual(["Open", "Answered"]);
+  });
+
+  it("an earlier version's comment at the same POSITION doesn't answer an id-less ask (probe)", () => {
+    const v1: Artifact = { ...pageArtifact, id: "art_pos_v1", version: 1, status: "superseded", content: { title: "P", html: "<p>v1</p>" } };
+    const v2: Artifact = { ...pageArtifact, id: "art_pos_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    const anchor = { kind: "element", locator: "body > div:nth-of-type(2)", quote: "An unrelated card", version: 1 };
+    useArtifactStore.getState().addComment({ ...human("cmt_1", anchor), target: { artifactId: v1.id, htmlAnchor: anchor as any } });
+    render(<PageArtifact artifact={v2} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "asks", asks: [{ kind: "decision", text: "Ship on Friday?", locator: "body > div:nth-of-type(2)" }], pinAsks: [0] });
+    expect(states()).toEqual(["Open"]);
+  });
+
+  it("resolved comments and comments not found on this version don't answer; a child with its own id does (via the frame)", () => {
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#decide-ttl", quote: "x" }, { humanResolvedAt: new Date().toISOString() }));
+    useArtifactStore.getState().addComment(human("cmt_2", { kind: "element", locator: "#ask-budget", quote: "y" }));
+    useArtifactStore.getState().addComment(human("cmt_3", { kind: "element", locator: "#ttl-note", quote: "60s is fine" }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pins-status", found: [true, false, true] });
+    fromFrame(win, ASKS);
+    expect(states()).toEqual(["Open", "Open"]);
+    // The frame says pin 3 (#ttl-note) sits inside ask 0.
+    fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0] });
+    expect(states()).toEqual(["Answered", "Open"]);
+    // A report for a different pin list is not used.
+    fromFrame(win, { ...ASKS, pinAsks: [0, 0] });
+    expect(states()).toEqual(["Open", "Open"]);
+  });
+
+  it("ignores outline, reading progress and asks reports while the page's scripts run (pre-Run values stand)", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    let win = fakeFrameWindow();
+    fromFrame(win, OUTLINE);
+    fromFrame(win, ASKS);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    win = fakeFrameWindow();
+    fromFrame(win, { ...OUTLINE, headings: [{ level: 1, text: "Forged", locator: "h1" }] });
+    fromFrame(win, { dp: "outline-active", index: 2 });
+    fromFrame(win, { dp: "asks", asks: [], pinAsks: [] });
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(within(rail).getAllByTestId("page-outline-entry").map((e) => e.textContent)).toEqual(["Cache invalidation", "Options", "TTL expiry"]);
+    expect(within(rail).getByTestId("page-outline-progress")).toHaveTextContent("Top of the page");
+    expect(screen.getAllByTestId("page-ask")).toHaveLength(2);
+  });
+
   it("a read-only page lists asks without Reply; malformed or foreign ask reports are ignored", () => {
     const retracted: Artifact = { ...pageArtifact, id: "art_page_ro", status: "retracted" };
     useArtifactStore.getState().addArtifact(retracted);
     render(<PageArtifact artifact={retracted} />);
     const win = fakeFrameWindow();
     fromFrame({ postMessage: vi.fn() }, ASKS);
-    fromFrame(win, { dp: "asks", asks: [{ ...ASKS.asks[0], kind: "approve" }] });
+    fromFrame(win, { dp: "asks", asks: [{ ...ASKS.asks[0], kind: "approve" }], pinAsks: [] });
     expect(screen.queryByTestId("page-asks")).not.toBeInTheDocument();
     fromFrame(win, ASKS);
     const strip = screen.getByTestId("page-asks");

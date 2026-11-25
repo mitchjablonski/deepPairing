@@ -167,16 +167,26 @@ export const PageAskSchema = z
 export type PageAsk = z.infer<typeof PageAskSchema>;
 
 export const PageAsksMessageSchema = z
-  .object({ dp: z.literal("asks"), asks: z.array(PageAskSchema).max(PAGE_ASK_LIMITS.max) })
-  .strict();
+  .object({
+    dp: z.literal("asks"),
+    asks: z.array(PageAskSchema).max(PAGE_ASK_LIMITS.max),
+    /** Per pin (same order as the pins the parent sent): the innermost ask
+     *  its element sits in, -1 for none. */
+    pinAsks: z.array(z.number().int().min(-1).max(PAGE_ASK_LIMITS.max - 1)).max(500),
+  })
+  .strict()
+  .superRefine((m, ctx) => {
+    if (m.pinAsks.some((i) => i >= m.asks.length)) ctx.addIssue({ code: "custom", path: ["pinAsks"], message: "ask index out of range" });
+  });
+export type PageAsksMessage = z.infer<typeof PageAsksMessageSchema>;
 
-/** A valid `{dp:"asks", asks}` from this frame → the asks; else null.
- *  Display-only: an ask never creates a comment by itself. */
-export function acceptAsksMessage(event: FrameMessage, frame: Window | null | undefined): PageAsk[] | null {
+/** A valid `{dp:"asks", asks, pinAsks}` from this frame → the report; else
+ *  null. Display-only: an ask never creates a comment by itself. */
+export function acceptAsksMessage(event: FrameMessage, frame: Window | null | undefined): PageAsksMessage | null {
   const d = fromFrame(event, frame);
   if (!d || d.dp !== "asks") return null;
   const parsed = PageAsksMessageSchema.safeParse(d);
-  return parsed.success ? parsed.data.asks : null;
+  return parsed.success ? parsed.data : null;
 }
 
 /** The element anchor a "Reply" to an ask opens the composer at: the same

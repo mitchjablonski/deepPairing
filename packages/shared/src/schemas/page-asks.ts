@@ -7,6 +7,8 @@
  * server scans them from the page text; both decide "answered" with the SAME
  * rule, kept here so the two can't drift: an ask is answered once a human
  * comment is anchored to the ask's element (its locator or `#id`) or inside it.
+ * A comment made on an EARLIER version must also quote the ask's CURRENT text,
+ * because a revision can reuse an id or a position for a different ask.
  */
 
 /** Marks a callout that asks the human to decide something. */
@@ -19,12 +21,38 @@ export type PageAskKind = "decision" | "question";
 /** Bounds shared by the frame collector, the parent schema and the server scanner. */
 export const PAGE_ASK_LIMITS = { max: 50, text: 200, id: 200 } as const;
 
+/** Elements whose content never renders in the page frame: the sanitizer
+ *  removes them before Run (and they don't render after it), so an ask inside
+ *  one is never shown to the human. The companion's sanitizer drops exactly
+ *  this set; the server's ask scanner skips their content. */
+export const PAGE_SANITIZE_DROP_TAGS = [
+  "script", "noscript", "template", "iframe", "frame", "frameset", "object", "embed", "applet", "portal", "base",
+] as const;
+
 /** What the matcher needs to know about an ask. `locator` is only known
- *  frame-side (the server has no DOM). */
+ *  frame-side (the server has no DOM); `childIds` only server-side (ids of
+ *  elements inside the ask, so a comment on such a child counts as inside). */
 export interface PageAskRef {
   id?: string;
   locator?: string;
+  childIds?: readonly string[];
   text: string;
+}
+
+/** The version a comment is judged against. A comment is from an earlier
+ *  version when it targets a different artifact in the chain, or its anchor
+ *  records a lower version. */
+export interface PageAskVersion {
+  artifactId: string;
+  version: number;
+}
+
+/** A comment the matcher reads (the subset of Comment it needs). */
+export interface PageAskComment {
+  author: string;
+  parentCommentId?: string | null;
+  humanResolvedAt?: string | null;
+  target: { artifactId?: string; htmlAnchor?: { locator: string; quote: string; version?: number } };
 }
 
 /**
@@ -63,25 +91,66 @@ function atOrInside(locator: string, base: string): boolean {
 
 /**
  * Is this anchor on the ask? Only when its locator is the ask's element (by
- * the frame's locator or `#id`) or something inside it. There is deliberately
- * no text fallback: a comment on text that merely repeats the ask (a TL;DR
- * restating the question) must not mark it answered, because a false
- * "answered" hides an open ask from both the human and the agent.
+ * the frame's locator or `#id`), a child with its own id, or something inside
+ * them. There is deliberately no text fallback: a comment on text that merely
+ * repeats the ask (a TL;DR restating the question) must not mark it answered,
+ * because a false "answered" hides an open ask from both the human and the
+ * agent.
  */
-export function anchorTargetsAsk(ask: PageAskRef, anchor: { locator: string; quote: string }): boolean {
+export function anchorTargetsAsk(ask: PageAskRef, anchor: { locator: string }): boolean {
   if (ask.locator && atOrInside(anchor.locator, ask.locator)) return true;
-  return !!ask.id && atOrInside(anchor.locator, "#" + cssEscapeIdent(ask.id));
+  if (ask.id && atOrInside(anchor.locator, "#" + cssEscapeIdent(ask.id))) return true;
+  for (const c of ask.childIds ?? []) if (atOrInside(anchor.locator, "#" + cssEscapeIdent(c))) return true;
+  return false;
 }
 
-/** Answered = some HUMAN root comment is anchored to the ask. */
+/** Text compared with every whitespace character removed: the frame and the
+ *  server space block boundaries differently (a `<br>`), never the letters. */
+function squash(s: string): string {
+  return s.replace(/\s+/g, "");
+}
+
+/** Does an earlier-version comment quote the ask's CURRENT text? Its quote
+ *  must start with the whole (clipped) ask text: a Reply quotes exactly the
+ *  ask text, a click on the ask element quotes it plus anything past the
+ *  clip. A quote of only part of the ask (a "Decide:" label) never counts. */
+export function quoteMatchesAsk(ask: PageAskRef, quote: string): boolean {
+  const t = squash(ask.text);
+  return t.length > 0 && squash(quote).startsWith(t);
+}
+
+/** Is this comment from an earlier version than `current`? */
+export function isEarlierVersionComment(c: PageAskComment, current: PageAskVersion | undefined): boolean {
+  if (!current) return false;
+  if (c.target.artifactId && c.target.artifactId !== current.artifactId) return true;
+  const v = c.target.htmlAnchor?.version;
+  return typeof v === "number" && v < current.version;
+}
+
+/**
+ * Does this comment answer the ask? A HUMAN root comment, not resolved, whose
+ * anchor targets the ask (or, companion-side, whose pin the frame found inside
+ * the ask: `insideByFrame`), and — when made on an earlier version — whose
+ * quote matches the ask's current text.
+ */
+export function commentAnswersAsk(
+  ask: PageAskRef,
+  c: PageAskComment,
+  current?: PageAskVersion,
+  insideByFrame = false,
+): boolean {
+  if (c.author !== "human" || c.parentCommentId || c.humanResolvedAt) return false;
+  const a = c.target.htmlAnchor;
+  if (!a || typeof a.locator !== "string" || typeof a.quote !== "string") return false;
+  if (!insideByFrame && !anchorTargetsAsk(ask, a)) return false;
+  return !isEarlierVersionComment(c, current) || quoteMatchesAsk(ask, a.quote);
+}
+
+/** Answered = some comment answers the ask (see commentAnswersAsk). */
 export function isPageAskAnswered(
   ask: PageAskRef,
-  comments: ReadonlyArray<{ author: string; parentCommentId?: string | null; target: { htmlAnchor?: { locator: string; quote: string } } }>,
+  comments: ReadonlyArray<PageAskComment>,
+  current?: PageAskVersion,
 ): boolean {
-  for (const c of comments) {
-    if (c.author !== "human" || c.parentCommentId) continue;
-    const a = c.target.htmlAnchor;
-    if (a && typeof a.locator === "string" && typeof a.quote === "string" && anchorTargetsAsk(ask, a)) return true;
-  }
-  return false;
+  return comments.some((c) => commentAnswersAsk(ask, c, current));
 }

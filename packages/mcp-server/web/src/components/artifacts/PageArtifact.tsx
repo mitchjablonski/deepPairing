@@ -34,7 +34,7 @@ import type { ChangeLocator } from "../../lib/pageVersionDiff";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
-import { isPageAskAnswered, pageRuleOutKey } from "@deeppairing/shared";
+import { commentAnswersAsk, pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -171,10 +171,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const [outline, setOutline] = useState<PageOutlineMessage | null>(null);
   const [activeSection, setActiveSection] = useState(-1);
   const [asks, setAsks] = useState<PageAsk[]>([]);
+  const [pinAsks, setPinAsks] = useState<number[]>([]);
   useEffect(() => {
     setOutline(null);
     setActiveSection(-1);
     setAsks([]);
+    setPinAsks([]);
   }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
 
@@ -270,19 +272,26 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         setFound(status);
         return;
       }
+      // #714 gaps 4+5 — outline, reading progress and asks follow the same
+      // trust model as changes-status below: once the page's own scripts run
+      // they could forge these, so they are ignored then and the last
+      // pre-Run report stands.
       const reportedOutline = acceptOutlineMessage(event, frame);
       if (reportedOutline) {
-        setOutline(reportedOutline);
+        if (!runningRef.current) setOutline(reportedOutline);
         return;
       }
       const active = acceptOutlineActive(event, frame);
       if (active !== null) {
-        setActiveSection(active);
+        if (!runningRef.current) setActiveSection(active);
         return;
       }
       const reportedAsks = acceptAsksMessage(event, frame);
       if (reportedAsks) {
-        setAsks(reportedAsks);
+        if (!runningRef.current) {
+          setAsks(reportedAsks.asks);
+          setPinAsks(reportedAsks.pinAsks);
+        }
         return;
       }
       // Trust model: once the page's own scripts run they share the frame and
@@ -404,8 +413,22 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     postToFrame({ dp: "focus-heading", index, locator: h.locator });
   };
 
-  // #714 gap 5 — an ask is answered once a human comment is anchored to it.
-  const askAnswered = useMemo(() => asks.map((a) => isPageAskAnswered(a, anchored)), [asks, anchored]);
+  // #714 gap 5 — an ask is answered once a human comment is anchored to it
+  // (its locator or #id, or inside it — including a child with its own id,
+  // which the frame resolves as pinAsks). Never by a comment the reviewer
+  // resolved or whose spot isn't on this version, and a comment from an
+  // earlier version must also quote the ask's current text (a revision can
+  // reuse an id or a position for a different ask).
+  const askAnswered = useMemo(() => {
+    const current = { artifactId: artifact.id, version: artifact.version };
+    const pinsAligned = pinAsks.length === anchored.length;
+    return asks.map((ask, k) =>
+      anchored.some((c, i) => {
+        if (found && found[i] === false) return false;
+        return commentAnswersAsk(ask, c, current, pinsAligned && pinAsks[i] === k);
+      }),
+    );
+  }, [asks, anchored, pinAsks, found, artifact.id, artifact.version]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
     if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });

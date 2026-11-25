@@ -120,7 +120,7 @@ describe("outline / asks messages (#714 gaps 4+5)", () => {
     pins: [1, -1],
     changes: [0],
   };
-  const asks = { dp: "asks", asks: [{ kind: "decision", id: "decide-ttl", text: "Decide: a 60s TTL?", locator: "#decide-ttl" }] };
+  const asks = { dp: "asks", asks: [{ kind: "decision", id: "decide-ttl", text: "Decide: a 60s TTL?", locator: "#decide-ttl" }], pinAsks: [0, -1] };
 
   it("accepts a valid outline, active index and asks from this frame only", () => {
     expect(acceptOutlineMessage({ source: frame, data: outline }, frame)).toEqual(outline);
@@ -129,7 +129,7 @@ describe("outline / asks messages (#714 gaps 4+5)", () => {
     expect(acceptOutlineActive({ source: frame, data: { dp: "outline-active", index: 1 } }, frame)).toBe(1);
     expect(acceptOutlineActive({ source: frame, data: { dp: "outline-active", index: -1 } }, frame)).toBe(-1);
     expect(acceptOutlineActive({ source: otherFrame, data: { dp: "outline-active", index: 1 } }, frame)).toBeNull();
-    expect(acceptAsksMessage({ source: frame, data: asks }, frame)).toEqual(asks.asks);
+    expect(acceptAsksMessage({ source: frame, data: asks }, frame)).toEqual(asks);
     expect(acceptAsksMessage({ source: otherFrame, data: asks }, frame)).toBeNull();
   });
 
@@ -148,12 +148,15 @@ describe("outline / asks messages (#714 gaps 4+5)", () => {
   });
 
   it.each([
-    ["an unknown kind", { dp: "asks", asks: [{ ...asks.asks[0], kind: "approve" }] }],
-    ["an over-long text", { dp: "asks", asks: [{ ...asks.asks[0], text: "x".repeat(201) }] }],
-    ["an empty id", { dp: "asks", asks: [{ ...asks.asks[0], id: "" }] }],
-    ["no locator", { dp: "asks", asks: [{ kind: "question", text: "x" }] }],
-    ["too many asks", { dp: "asks", asks: Array.from({ length: 51 }, () => asks.asks[0]) }],
-    ["an extra field", { dp: "asks", asks: [{ ...asks.asks[0], commentId: "cmt_1" }] }],
+    ["an unknown kind", { dp: "asks", asks: [{ ...asks.asks[0], kind: "approve" }], pinAsks: [] }],
+    ["an over-long text", { dp: "asks", asks: [{ ...asks.asks[0], text: "x".repeat(201) }], pinAsks: [] }],
+    ["an empty id", { dp: "asks", asks: [{ ...asks.asks[0], id: "" }], pinAsks: [] }],
+    ["no locator", { dp: "asks", asks: [{ kind: "question", text: "x" }], pinAsks: [] }],
+    ["too many asks", { dp: "asks", asks: Array.from({ length: 51 }, () => asks.asks[0]), pinAsks: [] }],
+    ["an extra field", { dp: "asks", asks: [{ ...asks.asks[0], commentId: "cmt_1" }], pinAsks: [] }],
+    ["no pinAsks", { dp: "asks", asks: asks.asks }],
+    ["a pinAsks index past the asks", { ...asks, pinAsks: [1] }],
+    ["a pinAsks index below -1", { ...asks, pinAsks: [-2] }],
   ])("rejects malformed asks: %s", (_label, data) => {
     expect(acceptAsksMessage({ source: frame, data }, frame)).toBeNull();
   });

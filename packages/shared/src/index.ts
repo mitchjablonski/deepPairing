@@ -208,11 +208,17 @@ export {
   PAGE_DECISION_ATTR,
   PAGE_QUESTION_ATTR,
   PAGE_ASK_LIMITS,
+  PAGE_SANITIZE_DROP_TAGS,
   anchorTargetsAsk,
+  commentAnswersAsk,
   cssEscapeIdent,
+  isEarlierVersionComment,
   isPageAskAnswered,
+  quoteMatchesAsk,
+  type PageAskComment,
   type PageAskKind,
   type PageAskRef,
+  type PageAskVersion,
 } from "./schemas/page-asks.js";
 
 export {

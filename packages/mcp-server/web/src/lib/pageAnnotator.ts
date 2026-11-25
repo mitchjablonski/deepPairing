@@ -1014,7 +1014,8 @@ function focusPin(index) {
  *  change mark sits in) and the asks, reported to the parent when they
  *  change. Display-only hints: the parent validates every field and never
  *  creates anything from them. outlineEls / askEls line up with the last
- *  report, so a parent index points at the element it saw. */
+ *  report, so a parent index points at the element it saw. The asks report
+ *  also carries pinAsks: per pin, the innermost ask containing it. */
 var outlineEls = [], askEls = [], lastOutlineJson = "", lastAsksJson = "", activeIdx = -2;
 var outlinePending = 0, activePending = 0;
 function reportOutline() {
@@ -1044,7 +1045,17 @@ function reportOutline() {
     asks.push(item);
   }
   askEls = aels;
-  var amsg = { dp: "asks", asks: asks };
+  // Per pin: the innermost ask its element sits in (-1 = none), so a comment
+  // on a child with its own id still counts as on the ask.
+  var pinAsks = [];
+  for (j = 0; j < current.length; j++) {
+    var pe = pinEls[j], hitAsk = -1;
+    if (pe && pe.isConnected) {
+      for (var k = 0; k < aels.length; k++) if (aels[k] === pe || aels[k].contains(pe)) hitAsk = k;
+    }
+    pinAsks.push(hitAsk);
+  }
+  var amsg = { dp: "asks", asks: asks, pinAsks: pinAsks };
   var ajson = JSON.stringify(amsg);
   if (ajson !== lastAsksJson) { lastAsksJson = ajson; post(amsg); }
   reportActive();

@@ -1040,6 +1040,22 @@ describe("annotator main — outline, asks and reading progress (#714 gaps 4+5)"
     expect(of("outline").at(-1)).toMatchObject({ pins: [2, -1, 3], changes: [1] });
   });
 
+  it("reports, per pin, the innermost ask its element sits in (a child with its own id counts)", () => {
+    document.getElementById("decide-ttl")!.insertAdjacentHTML("beforeend", " <em id=\"ttl-note\">60s</em>");
+    return Promise.resolve().then(() => {
+      send({
+        dp: "pins",
+        anchors: [
+          { kind: "element", locator: "#ttl-note", quote: "60s" },
+          { kind: "element", locator: "#redis-p", quote: "About 15ms." },
+          { kind: "element", locator: "#ask-budget", quote: "Is one more instance in budget?" },
+        ],
+      });
+      vi.advanceTimersByTime(300);
+      expect(of("asks").at(-1).pinAsks).toEqual([0, -1, 1]);
+    });
+  });
+
   it("re-reports after a relevant page mutation (debounced), never for its own layer", () => {
     document.querySelector("h3")!.textContent = "Redis (managed)";
     document.body.insertAdjacentHTML("beforeend", "<p id=\"late\" data-dp-question>Late ask?</p>");
@@ -1115,5 +1131,13 @@ describe("ask id locators: annotator vs shared matcher (#714 gap 5)", () => {
     for (const id of ["decide-ttl", "1st", "-2x", "a.b:c", "ünï", "with space", "-", "x\u0001y"]) {
       expect(cssEscapeIdent(id)).toBe(core.cssEscape(id));
     }
+  });
+});
+
+describe("ask attributes: annotator selector vs shared constants (#714 gap 5)", () => {
+  it("the annotator collects exactly the shared PAGE_DECISION_ATTR / PAGE_QUESTION_ATTR", async () => {
+    const { PAGE_DECISION_ATTR, PAGE_QUESTION_ATTR } = await import("@deeppairing/shared");
+    const core = makeCore() as Core & { ASK_SEL: string };
+    expect(core.ASK_SEL).toBe(`[${PAGE_DECISION_ATTR}], [${PAGE_QUESTION_ATTR}]`);
   });
 });

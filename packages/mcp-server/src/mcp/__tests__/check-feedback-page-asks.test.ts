@@ -83,6 +83,45 @@ describe("check_feedback — open page asks (#714 gap 5)", () => {
     expect(entryFor(res.structuredContent, v2).openAsks.map((q: any) => q.id)).toEqual(["decide-ttl"]);
   });
 
+  it("a reused id with a NEW question stays open on the revision (earlier answer quoted the old text)", async () => {
+    const v1 = await presentPage('<h1>Q</h1><div id="q1" data-dp-question>Which DB?</div>');
+    await store.addComment({
+      id: "cmt_db",
+      artifactId: v1,
+      content: "Postgres",
+      author: "human",
+      target: { artifactId: v1, htmlAnchor: { kind: "element", locator: "#q1", quote: "Which DB?", version: 1 } },
+    });
+    await callTool("check_feedback");
+    const rev = await callTool("revise_artifact", { artifactId: v1, mode: "supersede", reason: "Next question", content: { html: '<h1>Q</h1><div id="q1" data-dp-question>Which region?</div>' } });
+    expect(rev.isError, rev.text).toBeFalsy();
+    const v2 = store.getArtifacts().find((a) => a.type === "page" && a.parentId === v1)!.id;
+    const res = await callTool("check_feedback");
+    expect(entryFor(res.structuredContent, v2).openAsks).toEqual([{ id: "q1", kind: "question", text: "Which region?" }]);
+  });
+
+  it("id-less asks are listed as verifiable:false, kept out of the owed count, and named in their own line", async () => {
+    const id = await presentPage('<h1>Q</h1><p id="q1" data-dp-question>Has id?</p><p data-dp-question>No id one?</p><p data-dp-decision>No id two?</p>');
+    const res = await callTool("check_feedback");
+    expect(entryFor(res.structuredContent, id).openAsks).toEqual([
+      { id: "q1", kind: "question", text: "Has id?" },
+      { verifiable: false, kind: "question", text: "No id one?" },
+      { verifiable: false, kind: "decision", text: "No id two?" },
+    ]);
+    expect(res.text).toContain('has 1 open ask your pair hasn\'t answered yet: #q1 (question) "Has id?"');
+    expect(res.text).toContain('2 asks have no id on page "Profile cache", so their answers can\'t be checked here — add ids, or check the companion.');
+  });
+
+  it("caps the structured openAsks at 20 per page with openAsksOmitted", async () => {
+    const html = "<h1>Many</h1>" + Array.from({ length: 23 }, (_, i) => `<p id="a${i}" data-dp-question>Ask ${i}?</p>`).join("");
+    const id = await presentPage(html);
+    const res = await callTool("check_feedback");
+    const entry = entryFor(res.structuredContent, id);
+    expect(entry.openAsks).toHaveLength(20);
+    expect(entry.openAsksOmitted).toBe(3);
+    expect(res.text).toContain("has 23 open asks");
+  });
+
   it("a page without asks keeps its entry unchanged (no openAsks key, no prose line)", async () => {
     const id = await presentPage("<h1>Plain</h1><p>No asks.</p>");
     const res = await callTool("check_feedback");
