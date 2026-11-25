@@ -458,7 +458,9 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           </Suspense>
           <NextPendingLink artifact={artifact} />
         </div>
-        {artifact.agentReasoning && (
+        {/* #714 gap 2 — a revised page shows its reason prominently in its own
+            header (beside the file-watch notice), so it isn't repeated here. */}
+        {artifact.agentReasoning && !(artifact.type === "page" && artifact.version > 1) && (
           <p className="text-xs text-text-muted italic">{artifact.agentReasoning}</p>
         )}
       </div>

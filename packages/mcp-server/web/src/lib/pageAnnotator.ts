@@ -31,6 +31,14 @@
  * switches between annotating clicks and letting them through to the page (after
  * Run). Messages are accepted only from `parent`.
  *
+ * #714 gap 2 — `{dp:"changes", marks, show}` carries the blocks that changed
+ * since the previous version, as `{kind, tag, text, occurrence}` locators the
+ * companion computed from the parsed (never executed) HTML. Each is checked
+ * field by field, re-found by tag + clipped text, and drawn as a change bar
+ * (DOM APIs and textContent only) while `show` is true; `{dp:"changes-status",
+ * found}` reports which were found and `{dp:"focus-change", index}` scrolls to
+ * one.
+ *
  * Written as plain JS inside `String.raw` (so no `${` or backticks below) and
  * split into a CORE (pure helpers: locator building, quote extraction,
  * re-finding) and a MAIN (event wiring), so jsdom tests can evaluate the exact
@@ -458,6 +466,98 @@ function pickBest(list) {
   return best && !tied ? { el: best.el, range: best.range } : null;
 }
 
+/** #714 gap 2 — a version-change locator {tag, text, occurrence}, computed by
+ *  the companion from the parsed (never executed) page. clippedText MUST read
+ *  text exactly as the companion's pageVersionDiff.clippedText does (a parity
+ *  test runs both on shared fixtures): whitespace collapsed, br is a space,
+ *  each table cell after the first in its row starts with " | " (even after
+ *  empty cells), an input adds its rendered label/value, and empty text falls
+ *  back to alt/aria-label/title/value, then a descendant image's alt. Our own
+ *  layer is skipped by its element name, never by an attribute an author
+ *  could also write. Must equal pageVersionDiff's TEXT_SKIP_SELECTOR. */
+var CHANGE_SKIP = "script,style,noscript,template,iframe,frame,frameset,object,embed,applet,portal,dp-annotator-layer";
+function inChangeSkip(el) { return !!(el && el.closest && el.closest(CHANGE_SKIP)); }
+function laterCell(e) {
+  for (var s = e.previousElementSibling; s; s = s.previousElementSibling) {
+    var st = String(s.localName).toLowerCase();
+    if (st === "td" || st === "th") return true;
+  }
+  return false;
+}
+var BUTTON_INPUTS = { submit: "Submit", reset: "Reset", button: "" };
+var TEXT_INPUTS = { "": 1, text: 1, search: 1, email: 1, url: 1, tel: 1, number: 1 };
+/** What an input shows as text: a button's value attribute (or its default
+ *  label), a text-like field's value ATTRIBUTE (never live typing). */
+function inputText(e) {
+  var type = String(e.getAttribute("type") || "").trim().toLowerCase();
+  var v = e.getAttribute("value");
+  if (Object.prototype.hasOwnProperty.call(BUTTON_INPUTS, type)) return v !== null ? v : BUTTON_INPUTS[type];
+  if (Object.prototype.hasOwnProperty.call(TEXT_INPUTS, type)) return v !== null ? v : "";
+  return "";
+}
+function clippedText(el, max) {
+  var walker = document.createTreeWalker(el, 5, null), text = "", lastSpace = true, n;
+  function space() { if (!lastSpace) { text += " "; lastSpace = true; } }
+  function chars(raw) {
+    for (var i = 0; i < raw.length; i++) {
+      var ch = raw.charAt(i);
+      if (isWs(ch)) space();
+      else { text += ch; lastSpace = false; }
+      if (text.length > max) return true;
+    }
+    return false;
+  }
+  while ((n = walker.nextNode())) {
+    if (n.nodeType === 1) {
+      if (inChangeSkip(n)) continue;
+      var tag = String(n.localName).toLowerCase();
+      if (tag === "br") space();
+      else if (tag === "td" || tag === "th") { if (laterCell(n)) { space(); text += "| "; lastSpace = true; } }
+      else if (tag === "input" && chars(inputText(n))) break;
+      continue;
+    }
+    if (inChangeSkip(n.parentElement)) continue;
+    if (chars(n.nodeValue || "")) break;
+  }
+  var t = norm(text);
+  if (!t && el.getAttribute) t = norm(el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("value") || "");
+  if (!t && el.getElementsByTagName) {
+    var imgs = el.getElementsByTagName("img");
+    for (var k = 0; k < imgs.length && !t; k++) if (!inChangeSkip(imgs[k])) t = norm(imgs[k].getAttribute("alt") || "");
+  }
+  return clip(t, max);
+}
+/** Re-find each locator: the occurrence-th element of its tag whose clipped
+ *  text equals its text, else the first such element (the page changed after
+ *  Run), else null. Each tag's text index is built once and kept in cache
+ *  (the caller drops it when the page itself changes). */
+function findChanges(list, cache) {
+  var byTag = cache && typeof cache === "object" ? cache : {}, out = [];
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i];
+    if (!c) { out.push(null); continue; }
+    var idx = Object.prototype.hasOwnProperty.call(byTag, c.tag) ? byTag[c.tag] : null;
+    if (!idx) {
+      idx = [];
+      var els = document.getElementsByTagName(c.tag);
+      for (var j = 0; j < els.length; j++) {
+        if (inChangeSkip(els[j])) continue;
+        idx.push({ el: els[j], text: clippedText(els[j], LIMITS.quote) });
+      }
+      byTag[c.tag] = idx;
+    }
+    var seen = 0, first = null, hit = null;
+    for (var k = 0; k < idx.length; k++) {
+      if (idx[k].text !== c.text || !idx[k].el.isConnected) continue;
+      if (!first) first = idx[k].el;
+      if (seen === c.occurrence) { hit = idx[k].el; break; }
+      seen++;
+    }
+    out.push(hit || first);
+  }
+  return out;
+}
+
 return {
   LIMITS: LIMITS,
   LINK_SEL: LINK_SEL,
@@ -474,7 +574,10 @@ return {
   linkAnchor: linkAnchor,
   nodeAnchor: nodeAnchor,
   cellAnchor: cellAnchor,
-  mermaidNodeId: mermaidNodeId
+  mermaidNodeId: mermaidNodeId,
+  CHANGE_SKIP: CHANGE_SKIP,
+  clippedText: clippedText,
+  findChanges: findChanges
 };
 `;
 
@@ -484,6 +587,8 @@ export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
 var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0;
+// #714 gap 2 — version-change marks (validated locators) and their toggle.
+var changes = [], showChanges = false, lastChangesFound = null;
 /** Our own nodes, by reference: an authored element can carry the marker
  *  attribute too, so ownership is never inferred from markup (#715 review). */
 var ownNodes = typeof WeakSet === "function" ? new WeakSet() : null;
@@ -694,17 +799,107 @@ function drawPins() {
   }
   return found;
 }
+var CHANGE_COLORS = { added: "#16a34a", changed: "#8b5cf6", moved: "#2563eb", hinted: "#0891b2" };
+var CHANGE_GLYPHS = { added: "+", changed: "~", moved: "\u2195", hinted: "*" };
+var CHANGE_KINDS = { added: 1, changed: 1, moved: 1, hinted: 1 };
+var TAG_RE = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
+/** A locator from the parent, checked field by field (the parent built it
+ *  from a Zod-validated message, but the frame trusts nothing): null if bad. */
+function validChange(c) {
+  if (!c || typeof c !== "object") return null;
+  if (typeof c.kind !== "string" || !Object.prototype.hasOwnProperty.call(CHANGE_KINDS, c.kind)) return null;
+  if (typeof c.tag !== "string" || !TAG_RE.test(c.tag)) return null;
+  if (typeof c.text !== "string" || !c.text || c.text.length > core.LIMITS.quote) return null;
+  var o = c.occurrence;
+  if (typeof o !== "number" || o < 0 || o > 1000000 || Math.floor(o) !== o) return null;
+  return { kind: c.kind, tag: c.tag, text: c.text, occurrence: o };
+}
+/** Change bars, drawn under the pins (inserted first in the layer), with DOM
+ *  APIs and textContent only. Re-resolved on every draw, like the pins. */
+var changeEls = null, changeIndex = {}, changeBoxes = null;
+/** Drop the resolved change targets and the per-tag text index: the page's
+ *  own DOM changed (never our layer), or new marks arrived. */
+function invalidateChanges() { changeEls = null; changeIndex = {}; changeBoxes = null; }
+function changesFound() {
+  var found = [];
+  for (var j = 0; j < changes.length; j++) found.push(!!(changes[j] && changeEls && changeEls[j]));
+  return found;
+}
+/** Change bars, drawn under the pins (inserted first in the layer) with mk()
+ *  (so they are ours by reference) and textContent only. A scroll or resize
+ *  only re-places them; the targets are re-found only after the page's own
+ *  DOM changes (invalidateChanges). */
+function drawChanges() {
+  var l = ensureLayer(), b;
+  if (showChanges && changeEls && changeBoxes) {
+    var stale = false;
+    for (b = 0; b < changeBoxes.length; b++) {
+      if (!changeBoxes[b].box.isConnected || !changeBoxes[b].el.isConnected) { stale = true; break; }
+    }
+    if (!stale) {
+      for (b = 0; b < changeBoxes.length; b++) place(changeBoxes[b].box, changeBoxes[b].el.getBoundingClientRect());
+      return changesFound();
+    }
+    invalidateChanges();
+  }
+  var olds = l.querySelectorAll("dp-annotator-change");
+  for (var i = 0; i < olds.length; i++) olds[i].remove();
+  changeBoxes = null;
+  if (!showChanges || !changes.length) return [];
+  if (!changeEls) {
+    try { changeEls = core.findChanges(changes, changeIndex); } catch (e) { changeEls = []; }
+  }
+  changeBoxes = [];
+  for (var j = 0; j < changes.length; j++) {
+    var el = changes[j] ? changeEls[j] || null : null;
+    if (!el || !el.getBoundingClientRect) continue;
+    var color = CHANGE_COLORS[changes[j].kind];
+    var box = mk("dp-annotator-change");
+    box.setAttribute("data-dp-change", String(j));
+    box.setAttribute("data-dp-change-kind", changes[j].kind);
+    important(box, { position: "absolute", display: "block", "box-sizing": "border-box", "border-left": "4px solid " + color,
+      outline: "1px dashed " + color, background: "transparent", "pointer-events": "none", margin: "0", padding: "0" });
+    place(box, el.getBoundingClientRect());
+    var tag = mk("dp-annotator-change-tag");
+    tag.textContent = CHANGE_GLYPHS[changes[j].kind];
+    important(tag, { position: "absolute", left: "-14px", top: "-2px", display: "block", width: "10px", height: "14px",
+      color: color, font: "700 12px/14px system-ui, sans-serif", "text-align": "center" });
+    box.appendChild(tag);
+    l.insertBefore(box, l.firstChild);
+    changeBoxes.push({ box: box, el: el });
+  }
+  return changesFound();
+}
+function focusChange(index) {
+  if (!showChanges || typeof index !== "number" || index < 0 || index >= changes.length) return;
+  var i = Math.floor(index);
+  if (!changes[i]) return;
+  reconcile(false);
+  var el = changeEls ? changeEls[i] : null;
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  var box = layer ? layer.querySelector("dp-annotator-change[data-dp-change=\"" + i + "\"]") : null;
+  if (box) {
+    var color = CHANGE_COLORS[changes[i].kind];
+    important(box, { outline: "3px solid " + color });
+    setTimeout(function () { important(box, { outline: "1px dashed " + color }); }, 1600);
+  }
+}
 /** Redraw and tell the parent when which anchors are found has changed. */
-function reconcile(force) {
+function reconcile(force, forceChanges) {
   pending = 0;
+  var cf = drawChanges();
   var found = drawPins();
   if (force || !samePins(lastFound, found)) {
     lastFound = found;
     post({ dp: "pins-status", found: found });
   }
+  if (forceChanges || !samePins(lastChangesFound, cf)) {
+    lastChangesFound = cf;
+    post({ dp: "changes-status", found: cf });
+  }
 }
 function schedule() {
-  if (!current.length || pending) return;
+  if ((!current.length && !(showChanges && changes.length)) || pending) return;
   pending = setTimeout(function () { reconcile(false); }, 120);
 }
 function focusPin(index) {
@@ -741,7 +936,7 @@ var mo = null, ro = null;
 function observe() {
   try {
     if (typeof window.MutationObserver === "function") {
-      mo = new window.MutationObserver(function (records) { if (relevant(records)) schedule(); });
+      mo = new window.MutationObserver(function (records) { if (relevant(records)) { invalidateChanges(); schedule(); } });
       mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     }
   } catch (e) { mo = null; }
@@ -762,6 +957,16 @@ function onMessage(e) {
     reconcile(true);
   } else if (d.dp === "focus") {
     focusPin(d.index);
+  } else if (d.dp === "changes") {
+    var list = Array.isArray(d.marks) ? d.marks.slice(0, 300) : [];
+    changes = [];
+    for (var ci = 0; ci < list.length; ci++) changes.push(validChange(list[ci]));
+    // A slot that failed validation stays null (never found), so indexes line up.
+    showChanges = d.show === true;
+    invalidateChanges();
+    reconcile(false, true);
+  } else if (d.dp === "focus-change") {
+    focusChange(d.index);
   } else if (d.dp === "mode") {
     annotate = d.annotate !== false;
     scripts = d.scripts === true;
