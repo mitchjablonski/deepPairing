@@ -1,0 +1,1 @@
+import{S as e}from"./artifact-BFW_wifK.js";import{j as t}from"./index-GvOpDFai.js";function n(n){let r=t(n,e(e=>e.active));return r===`closed`||r===`frozen`}export{n as t};
