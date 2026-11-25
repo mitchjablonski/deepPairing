@@ -14,7 +14,6 @@ import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
 import {
   acceptAnchorMessage,
-  acceptAnchorPoint,
   acceptPinClick,
   acceptPinHover,
   buildPinsMessage,
@@ -82,36 +81,11 @@ interface FrameBox {
   left: number;
   width: number;
   height: number;
-  wrapHeight: number;
 }
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
-
-/** #714 gap 8 — where the narrow floating composer goes: next to the spot
- *  the reviewer clicked, on the side away from it (below a spot in the top
- *  half, above one in the bottom half), so the spot stays visible. Opened
- *  from the companion (no point): docked to the bottom of the frame, while
- *  the frame centres the spot. */
-export function floatingComposerStyle(box: FrameBox, point: FramePoint | null): CSSProperties {
-  const width = Math.min(448, Math.max(200, box.width - 16));
-  const gap = 12;
-  if (!point) {
-    return {
-      left: box.left + 8,
-      width,
-      bottom: box.wrapHeight - (box.top + box.height) + 8,
-      maxHeight: Math.max(160, box.height * 0.45),
-      overflowY: "auto",
-    };
-  }
-  const y = clamp(point.y, 0, box.height);
-  const x = clamp(point.x, 0, box.width);
-  const left = box.left + clamp(x - 24, 8, Math.max(8, box.width - width - 8));
-  if (y < box.height / 2) {
-    return { left, width, top: box.top + y + gap, maxHeight: Math.max(160, box.height - y - gap - 8), overflowY: "auto" };
-  }
-  return { left, width, bottom: box.wrapHeight - (box.top + y) + gap, maxHeight: Math.max(160, y - gap - 8), overflowY: "auto" };
-}
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+/** The hover preview's max width (Tailwind max-w-xs), for clamping it inside the frame. */
+const PREVIEW_MAX_WIDTH = 320;
 
 /** The hover preview's text: the comment, clipped. */
 function snippet(text: string): string {
@@ -172,8 +146,9 @@ export function anchoredPageComments(comments: Comment[]): Comment[] {
  * badge in the frame is clickable (display-only: it highlights and reveals its
  * row here, never posts) and hovering it shows the comment's snippet, rendered
  * here from the store. The composer sits in the right-hand review rail on a
- * wide panel, or floats over the frame beside the clicked spot on a narrow
- * one, so the spot stays in view; Escape returns focus to the frame.
+ * wide panel, or is docked directly below the frame on a narrow one (never
+ * over the page's content), with the frame scrolling the spot near its top so
+ * it stays in view; Escape returns focus to the frame.
  *
  * The footer is the standard ArtifactStatusActions: Respond / Ask, Request
  * changes, Reject (with the "name the pattern" capture, so a reject feeds
@@ -209,10 +184,19 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // #714 gap 7 — pin colours. Derived WITHOUT the frame's found report (an
   // orphaned comment has no pin to colour), and keyed by value, so a
   // pins-status report never re-sends the pins (no feedback loop).
-  const pinStatesKey = anchored.map((c) => pinState(deriveCommentState(c, threadReplies(c, comments), false))).join(",");
+  const storeArtifacts = useArtifactStore((s) => s.artifacts);
+  const deriveOpts = useMemo(
+    () => ({ revisionAt: (id: string) => storeArtifacts.find((a) => a.id === id)?.createdAt }),
+    [storeArtifacts],
+  );
+  const pinStatesKey = anchored
+    .map((c) => pinState(deriveCommentState(c, threadReplies(c, comments), false, deriveOpts)))
+    .join(",");
   const pinStates = useMemo(() => (pinStatesKey ? (pinStatesKey.split(",") as PinStateValue[]) : []), [pinStatesKey]);
 
   const [draft, setDraft] = useState<HtmlAnchor | null>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [openNonce, setOpenNonce] = useState(0);
   // Who opened the composer: an explicit parent action (a pin in the list)
   // focuses it on mount; a frame-initiated open is focused only after a fresh
@@ -240,8 +224,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const [running, setRunning] = useState(false);
   // #714 gaps 7+8 — the review queue and the composer beside its anchor.
   const queue = useMemo(
-    () => buildQueue(anchored, comments, (c, i) => (found ? found[i] === false : serverOrphans.has(c.id))),
-    [anchored, comments, found, serverOrphans],
+    () => buildQueue(anchored, comments, (c, i) => (found ? found[i] === false : serverOrphans.has(c.id)), deriveOpts),
+    [anchored, comments, found, serverOrphans, deriveOpts],
   );
   const counts = useMemo(() => queueCounts(queue), [queue]);
   // null = automatic: Open while anything is open, else All.
@@ -250,38 +234,34 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [reveal, setReveal] = useState({ nonce: 0, focus: false });
   const [hover, setHover] = useState<{ id: string; at: FramePoint } | null>(null);
-  // Where in the frame the current draft's spot was clicked (frame viewport
-  // px), for the narrow floating composer; null = opened from the companion.
-  const [draftPoint, setDraftPoint] = useState<FramePoint | null>(null);
   const queueRef = useRef(queue);
   queueRef.current = queue;
   const filterRef = useRef(filter);
   filterRef.current = filter;
   const containerRef = useRef<HTMLDivElement>(null);
   const wide = useWideContainer(containerRef, REVIEW_RAIL_MIN_WIDTH);
-  const allArtifacts = useArtifactStore((s) => s.artifacts);
-  // Where the iframe sits inside its wrapper, measured when something has to
-  // be placed over it (the pin preview, the floating composer).
+  const wideRef = useRef(wide);
+  wideRef.current = wide;
+  // Where the iframe sits inside its wrapper, measured for the pin preview
+  // and re-measured when the panel resizes.
   const frameWrapRef = useRef<HTMLDivElement>(null);
   const [frameBox, setFrameBox] = useState<FrameBox | null>(null);
   useLayoutEffect(() => {
-    if (!hover && !draft) return;
+    if (!hover) return;
     const wrap = frameWrapRef.current;
-    const f = iframeRef.current;
-    if (!wrap || !f) {
-      setFrameBox(null);
-      return;
-    }
-    const w = wrap.getBoundingClientRect();
-    const r = f.getBoundingClientRect();
-    setFrameBox(
-      r.height > 0 ? { top: r.top - w.top, left: r.left - w.left, width: r.width, height: r.height, wrapHeight: w.height } : null,
-    );
-  }, [hover, draft, draftPoint, wide, running]);
-  const floatingStyle = useMemo(
-    () => (draft && !wide && frameBox ? floatingComposerStyle(frameBox, draftPoint) : null),
-    [draft, wide, frameBox, draftPoint],
-  );
+    const measure = () => {
+      const f = iframeRef.current;
+      if (!wrap || !f) return setFrameBox(null);
+      const w = wrap.getBoundingClientRect();
+      const r = f.getBoundingClientRect();
+      setFrameBox({ top: r.top - w.top, left: r.left - w.left, width: r.width, height: r.height });
+    };
+    measure();
+    if (!wrap || typeof ResizeObserver !== "function") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [hover, wide, running]);
   // #714 gaps 4+5 — the page's outline and asks, as the frame reports them
   // (display-only hints: validated, rendered as text, never acted on alone).
   const [outline, setOutline] = useState<PageOutlineMessage | null>(null);
@@ -368,7 +348,6 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         if (readOnly || !pointingRef.current || !frameOwnsFocusRef.current(element)) return;
         acceptingFrame.current = element;
         setDraft({ ...anchor, version: artifact.version });
-        setDraftPoint(acceptAnchorPoint(event, frame));
         setExplicitOpen(false);
         setOpenNonce((n) => n + 1);
         setFrameFocusNonce((n) => n + 1);
@@ -490,12 +469,18 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   }, [artifact.id]);
 
   // Frame-initiated focus: re-check ownership at the moment of moving it.
+  // preventScroll, then (narrow) bring the docked composer into view with the
+  // least scroll and ask the frame to put the spot near ITS top, so both the
+  // spot and the composer are on screen. A scroll message never moves focus.
   useEffect(() => {
     if (!frameFocusNonce || !frameOwnsFocus(acceptingFrame.current)) return;
-    // preventScroll: the composer sits beside the frame (rail) or over it near
-    // the spot (floating), so focusing it must not scroll the spot away.
     composerBoxRef.current?.querySelector("textarea")?.focus?.({ preventScroll: true });
-  }, [frameFocusNonce, frameOwnsFocus]);
+    if (!wideRef.current && draftRef.current) {
+      composerBoxRef.current?.scrollIntoView?.({ block: "nearest" });
+      const { version: _v, ...anchor } = draftRef.current;
+      postToFrame({ dp: "focus", anchor, block: "start" });
+    }
+  }, [frameFocusNonce, frameOwnsFocus, postToFrame]);
 
   const onRunningChange = useCallback((r: boolean) => setRunning(r), []);
 
@@ -523,11 +508,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const focusComment = (index: number) => {
     const anchor = anchors[index];
     if (!anchor) return;
-    postToFrame({ dp: "focus", index });
+    // Narrow: the composer docks below the frame, so the pin goes near the
+    // frame's top rather than its centre.
+    postToFrame(wide ? { dp: "focus", index } : { dp: "focus", index, block: "start" });
     setHighlightId(anchored[index]?.id ?? null);
     if (!readOnly) {
       acceptingFrame.current = null;
-      setDraftPoint(null);
       setDraft({ ...anchor, version: artifact.version });
       setExplicitOpen(true);
       setOpenNonce((n) => n + 1);
@@ -617,7 +603,6 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     if (!ask || !anchor || readOnly) return;
     postToFrame({ dp: "focus-ask", index, locator: ask.locator });
     acceptingFrame.current = null;
-    setDraftPoint(null);
     setDraft({ ...anchor, version: artifact.version });
     setExplicitOpen(true);
     setOpenNonce((n) => n + 1);
@@ -644,7 +629,6 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
    *  for that spot (useDraft), so reopening it restores the text. */
   const closeComposer = () => {
     setDraft(null);
-    setDraftPoint(null);
     iframeRef.current?.focus?.();
   };
   const onComposerKeyDown = (e: ReactKeyboardEvent) => {
@@ -659,13 +643,13 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const composer =
     draft && !readOnly ? (
       <div
-        className={`p-3 rounded-lg border border-accent-blue/30 bg-surface-elevated space-y-2 ${wide ? "" : "shadow-xl"}`}
+        className="p-3 rounded-lg border border-accent-blue/30 bg-surface-elevated space-y-2"
         ref={composerBoxRef}
         role="group"
         aria-label="Comment composer"
         onKeyDown={onComposerKeyDown}
         data-testid="page-anchor-composer"
-        data-placement={wide ? "rail" : floatingStyle ? "floating" : "below"}
+        data-placement={wide ? "rail" : "below"}
       >
         <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">
@@ -718,7 +702,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       revealNonce={reveal.nonce}
       focusRow={reveal.focus}
       onSelect={focusComment}
-      fromVersion={(c) => commentPriorVersion(allArtifacts, c, artifact.id)}
+      fromVersion={(c) => commentPriorVersion(storeArtifacts, c, artifact.id)}
       liveStances={liveStances}
       variant={variant}
     />
@@ -727,8 +711,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const hoverStyle: CSSProperties | undefined =
     hover && hoverEntry
       ? {
-          left: Math.max(0, (frameBox?.left ?? 0) + Math.min(hover.at.x, Math.max(0, (frameBox?.width ?? 0) - 240))),
-          top: (frameBox?.top ?? 0) + Math.max(0, Math.min(hover.at.y + 4, frameBox?.height ?? hover.at.y + 4)),
+          // Clamped by the preview's real max width so it never overflows the frame.
+          left: (frameBox?.left ?? 0) + clamp(hover.at.x, 0, (frameBox?.width ?? 0) - PREVIEW_MAX_WIDTH),
+          top: (frameBox?.top ?? 0) + clamp(hover.at.y + 4, 0, frameBox?.height ?? hover.at.y + 4),
+          maxWidth: PREVIEW_MAX_WIDTH,
         }
       : undefined;
 
@@ -900,23 +886,28 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       <PageAsksStrip asks={asks} answered={askAnswered} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
       {/* #714 gap 4 — the outline: a sticky rail beside the frame when the
           panel is wide, a collapsible disclosure above it when narrow.
-          #714 gaps 7+8 — the review rail (composer + comment queue) on the
-          right once the panel is wide enough for both rails; narrower, the
-          composer floats over the frame near its spot and the queue sits
-          below. */}
+          #714 gaps 7+8 — ONE review column (composer + queue), always the same
+          DOM node so the composer never remounts (focus and draft survive a
+          layout switch): a sticky right-hand rail when the panel is wide
+          enough for both rails, else a full-width row directly below the
+          frame. It is never drawn over the frame's content. */}
       <div className="@container" ref={containerRef} data-review-layout={wide ? "rail" : "below"}>
         {headings.length > 0 && (
           <div className="@3xl:hidden mb-2">
             <PageOutline {...outlineProps} variant="disclosure" />
           </div>
         )}
-        <div className="flex items-start gap-3">
+        <div
+          className={`grid gap-3 items-start grid-cols-1 ${headings.length > 0 ? "@3xl:grid-cols-[14rem_minmax(0,1fr)]" : ""}`}
+          style={wide ? { gridTemplateColumns: `${headings.length > 0 ? "14rem " : ""}minmax(0,1fr) 18rem` } : undefined}
+          data-testid="page-review-grid"
+        >
           {headings.length > 0 && (
-            <div className="hidden @3xl:block w-56 shrink-0 self-stretch">
+            <div className="hidden @3xl:block self-stretch">
               <PageOutline {...outlineProps} variant="rail" />
             </div>
           )}
-          <div className="flex-1 min-w-0 relative" ref={frameWrapRef}>
+          <div className="min-w-0 relative" ref={frameWrapRef} data-testid="page-frame-box">
             <PrototypeFrame
               html={page.html}
               maxBytes={PAGE_HTML_MAX_BYTES}
@@ -946,31 +937,19 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
                 <p className="text-text-primary line-clamp-3 break-words">{snippet(hoverEntry.comment.content)}</p>
               </div>
             )}
-            {composer && !wide && floatingStyle && (
-              <div className="absolute z-30" style={floatingStyle} data-testid="page-composer-floating">
-                {composer}
-              </div>
-            )}
           </div>
-          {wide && (
-            <aside
-              className="w-72 shrink-0 self-stretch"
-              aria-label="Review"
-              data-testid="page-review-rail"
-            >
-              <div className="sticky top-2 max-h-[calc(70vh+2rem)] overflow-y-auto space-y-3 pr-0.5">
-                {composer}
-                {queueEl("rail")}
-              </div>
-            </aside>
-          )}
+          <div
+            className={wide ? "sticky top-2 max-h-[calc(70vh+2rem)] overflow-y-auto space-y-3 pr-0.5" : "col-span-full space-y-3"}
+            role={wide ? "complementary" : undefined}
+            aria-label="Review"
+            data-testid="page-review-column"
+            data-placement={wide ? "rail" : "below"}
+          >
+            {composer}
+            {queueEl(wide ? "rail" : "below")}
+          </div>
         </div>
-        {/* Narrow, with no room measured to float it (the frame hasn't laid
-            out): the composer falls back to just under the frame. */}
-        {composer && !wide && !floatingStyle && <div className="mt-2">{composer}</div>}
       </div>
-
-      {!wide && queueEl("below")}
       <ArtifactStatusActions artifact={artifact} />
     </div>
   );

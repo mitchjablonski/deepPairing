@@ -252,6 +252,10 @@ export type CommentRuleOut = z.infer<typeof CommentRuleOutSchema>;
 export const CommentAddressedInSchema = z.object({
   artifactId: z.string().min(1).max(256),
   version: z.number().int().positive(),
+  /** When that revision was made (its createdAt), so a later human reply can
+   *  reopen the comment. Optional: older stamps fall back to the revision's
+   *  own artifact record. */
+  at: z.string().datetime().optional(),
 });
 export type CommentAddressedIn = z.infer<typeof CommentAddressedInSchema>;
 

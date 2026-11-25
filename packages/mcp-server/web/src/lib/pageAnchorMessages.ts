@@ -255,12 +255,3 @@ export function acceptPinHover(
   const at = FramePointSchema.safeParse({ x: d.x, y: d.y });
   return id.success && at.success ? { id: id.data, at: at.data } : undefined;
 }
-
-/** The point an `{dp:"anchor"}` was made at (`at`, frame viewport px), when
- *  present and valid; used only to place the narrow floating composer. */
-export function acceptAnchorPoint(event: FrameMessage, frame: Window | null | undefined): FramePoint | null {
-  const d = fromFrame(event, frame);
-  if (!d || d.dp !== "anchor") return null;
-  const parsed = FramePointSchema.safeParse(d.at);
-  return parsed.success ? parsed.data : null;
-}

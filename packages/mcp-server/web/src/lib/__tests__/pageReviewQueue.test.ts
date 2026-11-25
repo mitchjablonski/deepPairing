@@ -64,6 +64,47 @@ describe("deriveCommentState", () => {
   });
 });
 
+describe("the latest word in the thread decides (#722 review)", () => {
+  const human = (id: string, n: number) => c(id, n, { parentCommentId: "a" });
+  const agent = (id: string, n: number) => c(id, n, { parentCommentId: "a", author: "agent" });
+
+  it("an agent reply after your follow-up answers it again; your follow-up after the agent's reply reopens it", () => {
+    expect(deriveCommentState(c("a", 1), [agent("r1", 2), human("h1", 3)], false)).toEqual({ kind: "open", seen: false, reopened: true });
+    expect(stateLabel(deriveCommentState(c("a", 1), [agent("r1", 2), human("h1", 3)], false)).text).toBe("Reopened");
+    expect(deriveCommentState(c("a", 1), [agent("r1", 2), human("h1", 3), agent("r2", 4)], false)).toEqual({ kind: "addressed", via: "answer" });
+    // An agent clarifying question still reads as answered until you reply.
+    expect(deriveCommentState(c("a", 1), [agent("q", 2)], false).kind).toBe("addressed");
+  });
+
+  it("a human reply before the agent's reply doesn't reopen it", () => {
+    expect(deriveCommentState(c("a", 1), [human("h1", 2), agent("r1", 3)], false)).toEqual({ kind: "addressed", via: "answer" });
+  });
+
+  it("a revision addresses it only when it came after your latest message", () => {
+    const rev = (at?: string) => c("a", 1, { addressedIn: { artifactId: "art_v2", version: 2, ...(at ? { at } : {}) } });
+    expect(deriveCommentState(rev(at(5)), [human("h1", 3)], false)).toEqual({ kind: "addressed", via: "revision", version: 2 });
+    expect(deriveCommentState(rev(at(5)), [human("h1", 6)], false)).toEqual({ kind: "open", seen: false, reopened: true });
+    // No `at`: the revision artifact's createdAt from the store chain.
+    const opts = { revisionAt: (id: string) => (id === "art_v2" ? at(5) : undefined) };
+    expect(deriveCommentState(rev(), [human("h1", 6)], false, opts).kind).toBe("open");
+    expect(deriveCommentState(rev(), [human("h1", 4)], false, opts).kind).toBe("addressed");
+    // Neither known: right after the root, so any later human reply reopens.
+    expect(deriveCommentState(rev(), [], false).kind).toBe("addressed");
+    expect(deriveCommentState(rev(), [human("h1", 2)], false).kind).toBe("open");
+  });
+
+  it("an answer link without its reply in the thread counts as just after the root", () => {
+    expect(deriveCommentState(c("a", 1, { answeredByCommentId: "x" }), [], false).kind).toBe("addressed");
+    expect(deriveCommentState(c("a", 1, { answeredByCommentId: "x" }), [human("h1", 2)], false).kind).toBe("open");
+  });
+
+  it("your resolve, then a reply, reopens; a reopened comment whose spot is gone is orphaned", () => {
+    expect(deriveCommentState(c("a", 1, { humanResolvedAt: at(3) }), [human("h1", 4)], false)).toMatchObject({ kind: "open", reopened: true });
+    expect(deriveCommentState(c("a", 1), [agent("r1", 2), human("h1", 3)], true)).toEqual({ kind: "orphaned" });
+    expect(pinState(deriveCommentState(c("a", 1), [agent("r1", 2), human("h1", 3)], false))).toBe("open");
+  });
+});
+
 describe("threadReplies and buildQueue", () => {
   it("counts every reply in the thread, nested ones included, and nothing from other threads", () => {
     const a = c("a", 1);

@@ -325,7 +325,8 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     expect(within(screen.getByTestId("page-annotations")).getByText(/a sentence from v1/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("page-annotation"));
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", index: 0 }, "*");
+    // Narrow (the composer docks below the frame): the pin goes near the frame's top.
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", index: 0, block: "start" }, "*");
     // An explicit open from the companion still focuses the composer.
     expect(document.activeElement).toBe(screen.getByLabelText("Comment on the selected spot"));
   });
@@ -1424,58 +1425,133 @@ describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)",
   });
 
   describe("composer placement", () => {
+    /** A controllable layout: every box reports `size`; ResizeObserver
+     *  callbacks fire on demand. */
     function stubLayout(width: number, height: number) {
+      const size = { width, height };
+      const callbacks: Array<() => void> = [];
       vi.stubGlobal(
         "ResizeObserver",
         class {
+          cb: () => void;
+          constructor(cb: () => void) { this.cb = cb; callbacks.push(cb); }
           observe() {}
           disconnect() {}
           unobserve() {}
         },
       );
-      return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-        x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}),
-      } as DOMRect);
+      const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+        () => ({ x: 0, y: 0, top: 0, left: 0, right: size.width, bottom: size.height, width: size.width, height: size.height, toJSON: () => ({}) }) as DOMRect,
+      );
+      return {
+        spy,
+        resize(w: number) {
+          size.width = w;
+          act(() => { for (const cb of callbacks) cb(); });
+        },
+      };
     }
 
     it("wide panel: the composer and the queue sit in the right-hand review rail", () => {
-      const spy = stubLayout(1400, 800);
+      const { spy } = stubLayout(1400, 800);
       try {
         seed();
         render(<PageArtifact artifact={pageArtifact} />);
         const win = fakeFrameWindow();
-        fromFrame(win, { dp: "anchor", anchor: cellAnchor, at: { x: 100, y: 100 } });
-        const rail = screen.getByTestId("page-review-rail");
-        const composer = within(rail).getByTestId("page-anchor-composer");
+        fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+        const column = screen.getByTestId("page-review-column");
+        expect(column).toHaveAttribute("data-placement", "rail");
+        const composer = within(column).getByTestId("page-anchor-composer");
         expect(composer).toHaveAttribute("data-placement", "rail");
-        expect(within(rail).getByTestId("page-annotations")).toHaveAttribute("data-variant", "rail");
-        expect(screen.getAllByTestId("page-anchor-composer")).toHaveLength(1);
+        expect(within(column).getByTestId("page-annotations")).toHaveAttribute("data-variant", "rail");
+        expect(screen.getByTestId("page-review-grid").style.gridTemplateColumns).toBe("minmax(0,1fr) 18rem");
         expect(document.activeElement).toBe(within(composer).getByLabelText("Comment on the selected spot", { selector: "textarea" }));
+        // Wide: the frame isn't asked to scroll for a spot the reviewer just clicked.
+        expect(win.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ dp: "focus" }), "*");
       } finally {
         spy.mockRestore();
       }
     });
 
-    it("narrow panel: the composer floats over the frame on the far side of the clicked spot", () => {
-      const spy = stubLayout(600, 600);
+    it("narrow panel: the composer docks below the frame, never over it, and the frame scrolls the spot near its top", () => {
+      const { spy } = stubLayout(600, 600);
+      const scroll = vi.fn();
+      Element.prototype.scrollIntoView = scroll;
       try {
         render(<PageArtifact artifact={pageArtifact} />);
         const win = fakeFrameWindow();
-        fromFrame(win, { dp: "anchor", anchor: cellAnchor, at: { x: 100, y: 100 } });
-        const floating = screen.getByTestId("page-composer-floating");
-        expect(within(floating).getByTestId("page-anchor-composer")).toHaveAttribute("data-placement", "floating");
-        // A spot in the top half: the card opens just below it.
-        expect(floating.style.top).toBe("112px");
-        expect(floating.style.bottom).toBe("");
-        expect(screen.queryByTestId("page-review-rail")).not.toBeInTheDocument();
-        // A spot in the bottom half: the card opens above it.
-        fromFrame(win, { dp: "anchor", anchor: { ...cellAnchor, quote: "None" }, at: { x: 100, y: 500 } });
-        const again = screen.getByTestId("page-composer-floating");
-        expect(again.style.top).toBe("");
-        expect(again.style.bottom).toBe("112px");
+        fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+        const composer = screen.getByTestId("page-anchor-composer");
+        expect(composer).toHaveAttribute("data-placement", "below");
+        // Not inside the frame's box, not absolutely positioned anywhere: a
+        // normal block in the review row under the frame.
+        expect(screen.getByTestId("page-frame-box").contains(composer)).toBe(false);
+        expect(screen.getByTestId("page-review-column")).toContainElement(composer);
+        expect(screen.getByTestId("page-review-column").className).toContain("col-span-full");
+        for (let el: HTMLElement | null = composer; el; el = el.parentElement) {
+          expect(el.className).not.toMatch(/\b(absolute|fixed)\b/);
+          expect(el.style.position).not.toMatch(/absolute|fixed/);
+        }
+        expect(screen.queryByTestId("page-composer-floating")).not.toBeInTheDocument();
+        // The frame is asked to put the spot near its top; the composer is
+        // brought into view with the least scroll; focus is in the textarea
+        // on the FIRST open.
+        expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", anchor: cellAnchor, block: "start" }, "*");
+        expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
+        expect(document.activeElement).toBe(within(composer).getByLabelText("Comment on the selected spot", { selector: "textarea" }));
+      } finally {
+        spy.mockRestore();
+        delete (Element.prototype as any).scrollIntoView;
+      }
+    });
+
+    it("the composer is one stable mount: focus and text survive a narrow/wide switch", async () => {
+      const layout = stubLayout(600, 600);
+      try {
+        render(<PageArtifact artifact={pageArtifact} />);
+        const win = fakeFrameWindow();
+        fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+        const textarea = screen.getByLabelText("Comment on the selected spot", { selector: "textarea" });
+        expect(document.activeElement).toBe(textarea);
+        await userEvent.type(textarea, "half typed");
+        layout.resize(1400);
+        expect(screen.getByTestId("page-review-column")).toHaveAttribute("data-placement", "rail");
+        expect(screen.getByLabelText("Comment on the selected spot", { selector: "textarea" })).toBe(textarea);
+        expect(document.activeElement).toBe(textarea);
+        layout.resize(600);
+        expect(screen.getByTestId("page-review-column")).toHaveAttribute("data-placement", "below");
+        expect(document.activeElement).toBe(textarea);
+        expect(textarea).toHaveValue("half typed");
+      } finally {
+        layout.spy.mockRestore();
+      }
+    });
+
+    it("clamps the pin preview by its real max width so it stays inside the frame", () => {
+      const { spy } = stubLayout(600, 600);
+      try {
+        seed();
+        render(<PageArtifact artifact={pageArtifact} />);
+        const win = fakeFrameWindow();
+        fromFrame(win, { dp: "pin-hover", id: "c_open", x: 550, y: 40 });
+        const preview = screen.getByTestId("page-pin-preview");
+        expect(preview.style.left).toBe("280px");
+        expect(preview.style.maxWidth).toBe("320px");
       } finally {
         spy.mockRestore();
       }
+    });
+
+    it("Escape inside Rule this out's confirm step cancels only that step, not the composer", async () => {
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+      await userEvent.click(screen.getByRole("button", { name: "Rule this out" }));
+      const panel = screen.getByTestId("page-rule-out-panel");
+      within(panel).getByRole("button", { name: "Rule it out" }).focus();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByTestId("page-rule-out-panel")).not.toBeInTheDocument();
+      expect(screen.getByTestId("page-anchor-composer")).toBeInTheDocument();
     });
 
     it("with no layout measured, the composer falls back to just under the frame", () => {

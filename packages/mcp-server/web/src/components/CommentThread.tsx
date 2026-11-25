@@ -642,6 +642,9 @@ export function AskTrigger({
                   send();
                 }
                 if (e.key === "Escape") {
+                  // Handled here: an enclosing surface (the page composer)
+                  // must not also act on this Escape.
+                  e.preventDefault();
                   setOpen(false);
                   setQuestion("");
                 }

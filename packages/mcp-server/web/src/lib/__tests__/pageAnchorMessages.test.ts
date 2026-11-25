@@ -6,7 +6,6 @@
 import { describe, it, expect } from "vitest";
 import {
   acceptAnchorMessage,
-  acceptAnchorPoint,
   acceptAsksMessage,
   acceptPinClick,
   acceptPinHover,
@@ -206,12 +205,5 @@ describe("#714 gap 7 — pins down, pin clicks and hovers up", () => {
     expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: "c1", x: 1e9, y: 6 } }, frame)).toBeUndefined();
     expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: "c1" } }, frame)).toBeUndefined();
     expect(acceptPinHover({ source: otherFrame, data: { dp: "pin-hover", id: null } }, frame)).toBeUndefined();
-  });
-
-  it("acceptAnchorPoint reads an anchor's optional `at`, and the anchor itself still parses without it", () => {
-    expect(acceptAnchorPoint({ source: frame, data: { dp: "anchor", anchor, at: { x: 1, y: 2 } } }, frame)).toEqual({ x: 1, y: 2 });
-    expect(acceptAnchorPoint({ source: frame, data: { dp: "anchor", anchor } }, frame)).toBeNull();
-    expect(acceptAnchorPoint({ source: frame, data: { dp: "anchor", anchor, at: { x: "1", y: 2 } } }, frame)).toBeNull();
-    expect(acceptAnchorMessage({ source: frame, data: { dp: "anchor", anchor, at: { x: 1, y: 2 } } }, frame)).toEqual(anchor);
   });
 });

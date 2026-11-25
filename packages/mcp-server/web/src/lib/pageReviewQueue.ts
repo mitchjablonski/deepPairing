@@ -7,24 +7,23 @@ import type { Comment } from "@deeppairing/shared";
  *
  * Type-only imports: pure derivation, no Zod.
  *
- * States, in precedence order (each comment is in exactly one bucket):
- *  - addressed — the agent dealt with it, in one of three distinct ways, each
- *    said in its own words:
- *      · "revision": a page revision named it addressed (standalone
- *        `revise-page --ack-comment-id` stamps `addressedIn` on the comment);
- *      · "answer": the agent answered it (`answeredByCommentId`, or an agent
- *        reply in its thread after it);
- *      · "resolved": you resolved it yourself (`humanResolvedAt`).
- *    Addressed wins over orphaned: a fix often removes the very text the
- *    comment pointed at.
- *  - orphaned — its spot is not on this version of the page.
- *  - open — everything else. `seen` is the MCP drain-on-read bit
- *    (`acknowledged` with no revision stamp): the agent has READ it, which is
- *    not the same as having done anything about it, so it stays open.
+ * The LATEST WORD in the thread decides (#722 review):
+ *  - the agent's last act — a reply (or `answeredByCommentId`), or a page
+ *    revision that named the comment addressed (`addressedIn`, timed by its
+ *    `at` or the revision's own createdAt) — after the latest human message
+ *    → addressed ("Answered by the agent" / "Addressed in vN"). A plain agent
+ *    clarifying question also counts as answered; your follow-up reopens it;
+ *  - your own resolve (`humanResolvedAt`) as the latest act → "Resolved by you";
+ *  - a human reply AFTER any of those → open again, shown as "Reopened";
+ *  - otherwise open. `seen` is the MCP drain-on-read bit (`acknowledged`
+ *    with no revision stamp): the agent READ it, which is not acting on it.
+ * An open (or reopened) comment whose spot is not on this version is
+ * orphaned; addressed and resolved win over orphaned, because a fix often
+ * removes the very text the comment pointed at.
  */
 
 export type PageCommentState =
-  | { kind: "open"; seen: boolean }
+  | { kind: "open"; seen: boolean; reopened?: boolean }
   | { kind: "addressed"; via: "revision"; version: number }
   | { kind: "addressed"; via: "answer" }
   | { kind: "addressed"; via: "resolved" }
@@ -64,17 +63,54 @@ export function threadReplies(root: Comment, all: readonly Comment[]): Comment[]
   return out;
 }
 
-export function deriveCommentState(root: Comment, replies: readonly Comment[], missing: boolean): PageCommentState {
+export interface DeriveOptions {
+  /** createdAt of a revision artifact, for an `addressedIn` stamp without `at`. */
+  revisionAt?: (artifactId: string) => string | undefined;
+}
+
+type ThreadEvent = { t: number; kind: "human" | "answer" | "revision" | "resolve"; version?: number };
+/** At equal times an act outranks a message (fallback times equal the root's). */
+const RANK: Record<ThreadEvent["kind"], number> = { human: 0, resolve: 1, answer: 2, revision: 3 };
+
+function time(iso: string | null | undefined): number | undefined {
+  if (!iso) return undefined;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : undefined;
+}
+
+export function deriveCommentState(
+  root: Comment,
+  replies: readonly Comment[],
+  missing: boolean,
+  opts: DeriveOptions = {},
+): PageCommentState {
+  const rootT = time(root.createdAt) ?? 0;
+  const events: ThreadEvent[] = [{ t: rootT, kind: "human" }];
+  for (const r of replies) {
+    const t = time(r.createdAt) ?? rootT;
+    events.push({ t, kind: r.author === "agent" ? "answer" : "human" });
+  }
+  // An answer link whose reply isn't in this thread still counts, as just
+  // after the root (a later human reply reopens it).
+  if (root.answeredByCommentId && !replies.some((r) => r.id === root.answeredByCommentId)) {
+    events.push({ t: rootT, kind: "answer" });
+  }
   const addressedIn = root.addressedIn;
   if (addressedIn && Number.isInteger(addressedIn.version) && addressedIn.version > 0) {
-    return { kind: "addressed", via: "revision", version: addressedIn.version };
+    const t = time(addressedIn.at) ?? time(opts.revisionAt?.(addressedIn.artifactId)) ?? rootT;
+    events.push({ t, kind: "revision", version: addressedIn.version });
   }
-  if (root.answeredByCommentId || replies.some((r) => r.author === "agent" && r.createdAt >= root.createdAt)) {
-    return { kind: "addressed", via: "answer" };
-  }
-  if (root.humanResolvedAt) return { kind: "addressed", via: "resolved" };
+  const resolvedT = time(root.humanResolvedAt);
+  if (resolvedT !== undefined) events.push({ t: resolvedT, kind: "resolve" });
+
+  let latest = events[0]!;
+  for (const e of events) if (e.t > latest.t || (e.t === latest.t && RANK[e.kind] > RANK[latest.kind])) latest = e;
+  if (latest.kind === "revision") return { kind: "addressed", via: "revision", version: latest.version! };
+  if (latest.kind === "answer") return { kind: "addressed", via: "answer" };
+  if (latest.kind === "resolve") return { kind: "addressed", via: "resolved" };
   if (missing) return { kind: "orphaned" };
-  return { kind: "open", seen: root.acknowledged === true };
+  const reopened = events.some((e) => e.kind !== "human");
+  return reopened ? { kind: "open", seen: root.acknowledged === true, reopened: true } : { kind: "open", seen: root.acknowledged === true };
 }
 
 export function stateFilter(state: PageCommentState): QueueFilter {
@@ -103,6 +139,12 @@ export function stateLabel(state: PageCommentState): { text: string; title: stri
         title: "The spot this comment points at is not on this version of the page, and nothing has addressed it.",
       };
     case "open":
+      if (state.reopened) {
+        return {
+          text: "Reopened",
+          title: "You replied after the agent's answer, the revision that addressed it, or your own resolve, so it's open again.",
+        };
+      }
       return state.seen
         ? {
             text: "Seen by agent",
@@ -127,11 +169,12 @@ export function buildQueue(
   anchored: readonly Comment[],
   all: readonly Comment[],
   isMissing: (comment: Comment, index: number) => boolean,
+  opts: DeriveOptions = {},
 ): QueueEntry[] {
   return anchored.map((comment, index) => {
     const replies = threadReplies(comment, all);
     const missing = isMissing(comment, index);
-    return { comment, index, replies: replies.length, missing, state: deriveCommentState(comment, replies, missing) };
+    return { comment, index, replies: replies.length, missing, state: deriveCommentState(comment, replies, missing, opts) };
   });
 }
 

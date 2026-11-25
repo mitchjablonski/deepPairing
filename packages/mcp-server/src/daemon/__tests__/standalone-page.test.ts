@@ -164,7 +164,8 @@ describe("authenticated standalone page revision", () => {
       expect(store.getSessionMemory()).toEqual(memory);
       expect(store.getComment("cmt_old")?.ruleOut).toEqual({ description });
       // #714 gap 7 — each acknowledged comment names the revision that addressed it.
-      const addressedIn = { artifactId: success.structuredContent.artifactId, version: 3 };
+      const revised = store.getArtifacts().find((a) => a.id === success.structuredContent.artifactId)!;
+      const addressedIn = { artifactId: revised.id, version: 3, at: revised.createdAt };
       expect(store.getComment("cmt_old")?.addressedIn).toEqual(addressedIn);
       expect(store.getComment("cmt_current")?.addressedIn).toEqual(addressedIn);
       expect(store.getComment("cmt_left_pending")?.addressedIn).toBeUndefined();

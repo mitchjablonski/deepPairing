@@ -406,9 +406,84 @@ describe("annotator main — event wiring", () => {
     expect(hovers().pop()).toEqual({ dp: "pin-hover", id: null });
   });
 
-  it("anchors carry the point they were made at", () => {
-    document.querySelector(".intro")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: 12, clientY: 34 }));
-    expect(posted.filter((m) => m?.dp === "anchor").pop().at).toEqual({ x: 12, y: 34 });
+  it("Cmd/Ctrl-click on a badge passes through (no pin click); holding the key makes badges inert", () => {
+    window.dispatchEvent(pinsMsg());
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Control", ctrlKey: true }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Control" }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["auto", "auto"]);
+    // A pointer move with the modifier held does the same.
+    document.getElementById("title")!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, metaKey: true }));
+    expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+  });
+
+  it("the badge sits fully outside the anchored element's top-left corner", () => {
+    window.dispatchEvent(pinsMsg());
+    expect(badges()[0]!.style.getPropertyValue("left")).toBe("-20px");
+    expect(badges()[0]!.style.getPropertyValue("top")).toBe("-20px");
+  });
+
+  it("no live badge over a control that keeps its own click (no hit-testing: judged by the pinned element)", () => {
+    document.body.innerHTML = "<details><summary id=\"sum\">More</summary><p>x</p></details><p id=\"plain\">Plain text</p>";
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          dp: "pins",
+          anchors: [
+            { kind: "element", locator: "#sum", quote: "More" },
+            { kind: "element", locator: "#plain", quote: "Plain text" },
+          ],
+          states: ["open", "open"],
+          ids: ["c_sum", "c_plain"],
+        },
+        source: window,
+      }),
+    );
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "auto"]);
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+  });
+
+  it("with hit-testing, a badge over a native control (here an input) stays inert; over plain text it is live", () => {
+    document.body.innerHTML = "<p id=\"a\">Alpha</p><input id=\"field\"><p id=\"b\">Beta</p>";
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 40, y: 40, left: 40, top: 40, right: 58, bottom: 58, width: 18, height: 18, toJSON: () => ({}),
+    } as DOMRect);
+    let under: Element = document.getElementById("field")!;
+    (document as any).elementsFromPoint = () => [under];
+    try {
+      const send = () => window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { dp: "pins", anchors: [{ kind: "element", locator: "#a", quote: "Alpha" }], states: ["open"], ids: ["c_a"] },
+          source: window,
+        }),
+      );
+      send();
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+      under = document.getElementById("b")!;
+      send();
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      delete (document as any).elementsFromPoint;
+      rect.mockRestore();
+    }
+  });
+
+  it("{dp:'focus', anchor, block:'start'} scrolls the frame itself so the spot sits near its top", () => {
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { dp: "focus", anchor: { kind: "element", locator: "#title", quote: "Cache invalidation" }, block: "start" },
+        source: window,
+      }),
+    );
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    // A bogus anchor does nothing.
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "focus", anchor: "nope", block: "start" }, source: window }));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
   it("re-resolves after the page changes: a removed target reports not found, without a new pins message", async () => {

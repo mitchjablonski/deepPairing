@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import type { Comment, HtmlAnchor } from "@deeppairing/shared";
 import { htmlAnchorKindLabel } from "../../lib/htmlAnchorDisplay";
 import {
@@ -109,6 +109,7 @@ export function PageReviewQueue({
   variant,
 }: PageReviewQueueProps) {
   const listRef = useRef<HTMLOListElement>(null);
+  const idBase = useId();
   useEffect(() => {
     if (!revealNonce || !highlightId) return;
     const row = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>("[data-comment-id]") ?? []).find(
@@ -167,11 +168,16 @@ export function PageReviewQueue({
             const from = fromVersion(c);
             return (
               <li key={c.id}>
+                <span className="sr-only" id={`${idBase}-state-${i}`}>
+                  {chip.title}
+                </span>
                 <button
                   type="button"
                   onClick={() => onSelect(i)}
                   aria-current={highlighted ? "true" : undefined}
-                  aria-label={`Comment ${i + 1}: ${chip.text}${replies ? `, ${replies} ${replies === 1 ? "reply" : "replies"}` : ""}. ${c.content.slice(0, 140)}`}
+                  // The visible content is the accessible name (number, state,
+                  // replies, spot, comment); the state's meaning is a description.
+                  aria-describedby={`${idBase}-state-${i}`}
                   className={`w-full text-left flex gap-2 p-2 rounded border hover:bg-surface-elevated focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue ${
                     highlighted ? "border-accent-blue ring-1 ring-accent-blue bg-accent-blue-dim/20" : "border-border-default"
                   } ${state.kind === "addressed" ? "opacity-75" : ""}`}
@@ -181,6 +187,7 @@ export function PageReviewQueue({
                 >
                   <PinDot n={i + 1} state={state} />
                   <span className="flex-1 min-w-0 space-y-1">
+                    <span className="sr-only">Comment {i + 1}.</span>
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs">
                       <span
                         className={`font-semibold ${CHIP_TONE[stateFilter(state)]}`}

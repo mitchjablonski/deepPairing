@@ -1512,7 +1512,9 @@ export class FileStore implements IStore {
       // companion can say "Addressed in vN" rather than the drain's "seen".
       // verifyRevision proved exactly one durable successor.
       const successor = artifacts.find((artifact) => artifact.parentId === parentId);
-      const addressedIn = successor ? { artifactId: successor.id, version: successor.version } : undefined;
+      const addressedIn = successor
+        ? { artifactId: successor.id, version: successor.version, ...(successor.createdAt ? { at: successor.createdAt } : {}) }
+        : undefined;
       const updated = merged.map((comment) => {
         if (!selected.has(comment.id)) return comment;
         const stamp = addressedIn && !comment.addressedIn ? { addressedIn } : {};
