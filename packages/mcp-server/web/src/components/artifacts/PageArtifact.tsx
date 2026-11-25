@@ -425,7 +425,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     return asks.map((ask, k) =>
       anchored.some((c, i) => {
         if (found && found[i] === false) return false;
-        return commentAnswersAsk(ask, c, current, pinsAligned && pinAsks[i] === k);
+        // The frame re-found this pin on THIS version inside this ask: that
+        // is evidence enough (no quote check). Only for a pin it reported found.
+        const insideByFrame = pinsAligned && pinAsks[i] === k && found?.[i] === true;
+        return commentAnswersAsk(ask, c, current, insideByFrame);
       }),
     );
   }, [asks, anchored, pinAsks, found, artifact.id, artifact.version]);

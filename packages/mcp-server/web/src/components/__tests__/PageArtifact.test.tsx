@@ -1181,6 +1181,26 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     expect(states()).toEqual(["Open", "Open"]);
   });
 
+  it("an earlier version's comment the frame re-found inside the ask answers without a quote match; unfound, it doesn't", () => {
+    const v1: Artifact = { ...pageArtifact, id: "art_in_v1", version: 1, status: "superseded", content: { title: "P", html: "<p>v1</p>" } };
+    const v2: Artifact = { ...pageArtifact, id: "art_in_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    // A comment on a child option ("Postgres") made on v1, with a locator from
+    // v1's structure that no longer names the ask: only the frame can tell.
+    const anchor = { kind: "element", locator: "main > ul > li:nth-of-type(1)", quote: "Postgres", version: 1 };
+    useArtifactStore.getState().addComment({ ...human("cmt_1", anchor), target: { artifactId: v1.id, htmlAnchor: anchor as any } });
+    render(<PageArtifact artifact={v2} />);
+    const win = fakeFrameWindow();
+    const report = { dp: "asks", asks: [{ kind: "decision", id: "db", text: "Which database for sessions? Postgres MySQL", locator: "#db" }], pinAsks: [0] };
+    fromFrame(win, report);
+    expect(states()).toEqual(["Open"]); // no pin status yet: no evidence
+    fromFrame(win, { dp: "pins-status", found: [false] });
+    expect(states()).toEqual(["Open"]);
+    fromFrame(win, { dp: "pins-status", found: [true] });
+    expect(states()).toEqual(["Answered"]);
+  });
+
   it("ignores outline, reading progress and asks reports while the page's scripts run (pre-Run values stand)", async () => {
     render(<PageArtifact artifact={pageArtifact} />);
     let win = fakeFrameWindow();

@@ -74,6 +74,36 @@ describe("extractPageAsks", () => {
     expect(extractPageAsks(html)).toEqual([{ id: "seen", kind: "question", text: "Seen?" }]);
   });
 
+  it("treats self-closed drop tags as open (HTML ignores /> on them): their content stays hidden", () => {
+    for (const tag of ["iframe", "noscript", "object"]) {
+      const html = `<${tag}/><p id="hidden" data-dp-question>Hidden?</p></${tag}><p id="seen" data-dp-question>Seen?</p>`;
+      expect(extractPageAsks(html).map((a) => a.id)).toEqual(["seen"]);
+    }
+  });
+
+  it.each([
+    ["li", '<ul><li id="q1" data-dp-question>Pick<li id="sib">Sibling</ul>'],
+    ["dd", '<dl><dd id="q1" data-dp-question>Pick<dt id="sib">Sibling</dl>'],
+    ["option", '<select><option id="q1" data-dp-question>Pick<option id="sib">Sibling</select>'],
+    ["td", '<table><tr><td id="q1" data-dp-question>Pick<td id="sib">Sibling</table>'],
+    ["tr", '<table><tbody><tr id="q1" data-dp-question><td>Pick<tr id="sib"><td>Sibling</table>'],
+  ])("an unclosed %s ask ends where HTML closes it: a sibling's id is not a child, its text not the ask's", (_tag, html) => {
+    const [ask] = extractPageAsks(html);
+    expect(ask).toEqual({ id: "q1", kind: "question", text: "Pick" });
+    expect(openPageAsks([ask!], [{ author: "human", parentCommentId: null, target: { htmlAnchor: { locator: "#sib", quote: "Sibling" } } }])).toHaveLength(1);
+  });
+
+  it("an implicitly closed item still owns its real children, and a nested list doesn't close it", () => {
+    const html = '<ul><li id="q1" data-dp-question>Pick <ul><li id="inner">a</li><li>b</li></ul> <em id="note">n</em><li id="sib">Sibling</ul>';
+    expect(extractPageAsks(html)).toEqual([{ id: "q1", kind: "question", text: "Pick a b n", childIds: ["inner", "note"] }]);
+  });
+
+  it("decodes every named entity the way the frame shows it (curly quotes, accents)", () => {
+    expect(extractPageAsks('<p id="q" data-dp-question>Isn&rsquo;t &ldquo;caf&eacute;&rdquo; fine?</p>')).toEqual([
+      { id: "q", kind: "question", text: "Isn\u2019t \u201Ccaf\u00E9\u201D fine?" },
+    ]);
+  });
+
   it("keeps ids of children inside the innermost ask (not of nested asks)", () => {
     const html = '<div id="o" data-dp-question>Q <em id="o-note">n</em><p id="i" data-dp-decision>D <b id="i-b">b</b></p></div><p id="after">x</p>';
     expect(extractPageAsks(html)).toEqual([
@@ -166,6 +196,40 @@ describe("openPageAsks", () => {
     expect(openPageAsks(v2, [same], current).map((a) => a.id)).toEqual(["q2"]);
     // An earlier-version comment quoting only a label of the ask doesn't count.
     expect(openPageAsks(v2, [onV1("#q2", "Which")], current).map((a) => a.id)).toEqual(["q1", "q2"]);
+  });
+
+  describe("earlier-version answers after a revise", () => {
+    const current = { artifactId: "art_v2", version: 2 };
+    const onV1 = (locator: string, quote: string) => ({
+      author: "human", parentCommentId: null, target: { artifactId: "art_v1", htmlAnchor: { locator, quote, version: 1 } },
+    });
+    const v2 = extractPageAsks(
+      '<div id="db" data-dp-decision>Which database for sessions? <ul><li id="pg">Postgres</li><li id="my">MySQL</li></ul></div>' +
+      '<p id="ent" data-dp-question>Isn&rsquo;t the &ldquo;caf&eacute;&rdquo; cache enough for now?</p>' +
+      '<p id="d" data-dp-decision>Decide:</p>',
+    );
+    const openIds = (comments: unknown[]) => openPageAsks(v2, comments as never, current).map((a) => a.id);
+
+    it("a comment on a child option still answers", () => {
+      expect(openIds([onV1("#pg", "Postgres")])).toEqual(["ent", "d"]);
+    });
+    it("a text selection inside the ask still answers", () => {
+      expect(openIds([onV1("#db", "database for sessions")])).toEqual(["ent", "d"]);
+    });
+    it("a Reply quoting the frame's text (curly quotes, accents) still answers", () => {
+      expect(openIds([onV1("#ent", "Isn\u2019t the \u201Ccaf\u00E9\u201D cache enough for now?")])).toEqual(["db", "d"]);
+      // …and straight quotes in the old quote fold to the same text.
+      expect(openIds([onV1("#ent", "Isn't the \"café\" cache enough for now?")])).toEqual(["db", "d"]);
+    });
+    it("a reused id whose text changed stays open (the old quote isn't in the new text)", () => {
+      const reused = extractPageAsks('<div id="db" data-dp-decision>Which region for the cluster?</div>');
+      expect(openPageAsks(reused, [onV1("#db", "Which database for sessions?")] as never, current)).toHaveLength(1);
+    });
+    it("a short new ask needs an exact match: an old longer quote doesn't answer 'Decide:'", () => {
+      expect(openIds([onV1("#d", "Decide: a 60s TTL, or invalidate on write?")])).toEqual(["db", "ent", "d"]);
+      expect(openIds([onV1("#d", "Decide:")])).toEqual(["db", "ent"]);
+      expect(openIds([onV1("#db", "Which d")])).toEqual(["db", "ent", "d"]); // under 8 characters
+    });
   });
 
   it("a resolved comment does not answer an ask", () => {

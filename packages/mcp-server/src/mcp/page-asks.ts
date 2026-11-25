@@ -23,7 +23,12 @@
  *    them, matching the frame.
  */
 import { PAGE_ASK_LIMITS, PAGE_SANITIZE_DROP_TAGS, isPageAskAnswered, type PageAskKind, type PageAskVersion } from "@deeppairing/shared";
-import { BLOCK_TAGS, DROP_ELEMENTS, TEXT_ELEMENTS, decodeEntities, opensElement } from "./page-text.js";
+import { BLOCK_TAGS, DROP_ELEMENTS, TEXT_ELEMENTS, opensElement } from "./page-text.js";
+import { decodeHtmlEntities } from "./page-anchor-relocate.js";
+
+/** Full named-entity decoding (page-text's short table folds curly quotes to
+ *  ASCII and leaves accented names raw, which the frame never does). */
+const decode = (s: string): string => decodeHtmlEntities(s).text;
 
 export interface PageAskScan {
   id?: string;
@@ -31,7 +36,41 @@ export interface PageAskScan {
   text: string;
   /** Ids of elements inside the ask (not other asks), capped. */
   childIds?: string[];
+  /** More of the ask's text than `text` (up to MATCH_TEXT_MAX), only when it
+   *  is longer: an earlier-version quote of a child or a selection anywhere
+   *  in the ask is matched against it. Internal; never sent to the agent. */
+  matchText?: string;
 }
+
+/** How much of an ask's text is kept for matching earlier-version quotes. */
+const MATCH_TEXT_MAX = 2000;
+
+/** HTML's implicit end tags: an open element of the key's tag ends when one
+ *  of `siblings` opens in the same scope (no new scope container opened in
+ *  between), or when one of its `scope` containers closes. */
+const IMPLICIT_CLOSES: Record<string, { siblings: ReadonlySet<string>; scope: readonly string[] }> = (() => {
+  const li = { siblings: new Set(["li"]), scope: ["ul", "ol", "menu"] };
+  const dd = { siblings: new Set(["dt", "dd"]), scope: ["dl"] };
+  const cell = { siblings: new Set(["td", "th", "tr", "tbody", "thead", "tfoot"]), scope: ["table", "tr"] };
+  const section = { siblings: new Set(["tbody", "thead", "tfoot"]), scope: ["table"] };
+  return {
+    li,
+    dt: dd,
+    dd,
+    option: { siblings: new Set(["option", "optgroup"]), scope: ["select", "datalist", "optgroup"] },
+    optgroup: { siblings: new Set(["optgroup"]), scope: ["select"] },
+    td: cell,
+    th: cell,
+    tr: { siblings: new Set(["tr", "tbody", "thead", "tfoot"]), scope: ["table", "thead", "tbody", "tfoot"] },
+    thead: section,
+    tbody: section,
+    tfoot: section,
+  };
+})();
+/** Tags whose opening can implicitly close an open ask. */
+const IMPLICIT_TRIGGERS = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.siblings]));
+/** Tags whose closing can implicitly close an open ask. */
+const IMPLICIT_SCOPES = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.scope]));
 
 /** Drop-list containers whose CONTENT is skipped (script and template are
  *  already dropped by page-text's rules; base and embed are void). */
@@ -45,12 +84,13 @@ const VOID_TAGS = new Set([
 ]);
 /** Opening any of these implicitly closes an open <p>. */
 const P_CLOSERS = new Set([
+  "li", "dd", "dt",
   "address", "article", "aside", "blockquote", "details", "div", "dl", "fieldset", "figcaption", "figure",
   "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "main", "nav", "ol", "p", "pre",
   "section", "table", "ul",
 ]);
 /** Raw characters kept per ask before decoding (entities shrink when decoded). */
-const RAW_BUDGET = PAGE_ASK_LIMITS.text * 5;
+const RAW_BUDGET = MATCH_TEXT_MAX * 2;
 
 function isSpace(c: number): boolean {
   return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
@@ -102,6 +142,8 @@ interface Collector {
   done: boolean;
   /** Its close tag was seen (structure, not text). */
   closed: boolean;
+  /** For an implicitly closed tag (li, td, …): its scope depth when opened. */
+  scope?: number;
 }
 
 /** The asks marked on a page, in document order. */
@@ -150,8 +192,9 @@ export function extractPageAsks(html: string): PageAskScan[] {
   const finish = (c: Collector) => {
     if (c.done) return;
     c.done = true;
-    const text = decodeEntities(c.raw).replace(/\s+/g, " ").trim() || c.fallback;
-    c.ask.text = text.length > PAGE_ASK_LIMITS.text ? text.slice(0, PAGE_ASK_LIMITS.text) : text;
+    const full = decode(c.raw).replace(/\s+/g, " ").trim() || c.fallback;
+    c.ask.text = full.length > PAGE_ASK_LIMITS.text ? full.slice(0, PAGE_ASK_LIMITS.text) : full;
+    if (full.length > c.ask.text.length) c.ask.matchText = full.slice(0, MATCH_TEXT_MAX);
   };
   const feed = (s: string) => {
     if (hungry.length === 0 || !s) return;
@@ -174,6 +217,36 @@ export function extractPageAsks(html: string): PageAskScan[] {
     }
   };
 
+  const scopeDepth = (tag: string): number => {
+    let d = 0;
+    for (const t of IMPLICIT_CLOSES[tag]!.scope) d += openCount.get(t) ?? 0;
+    return d;
+  };
+  /** End an ask HTML closes without a close tag (its text stops here). */
+  const implicitClose = (c: Collector) => {
+    c.closed = true;
+    finish(c);
+    const stack = stacks.get(c.tag);
+    const at = stack ? stack.indexOf(c) : -1;
+    if (at !== -1) stack!.splice(at, 1);
+  };
+  /** Before `name` opens: does it end an open li / dd / option / td / tr ask? */
+  const implicitOnOpen = (name: string) => {
+    if (!IMPLICIT_TRIGGERS.has(name)) return;
+    for (const c of openOrder) {
+      if (c.closed || c.scope === undefined) continue;
+      if (IMPLICIT_CLOSES[c.tag]!.siblings.has(name) && scopeDepth(c.tag) === c.scope) implicitClose(c);
+    }
+  };
+  /** After `name` closed: did that end the container an open ask sat in? */
+  const implicitOnClose = (name: string) => {
+    if (!IMPLICIT_SCOPES.has(name)) return;
+    for (const c of openOrder) {
+      if (c.closed || c.scope === undefined) continue;
+      if (IMPLICIT_CLOSES[c.tag]!.scope.includes(name) && scopeDepth(c.tag) < c.scope) implicitClose(c);
+    }
+  };
+
   let i = 0;
   while (i < n) {
     if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0) break;
@@ -193,7 +266,8 @@ export function extractPageAsks(html: string): PageAskScan[] {
     if (gt === -1) { feed(html.slice(lt)); break; }
     if (opensElement(lower, lt, "plaintext")) { feed(" " + html.slice(gt + 1)); break; }
     const hidden = CONTAINER_DROPS.find((t) => opensElement(lower, lt, t));
-    if (hidden && lower.charCodeAt(gt - 1) !== 47 /* a self-closed form has no content */) {
+    // HTML ignores "/>" on these (they aren't void): content follows either way.
+    if (hidden) {
       const close = memoIndexOf(lower, `</${hidden}`, gt + 1);
       if (close === -1) break; // unclosed: the rest of the page is inside it
       const closeEnd = html.indexOf(">", close);
@@ -216,7 +290,8 @@ export function extractPageAsks(html: string): PageAskScan[] {
     if (!m) continue;
     const name = m[2]!;
     if (BLOCK_TAGS.has(name)) feed(" ");
-    if (m[1]) { closeTag(name); continue; }
+    if (m[1]) { closeTag(name); implicitOnClose(name); continue; }
+    implicitOnOpen(name);
     if (P_CLOSERS.has(name) && (openCount.get("p") ?? 0) > 0) {
       // An open <p> ends here, however many were left open.
       openCount.set("p", 1);
@@ -229,7 +304,7 @@ export function extractPageAsks(html: string): PageAskScan[] {
     const inner = isAsk || tagLower.indexOf("id") === -1 ? undefined : innermost();
     if (inner) {
       // A child with its own id inside an ask: a comment on it is on the ask.
-      const childId = decodeEntities(tagAttributes(html.slice(lt, gt + 1)).get("id") ?? "");
+      const childId = decode(tagAttributes(html.slice(lt, gt + 1)).get("id") ?? "");
       if (childId && childId.length <= PAGE_ASK_LIMITS.id && !/\s/.test(childId)) {
         const ids = (inner.ask.childIds ??= []);
         if (ids.length < CHILD_IDS_MAX) ids.push(childId);
@@ -240,11 +315,12 @@ export function extractPageAsks(html: string): PageAskScan[] {
     const decision = attrs.has("data-dp-decision");
     if (!decision && !attrs.has("data-dp-question")) continue;
     const ask: PageAskScan = { kind: decision ? "decision" : "question", text: "" };
-    const id = decodeEntities(attrs.get("id") ?? "");
+    const id = decode(attrs.get("id") ?? "");
     if (id && id.length <= PAGE_ASK_LIMITS.id && !/\s/.test(id)) ask.id = id;
     out.push(ask);
-    const fallback = decodeEntities(attrs.get("aria-label") ?? attrs.get("title") ?? attrs.get("alt") ?? "").replace(/\s+/g, " ").trim();
+    const fallback = decode(attrs.get("aria-label") ?? attrs.get("title") ?? attrs.get("alt") ?? "").replace(/\s+/g, " ").trim();
     const c: Collector = { ask, tag: name, level: openCount.get(name) ?? 0, raw: "", fallback, done: false, closed: false };
+    if (IMPLICIT_CLOSES[name]) c.scope = scopeDepth(name);
     if (isVoid) { c.closed = true; finish(c); continue; }
     openOrder.push(c);
     const stack = stacks.get(name) ?? [];

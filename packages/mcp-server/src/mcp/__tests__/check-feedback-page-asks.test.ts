@@ -100,6 +100,24 @@ describe("check_feedback — open page asks (#714 gap 5)", () => {
     expect(entryFor(res.structuredContent, v2).openAsks).toEqual([{ id: "q1", kind: "question", text: "Which region?" }]);
   });
 
+  it("keeps v1 answers on a child option and on an entity-spelled Reply through a revise", async () => {
+    const html = (tldr: string) =>
+      `<h1>Q</h1><p>${tldr}</p>` +
+      '<div id="db" data-dp-decision>Which database for sessions? <ul><li id="pg">Postgres</li><li>MySQL</li></ul></div>' +
+      '<p id="cache" data-dp-question>Isn&rsquo;t the &ldquo;caf&eacute;&rdquo; cache enough for now?</p>';
+    const v1 = await presentPage(html("v1"));
+    const comment = (id: string, locator: string, quote: string) =>
+      store.addComment({ id, artifactId: v1, content: "answer", author: "human", target: { artifactId: v1, htmlAnchor: { kind: "element", locator, quote, version: 1 } } });
+    await comment("cmt_pg", "#pg", "Postgres");
+    await comment("cmt_cache", "#cache", "Isn\u2019t the \u201Ccaf\u00E9\u201D cache enough for now?");
+    await callTool("check_feedback");
+    const rev = await callTool("revise_artifact", { artifactId: v1, mode: "supersede", reason: "TL;DR", content: { html: html("v2") } });
+    expect(rev.isError, rev.text).toBeFalsy();
+    const v2 = store.getArtifacts().find((a) => a.type === "page" && a.parentId === v1)!.id;
+    const res = await callTool("check_feedback");
+    expect(entryFor(res.structuredContent, v2)).not.toHaveProperty("openAsks");
+  });
+
   it("id-less asks are listed as verifiable:false, kept out of the owed count, and named in their own line", async () => {
     const id = await presentPage('<h1>Q</h1><p id="q1" data-dp-question>Has id?</p><p data-dp-question>No id one?</p><p data-dp-decision>No id two?</p>');
     const res = await callTool("check_feedback");

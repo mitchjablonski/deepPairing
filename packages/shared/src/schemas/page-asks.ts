@@ -37,6 +37,9 @@ export interface PageAskRef {
   locator?: string;
   childIds?: readonly string[];
   text: string;
+  /** More of the ask's text than `text` (server-side, for matching a quote of
+   *  a child or a selection anywhere in the ask); defaults to `text`. */
+  matchText?: string;
 }
 
 /** The version a comment is judged against. A comment is from an earlier
@@ -104,19 +107,41 @@ export function anchorTargetsAsk(ask: PageAskRef, anchor: { locator: string }): 
   return false;
 }
 
-/** Text compared with every whitespace character removed: the frame and the
- *  server space block boundaries differently (a `<br>`), never the letters. */
-function squash(s: string): string {
-  return s.replace(/\s+/g, "");
+/** Text as the matcher compares it: NFKC, curly quotes and apostrophes
+ *  folded to ASCII, every whitespace character removed. The frame and the
+ *  server space block boundaries differently (a `<br>`) and may spell a
+ *  character differently (an entity, a ligature), never the words. */
+export function squashAskText(s: string): string {
+  return s
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, "\"")
+    .replace(/\s+/g, "");
 }
 
-/** Does an earlier-version comment quote the ask's CURRENT text? Its quote
- *  must start with the whole (clipped) ask text: a Reply quotes exactly the
- *  ask text, a click on the ask element quotes it plus anything past the
- *  clip. A quote of only part of the ask (a "Decide:" label) never counts. */
+/** Below this many squashed characters an ask is too short to match by
+ *  substring ("Decide:"): an earlier quote must then equal it exactly. */
+export const ASK_MATCH_MIN_ASK = 12;
+/** The shortest earlier-version quote that may match inside an ask. */
+export const ASK_MATCH_MIN_QUOTE = 8;
+
+/**
+ * Does an earlier-version comment still point at THIS ask's text? It guards
+ * against a revision reusing an id or a position for a different question,
+ * while keeping real answers: a Reply (it quotes the ask text), a click on the
+ * ask (its text, perhaps past the clip), a child (an option) or a selection
+ * inside it. So: the quote equals the ask's text; or, for an ask of at least
+ * ASK_MATCH_MIN_ASK characters, the quote starts with it or is a substring of
+ * it of at least ASK_MATCH_MIN_QUOTE characters. A reused id whose text
+ * changed fails all three, because the old quote isn't in the new text.
+ */
 export function quoteMatchesAsk(ask: PageAskRef, quote: string): boolean {
-  const t = squash(ask.text);
-  return t.length > 0 && squash(quote).startsWith(t);
+  const t = squashAskText(ask.matchText ?? ask.text);
+  const q = squashAskText(quote);
+  if (!q || !t) return false;
+  if (q === t || squashAskText(ask.text) === q) return true;
+  if (t.length < ASK_MATCH_MIN_ASK) return false;
+  return q.startsWith(squashAskText(ask.text)) || (q.length >= ASK_MATCH_MIN_QUOTE && t.includes(q));
 }
 
 /** Is this comment from an earlier version than `current`? */
@@ -129,9 +154,12 @@ export function isEarlierVersionComment(c: PageAskComment, current: PageAskVersi
 
 /**
  * Does this comment answer the ask? A HUMAN root comment, not resolved, whose
- * anchor targets the ask (or, companion-side, whose pin the frame found inside
- * the ask: `insideByFrame`), and — when made on an earlier version — whose
- * quote matches the ask's current text.
+ * anchor targets the ask, and — when made on an earlier version — whose quote
+ * matches the ask's current text. Companion-side, `insideByFrame` means the
+ * frame re-found the comment's spot on THIS version inside this ask: that is
+ * evidence enough (re-finding already checked the quoted text against the
+ * page), so the quote requirement is skipped. The caller passes it only for a
+ * pin the frame found.
  */
 export function commentAnswersAsk(
   ask: PageAskRef,
@@ -142,7 +170,8 @@ export function commentAnswersAsk(
   if (c.author !== "human" || c.parentCommentId || c.humanResolvedAt) return false;
   const a = c.target.htmlAnchor;
   if (!a || typeof a.locator !== "string" || typeof a.quote !== "string") return false;
-  if (!insideByFrame && !anchorTargetsAsk(ask, a)) return false;
+  if (insideByFrame) return true;
+  if (!anchorTargetsAsk(ask, a)) return false;
   return !isEarlierVersionComment(c, current) || quoteMatchesAsk(ask, a.quote);
 }
 
