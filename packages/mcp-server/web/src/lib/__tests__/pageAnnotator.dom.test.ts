@@ -1117,6 +1117,17 @@ describe("annotator main — outline, asks and reading progress (#714 gaps 4+5)"
     });
   });
 
+  it("echoes the parent's pin-list key on pins-status and asks reports; a malformed key is dropped", () => {
+    send({ dp: "pins", anchors: [{ kind: "element", locator: "#redis-p", quote: "About 15ms." }], key: "abc123:9" });
+    vi.advanceTimersByTime(300);
+    expect(of("pins-status").at(-1)).toEqual({ dp: "pins-status", found: [true], key: "abc123:9" });
+    expect(of("asks").at(-1)).toMatchObject({ pinAsks: [-1], key: "abc123:9" });
+    send({ dp: "pins", anchors: [{ kind: "element", locator: "#redis-p", quote: "About 15ms." }], key: "<img src=x>" });
+    vi.advanceTimersByTime(300);
+    expect(of("pins-status").at(-1)).toEqual({ dp: "pins-status", found: [true] });
+    expect(of("asks").at(-1)).not.toHaveProperty("key");
+  });
+
   it("re-reports after a relevant page mutation (debounced), never for its own layer", () => {
     document.querySelector("h3")!.textContent = "Redis (managed)";
     document.body.insertAdjacentHTML("beforeend", "<p id=\"late\" data-dp-question>Late ask?</p>");

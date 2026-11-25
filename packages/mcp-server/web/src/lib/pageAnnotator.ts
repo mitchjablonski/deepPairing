@@ -678,6 +678,11 @@ export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
 var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0, pinEls = [];
+/** #714 gap 5 — the parent's tag for the pin list it sent, echoed on every
+ *  report computed from that list (pins-status, asks), so the parent never
+ *  attributes a report to a list that changed while it was in flight. */
+var pinsKey = null;
+function withKey(msg) { if (pinsKey !== null) msg.key = pinsKey; return msg; }
 // #714 gap 2 — version-change marks (validated locators) and their toggle.
 var changes = [], showChanges = false, lastChangesFound = null;
 /** Our own nodes, by reference: an authored element can carry the marker
@@ -984,7 +989,7 @@ function reconcile(force, forceChanges) {
   var found = drawPins();
   if (force || !samePins(lastFound, found)) {
     lastFound = found;
-    post({ dp: "pins-status", found: found });
+    post(withKey({ dp: "pins-status", found: found }));
   }
   if (forceChanges || !samePins(lastChangesFound, cf)) {
     lastChangesFound = cf;
@@ -1055,7 +1060,7 @@ function reportOutline() {
     }
     pinAsks.push(hitAsk);
   }
-  var amsg = { dp: "asks", asks: asks, pinAsks: pinAsks };
+  var amsg = withKey({ dp: "asks", asks: asks, pinAsks: pinAsks });
   var ajson = JSON.stringify(amsg);
   if (ajson !== lastAsksJson) { lastAsksJson = ajson; post(amsg); }
   reportActive();
@@ -1168,6 +1173,7 @@ function onMessage(e) {
   if (!d || typeof d !== "object") return;
   if (d.dp === "pins") {
     current = Array.isArray(d.anchors) ? d.anchors.slice(0, 500) : [];
+    pinsKey = typeof d.key === "string" && /^[0-9a-z:]{1,64}$/.test(d.key) ? d.key : null;
     reconcile(true);
     scheduleOutline();
   } else if (d.dp === "focus") {

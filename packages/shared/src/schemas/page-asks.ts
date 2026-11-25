@@ -110,6 +110,26 @@ export function anchorTargetsAsk(ask: PageAskRef, anchor: { locator: string }): 
   return false;
 }
 
+/**
+ * Elements whose boundaries (and `<br>`) separate words in an ask's full
+ * text, by tag name only (never CSS): "now<br>here" and `<li>Yes</li><li>No`
+ * read as "now here" and "Yes No", while inline formatting (b, i, em, span,
+ * a, code, …) stays transparent ("a<b>c</b>d" is "acd"). The ONE list both
+ * the server scanner and the companion's DOM walk use.
+ */
+export const PAGE_ASK_BREAK_TAGS = [
+  "br", "hr", "p", "div", "li", "ul", "ol", "menu", "dl", "dt", "dd",
+  "h1", "h2", "h3", "h4", "h5", "h6", "table", "caption", "thead", "tbody", "tfoot", "tr", "td", "th",
+  "section", "article", "aside", "nav", "main", "header", "footer", "address", "blockquote", "pre", "listing",
+  "figure", "figcaption", "details", "summary", "dialog", "fieldset", "legend", "form", "hgroup", "search",
+  "select", "option", "optgroup", "center",
+] as const;
+const BREAK_TAG_SET: ReadonlySet<string> = new Set(PAGE_ASK_BREAK_TAGS);
+/** Is this (lowercase) tag name a word break in ask text? */
+export function isAskBreakTag(tag: string): boolean {
+  return BREAK_TAG_SET.has(tag);
+}
+
 /** NFKC, with curly quotes and apostrophes folded to ASCII. Per character
  *  class only, so it can run on each chunk of a streamed text. */
 function foldAskChars(s: string): string {
@@ -133,7 +153,9 @@ export function squashAskText(s: string): string {
  * boundaries), so neither side holds a large ask's text. A whitespace run is
  * one separator even when it spans chunks; leading and trailing whitespace is
  * dropped; two chunks that meet without whitespace in the source get no
- * separator (`a<b>c</b>d` → "acd", `a <b>c</b>` → "a c"). cyrb53: 53 bits,
+ * separator (`a<b>c</b>d` → "acd", `a <b>c</b>` → "a c"), unless the
+ * caller marks a break there (`separate()`: a `<br>` or a block boundary,
+ * PAGE_ASK_BREAK_TAGS). cyrb53: 53 bits,
  * stable, dependency-free.
  */
 export class AskTextHasher {
@@ -163,6 +185,12 @@ export class AskTextHasher {
       }
       this.emit(ch);
     }
+  }
+
+  /** A `<br>` or a block boundary: one separator, under the same collapse
+   *  and trim rules as whitespace (never doubled, never leading/trailing). */
+  separate(): void {
+    if (this.chars > 0) this.pendingSpace = true;
   }
 
   /** The hash, or undefined when no text was pushed. */

@@ -29,6 +29,13 @@ const CASES: Array<[string, string]> = [
   ["whitespace-only node between blocks", '<div id="a" data-dp-decision><p>One</p>\n  <p>Two</p><p>Three</p></div>'],
   ["leading and trailing whitespace", '<p id="a" data-dp-question>\n   padded   \n</p>'],
   ["nbsp", '<p id="a" data-dp-question>no&nbsp;break&#160;here</p>'],
+  ["br", '<p id="a" data-dp-question>now<br>here</p>'],
+  ["br next to whitespace", '<p id="a" data-dp-question>now <br> here<br></p>'],
+  ["list items", '<div id="a" data-dp-question><ul><li>Yes</li><li>No</li></ul></div>'],
+  ["unclosed list items", '<ul id="a" data-dp-question><li>Yes<li>No</ul>'],
+  ["table cells", '<table id="a" data-dp-question><tr><td>TTL</td><td>60s</td></tr><tr><td>Purge</td></tr></table>'],
+  ["inline inside blocks", '<div id="a" data-dp-decision><p>Pick <b>one</b>:</p><p><em>Re</em>dis or <code>LRU</code></p></div>'],
+  ["nested blocks and headings", '<section id="a" data-dp-question><h2>Q</h2><div><div>deep</div></div>tail</section>'],
 ];
 
 describe("full-text hash parity: companion parse vs server scan", () => {
@@ -51,7 +58,35 @@ describe("full-text hash parity: companion parse vs server scan", () => {
     expect(h('<p id="a" data-dp-question>a<b>c</b>d</p>')).toBe(h('<p id="a" data-dp-question>acd</p>'));
     expect(h('<p id="a" data-dp-question>a <b>c</b></p>')).toBe(h('<p id="a" data-dp-question>a c</p>'));
     expect(h('<p id="a" data-dp-question>a <b> c</b></p>')).toBe(h('<p id="a" data-dp-question>a c</p>'));
+    // A visible line break or block boundary is a separator; inline formatting isn't.
+    for (const f of [h, sv]) {
+      expect(f('<p id="a" data-dp-question>now<br>here</p>')).not.toBe(f('<p id="a" data-dp-question>nowhere</p>'));
+      expect(f('<p id="a" data-dp-question>now<br>here</p>')).toBe(f('<p id="a" data-dp-question>now here</p>'));
+      expect(f('<div id="a" data-dp-question><li>Yes</li><li>No</li></div>')).not.toBe(f('<div id="a" data-dp-question>YesNo</div>'));
+      expect(f('<div id="a" data-dp-question><li>Yes</li><li>No</li></div>')).toBe(f('<div id="a" data-dp-question>Yes No</div>'));
+      expect(f('<p id="a" data-dp-question>a<b>c</b>d</p>')).toBe(f('<p id="a" data-dp-question>acd</p>'));
+      expect(f('<p id="a" data-dp-question>a<span>c</span><code>d</code></p>')).toBe(f('<p id="a" data-dp-question>acd</p>'));
+    }
   });
+
+  it.each(["pre", "listing", "textarea"])(
+    "the server drops the newline right after <%s> as browsers do (happy-dom keeps it, so compare with the newline-free markup)",
+    (tag) => {
+      const withNl = `<div id="a" data-dp-question>x<${tag}>\ny</${tag}></div>`;
+      const withCrlf = `<div id="a" data-dp-question>x<${tag}>\r\ny</${tag}></div>`;
+      const browserView = `<div id="a" data-dp-question>x<${tag}>y</${tag}></div>`;
+      const server = (html: string) => extractPageAsks(html)[0]!.fullHash;
+      expect(server(withNl)).toBe(server(browserView));
+      expect(server(withCrlf)).toBe(server(browserView));
+      expect(server(withNl)).toBe(extractVersionAsks(browserView)![0]!.fullHash);
+      // Only the FIRST newline goes: a second one is real text. (pre and
+      // listing are block-level, so their boundary separates x and y anyway;
+      // textarea is inline, so there the second newline is the only space.)
+      if (tag === "textarea") {
+        expect(server(`<div id="a" data-dp-question>x<${tag}>\n\ny</${tag}></div>`)).not.toBe(server(browserView));
+      }
+    },
+  );
 
   it("skips asks inside drop containers and keeps only id'd asks with their own child ids", () => {
     const asks = extractVersionAsks(

@@ -254,6 +254,14 @@ describe("openPageAsks", () => {
       expect(openIds(ask("now  here"), [onV1("#w", "Is the cache")], { art_v1: ask("now here") })).toEqual([]);
     });
 
+    it("a line break is a word break: an answer on 'now<br>here' doesn't carry to 'nowhere', nor 'Yes / No' items to 'YesNo'", () => {
+      const p = (body: string) => `<div id="w" data-dp-question>Is the cache needed ${body}?</div>`;
+      expect(openIds(p("nowhere"), [onV1("#w", "Is the cache")], { art_v1: p("now<br>here") })).toEqual(["w"]);
+      expect(openIds(p("now here"), [onV1("#w", "Is the cache")], { art_v1: p("now<br>here") })).toEqual([]);
+      expect(openIds(p("YesNo"), [onV1("#w", "Is the cache")], { art_v1: p("<ul><li>Yes</li><li>No</li></ul>") })).toEqual(["w"]);
+      expect(openIds(p("a<b>c</b>d"), [onV1("#w", "Is the cache")], { art_v1: p("acd") })).toEqual([]);
+    });
+
     it("at the 50-ask cap the last ask is still read to its close: a long-tail edit stays open", () => {
       const page = (q: string) =>
         Array.from({ length: 49 }, (_, i) => `<p id="a${i}" data-dp-question>Ask ${i}?</p>`).join("") +

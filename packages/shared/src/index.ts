@@ -218,6 +218,8 @@ export {
   askTextsContinue,
   askTextHash,
   AskTextHasher,
+  PAGE_ASK_BREAK_TAGS,
+  isAskBreakTag,
   findEarlierAsk,
   type EarlierAsksLookup,
   type PageAskComment,

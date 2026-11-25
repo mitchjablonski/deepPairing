@@ -18,7 +18,7 @@ import {
   acceptChangesStatus,
   acceptOutlineActive,
   acceptOutlineMessage,
-  acceptPinsStatus,
+  acceptPinsStatusReport,
   askAnchor,
   buildChangesMessage,
   isReadyMessage,
@@ -35,7 +35,7 @@ import type { ChangeLocator } from "../../lib/pageVersionDiff";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
-import { commentAnswersAsk, isEarlierVersionComment, pageRuleOutKey } from "@deeppairing/shared";
+import { askTextHash, commentAnswersAsk, isEarlierVersionComment, pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -141,8 +141,11 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const anchored = useMemo(() => anchoredPageComments(comments), [comments]);
   /** Identifies the anchored-comment list (the pin order the frame reports in). */
   const anchoredKey = useMemo(() => anchored.map((c) => c.id).join("\u0000"), [anchored]);
-  const anchoredKeyRef = useRef(anchoredKey);
-  anchoredKeyRef.current = anchoredKey;
+  /** The pin list's tag, sent with `pins` and echoed by the frame on every
+   *  report computed from that list: a report is used for ask completion
+   *  only when its key matches the list on screen, so a delete + add while a
+   *  report is in flight can't be misattributed. */
+  const pinsKey = useMemo(() => askTextHash(anchoredKey) ?? "0", [anchoredKey]);
   const anchors = useMemo(() => anchored.map((c) => c.target.htmlAnchor as HtmlAnchor), [anchored]);
 
   const [draft, setDraft] = useState<HtmlAnchor | null>(null);
@@ -218,7 +221,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     // (anchors the human already made on this page, never comment text).
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
-  const sendPins = useCallback(() => postToFrame({ dp: "pins", anchors }), [postToFrame, anchors]);
+  const sendPins = useCallback(() => postToFrame({ dp: "pins", anchors, key: pinsKey }), [postToFrame, anchors, pinsKey]);
   // #714 — pointing is the reviewer's choice before Run as well as after: a
   // page with no scripts never shows Run, and its own links, details and
   // CSS-only tabs work either way (the annotator lets native controls keep
@@ -279,10 +282,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         if (!readOnly && !runningRef.current && frameOwnsFocusRef.current(element)) setAnnotate((a) => !a);
         return;
       }
-      const status = acceptPinsStatus(event, frame);
+      const status = acceptPinsStatusReport(event, frame);
       if (status) {
-        setFound(status);
-        if (!runningRef.current) setAskPinStatus({ forId: artifactIdRef.current, key: anchoredKeyRef.current, found: status });
+        setFound(status.found);
+        if (!runningRef.current) setAskPinStatus({ forId: artifactIdRef.current, key: status.key ?? "", found: status.found });
         return;
       }
       // #714 gaps 4+5 — outline, reading progress and asks follow the same
@@ -303,7 +306,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       if (reportedAsks) {
         if (!runningRef.current) {
           setAsks(reportedAsks.asks);
-          setPinAsks({ forId: artifactIdRef.current, key: anchoredKeyRef.current, list: reportedAsks.pinAsks });
+          setPinAsks({ forId: artifactIdRef.current, key: reportedAsks.key ?? "", list: reportedAsks.pinAsks });
         }
         return;
       }
@@ -445,12 +448,15 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     () => [artifact, ...lineage.map((l) => l.artifact).filter((a) => earlierVersionIds.has(a.id))],
     [artifact, lineage, earlierVersionIds],
   );
-  const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && earlierVersionIds.size > 0);
+  // The current version is parsed too whenever asks have comments: its
+  // full-text hashes (continuity) and child ids (a comment on a child with its
+  // own id, also after Run when the frame's reports are frozen).
+  const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && anchored.length > 0);
   const askAnswered = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
     // The pre-Run reports, only when they describe this page's current pins.
     const scoped = <T extends { forId: string; key: string }>(r: T | null) =>
-      r && r.forId === artifact.id && r.key === anchoredKey ? r : null;
+      r && r.forId === artifact.id && r.key === pinsKey ? r : null;
     const askPins = scoped(pinAsks)?.list ?? null;
     const preRunFound = scoped(askPinStatus)?.found ?? null;
     const pinsAligned = !!askPins && askPins.length === anchored.length;
@@ -458,8 +464,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     const earlierAsks = (versionId: string) => (versionId === artifact.id ? undefined : parsedAsks(versionId));
     return asks.map((ask, k) => {
       // Continuity compares the full-text hash from THIS version's parsed HTML.
-      const fullHash = ask.id ? currentParsed?.find((p) => p.id === ask.id)?.fullHash : undefined;
-      const ref = { ...ask, ...(fullHash ? { fullHash } : {}) };
+      const parsed = ask.id ? currentParsed?.find((p) => p.id === ask.id) : undefined;
+      const ref = {
+        ...ask,
+        ...(parsed?.fullHash ? { fullHash: parsed.fullHash } : {}),
+        ...(parsed?.childIds ? { childIds: parsed.childIds } : {}),
+      };
       return anchored.some((c, i) => {
         // An earlier version's comment is judged only against its own source
         // version (ask continuity); whether its pin relocates in the current
@@ -472,7 +482,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         return commentAnswersAsk(ref, c, current, { insideByFrame });
       });
     });
-  }, [asks, anchored, anchoredKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
+  }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
     if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });
