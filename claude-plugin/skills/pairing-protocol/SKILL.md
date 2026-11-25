@@ -522,8 +522,19 @@ Words to the agent:
   outside the project root, symlinks included, are refused). Add a `summary`
   written TO your pair (what the page shows, what you want from them) and a
   `concept` when the page proposes a named pattern. It renders full-width in a
-  sandboxed frame with NO network, so inline every asset; scripts run only
-  when your pair clicks Run, so the page must read without them. It is a
+  sandboxed frame with NO network: CDN scripts, stylesheets, fonts and remote
+  images are blocked, so inline styles and scripts, and images and fonts as
+  data: URIs (video, audio, iframes and objects won't load). Scripts run
+  only when your pair clicks Run, so the page must read without them. Keep it
+  under 2 MiB. Make it skimmable: a TL;DR block first, then
+  `<section id="...">` with an `<h2>` each, tables for comparisons, inline SVG
+  diagrams (Mermaid source is not rendered), `<details>` for depth, and each
+  ask in an element marked `data-dp-decision` or `data-dp-question` with an
+  id. The result lists non-blocking warnings (external assets, no headings, a
+  long page without section ids); fix them in the next version. For in-page
+  navigation use `#id` links, `<details>` and radio/checkbox tabs, which keep
+  working while your pair comments; `:target`-based CSS never switches there.
+  (Source of truth: `packages/mcp-server/src/page-authoring.ts`.) It is a
   reviewable draft: approve, request changes, or reject with a reason. The
   rejection gate reads the page's visible text, title, summary and concept
   like any other present_* call; a match is refused with the stored reason,
