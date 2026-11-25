@@ -154,31 +154,44 @@ ${renderPageAuthoringGuide()}
 
 4. READ PAGE FEEDBACK
   deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>
-  After presenting a page, this reads the human's anchored comments on that
-  exact page version, newest first. It is passive: reading never
-  acknowledges anything, so repeated reads return the same comments while
-  they remain unacknowledged. It does not wait.
-  An empty "comments" list means only that there are no PENDING ANCHORED
-  comments. The human may not have reviewed yet, may have approved with no
-  comments, may have left only an unanchored note, or you may have
-  acknowledged their comments already. Before concluding anything, check
-  artifact.status (draft or reviewing: no verdict yet; anything else: the
-  human has acted or the page has closed) and successor, or wait for the
-  human to tell you they are done.
+  After presenting a page, this reads the human's verdict and pending
+  feedback on that exact page version, newest first. Reading is passive and
+  never acknowledges anything. Pending comments and notes remain eligible for
+  later reads while they remain unacknowledged. The command returns immediately.
     -> {"sessionId","artifact":{"id","version","status"},"successor"?,
-        "comments":[...],"omittedComments"}
-  Each comment has id, content (the human's words), parentCommentId (set on
-  a reply), htmlAnchor (where it points: kind, locator, quote, and when
-  present prefix, suffix, table, nodeId, href, version), and optionally
-  intent ("comment" | "question" | "suggestion"), followUp and ruleOut.
-  - ruleOut: the human ruled the anchored text out. Take it out of the page;
-    don't argue for it. The comment content is their reason.
+        "verdict"?,"comments":[...],"omittedComments",
+        "notes":[...],"omittedNotes"}
+  - verdict: present when the human's latest action on this version was
+    Request changes (status "revised") or Reject (status "rejected"), with
+    "at". "reason" is their explanation, and "commentId" its id, when it can
+    be verified. If "reason" is missing, the response has no verified reason.
+    "reasonTruncated" means only the start of a very long
+    reason fit. Act on the reason before anything else: change the approach
+    after a Reject, and address it before revising after Request changes.
+  - comments: anchored comments. Each has id, content (the human's words),
+    parentCommentId (set on a reply), htmlAnchor (where it points: kind,
+    locator, quote, and when present prefix, suffix, table, nodeId, href,
+    version), and optionally intent ("comment" | "question" |
+    "suggestion"), followUp and ruleOut.
+    - ruleOut: the human ruled the anchored text out. Take it out of the
+      page. The comment content is their reason.
+  - notes: the human's pending notes with no anchor (same fields, no
+    htmlAnchor). They apply to the page as a whole.
   - successor: the page has moved to a newer version. Read that version
-    with its id (successor.id) as --artifact-id.
-  A read returns at most ${PAGE_FEEDBACK_MAX_COMMENTS} comments and ${PAGE_FEEDBACK_MAX_KIB} KiB of JSON. omittedComments counts
-  the ones that didn't fit; returned comments are always whole.
-  Only anchored human comments are included. Page notes without an anchor
-  and file-watch notices are not.
+    with its id (successor.id) as --artifact-id. A verdict belongs to the
+    version it was given on, so read the version you revised from too
+    before acting.
+  An absent verdict means this payload contains no Request changes or
+  Reject verdict. If comments and notes are empty, check both omission
+  counts before deciding whether feedback is pending. The human may not
+  have reviewed yet, may have approved (check artifact.status: "approved"),
+  or you may have acknowledged everything already. Check artifact.status
+  (draft or reviewing: no verdict yet) and successor, or wait for the human
+  to tell you they are done.
+  A read returns at most ${PAGE_FEEDBACK_MAX_COMMENTS} items and ${PAGE_FEEDBACK_MAX_KIB} KiB of JSON. The verdict claims space
+  first. omittedComments counts anchored comments that didn't fit, and
+  omittedNotes counts unanchored notes that didn't fit. Returned comments
+  and notes stay whole. File-watch notices are not included.
 
 5. REVISE A PAGE
   How you ship a new version depends on how you presented the page.
