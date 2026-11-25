@@ -1,4 +1,6 @@
+import { z } from "zod";
 import { HtmlAnchorSchema, type HtmlAnchor } from "@deeppairing/shared";
+import { LOCATOR_TEXT_MAX, MAX_CHANGE_MARKS } from "./pageVersionDiff";
 
 /**
  * #680 slice 2 — the PARENT side of the page frame's postMessage protocol.
@@ -57,4 +59,46 @@ export function isReadyMessage(event: FrameMessage, frame: Window | null | undef
 export function isTogglePointingMessage(event: FrameMessage, frame: Window | null | undefined): boolean {
   const d = fromFrame(event, frame);
   return !!d && d.dp === "toggle-pointing";
+}
+
+/** #714 gap 2 — one version-change mark, as the companion sends it DOWN to the
+ *  frame. Built only from the parsed (never executed) page text; capped the
+ *  same way the annotator re-checks it. */
+export const PageChangeMarkSchema = z
+  .object({
+    kind: z.enum(["added", "changed", "moved", "hinted"]),
+    tag: z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,63}$/),
+    text: z.string().min(1).max(LOCATOR_TEXT_MAX),
+    occurrence: z.number().int().min(0).max(1_000_000),
+  })
+  .strict();
+export type PageChangeMark = z.infer<typeof PageChangeMarkSchema>;
+
+export const PageChangesMessageSchema = z
+  .object({
+    dp: z.literal("changes"),
+    marks: z.array(PageChangeMarkSchema).max(MAX_CHANGE_MARKS),
+    show: z.boolean(),
+  })
+  .strict();
+export type PageChangesMessage = z.infer<typeof PageChangesMessageSchema>;
+
+/** The `{dp:"changes"}` message for the frame: every mark validated against
+ *  the schema (a mark that fails is dropped, never sent half-checked). */
+export function buildChangesMessage(marks: readonly unknown[], show: boolean): PageChangesMessage {
+  const ok: PageChangeMark[] = [];
+  for (const m of marks.slice(0, MAX_CHANGE_MARKS)) {
+    const parsed = PageChangeMarkSchema.safeParse(m);
+    if (parsed.success) ok.push(parsed.data);
+  }
+  return PageChangesMessageSchema.parse({ dp: "changes", marks: ok, show });
+}
+
+/** A valid `{dp:"changes-status", found:boolean[]}` from this frame → `found`; else null. */
+export function acceptChangesStatus(event: FrameMessage, frame: Window | null | undefined): boolean[] | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "changes-status") return null;
+  const found = d.found;
+  if (!Array.isArray(found) || found.length > MAX_CHANGE_MARKS || !found.every((f) => typeof f === "boolean")) return null;
+  return found as boolean[];
 }

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HtmlAnchorSchema } from "@deeppairing/shared";
 import { ANNOTATOR_CORE_SOURCE, ANNOTATOR_MAIN_SOURCE, ANNOTATOR_SCRIPT } from "../pageAnnotator";
+import { clippedText as diffClippedText, TEXT_SKIP_SELECTOR } from "../pageVersionDiff";
 
 type Core = {
   buildLocator(el: Element): string;
@@ -738,5 +739,165 @@ describe("annotator script string", () => {
 
   it("is syntactically valid JavaScript", () => {
     expect(() => new Function(ANNOTATOR_SCRIPT)).not.toThrow();
+  });
+});
+
+describe("annotator main — version change marks (#714 gap 2)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  let scrolled: Element[];
+  const origScroll = Element.prototype.scrollIntoView;
+  beforeEach(() => {
+    document.body.innerHTML = PAGE;
+    posted = [];
+    scrolled = [];
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(
+      document,
+      window,
+      window,
+      makeCore(),
+    ) as () => void;
+  });
+  afterEach(() => {
+    uninstall();
+    Element.prototype.scrollIntoView = origScroll;
+    vi.restoreAllMocks();
+  });
+
+  const send = (data: unknown, source: unknown = window) =>
+    window.dispatchEvent(new MessageEvent("message", { data, source: source as MessageEventSource }));
+  const statuses = () => posted.filter((m) => m?.dp === "changes-status").map((m) => m.found);
+  const marks = [
+    { kind: "changed", tag: "p", text: "Second bold paragraph.", occurrence: 0 },
+    { kind: "added", tag: "tr", text: "Write-through purge | None", occurrence: 0 },
+    { kind: "added", tag: "p", text: "Gone from this page", occurrence: 0 },
+  ];
+
+  it("draws change bars from {dp:'changes'} (textContent only) and reports which were found", () => {
+    send({ dp: "changes", marks, show: true });
+    const boxes = Array.from(document.querySelectorAll("dp-annotator-change"));
+    expect(boxes.map((b) => b.getAttribute("data-dp-change-kind")).sort()).toEqual(["added", "changed"]);
+    expect(boxes.every((b) => b.textContent === "+" || b.textContent === "~")).toBe(true);
+    expect(statuses().at(-1)).toEqual([true, true, false]);
+  });
+
+  it("hides the bars when show is false, and drops malformed or spoofed marks", () => {
+    send({ dp: "changes", marks, show: false });
+    expect(document.querySelectorAll("dp-annotator-change")).toHaveLength(0);
+    send({ dp: "changes", marks: [{ kind: "changed", tag: "p><img", text: "x", occurrence: 0 }, { kind: "evil", tag: "p", text: "First paragraph.", occurrence: 0 }, { kind: "added", tag: "p", text: "First paragraph.", occurrence: -1 }], show: true });
+    expect(document.querySelectorAll("dp-annotator-change")).toHaveLength(0);
+    expect(statuses().at(-1)).toEqual([false, false, false]);
+    // From anyone but the parent: ignored.
+    send({ dp: "changes", marks, show: true }, null);
+    expect(document.querySelectorAll("dp-annotator-change")).toHaveLength(0);
+  });
+
+  it("navigates: {dp:'focus-change'} scrolls the frame to that change", () => {
+    send({ dp: "changes", marks, show: true });
+    send({ dp: "focus-change", index: 1 });
+    expect(scrolled.at(-1)).toBe(document.querySelectorAll("tbody tr")[1]);
+    send({ dp: "focus-change", index: 0 });
+    expect(scrolled.at(-1)).toBe(document.querySelectorAll("section p")[1]);
+    const before = scrolled.length;
+    send({ dp: "focus-change", index: 2 }); // not on the page: nothing to scroll to
+    send({ dp: "focus-change", index: 9 });
+    expect(scrolled.length).toBe(before);
+  });
+
+  it("re-finds a mark by occurrence among same-text elements", () => {
+    document.body.innerHTML = "<p>Same</p><p>Same</p><p>Same</p>";
+    send({ dp: "changes", marks: [{ kind: "added", tag: "p", text: "Same", occurrence: 2 }], show: true });
+    send({ dp: "focus-change", index: 0 });
+    expect(scrolled.at(-1)).toBe(document.querySelectorAll("p")[2]);
+  });
+});
+
+describe("annotator change marks — caching, ownership and parity (#714 gap 2 review)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  let finds: number;
+  beforeEach(() => {
+    document.body.innerHTML = PAGE;
+    posted = [];
+    finds = 0;
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    const core = makeCore() as any;
+    const real = core.findChanges;
+    core.findChanges = (list: unknown, cache: unknown) => { finds++; return real(list, cache); };
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, core) as () => void;
+  });
+  afterEach(() => {
+    uninstall();
+    vi.restoreAllMocks();
+  });
+  const send = (data: unknown) => window.dispatchEvent(new MessageEvent("message", { data, source: window }));
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("a scroll only re-places the bars; a page mutation re-finds them", async () => {
+    send({ dp: "changes", marks: [{ kind: "moved", tag: "p", text: "First paragraph.", occurrence: 0 }], show: true });
+    expect(finds).toBe(1);
+    const box = document.querySelector("dp-annotator-change")!;
+    expect(box.getAttribute("data-dp-change-kind")).toBe("moved");
+    window.dispatchEvent(new Event("scroll"));
+    await wait(200);
+    expect(finds).toBe(1);
+    expect(document.querySelector("dp-annotator-change")).toBe(box);
+    document.body.appendChild(document.createElement("p")).textContent = "page changed";
+    // The redraw is coalesced (~120 ms); poll rather than race it on a slow CI host.
+    await vi.waitFor(() => expect(finds).toBe(2), { timeout: 3000, interval: 25 });
+  });
+
+  it("drawing bars never re-triggers a redraw (bars are ours by reference)", async () => {
+    send({ dp: "changes", marks: [{ kind: "added", tag: "p", text: "First paragraph.", occurrence: 0 }], show: true });
+    await wait(250);
+    expect(finds).toBe(1);
+  });
+
+  it("a mutation inside authored [data-dp-annotator] content still invalidates the cache", async () => {
+    document.body.innerHTML = "<div data-dp-annotator><p>Authored</p></div>";
+    send({ dp: "changes", marks: [{ kind: "changed", tag: "p", text: "Authored", occurrence: 0 }], show: true });
+    expect(finds).toBe(1);
+    document.querySelector("[data-dp-annotator]")!.appendChild(document.createElement("p")).textContent = "more";
+    await vi.waitFor(() => expect(finds).toBe(2), { timeout: 3000, interval: 25 });
+  });
+
+  it("authored data-dp-annotator content is still found and marked", () => {
+    document.body.innerHTML = "<p data-dp-annotator>Authored</p>";
+    send({ dp: "changes", marks: [{ kind: "changed", tag: "p", text: "Authored", occurrence: 0 }], show: true });
+    expect(posted.filter((m) => m?.dp === "changes-status").at(-1)?.found).toEqual([true]);
+  });
+});
+
+describe("clippedText parity: annotator core vs companion diff (#714 gap 2)", () => {
+  const FIXTURES = [
+    "<p>  Hello   <b>bold</b>\n world </p>",
+    "<table><tr><td>40</td><td></td><th>x</th></tr></table>",
+    "<p>Ship<br>Monday</p>",
+    "<figure><img alt=\"Latency chart\"></figure>",
+    "<div><h3>Card</h3>Ship on <i>Monday</i></div>",
+    "<div aria-label=\"Labelled\"></div>",
+    "<p>a&nbsp;b &amp; c</p>",
+    "<div><script>var x = 1;</script><style>p{}</style><noscript>ns</noscript><template>t</template><iframe>f</iframe>kept</div>",
+    "<p data-dp-annotator>authored</p>",
+    `<p>${"long ".repeat(100)}</p>`,
+    "<table><tr><td></td><td></td><td>40</td></tr></table>",
+    "<p>Budget <input value=\"40\"> <input type=submit> <input type=button value=\"Go\"> <input type=hidden value=\"h\"> <input type=checkbox value=\"c\"></p>",
+  ];
+  it("both read every fixture identically", () => {
+    const core = makeCore() as any;
+    for (const html of FIXTURES) {
+      document.body.innerHTML = html;
+      const el = document.body.firstElementChild!;
+      expect(core.clippedText(el, 280)).toBe(diffClippedText(el, 280));
+    }
+  });
+  it("skip lists are the same string", () => {
+    expect((makeCore() as any).CHANGE_SKIP).toBe(TEXT_SKIP_SELECTOR);
   });
 });
