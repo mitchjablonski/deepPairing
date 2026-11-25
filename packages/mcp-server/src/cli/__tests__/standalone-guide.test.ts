@@ -54,17 +54,24 @@ describe("deeppairing guide (#681)", () => {
     expect(guide).not.toMatch(/withdrawn|every command prints/i);
   });
 
-  it("teaches read-page-feedback: passive, anchored, ruleOut, successor, bounds", () => {
+  it("teaches read-page-feedback: passive verdicts, anchored comments, notes, successors and bounds", () => {
     expect(guide).toContain("deeppairing read-page-feedback --session-id <sessionId> --artifact-id <artifactId>");
     expect(guide).toMatch(/never\s+acknowledges anything/);
     expect(guide).toMatch(/while\s+they\s+remain\s+unacknowledged/);
     expect(guide).not.toMatch(/until\s+you\s+address\s+them/);
-    for (const field of ["intent", "parentCommentId", "htmlAnchor", "ruleOut", "successor.id", "omittedComments"]) {
+    for (const field of [
+      "intent", "parentCommentId", "htmlAnchor", "ruleOut", "successor.id", "omittedComments",
+      "verdict", '"revised"', '"rejected"', "reason", "reasonTruncated", "notes", "omittedNotes",
+    ]) {
       expect(guide).toContain(field);
     }
-    expect(guide).toMatch(/Take it out of the page/);
-    expect(guide).toContain("at most 50 comments and 64 KiB");
-    expect(guide).toMatch(/Page notes without an anchor\s+and file-watch notices are not/);
+    expect(guide).toMatch(/Take it out of the\s+page/);
+    expect(guide).toContain("at most 50 items and 64 KiB");
+    expect(guide).toMatch(/omittedComments counts anchored comments that didn't fit, and\s+omittedNotes counts unanchored notes that didn't fit/);
+    expect(guide).toMatch(/Returned comments\s+and notes stay whole/);
+    expect(guide).toContain('If "reason" is missing, read notes for the human\'s words.');
+    expect(guide).toContain("File-watch notices are not included.");
+    expect(guide).not.toContain("Only anchored human comments are included");
     expect(guide).not.toContain("#679");
     expect(guide).toContain("--wait-ms");
     expect(guide).toContain("rejected_approach_blocked");
@@ -96,6 +103,8 @@ describe("deeppairing guide (#681)", () => {
     expect(guide).toContain("--ack-comment-id <commentId> ...");
     expect(guide).toContain("this page or a direct ancestor");
     expect(guide).toContain("acknowledgedCommentIds");
+    expect(guide).toMatch(/Pass only ordinary IDs from\s+comments to --ack-comment-id/);
+    expect(guide).toMatch(/Verdict reasons and unanchored notes stay on\s+their original version\. Read that exact version again after revising\./);
     expect(guide).toContain("a comment that is already acknowledged is safe");
     expect(guide).toContain("You can answer a question in the revised page.");
     expect(guide).toContain("Use the separate suggestion review flow for suggestions.");
@@ -135,15 +144,15 @@ describe("deeppairing guide (#681)", () => {
   it("tells the agent to share the URL and wait for review before trusting an empty read", () => {
     expect(guide).toMatch(/The receipt only confirms the page was created/);
     expect(guide).toMatch(/then wait for them to\s+review it/);
-    // Empty means "no pending anchored comments", not "not reviewed" (Codex P2).
     expect(guide).not.toMatch(/means\s+they haven't reviewed yet/);
     expect(guide).toMatch(/Don't read an empty read-page-feedback result as "no feedback"/);
     const flat = guide.replace(/\s+/g, " ");
-    expect(flat).toContain('An empty "comments" list means only that there are no PENDING ANCHORED comments.');
-    for (const reason of ["may not have reviewed yet", "may have approved with no comments", "may have left only an unanchored note", "acknowledged their comments already"]) {
+    expect(flat).toContain("An absent verdict means this payload contains no Request changes or Reject verdict.");
+    expect(flat).toContain("If comments and notes are empty, check both omission counts");
+    for (const reason of ["may not have reviewed yet", "may have approved", "acknowledged everything already"]) {
       expect(flat).toContain(reason);
     }
-    expect(flat).toMatch(/check artifact\.status .* and successor, or wait for the human/);
+    expect(flat).toMatch(/Check artifact\.status .* and successor, or wait for the human/);
     expect(guide).toMatch(/give the human the companionUrl and wait\s+for their review/);
   });
 

@@ -5735,16 +5735,16 @@ function cleanEnum(obj2) {
 }
 function base64ToUint8Array(base643) {
   const binaryString = atob(base643);
-  const bytes = new Uint8Array(binaryString.length);
+  const bytes2 = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+    bytes2[i] = binaryString.charCodeAt(i);
   }
-  return bytes;
+  return bytes2;
 }
-function uint8ArrayToBase64(bytes) {
+function uint8ArrayToBase64(bytes2) {
   let binaryString = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binaryString += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes2.length; i++) {
+    binaryString += String.fromCharCode(bytes2[i]);
   }
   return btoa(binaryString);
 }
@@ -5753,22 +5753,22 @@ function base64urlToUint8Array(base64url3) {
   const padding = "=".repeat((4 - base643.length % 4) % 4);
   return base64ToUint8Array(base643 + padding);
 }
-function uint8ArrayToBase64url(bytes) {
-  return uint8ArrayToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+function uint8ArrayToBase64url(bytes2) {
+  return uint8ArrayToBase64(bytes2).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 function hexToUint8Array(hex3) {
   const cleanHex = hex3.replace(/^0x/, "");
   if (cleanHex.length % 2 !== 0) {
     throw new Error("Invalid hex string length");
   }
-  const bytes = new Uint8Array(cleanHex.length / 2);
+  const bytes2 = new Uint8Array(cleanHex.length / 2);
   for (let i = 0; i < cleanHex.length; i += 2) {
-    bytes[i / 2] = Number.parseInt(cleanHex.slice(i, i + 2), 16);
+    bytes2[i / 2] = Number.parseInt(cleanHex.slice(i, i + 2), 16);
   }
-  return bytes;
+  return bytes2;
 }
-function uint8ArrayToHex(bytes) {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+function uint8ArrayToHex(bytes2) {
+  return Array.from(bytes2).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 var Class = class {
   constructor(..._args) {
@@ -19255,9 +19255,9 @@ var RequirementClaimListSchema = external_exports.array(RequirementClaimSchema).
   });
 });
 var RequirementClaimsSchema = external_exports.preprocess((raw2, ctx) => {
-  const bytes = requirementClaimsByteLength(raw2);
-  if (bytes > MAX_REQUIREMENT_CLAIMS_BYTES) {
-    ctx.addIssue({ code: "custom", path: [], message: `requirementClaims is ${bytes} bytes serialized (at most ${MAX_REQUIREMENT_CLAIMS_BYTES})` });
+  const bytes2 = requirementClaimsByteLength(raw2);
+  if (bytes2 > MAX_REQUIREMENT_CLAIMS_BYTES) {
+    ctx.addIssue({ code: "custom", path: [], message: `requirementClaims is ${bytes2} bytes serialized (at most ${MAX_REQUIREMENT_CLAIMS_BYTES})` });
   }
   return raw2;
 }, RequirementClaimListSchema).describe("Your account against the pinned brief (briefRef): one entry per requirement you are reporting on. Claims, not acceptance.");
@@ -19989,7 +19989,8 @@ function isNeverApprovedStatus(status) {
 }
 var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
-  at: external_exports.string().datetime()
+  at: external_exports.string().datetime(),
+  feedbackCommentId: external_exports.string().min(1).optional()
 });
 var SecretWarningSchema = external_exports.object({
   /** The pattern prefix that matched, e.g. "AKIA", "sk-", "PEM". */
@@ -20301,6 +20302,8 @@ var CommentSchema = external_exports.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  /** Server-stamped only for the note owned by a page verdict history entry. */
+  verdictFeedback: external_exports.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: external_exports.string().nullable().optional(),
   /**
@@ -26618,16 +26621,16 @@ var urlAlphabet = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzr
 var POOL_SIZE_MULTIPLIER = 128;
 var pool;
 var poolOffset;
-function fillPool(bytes) {
-  if (!pool || pool.length < bytes) {
-    pool = Buffer.allocUnsafe(bytes * POOL_SIZE_MULTIPLIER);
+function fillPool(bytes2) {
+  if (!pool || pool.length < bytes2) {
+    pool = Buffer.allocUnsafe(bytes2 * POOL_SIZE_MULTIPLIER);
     crypto3.getRandomValues(pool);
     poolOffset = 0;
-  } else if (poolOffset + bytes > pool.length) {
+  } else if (poolOffset + bytes2 > pool.length) {
     crypto3.getRandomValues(pool);
     poolOffset = 0;
   }
-  poolOffset += bytes;
+  poolOffset += bytes2;
 }
 function nanoid3(size = 21) {
   fillPool(size |= 0);
@@ -29894,6 +29897,12 @@ function pageOnlyHtmlAnchor(target, artifactType) {
   const { htmlAnchor: _dropped, ...rest } = target;
   return rest;
 }
+var ReservedVerdictFeedbackIdError = class extends Error {
+  constructor() {
+    super("This comment ID is reserved for page verdict feedback.");
+    this.name = "ReservedVerdictFeedbackIdError";
+  }
+};
 var ParentSupersededError = class extends Error {
   constructor(parentId, successorId, successorVersion, successorFromFile) {
     super(`${parentId} was already replaced${successorId ? ` by ${successorId}${successorVersion ? ` (v${successorVersion})` : ""}` : ""}; nothing was created.`);
@@ -30100,14 +30109,14 @@ var FileStore = class _FileStore {
   static salvageRecord = salvageRecord;
   /** Load a JSON file with graceful error handling and best-effort backup. */
   loadJsonFile(filePath, fallback) {
-    let bytes;
+    let bytes2;
     try {
       if (!fs18.existsSync(filePath)) {
         return fallback;
       }
-      bytes = fs18.readFileSync(filePath, "utf-8");
+      bytes2 = fs18.readFileSync(filePath, "utf-8");
       this.observedRecordFiles.add(path17.basename(filePath));
-      return JSON.parse(bytes);
+      return JSON.parse(bytes2);
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
         return fallback;
@@ -30115,7 +30124,7 @@ var FileStore = class _FileStore {
       console.error(`[deepPairing] Corrupted file ${filePath}: ${errorMessage(err)}`);
       try {
         fs18.copyFileSync(filePath, filePath + ".corrupt");
-        if (err instanceof SyntaxError && bytes !== void 0) this.backedUpCorruption[filePath] = bytes;
+        if (err instanceof SyntaxError && bytes2 !== void 0) this.backedUpCorruption[filePath] = bytes2;
       } catch {
       }
       return fallback;
@@ -30184,8 +30193,8 @@ var FileStore = class _FileStore {
       const disk = this.validateRetirementComments(JSON.parse(diskBytes2));
       const pending = this.validateRetirementComments(local);
       const merged2 = this.validateRetirementComments(mergeSessionRecords(JSON.parse(baseline), pending, disk, (c) => c.id));
-      const bytes = JSON.stringify(merged2, null, 2);
-      if (diskBytes2 !== bytes) writeStringAtomic(filePath2, bytes);
+      const bytes2 = JSON.stringify(merged2, null, 2);
+      if (diskBytes2 !== bytes2) writeStringAtomic(filePath2, bytes2);
       this.comments = merged2;
       this.recordBaselines[file2] = JSON.stringify(merged2);
       this.observedRecordFiles.add(file2);
@@ -30627,7 +30636,7 @@ var FileStore = class _FileStore {
       }
     });
   }
-  updateArtifactStatus(artifactId, status, reason = "unspecified") {
+  updateArtifactStatus(artifactId, status, reason = "unspecified", options) {
     this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
@@ -30661,7 +30670,10 @@ var FileStore = class _FileStore {
       if (history.length === 0 && art.createdAt) {
         history.push({ status: "draft", at: art.createdAt });
       }
-      history.push({ status, at: now, reason });
+      const feedbackCommentId = options?.feedbackCommentId;
+      const bindFeedback = art.type === "page" && feedbackCommentId && (status === "revised" && reason === "ui_revise_button" || status === "rejected" && reason === "ui_reject_button") && !this.comments.some((comment) => comment.id === feedbackCommentId) && this.verdictFeedbackReservations(feedbackCommentId).length === 0;
+      const event = { status, at: now, reason, ...bindFeedback ? { feedbackCommentId } : {} };
+      history.push(event);
       art.statusHistory = history;
       if (reason === "comment_side_effect") {
         console.error(
@@ -30819,14 +30831,23 @@ var FileStore = class _FileStore {
     const round = (n) => typeof n === "number" && Number.isFinite(n) ? Math.round(n * 100) : "";
     return `rect:${round(r.x)},${round(r.y)},${round(r.w)},${round(r.h)}`;
   }
+  verdictFeedbackReservations(commentId) {
+    return this.artifacts.flatMap((artifact) => artifact.type === "page" ? (artifact.statusHistory ?? []).filter((entry) => entry.feedbackCommentId === commentId).map(() => artifact) : []);
+  }
   addComment(params) {
     const now = Date.now();
     const parentKey = params.parentCommentId ?? "";
     const newTargetKey = _FileStore.targetKey(params.target);
+    const targetArtifact = params.artifactId && params.artifactId !== "__session__" ? this.artifacts.find((a) => a.id === params.artifactId) : void 0;
+    const reservations = this.verdictFeedbackReservations(params.id);
+    const owner = reservations[0];
+    const linkedVerdictFeedback = reservations.length === 1 && owner?.id === targetArtifact?.id && owner?.sessionId === this.sessionId && params.verdictFeedback === true && params.author === "human" && (params.intent === void 0 || params.intent === "comment") && !params.parentCommentId && !params.target?.htmlAnchor && !params.suggestion && !params.ruleOut && !this.comments.some((comment2) => comment2.id === params.id);
+    if (reservations.length && !linkedVerdictFeedback) throw new ReservedVerdictFeedbackIdError();
     const dupe = this.comments.find((c) => {
       if (c.author !== params.author) return false;
       if (c.target.artifactId !== params.artifactId) return false;
       if (c.content !== params.content) return false;
+      if (linkedVerdictFeedback || c.verdictFeedback) return false;
       if ((c.parentCommentId ?? "") !== parentKey) return false;
       if (_FileStore.targetKey(c.target) !== newTargetKey) return false;
       if ((c.ruleOut?.description ?? "") !== (params.ruleOut?.description ?? "")) return false;
@@ -30838,7 +30859,6 @@ var FileStore = class _FileStore {
     }
     const secretWarnings = scanForSecrets(params.content);
     const ruleOutParsed = params.ruleOut ? CommentRuleOutSchema.safeParse(params.ruleOut) : null;
-    const targetArtifact = params.artifactId && params.artifactId !== "__session__" ? this.artifacts.find((a) => a.id === params.artifactId) : void 0;
     const isFollowUp = params.author === "human" && !params.verdictFeedback && !!targetArtifact && isLateCommentableStatus(targetArtifact.status);
     const ruleOut = ruleOutParsed?.success && params.author === "human" && targetArtifact?.type === "page" && this.normalizeRejectedApproaches(this.readPreferences().rejectedApproaches ?? []).some((r) => r.description === ruleOutParsed.data.description && r.origin === "page_rule_out" && r.sourceArtifactId === params.artifactId) ? ruleOutParsed.data : void 0;
     const comment = {
@@ -30870,6 +30890,7 @@ var FileStore = class _FileStore {
       // #680 slice 4 — the rule-out marker, server-set; dropped when malformed or
       // when the comment isn't a human comment on a page.
       ...ruleOut ? { ruleOut } : {},
+      ...linkedVerdictFeedback ? { verdictFeedback: true } : {},
       // #187 — spread so a normal draft-review comment is byte-identical on disk.
       ...isFollowUp ? { followUp: true } : {},
       answeredByCommentId: null,
@@ -30946,8 +30967,8 @@ var FileStore = class _FileStore {
     });
   }
   writePageRevisionComments(comments, filePath, diskBytes) {
-    const bytes = JSON.stringify(comments, null, 2);
-    if (bytes !== diskBytes) writeStringAtomic(filePath, bytes);
+    const bytes2 = JSON.stringify(comments, null, 2);
+    if (bytes2 !== diskBytes) writeStringAtomic(filePath, bytes2);
     this.comments = comments;
     this.recordBaselines["comments.json"] = JSON.stringify(comments);
     this.observedRecordFiles.add("comments.json");
@@ -36909,8 +36930,10 @@ function createReviewRoutes({
       }
       if (!had) retractOnConflict = rejection.description;
     }
+    const feedbackCommentId = feedback && target.type === "page" && (status === "revised" || status === "rejected") ? `cmt_${nanoid3(10)}` : void 0;
     try {
-      await store.updateArtifactStatus(artifactId, status, reason);
+      if (feedbackCommentId) await store.updateArtifactStatus(artifactId, status, reason, { feedbackCommentId });
+      else await store.updateArtifactStatus(artifactId, status, reason);
     } catch (err) {
       if (target.type === "page" && err instanceof ParentSupersededError && err.successorId) {
         return stalePageResponse(err.successorId, err.successorVersion);
@@ -36923,7 +36946,7 @@ function createReviewRoutes({
     await updateTaskStatus(artifactId, store);
     if (feedback) {
       const comment = await store.addComment({
-        id: `cmt_${nanoid3(10)}`,
+        id: feedbackCommentId ?? `cmt_${nanoid3(10)}`,
         artifactId,
         content: feedback,
         author: "human",
@@ -39258,10 +39281,10 @@ function pageError(toolName, message, code = "INPUT_VALIDATION_FAILED") {
 function utf8ByteLength(s) {
   return Buffer.byteLength(s, "utf8");
 }
-function pageTooLargeError(toolName, bytes) {
+function pageTooLargeError(toolName, bytes2) {
   return pageError(
     toolName,
-    `the page is ${Math.ceil(bytes / 1024)} KB, over the ${PAGE_HTML_MAX_BYTES / (1024 * 1024)} MB cap. Trim inline assets (large data: URIs, embedded fonts) and present it again.`,
+    `the page is ${Math.ceil(bytes2 / 1024)} KB, over the ${PAGE_HTML_MAX_BYTES / (1024 * 1024)} MB cap. Trim inline assets (large data: URIs, embedded fonts) and present it again.`,
     "PAYLOAD_TOO_LARGE"
   );
 }
@@ -39284,8 +39307,8 @@ function validatePresentPageInput(args) {
     };
   }
   if (d.html !== void 0) {
-    const bytes = utf8ByteLength(d.html);
-    if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", bytes) };
+    const bytes2 = utf8ByteLength(d.html);
+    if (bytes2 > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", bytes2) };
   }
   const concept = typeof d.concept === "string" ? { name: d.concept.trim() } : d.concept;
   return admit("present_page", {
@@ -39312,8 +39335,8 @@ function validateRevisePageInput(args) {
   if (!result.success) {
     return { ok: false, error: formatValidationError("revise_artifact", result.error, EXAMPLE_PAGE, args) };
   }
-  const bytes = utf8ByteLength(result.data.html);
-  if (bytes > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("revise_artifact", bytes) };
+  const bytes2 = utf8ByteLength(result.data.html);
+  if (bytes2 > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("revise_artifact", bytes2) };
   return { ok: true, data: result.data };
 }
 function validateLogReasoningInput(args) {
@@ -41766,17 +41789,35 @@ var MAX_RESPONSE_BYTES = 64 * 1024;
 function pageMetadata({ id, version: version2, status }) {
   return { id, version: version2, status };
 }
-function commentFeedback(comment, htmlAnchor) {
+function noteFeedback(comment) {
   const { id, content, intent, parentCommentId, followUp, ruleOut } = comment;
   return {
     id,
     content,
     parentCommentId,
-    htmlAnchor,
     ...intent !== void 0 && { intent },
     ...followUp !== void 0 && { followUp },
     ...ruleOut !== void 0 && { ruleOut }
   };
+}
+function bytes(value) {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+function fitVerdictReason(result, verdict, reason) {
+  verdict.reason = reason;
+  if (bytes(result) <= MAX_RESPONSE_BYTES) return;
+  verdict.reasonTruncated = true;
+  const wholeEnd = (end) => end > 0 && /[\uD800-\uDBFF]/.test(reason[end - 1]) && /[\uDC00-\uDFFF]/.test(reason[end] ?? "") ? end - 1 : end;
+  let low = 0;
+  let high = Math.min(reason.length, MAX_RESPONSE_BYTES);
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    verdict.reason = reason.slice(0, wholeEnd(mid));
+    if (bytes(result) <= MAX_RESPONSE_BYTES) low = mid;
+    else high = mid - 1;
+  }
+  verdict.reason = reason.slice(0, wholeEnd(low));
+  if (bytes(result) > MAX_RESPONSE_BYTES) delete verdict.reason;
 }
 function readPageFeedback(store, artifactId) {
   const sessionId = store.getSessionId();
@@ -41784,30 +41825,53 @@ function readPageFeedback(store, artifactId) {
   const page = artifacts.find((a) => a.id === artifactId && a.type === "page" && a.sessionId === sessionId);
   if (!page) return void 0;
   const successor = findPageSuccessor(page, artifacts);
-  const pending = store.getCommentsForArtifact(artifactId).flatMap((comment) => {
-    const anchor = comment.target.htmlAnchor;
-    if (comment.sessionId !== sessionId || comment.author !== "human" || comment.acknowledged || !anchor) return [];
-    return [{ comment, anchor }];
-  });
-  pending.sort((a, b) => b.comment.createdAt.localeCompare(a.comment.createdAt) || a.comment.id.localeCompare(b.comment.id));
+  const event = page.statusHistory?.slice().reverse().find((entry) => entry.status === "revised" || entry.status === "rejected" || entry.status === "approved" || entry.status === "obsolete" && "reason" in entry && entry.reason === "ui_dismiss_obsolete");
+  const verdict = event?.status === "revised" || event?.status === "rejected" ? { status: event.status, at: event.at } : void 0;
+  let reasonComment;
+  if (verdict && event?.feedbackCommentId) {
+    const matches = store.getComments().filter((comment2) => comment2.id === event.feedbackCommentId);
+    const comment = matches.length === 1 ? matches[0] : void 0;
+    if (comment?.verdictFeedback === true && comment.sessionId === sessionId && comment.target.artifactId === artifactId && comment.author === "human" && !comment.target.htmlAnchor && (comment.intent === void 0 || comment.intent === "comment") && !comment.suggestion && !comment.ruleOut && comment.parentCommentId === null) {
+      reasonComment = comment;
+    }
+  }
+  const pending = store.getCommentsForArtifact(artifactId).filter((comment) => comment.sessionId === sessionId && comment.author === "human" && !comment.acknowledged && comment.id !== reasonComment?.id);
+  pending.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  const anchoredCount = pending.filter((comment) => comment.target.htmlAnchor).length;
   const result = {
     sessionId,
     artifact: pageMetadata(page),
     ...successor && { successor: pageMetadata(successor) },
+    ...verdict && { verdict },
+    notes: [],
+    omittedNotes: pending.length - anchoredCount,
     comments: [],
-    omittedComments: pending.length
+    omittedComments: anchoredCount
   };
-  let responseBytes = Buffer.byteLength(JSON.stringify(result));
-  if (responseBytes > MAX_RESPONSE_BYTES) return "metadata_too_large";
-  for (const { comment, anchor } of pending) {
-    if (result.comments.length === MAX_COMMENTS) break;
-    if (comment.content.length > MAX_RESPONSE_BYTES - responseBytes) continue;
-    const feedback = commentFeedback(comment, anchor);
-    const addedBytes = Buffer.byteLength(JSON.stringify(feedback)) + (result.comments.length ? 1 : 0);
-    if (responseBytes + addedBytes > MAX_RESPONSE_BYTES) continue;
-    result.comments.push(feedback);
-    responseBytes += addedBytes;
+  if (bytes(result) > MAX_RESPONSE_BYTES) return "metadata_too_large";
+  if (verdict && reasonComment) {
+    verdict.commentId = reasonComment.id;
+    if (bytes(result) > MAX_RESPONSE_BYTES) delete verdict.commentId;
+    fitVerdictReason(result, verdict, reasonComment.content);
+    if (bytes(result) > MAX_RESPONSE_BYTES) delete verdict.reasonTruncated;
   }
+  let responseBytes = bytes(result);
+  let items = verdict ? 1 : 0;
+  for (const comment of pending) {
+    if (items === MAX_COMMENTS) break;
+    if (comment.content.length > MAX_RESPONSE_BYTES - responseBytes) continue;
+    const anchor = comment.target.htmlAnchor;
+    const feedback = noteFeedback(comment);
+    const lane = anchor ? result.comments : result.notes;
+    const item = anchor ? { ...feedback, htmlAnchor: anchor } : feedback;
+    const added = bytes(item) + (lane.length ? 1 : 0);
+    if (responseBytes + added > MAX_RESPONSE_BYTES) continue;
+    if (anchor) result.comments.push({ ...feedback, htmlAnchor: anchor });
+    else result.notes.push(feedback);
+    items++;
+    responseBytes += added;
+  }
+  result.omittedNotes -= result.notes.length;
   result.omittedComments -= result.comments.length;
   return result;
 }
@@ -42197,14 +42261,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const { htmlBase64, ...rest } = parsed.data.args;
       let html;
       if (htmlBase64 !== void 0) {
-        const bytes = Buffer.from(htmlBase64, "base64");
-        if (bytes.length > PAGE_HTML_MAX_BYTES) {
+        const bytes2 = Buffer.from(htmlBase64, "base64");
+        if (bytes2.length > PAGE_HTML_MAX_BYTES) {
           return c.json({
-            error: `The page is ${bytes.length} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
+            error: `The page is ${bytes2.length} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
             code: ERROR_CODES.body_too_large
           }, 413);
         }
-        html = bytes.toString("utf8");
+        html = bytes2.toString("utf8");
       }
       const store = sessions.get(sessionId) ?? installSession(sessionId, {});
       const port = refreshCompanionLink();
@@ -42229,14 +42293,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const sessionId = c.req.param("sessionId");
       const lookup = requireWarmStandaloneStore2(c, expectedProjectRoot, sessionId, "revise-page");
       if (!lookup.ok) return lookup.response;
-      const bytes = Buffer.from(htmlBase64, "base64");
-      if (bytes.length > PAGE_HTML_MAX_BYTES) {
+      const bytes2 = Buffer.from(htmlBase64, "base64");
+      if (bytes2.length > PAGE_HTML_MAX_BYTES) {
         return c.json({
-          error: `The page is ${bytes.length} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
+          error: `The page is ${bytes2.length} bytes, over the ${PAGE_HTML_MAX_BYTES}-byte page cap. Trim it, and use a new request ID for the changed input.`,
           code: ERROR_CODES.body_too_large
         }, 413);
       }
-      const html = bytes.toString("utf8");
+      const html = bytes2.toString("utf8");
       if (Buffer.from(html, "utf8").toString("base64") !== htmlBase64) {
         return c.json({ error: "The page must be valid UTF-8 HTML encoded as canonical base64." }, 400);
       }
@@ -42617,7 +42681,15 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const params = parsed.data;
     delete params.verdictFeedback;
     const requestedId = params.id;
-    const comment = r.store.addComment(params);
+    let comment;
+    try {
+      comment = r.store.addComment(params);
+    } catch (error51) {
+      if (error51 instanceof ReservedVerdictFeedbackIdError) {
+        return c.json({ error: error51.message, code: ERROR_CODES.validation_error }, 409);
+      }
+      throw error51;
+    }
     if (comment.id === requestedId) {
       broadcast(sessionId, { type: "comment_added", comment });
     }

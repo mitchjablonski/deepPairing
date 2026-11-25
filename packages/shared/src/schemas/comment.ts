@@ -262,6 +262,8 @@ export const CommentSchema = z.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  /** Server-stamped only for the note owned by a page verdict history entry. */
+  verdictFeedback: z.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: z.string().nullable().optional(),
   /**
