@@ -8,18 +8,21 @@
  *
  *  1) parses the agent HTML with DOMParser (never executes anything) and finds
  *     `pre.mermaid`, `div.mermaid` and `code.language-mermaid` blocks;
- *  2) renders each block's text to SVG with the bundled Mermaid at
- *     `securityLevel: "strict"` (Mermaid's own DOMPurify pass, no click
- *     callbacks — and `bindFunctions` is never called);
+ *  2) renders each block's text to SVG with the bundled Mermaid inside an
+ *     ISOLATED renderer frame (mermaidFrameRenderer.ts: a hidden opaque-origin
+ *     sandbox with a no-network CSP, `securityLevel: "strict"`, htmlLabels off,
+ *     a hardened `secure` list) — never in the companion's own document;
  *  3) runs that SVG through a STRICT allowlist sanitizer (below) — no script,
  *     no `on*`, no external href / url(), foreignObject label HTML reduced to
  *     a few text-formatting tags;
  *  4) puts the sanitized SVG in place of the block, keeping Mermaid's node
- *     `id` / `class="node"` / `data-id` so the annotator's diagram-node anchor
- *     (`g.node`, `data-id`, `*-flowchart-<id>-N`) works.
+ *     `id` / `class="node"` (and `data-id`, which Mermaid 11 sets on edges)
+ *     so the annotator's diagram-node anchor (`g.node`, `*-flowchart-<id>-N`)
+ *     works.
  *
  * A block that fails, is too large, is over the per-page count, or times out
- * keeps its source with a small inline note. The renderer is injectable so
+ * keeps its source with a small inline note. A timeout aborts the request,
+ * which destroys the renderer frame, and is never cached. The renderer is injectable so
  * the pipeline is testable without layout APIs (happy-dom has no getBBox);
  * real rendering is covered by e2e.
  *
@@ -28,11 +31,13 @@
  */
 import { PAGE_SANITIZE_DROP_TAGS } from "@deeppairing/shared";
 import { isDangerousUrl } from "./pageSanitize";
+import { sharedMermaidFrameRenderer } from "./mermaidFrameRenderer";
 
 export type PageTheme = "light" | "dark";
 
-/** Renders Mermaid source to an SVG string. Rejects on a parse/render error. */
-export type MermaidRenderer = (id: string, source: string, theme: PageTheme) => Promise<string>;
+/** Renders Mermaid source to an SVG string. Rejects on a parse/render error.
+ *  `signal` aborts the request (the frame renderer destroys its frame). */
+export type MermaidRenderer = (id: string, source: string, theme: PageTheme, signal?: AbortSignal) => Promise<string>;
 
 /** At most this many diagrams are rendered per page. */
 export const PAGE_MERMAID_MAX_DIAGRAMS = 20;
@@ -62,6 +67,8 @@ export interface PageMermaidResult {
   rendered: number;
   /** Blocks left as source, with a note (failed, over a cap, or timed out). */
   fallback: number;
+  /** Of those, how many timed out (a result with any is never cached). */
+  timedOut: number;
 }
 
 const BLOCK_SEL = "pre.mermaid, div.mermaid, code.language-mermaid";
@@ -69,6 +76,15 @@ const BLOCK_SEL = "pre.mermaid, div.mermaid, code.language-mermaid";
 /** Cheap gate before any parsing: a page without the word has no blocks. */
 export function pageHasMermaid(html: string): boolean {
   return /mermaid/i.test(html);
+}
+
+/** True only when the page has an actual Mermaid block (a page that merely
+ *  mentions Mermaid never shows the "rendering" placeholder). Parses only
+ *  after the cheap word gate; never executes anything. */
+export function pageHasMermaidBlocks(html: string): boolean {
+  if (!pageHasMermaid(html) || typeof DOMParser === "undefined") return false;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return findMermaidBlocks(doc).some((b) => (b.textContent ?? "").trim() !== "");
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +96,7 @@ export function pageHasMermaid(html: string): boolean {
 const SVG_ALLOW: ReadonlySet<string> = new Set([
   "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "tspan", "textpath",
   "defs", "marker", "style", "title", "desc", "lineargradient", "radialgradient", "stop", "clippath", "mask",
-  "pattern", "symbol", "use", "foreignobject",
+  "pattern", "symbol", "use", "foreignobject", "switch",
   "filter", "feblend", "fecolormatrix", "fecomposite", "fedropshadow", "feflood", "fegaussianblur", "femerge",
   "femergenode", "feoffset",
 ]);
@@ -251,7 +267,7 @@ export const PAGE_MERMAID_NOTES = {
   failed: "Diagram couldn't be rendered; showing its source.",
   tooLarge: "Diagram couldn't be rendered: its source is too large; showing it as text.",
   tooMany: "Diagram couldn't be rendered: this page has more diagrams than the companion renders; showing its source.",
-  timedOut: "Diagram couldn't be rendered in time; showing its source.",
+  timedOut: "Diagram took too long to render; showing its source. Reopen the page to retry.",
 } as const;
 
 function noteAfter(doc: Document, block: Element, text: string): void {
@@ -273,10 +289,18 @@ function wrapperStyle(theme: PageTheme): string {
 
 class Timeout extends Error {}
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Timeout()), ms);
-    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+/** Run one render with a deadline. On timeout the request is ABORTED (the
+ *  frame renderer destroys its frame, killing the work), not just abandoned. */
+function renderWithTimeout(renderer: MermaidRenderer, id: string, source: string, theme: PageTheme, ms: number): Promise<string> {
+  const ctl = new AbortController();
+  return new Promise<string>((resolve, reject) => {
+    const t = setTimeout(() => {
+      reject(new Timeout());
+      ctl.abort();
+    }, ms);
+    Promise.resolve()
+      .then(() => renderer(id, source, theme, ctl.signal))
+      .then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
 }
 
@@ -293,13 +317,13 @@ export function pageMermaidId(index: number): string {
  * `<html>`/`<body>` attributes survive for both the static and the Run frame).
  */
 export async function renderPageMermaid(html: string, opts: PageMermaidOptions): Promise<PageMermaidResult> {
-  const unchanged: PageMermaidResult = { html, rendered: 0, fallback: 0 };
+  const unchanged: PageMermaidResult = { html, rendered: 0, fallback: 0, timedOut: 0 };
   if (!pageHasMermaid(html) || typeof DOMParser === "undefined") return unchanged;
   const doc = new DOMParser().parseFromString(html, "text/html");
   const blocks = findMermaidBlocks(doc);
   if (blocks.length === 0) return unchanged;
 
-  const renderer = opts.renderer ?? defaultMermaidRenderer;
+  const renderer = opts.renderer ?? sharedMermaidFrameRenderer().render;
   const maxDiagrams = opts.maxDiagrams ?? PAGE_MERMAID_MAX_DIAGRAMS;
   const maxSource = opts.maxSourceChars ?? PAGE_MERMAID_MAX_SOURCE_CHARS;
   const maxSvg = opts.maxSvgChars ?? PAGE_MERMAID_MAX_SVG_CHARS;
@@ -308,6 +332,7 @@ export async function renderPageMermaid(html: string, opts: PageMermaidOptions):
 
   let rendered = 0;
   let fallback = 0;
+  let timedOut = 0;
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]!;
     const source = (block.textContent ?? "").trim();
@@ -315,13 +340,15 @@ export async function renderPageMermaid(html: string, opts: PageMermaidOptions):
     if (i >= maxDiagrams) { noteAfter(doc, block, PAGE_MERMAID_NOTES.tooMany); fallback++; continue; }
     if (source.length > maxSource) { noteAfter(doc, block, PAGE_MERMAID_NOTES.tooLarge); fallback++; continue; }
     const left = deadline - Date.now();
-    if (left <= 0) { noteAfter(doc, block, PAGE_MERMAID_NOTES.timedOut); fallback++; continue; }
+    if (left <= 0) { noteAfter(doc, block, PAGE_MERMAID_NOTES.timedOut); fallback++; timedOut++; continue; }
     let svgText: string;
     try {
-      svgText = await withTimeout(Promise.resolve().then(() => renderer(pageMermaidId(i), source, opts.theme)), Math.min(timeoutMs, left));
+      svgText = await renderWithTimeout(renderer, pageMermaidId(i), source, opts.theme, Math.min(timeoutMs, left));
     } catch (err) {
-      noteAfter(doc, block, err instanceof Timeout ? PAGE_MERMAID_NOTES.timedOut : PAGE_MERMAID_NOTES.failed);
+      const late = err instanceof Timeout;
+      noteAfter(doc, block, late ? PAGE_MERMAID_NOTES.timedOut : PAGE_MERMAID_NOTES.failed);
       fallback++;
+      if (late) timedOut++;
       continue;
     }
     const svg = typeof svgText === "string" && svgText.length <= maxSvg ? sanitizeMermaidSvg(svgText) : null;
@@ -342,49 +369,16 @@ export async function renderPageMermaid(html: string, opts: PageMermaidOptions):
     rendered++;
   }
   if (rendered === 0 && fallback === 0) return unchanged;
-  return { html: doc.documentElement.outerHTML, rendered, fallback };
+  return { html: doc.documentElement.outerHTML, rendered, fallback, timedOut };
 }
 
 // ---------------------------------------------------------------------------
-// The real renderer, serialization, and the per-version cache
+// Page queue and the per-version cache
 // ---------------------------------------------------------------------------
 
-/** Same config as MermaidDiagram (mermaid.initialize resets to defaults on
- *  every call, so this never leaves a different global config behind for the
- *  plan diagrams). `strict` = Mermaid's DOMPurify pass and no click callbacks. */
-function mermaidConfig(theme: PageTheme) {
-  return {
-    startOnLoad: false,
-    securityLevel: "strict" as const,
-    fontFamily: "inherit",
-    suppressErrorRendering: true,
-    theme: theme === "light" ? ("default" as const) : ("dark" as const),
-  };
-}
-
-let mermaidModule: Promise<typeof import("mermaid").default> | null = null;
-
-/** Lazily imports the bundled Mermaid (only when a page has a block). */
-export const defaultMermaidRenderer: MermaidRenderer = async (id, source, theme) => {
-  if (!mermaidModule) mermaidModule = import("mermaid").then((m) => m.default);
-  const mermaid = await mermaidModule;
-  const clean = () => {
-    document.getElementById(`d${id}`)?.remove();
-    document.getElementById(id)?.remove();
-  };
-  clean();
-  mermaid.initialize(mermaidConfig(theme));
-  try {
-    const { svg } = await mermaid.render(id, source);
-    return svg;
-  } finally {
-    clean();
-  }
-};
-
-/** One page at a time: ids are deterministic per page, so two pages must not
- *  lay out `dp-page-mermaid-0` in the parent at once. Each step is bounded by
- *  the page's total timeout, so a stuck render can't stall the queue. */
+/** One page at a time, so one page's diagrams aren't interleaved with
+ *  another's. Each step is bounded by the page's total timeout, and a timeout
+ *  destroys the renderer frame, so nothing waits behind abandoned work. */
 let queue: Promise<unknown> = Promise.resolve();
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   const p = queue.then(fn, fn);
@@ -419,10 +413,22 @@ export function preparePageMermaid(html: string, theme: PageTheme, renderer?: Me
     cache.set(key, hit); // most recently used last
     return hit.out;
   }
-  const out = enqueue(() => renderPageMermaid(html, { theme, renderer })).then((r) => r.html, () => html);
-  cache.set(key, { input: html, theme, out });
+  const entry = { input: html, theme, out: Promise.resolve(html) };
+  entry.out = enqueue(() => renderPageMermaid(html, { theme, renderer })).then(
+    (r) => {
+      // A timeout is not a verdict on the diagram: don't cache it, so the
+      // next mount retries.
+      if (r.timedOut > 0 && cache.get(key) === entry) cache.delete(key);
+      return r.html;
+    },
+    () => {
+      if (cache.get(key) === entry) cache.delete(key);
+      return html;
+    },
+  );
+  cache.set(key, entry);
   while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
-  return out;
+  return entry.out;
 }
 
 /** Test seam: forget cached renders. */
@@ -432,6 +438,6 @@ export function clearPageMermaidCache(): void {
 
 /** The page frame's prepare hook (PageArtifact → PrototypeFrame). */
 export const PAGE_MERMAID_PREPARE = {
-  needed: pageHasMermaid,
+  needed: pageHasMermaidBlocks,
   run: (html: string, theme: PageTheme) => preparePageMermaid(html, theme),
 };

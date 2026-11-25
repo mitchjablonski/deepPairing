@@ -163,9 +163,19 @@ export function PrototypeFrame({
   // #714 gap 11 — render the page's Mermaid blocks in the parent before the
   // frame gets its srcdoc. Until the first result for this HTML lands, a
   // placeholder stands in (so the frame loads once, not twice); a theme flip
-  // keeps the current frame up until the re-themed render is ready.
-  const theme = resolveTheme(usePreferencesStore((s) => s.theme));
-  const prep = staticFirst && !tooBig && annotation?.prepare?.needed(html) ? annotation.prepare : null;
+  // keeps the current frame up until the re-themed render is ready. Once the
+  // human has chosen Run the theme is pinned to the one at Run, so a theme
+  // flip never reloads a running page (it re-themes on the next mount).
+  const appTheme = resolveTheme(usePreferencesStore((s) => s.theme));
+  const [runTheme, setRunTheme] = useState<"light" | "dark" | null>(null);
+  const theme = running && runTheme ? runTheme : appTheme;
+  const prepare = annotation?.prepare;
+  // `needed` may parse the page (a DOMParser pass), so once per html.
+  const prepNeeded = useMemo(
+    () => !!(staticFirst && !tooBig && prepare?.needed(html)),
+    [staticFirst, tooBig, prepare, html],
+  );
+  const prep = prepNeeded && prepare ? prepare : null;
   const [prepared, setPrepared] = useState<{ html: string; out: string } | null>(null);
   useEffect(() => {
     if (!prep) return;
@@ -261,7 +271,7 @@ export function PrototypeFrame({
           />
           {scripted && (
             <button
-              onClick={() => setRunning(true)}
+              onClick={() => { setRunTheme(appTheme); setRunning(true); }}
               className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-2 text-center
                          text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
             >
@@ -271,7 +281,7 @@ export function PrototypeFrame({
         </div>
       ) : (
         <button
-          onClick={() => setRunning(true)}
+          onClick={() => { setRunTheme(appTheme); setRunning(true); }}
           className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-4 text-center
                      text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
         >

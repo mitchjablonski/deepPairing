@@ -16,22 +16,49 @@ import {
 // <svg> (real browsers don't), so the fakes put no <style> in their SVG; the
 // <style> branch is tested on a DOM-built tree via sanitizeSvgTree.
 
-/** A fake that renders like Mermaid's flowchart: one `g.node` per `X[label]`,
- *  with Mermaid's id scheme and data-id, and an htmlLabels foreignObject. It
- *  embeds the label RAW, the worst case a buggy renderer could produce. */
+const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** A fake shaped like REAL Mermaid 11 flowchart output with htmlLabels off
+ *  (what the isolated renderer produces): `g.node` with an id of
+ *  `<svgId>-flowchart-<nodeId>-<n>` and NO data-id (Mermaid 11 sets data-id on
+ *  edges only), labels as escaped SVG text/tspans, edges with data-id and a
+ *  marker-end url(#…). */
 function fakeFlowchart(calls: Array<{ id: string; source: string; theme: string }> = []): MermaidRenderer {
   return async (id, source, theme) => {
     calls.push({ id, source, theme });
     const nodes = [...source.matchAll(/(\w+)\[([^\]]*)\]/g)].map(
       ([, nid, label], k) =>
-        `<g class="node default" id="${id}-flowchart-${nid}-${k}" data-id="${nid}" transform="translate(10,10)">` +
-        `<rect class="basic label-container" fill="url(#grad)"></rect>` +
+        `<g class="node default" id="${id}-flowchart-${nid}-${k}" transform="translate(10,10)">` +
+        `<rect class="basic label-container" style="" x="-40" y="-12" width="80" height="24" fill="url(#grad)"></rect>` +
+        `<g class="label" style="" transform="translate(0,0)"><rect></rect><g><rect class="background" style="stroke: none"></rect>` +
+        `<text y="-10.1" style=""><tspan class="text-outer-tspan" x="0" y="-0.1em" dy="1.1em">` +
+        `<tspan font-style="normal" class="text-inner-tspan" font-weight="normal">${esc(label!)}</tspan></tspan></text></g></g></g>`,
+    );
+    const edges = [...source.matchAll(/(\w+)(?:\[[^\]]*\])?\s*-->\s*(\w+)/g)].map(
+      ([, a, b], k) =>
+        `<path d="M0,0L10,10" id="${id}-L_${a}_${b}_${k}" class="flowchart-link" data-edge="true" data-et="edge" ` +
+        `data-id="L_${a}_${b}_${k}" marker-end="url(#${id}_flowchart-v2-pointEnd)"></path>`,
+    );
+    return `<svg id="${id}" width="100%" xmlns="http://www.w3.org/2000/svg" class="flowchart" style="max-width: 200px;" ` +
+      `viewBox="0 0 200 60" role="graphics-document document" aria-roledescription="flowchart-v2">` +
+      `<g><marker id="${id}_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" orient="auto">` +
+      `<path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"></path></marker>` +
+      `<defs><linearGradient id="grad"><stop offset="0"></stop></linearGradient></defs>` +
+      `<g class="root"><g class="edgePaths">${edges.join("")}</g><g class="nodes">${nodes.join("")}</g></g></g></svg>`;
+  };
+}
+
+/** The worst case: a renderer that emits htmlLabels foreignObject HTML with
+ *  the label embedded RAW (what a buggy or misconfigured Mermaid could do). */
+function fakeHtmlLabels(): MermaidRenderer {
+  return async (id, source) => {
+    const nodes = [...source.matchAll(/(\w+)\[([^\]]*)\]/g)].map(
+      ([, nid, label], k) =>
+        `<g class="node default" id="${id}-flowchart-${nid}-${k}"><rect fill="url(#grad)"></rect>` +
         `<foreignObject width="80" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap;">` +
         `<span class="nodeLabel"><p>${label}</p></span></div></foreignObject></g>`,
     );
-    return `<svg id="${id}" width="100%" xmlns="http://www.w3.org/2000/svg" style="max-width: 200px;" aria-roledescription="flowchart-v2">` +
-      `<defs><linearGradient id="grad"><stop offset="0"/></linearGradient></defs>` +
-      `<g class="nodes">${nodes.join("")}</g></svg>`;
+    return `<svg id="${id}" xmlns="http://www.w3.org/2000/svg"><g class="nodes">${nodes.join("")}</g></svg>`;
   };
 }
 
@@ -97,34 +124,40 @@ describe("renderPageMermaid", () => {
     expect(doc.body.textContent).toContain("After");
     // Local url(#…) refs and the diagram's own style survive.
     expect(doc.querySelector("rect")?.getAttribute("fill")).toBe("url(#grad)");
-    // Label HTML inside the foreignObject is kept.
-    expect(doc.querySelector("foreignObject span.nodeLabel p")?.textContent).toBe("Start");
+    // Real-shaped output survives intact: text labels, marker refs, edge data-id.
+    expect(doc.querySelector(`g.node[id='${pageMermaidId(0)}-flowchart-A-0'] tspan.text-inner-tspan`)?.textContent).toBe("Start");
+    expect(doc.querySelector("path.flowchart-link")?.getAttribute("marker-end")).toBe(`url(#${pageMermaidId(0)}_flowchart-v2-pointEnd)`);
+    expect(doc.querySelector("path.flowchart-link")?.getAttribute("data-id")).toBe("L_A_B_0");
   });
 
   it("leaves a page without blocks byte-identical and never calls the renderer", async () => {
     const renderer = vi.fn<MermaidRenderer>();
     const html = "<h1>No diagrams</h1><p>We considered mermaid but used SVG.</p>";
-    expect(await renderPageMermaid(html, { theme: "dark", renderer })).toEqual({ html, rendered: 0, fallback: 0 });
-    expect(await renderPageMermaid("<h1>x</h1>", { theme: "dark", renderer })).toEqual({ html: "<h1>x</h1>", rendered: 0, fallback: 0 });
+    expect(await renderPageMermaid(html, { theme: "dark", renderer })).toEqual({ html, rendered: 0, fallback: 0, timedOut: 0 });
+    expect(await renderPageMermaid("<h1>x</h1>", { theme: "dark", renderer })).toEqual({ html: "<h1>x</h1>", rendered: 0, fallback: 0, timedOut: 0 });
     expect(renderer).not.toHaveBeenCalled();
     expect(PAGE_MERMAID_PREPARE.needed("<h1>x</h1>")).toBe(false);
     expect(PAGE_MERMAID_PREPARE.needed("<pre class=mermaid>x</pre>")).toBe(true);
+    // A page that only MENTIONS Mermaid has no blocks: no placeholder, no render.
+    expect(PAGE_MERMAID_PREPARE.needed(html)).toBe(false);
+    expect(PAGE_MERMAID_PREPARE.needed("<p class=\"mermaid-note\">Mermaid</p><pre class=mermaid>  </pre>")).toBe(false);
   });
 
-  it("keeps the node anchor attributes, so the annotator's diagram-node anchor resolves", async () => {
+  it("keeps Mermaid's node ids (no data-id on real nodes), so the annotator's diagram-node anchor resolves", async () => {
     const html = "<h1>Flow</h1><pre class=\"mermaid\">flowchart LR\n  AuthGate[Auth gate] --&gt; Store[Store]</pre>";
     const out = await renderPageMermaid(html, { theme: "light", renderer: fakeFlowchart() });
     // Through the before-Run sanitizer too, as the frame does.
     const framed = sanitizePageHtml(out.html).html;
     document.body.innerHTML = framed;
-    const node = document.querySelector("g.node[data-id='AuthGate']");
+    const node = document.querySelector(`g.node[id$='-flowchart-AuthGate-0']`);
     expect(node).not.toBeNull();
     expect(node!.id).toBe(`${pageMermaidId(0)}-flowchart-AuthGate-0`);
+    expect(node!.hasAttribute("data-id")).toBe(false);
     const core = new Function("document", "window", ANNOTATOR_CORE_SOURCE)(document, window) as {
       anchorForTarget(t: Node): Record<string, unknown> | null;
       findAnchor(a: unknown): { el: Element } | null;
     };
-    const label = node!.querySelector("p")!;
+    const label = node!.querySelector("tspan.text-inner-tspan")!;
     const anchor = core.anchorForTarget(label.firstChild!)!;
     expect(anchor).toMatchObject({ kind: "diagram-node", nodeId: "AuthGate" });
     expect(core.findAnchor(anchor)?.el).toBe(node);
@@ -141,13 +174,17 @@ describe("renderPageMermaid", () => {
       "  A[<script>alert(1)</script>] --> B\n" +
       "  click A \"javascript:alert(5)\"\n  click B callback";
     const html = `<h1>t</h1><pre class="mermaid">${src.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>`;
-    const out = await renderPageMermaid(html, { theme: "dark", renderer: fakeFlowchart() });
+    // Real-shaped (escaped text labels) and the worst case (raw label HTML).
+    const real = await renderPageMermaid(html, { theme: "dark", renderer: fakeFlowchart() });
+    expect(real.rendered).toBe(1);
+    expectNothingHostile(real.html);
+    const out = await renderPageMermaid(html, { theme: "dark", renderer: fakeHtmlLabels() });
     expect(out.rendered).toBe(1);
     expectNothingHostile(out.html);
     // The label text that is safe survives (the link is unwrapped, not lost).
     const doc = parse(out.html);
-    expect(doc.querySelector("g.node[data-id='C']")?.textContent).toContain("go");
-    expect(doc.querySelector("g.node[data-id='E'] span")?.hasAttribute("style")).toBe(false);
+    expect(doc.querySelector("g.node[id*='-flowchart-C-']")?.textContent).toContain("go");
+    expect(doc.querySelector("g.node[id*='-flowchart-E-'] span")?.hasAttribute("style")).toBe(false);
   });
 
   it("a hostile SVG from the renderer itself is reduced to the allowlist", async () => {
@@ -223,14 +260,17 @@ describe("renderPageMermaid", () => {
     try {
       const html = Array.from({ length: 3 }, (_, i) => `<pre class="mermaid">flowchart LR\n  N${i}[n]</pre>`).join("");
       let started = 0;
-      const hang: MermaidRenderer = () => { started++; return new Promise<string>(() => {}); };
+      const signals: AbortSignal[] = [];
+      const hang: MermaidRenderer = (_id, _src, _theme, signal) => { started++; signals.push(signal!); return new Promise<string>(() => {}); };
       const p = renderPageMermaid(html, { theme: "light", renderer: hang, timeoutMs: 1_000, totalTimeoutMs: 1_500 });
       await vi.advanceTimersByTimeAsync(1_000); // diagram 0 times out
       await vi.advanceTimersByTimeAsync(500); // diagram 1 hits the page budget
       const out = await p;
-      expect(out).toMatchObject({ rendered: 0, fallback: 3 });
+      expect(out).toMatchObject({ rendered: 0, fallback: 3, timedOut: 3 });
       // Diagram 2 is never even started: the budget was spent.
       expect(started).toBe(2);
+      // Each timed-out request was ABORTED (so the frame renderer kills it).
+      expect(signals.map((sg) => sg.aborted)).toEqual([true, true]);
       const notes = Array.from(parse(out.html).querySelectorAll("[data-dp-mermaid-note]")).map((n) => n.textContent);
       expect(notes).toEqual([PAGE_MERMAID_NOTES.timedOut, PAGE_MERMAID_NOTES.timedOut, PAGE_MERMAID_NOTES.timedOut]);
     } finally {
@@ -264,6 +304,32 @@ describe("preparePageMermaid (cache)", () => {
     expect(a).toContain("<svg");
   });
 
+  it("never caches a timeout: the next mount retries", async () => {
+    vi.useFakeTimers();
+    try {
+      const html = "<pre class=\"mermaid\">flowchart LR\n  A[a]</pre>";
+      let calls = 0;
+      let hang = true;
+      const renderer: MermaidRenderer = (id, src, theme) => {
+        calls++;
+        return hang ? new Promise<string>(() => {}) : fakeFlowchart()(id, src, theme);
+      };
+      const first = preparePageMermaid(html, "light", renderer);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await first).toContain(PAGE_MERMAID_NOTES.timedOut);
+      hang = false;
+      const second = await preparePageMermaid(html, "light", renderer);
+      expect(calls).toBe(2);
+      expect(second).toContain("flowchart-A-0");
+      expect(second).not.toContain(PAGE_MERMAID_NOTES.timedOut);
+      // A genuine result IS cached.
+      await preparePageMermaid(html, "light", renderer);
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never rejects: a throwing pipeline resolves to the input", async () => {
     const html = "<pre class=\"mermaid\">x</pre>";
     const out = await preparePageMermaid(html, "light", () => { throw new Error("boom"); });
@@ -273,6 +339,28 @@ describe("preparePageMermaid (cache)", () => {
 });
 
 describe("sanitizeMermaidSvg / cleanSvgCss / findMermaidBlocks", () => {
+  it("keeps <switch> (journey task labels) and still sanitizes its children", () => {
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    const sw = document.createElementNS(NS, "switch");
+    const text = document.createElementNS(NS, "text");
+    text.setAttribute("onclick", "alert(1)");
+    text.textContent = "Task";
+    const fo = document.createElementNS(NS, "foreignObject");
+    const s1 = document.createElement("script");
+    s1.textContent = "alert(2)";
+    const d = document.createElement("div");
+    d.textContent = "Label";
+    fo.append(s1, d);
+    sw.append(fo, text);
+    svg.append(sw);
+    sanitizeSvgTree(svg);
+    expect(svg.querySelector("switch > text")?.textContent).toBe("Task");
+    expect(svg.querySelector("switch > text")?.hasAttribute("onclick")).toBe(false);
+    expect(svg.querySelector("switch foreignObject div")?.textContent).toBe("Label");
+    expect(svg.querySelector("script")).toBeNull();
+  });
+
   it("returns null for a non-svg root", () => {
     expect(sanitizeMermaidSvg("<p>x</p>")).toBeNull();
     expect(sanitizeMermaidSvg("")).toBeNull();
