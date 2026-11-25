@@ -202,6 +202,16 @@ describe("#714 gap 11 — the isolated Mermaid renderer document", () => {
     expect(meta).toMatch(/script-src 'self' http:\/\/127\.0\.0\.1:\* http:\/\/localhost:\*/);
   });
 
+  it("content-hashed /assets/ files are cached immutably; unhashed files and HTML are not", async () => {
+    fs.writeFileSync(path.join(dir, "assets", "mermaid.core-DF0wdvge.js"), "export {};");
+    fs.writeFileSync(path.join(dir, "assets", "plain.js"), "export {};");
+    const hashed = await app.request("/assets/mermaid.core-DF0wdvge.js");
+    expect(hashed.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect((await app.request("/assets/plain.js")).headers.get("cache-control")).toBeNull();
+    expect((await app.request("/")).headers.get("cache-control")).toBe("no-cache");
+    expect((await app.request(MERMAID_RENDERER_DOC)).headers.get("cache-control")).toBe("no-cache");
+  });
+
   it("built JS chunks are CORS-readable for the opaque-origin frame; HTML and CSS are not", async () => {
     const js = await app.request("/assets/mermaid-renderer-x.js", { headers: { Origin: "null" } });
     expect(js.headers.get("access-control-allow-origin")).toBe("*");

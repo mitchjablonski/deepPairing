@@ -31,13 +31,18 @@
  */
 import { PAGE_SANITIZE_DROP_TAGS } from "@deeppairing/shared";
 import { isDangerousUrl } from "./pageSanitize";
-import { sharedMermaidFrameRenderer } from "./mermaidFrameRenderer";
+import { RendererUnavailableError, sharedMermaidFrameRenderer } from "./mermaidFrameRenderer";
 
 export type PageTheme = "light" | "dark";
 
 /** Renders Mermaid source to an SVG string. Rejects on a parse/render error.
- *  `signal` aborts the request (the frame renderer destroys its frame). */
-export type MermaidRenderer = (id: string, source: string, theme: PageTheme, signal?: AbortSignal) => Promise<string>;
+ *  `signal` aborts the request (the frame renderer destroys its frame). A
+ *  renderer with `reportsStart` calls `onStart` once the work actually begins
+ *  (its frame is warm); the per-diagram timeout starts there, so a cold load
+ *  isn't charged to the diagram. The page budget always runs from the call. */
+export type MermaidRenderer = ((
+  id: string, source: string, theme: PageTheme, signal?: AbortSignal, onStart?: () => void,
+) => Promise<string>) & { reportsStart?: boolean };
 
 /** At most this many diagrams are rendered per page. */
 export const PAGE_MERMAID_MAX_DIAGRAMS = 20;
@@ -69,6 +74,8 @@ export interface PageMermaidResult {
   fallback: number;
   /** Of those, how many timed out (a result with any is never cached). */
   timedOut: number;
+  /** Of those, how many found no renderer on this host (never cached). */
+  unavailable?: number;
 }
 
 const BLOCK_SEL = "pre.mermaid, div.mermaid, code.language-mermaid";
@@ -268,6 +275,7 @@ export const PAGE_MERMAID_NOTES = {
   tooLarge: "Diagram couldn't be rendered: its source is too large; showing it as text.",
   tooMany: "Diagram couldn't be rendered: this page has more diagrams than the companion renders; showing its source.",
   timedOut: "Diagram took too long to render; showing its source. Reopen the page to retry.",
+  unavailable: "Diagrams render in the browser companion; showing source here.",
 } as const;
 
 function noteAfter(doc: Document, block: Element, text: string): void {
@@ -290,17 +298,26 @@ function wrapperStyle(theme: PageTheme): string {
 class Timeout extends Error {}
 
 /** Run one render with a deadline. On timeout the request is ABORTED (the
- *  frame renderer destroys its frame, killing the work), not just abandoned. */
-function renderWithTimeout(renderer: MermaidRenderer, id: string, source: string, theme: PageTheme, ms: number): Promise<string> {
+ *  frame renderer destroys its frame, killing the work), not just abandoned.
+ *  `ms` (per diagram) starts when the renderer reports the work started;
+ *  `budgetMs` (what is left of the page budget) runs from the call. */
+function renderWithTimeout(
+  renderer: MermaidRenderer, id: string, source: string, theme: PageTheme, ms: number, budgetMs: number,
+): Promise<string> {
   const ctl = new AbortController();
   return new Promise<string>((resolve, reject) => {
-    const t = setTimeout(() => {
+    let perDiagram: ReturnType<typeof setTimeout> | undefined;
+    const fire = () => {
       reject(new Timeout());
       ctl.abort();
-    }, ms);
+    };
+    const budget = setTimeout(fire, budgetMs);
+    const start = () => { if (perDiagram === undefined) perDiagram = setTimeout(fire, ms); };
+    const clear = () => { clearTimeout(budget); if (perDiagram !== undefined) clearTimeout(perDiagram); };
+    if (!renderer.reportsStart) start();
     Promise.resolve()
-      .then(() => renderer(id, source, theme, ctl.signal))
-      .then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+      .then(() => renderer(id, source, theme, ctl.signal, start))
+      .then((v) => { clear(); resolve(v); }, (e) => { clear(); reject(e); });
   });
 }
 
@@ -333,6 +350,7 @@ export async function renderPageMermaid(html: string, opts: PageMermaidOptions):
   let rendered = 0;
   let fallback = 0;
   let timedOut = 0;
+  let unavailable = 0;
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]!;
     const source = (block.textContent ?? "").trim();
@@ -343,12 +361,14 @@ export async function renderPageMermaid(html: string, opts: PageMermaidOptions):
     if (left <= 0) { noteAfter(doc, block, PAGE_MERMAID_NOTES.timedOut); fallback++; timedOut++; continue; }
     let svgText: string;
     try {
-      svgText = await renderWithTimeout(renderer, pageMermaidId(i), source, opts.theme, Math.min(timeoutMs, left));
+      svgText = await renderWithTimeout(renderer, pageMermaidId(i), source, opts.theme, timeoutMs, left);
     } catch (err) {
       const late = err instanceof Timeout;
-      noteAfter(doc, block, late ? PAGE_MERMAID_NOTES.timedOut : PAGE_MERMAID_NOTES.failed);
+      const absent = err instanceof RendererUnavailableError;
+      noteAfter(doc, block, late ? PAGE_MERMAID_NOTES.timedOut : absent ? PAGE_MERMAID_NOTES.unavailable : PAGE_MERMAID_NOTES.failed);
       fallback++;
       if (late) timedOut++;
+      if (absent) unavailable++;
       continue;
     }
     const svg = typeof svgText === "string" && svgText.length <= maxSvg ? sanitizeMermaidSvg(svgText) : null;
@@ -369,7 +389,7 @@ export async function renderPageMermaid(html: string, opts: PageMermaidOptions):
     rendered++;
   }
   if (rendered === 0 && fallback === 0) return unchanged;
-  return { html: doc.documentElement.outerHTML, rendered, fallback, timedOut };
+  return { html: doc.documentElement.outerHTML, rendered, fallback, timedOut, ...(unavailable ? { unavailable } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +438,7 @@ export function preparePageMermaid(html: string, theme: PageTheme, renderer?: Me
     (r) => {
       // A timeout is not a verdict on the diagram: don't cache it, so the
       // next mount retries.
-      if (r.timedOut > 0 && cache.get(key) === entry) cache.delete(key);
+      if ((r.timedOut > 0 || (r.unavailable ?? 0) > 0) && cache.get(key) === entry) cache.delete(key);
       return r.html;
     },
     () => {

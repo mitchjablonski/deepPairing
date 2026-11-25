@@ -27,6 +27,9 @@ const MIME_TYPES: Record<string, string> = {
   json: "application/json", svg: "image/svg+xml", woff2: "font/woff2", png: "image/png",
 };
 
+/** A Vite content-hashed asset name: `<name>-<8+ char hash>.<ext>`. */
+const HASHED_ASSET = /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
+
 /** #714 gap 11 — the isolated Mermaid renderer document (a second Vite page). */
 export const MERMAID_RENDERER_DOC = "/mermaid-renderer.html";
 
@@ -155,6 +158,13 @@ export function mountStaticUi(app: Hono, opts: StaticUiOptions): void {
       // secret-free code, so they may be read cross-origin; HTML (the only
       // document carrying the token) never gets this header.
       if (ext === "js" && filePath.startsWith("/assets/")) headers["Access-Control-Allow-Origin"] = "*";
+      // Vite content-hashes every /assets/ name (`name-<hash>.ext`), so a
+      // name never changes content: cache it for good. Keeps the renderer
+      // frame's cold load (the mermaid chunks) cheap after the first time.
+      // index.html stays no-cache (E5), so a new build is always picked up.
+      if (filePath.startsWith("/assets/") && HASHED_ASSET.test(filePath)) {
+        headers["Cache-Control"] = "public, max-age=31536000, immutable";
+      }
       return new Response(content, { headers });
     }
     // SPA fallback — deep links with no matching file render index.html (injected).

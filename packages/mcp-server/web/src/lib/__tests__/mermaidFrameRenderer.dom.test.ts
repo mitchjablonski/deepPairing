@@ -4,8 +4,12 @@
  * runs the REAL renderer core (handleRendererMessage) against a fake Mermaid,
  * wired through a fake message bus with real `source` identities.
  */
-import { describe, it, expect } from "vitest";
-import { MermaidFrameRenderer, RendererAbortError, RendererFailedError, type RendererFrame } from "../mermaidFrameRenderer";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  MermaidFrameRenderer, RendererAbortError, RendererFailedError, RendererUnavailableError, rendererHostSupported,
+  MERMAID_RENDERER_READY_TIMEOUT_MS, type RendererFrame,
+} from "../mermaidFrameRenderer";
+import { PAGE_MERMAID_NOTES, renderPageMermaid } from "../pageMermaid";
 import { MermaidRendererMessageSchema } from "../mermaidRendererProtocol";
 import { handleRendererMessage, rendererConfig, MERMAID_RENDERER_SECURE_KEYS, type MermaidLike } from "../../mermaidRenderer/core";
 
@@ -121,6 +125,74 @@ describe("MermaidFrameRenderer (parent side)", () => {
     dead.abort();
     await expect(r.render("dp-page-mermaid-0", "x", "light", dead.signal)).rejects.toBeInstanceOf(RendererAbortError);
     expect(r.framesCreated).toBe(1);
+  });
+});
+
+describe("availability: ready deadline, non-http hosts, cold load", () => {
+  afterEach(() => vi.useRealTimers());
+  const PAGE = Array.from({ length: 3 }, (_, i) => `<pre class="mermaid">flowchart LR\n  N${i}[n]</pre>`).join("");
+  const notes = (html: string) =>
+    Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("[data-dp-mermaid-note]")).map((n) => n.textContent);
+
+  it("a frame that never says ready (VS Code webview CSP) marks the renderer unavailable: one 3 s wait, then instant fallback", async () => {
+    vi.useFakeTimers();
+    const host = fakeHost({ autoReady: false });
+    const r = new MermaidFrameRenderer(host);
+    const start = Date.now();
+    const p = renderPageMermaid(PAGE, { theme: "light", renderer: r.render });
+    await vi.advanceTimersByTimeAsync(MERMAID_RENDERER_READY_TIMEOUT_MS);
+    const out = await p;
+    // No 15 s budget burn: everything settled at the ready deadline.
+    expect(Date.now() - start).toBe(MERMAID_RENDERER_READY_TIMEOUT_MS);
+    expect(out).toMatchObject({ rendered: 0, fallback: 3, timedOut: 0, unavailable: 3 });
+    expect(notes(out.html)).toEqual(Array(3).fill(PAGE_MERMAID_NOTES.unavailable));
+    expect(r.unavailable).toBe(true);
+    expect(r.framesCreated).toBe(1);
+    expect(host.frames[0]!.destroyed).toBe(true);
+    // Session-wide: the next page fails over at once, with no new frame.
+    const again = renderPageMermaid(PAGE, { theme: "light", renderer: r.render });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await again).unavailable).toBe(3);
+    expect(r.framesCreated).toBe(1);
+    await expect(r.render("dp-page-mermaid-0", "x", "light")).rejects.toBeInstanceOf(RendererUnavailableError);
+  });
+
+  it("a non-http(s) host skips the renderer entirely: no frame, immediate source + note", async () => {
+    expect(rendererHostSupported("vscode-webview:")).toBe(false);
+    expect(rendererHostSupported("file:")).toBe(false);
+    expect(rendererHostSupported(undefined)).toBe(false);
+    expect(rendererHostSupported("http:")).toBe(true);
+    expect(rendererHostSupported("https:")).toBe(true);
+    const host = fakeHost();
+    const r = new MermaidFrameRenderer({ ...host, unavailable: !rendererHostSupported("vscode-webview:") });
+    const out = await renderPageMermaid(PAGE, { theme: "dark", renderer: r.render });
+    expect(out).toMatchObject({ rendered: 0, unavailable: 3 });
+    expect(notes(out.html)).toEqual(Array(3).fill(PAGE_MERMAID_NOTES.unavailable));
+    expect(r.framesCreated).toBe(0);
+  });
+
+  it("a cold load is not charged to the diagram's render timeout", async () => {
+    vi.useFakeTimers();
+    const host = fakeHost({ autoReady: false });
+    const r = new MermaidFrameRenderer({ ...host, readyTimeoutMs: 3_000 });
+    const p = renderPageMermaid(PAGE.slice(0, PAGE.indexOf("</pre>") + 6), { theme: "light", renderer: r.render, timeoutMs: 1_000, totalTimeoutMs: 10_000 });
+    // The frame takes 2.5 s to load: longer than the 1 s render timeout.
+    await vi.advanceTimersByTimeAsync(2_500);
+    host.toParent(host.frames[0]!.win, { type: "dp-mermaid-ready" });
+    await vi.advanceTimersByTimeAsync(10);
+    const out = await p;
+    expect(out).toMatchObject({ rendered: 1, fallback: 0, timedOut: 0 });
+    expect(r.unavailable).toBe(false);
+    expect(host.frames[0]!.destroyed).toBe(false);
+  });
+
+  it("the frame stays warm across pages (destroyed only on abort)", async () => {
+    const host = fakeHost();
+    const r = new MermaidFrameRenderer(host);
+    await renderPageMermaid(PAGE, { theme: "light", renderer: r.render });
+    await renderPageMermaid(PAGE, { theme: "dark", renderer: r.render });
+    expect(r.framesCreated).toBe(1);
+    expect(host.frames[0]!.destroyed).toBe(false);
   });
 });
 

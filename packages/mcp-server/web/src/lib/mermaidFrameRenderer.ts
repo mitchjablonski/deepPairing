@@ -11,7 +11,13 @@
  *
  * Cancellation is real: aborting a request DESTROYS the frame (killing a hung
  * or long render) and the next request gets a fresh one, so nothing queues
- * behind abandoned work. The plan-card MermaidDiagram keeps its own renderer
+ * behind abandoned work. Otherwise the frame stays warm across pages.
+ *
+ * Availability: the frame must say "ready" within a short deadline of its
+ * own (cold load is NOT charged to any diagram's render timeout). If it
+ * doesn't — e.g. the VS Code webview, whose CSP has no frame-src, or any
+ * non-http(s) host — the renderer is marked unavailable for the session and
+ * every request fails at once, so pages fall back to source immediately. The plan-card MermaidDiagram keeps its own renderer
  * and shares no Mermaid state with this one.
  */
 import {
@@ -30,7 +36,14 @@ export interface FrameRendererDeps {
   createFrame: () => RendererFrame;
   /** Subscribe to messages arriving at the parent window. */
   listen: (handler: (event: { source: unknown; data: unknown }) => void) => () => void;
+  /** How long a new frame may take to post "ready" (default 3 s). */
+  readyTimeoutMs?: number;
+  /** Start out unavailable (a host that can't load the frame at all). */
+  unavailable?: boolean;
 }
+
+/** Default deadline for a new frame's "ready". */
+export const MERMAID_RENDERER_READY_TIMEOUT_MS = 3_000;
 
 export class RendererAbortError extends Error {
   constructor() {
@@ -40,6 +53,14 @@ export class RendererAbortError extends Error {
 }
 
 export class RendererFailedError extends Error {}
+
+/** The renderer frame can't run here (it never became ready). */
+export class RendererUnavailableError extends Error {
+  constructor() {
+    super("diagram renderer unavailable");
+    this.name = "RendererUnavailableError";
+  }
+}
 
 interface Pending {
   reqId: string;
@@ -51,6 +72,10 @@ export class MermaidFrameRenderer {
   private frame: RendererFrame | null = null;
   private ready: Promise<void> | null = null;
   private markReady: (() => void) | null = null;
+  private failReady: ((err: Error) => void) | null = null;
+  private readyTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Session-wide: once the frame missed its ready deadline, stop trying. */
+  unavailable: boolean;
   private pending: Pending | null = null;
   private unlisten: (() => void) | null = null;
   private chain: Promise<unknown> = Promise.resolve();
@@ -58,15 +83,24 @@ export class MermaidFrameRenderer {
   /** Frames created so far (observability for tests). */
   framesCreated = 0;
 
-  constructor(private readonly deps: FrameRendererDeps) {}
+  constructor(private readonly deps: FrameRendererDeps) {
+    this.unavailable = !!deps.unavailable;
+    this.render = Object.assign(
+      (id: string, source: string, theme: PageTheme, signal?: AbortSignal, onStart?: () => void) => {
+        if (this.unavailable) return Promise.reject(new RendererUnavailableError());
+        const run = () => this.renderOne(id, source, theme, signal, onStart);
+        const p = this.chain.then(run, run);
+        this.chain = p.catch(() => undefined);
+        return p;
+      },
+      // The render timeout starts at onStart (request posted to a READY
+      // frame), so a cold load never counts against a diagram.
+      { reportsStart: true },
+    );
+  }
 
   /** A MermaidRenderer bound to this instance; requests run one at a time. */
-  readonly render: MermaidRenderer = (id, source, theme, signal) => {
-    const run = () => this.renderOne(id, source, theme, signal);
-    const p = this.chain.then(run, run);
-    this.chain = p.catch(() => undefined);
-    return p;
-  };
+  readonly render: MermaidRenderer;
 
   /** Tear down the frame (and fail any in-flight request). */
   dispose(): void {
@@ -81,6 +115,8 @@ export class MermaidFrameRenderer {
     if (!parsed.success) return;
     const msg = parsed.data;
     if (msg.type === "dp-mermaid-ready") {
+      if (this.readyTimer) clearTimeout(this.readyTimer);
+      this.readyTimer = null;
       this.markReady?.();
       return;
     }
@@ -94,25 +130,42 @@ export class MermaidFrameRenderer {
   private ensureFrame(): Promise<void> {
     if (!this.unlisten) this.unlisten = this.deps.listen(this.onMessage);
     if (this.frame && this.ready) return this.ready;
-    this.ready = new Promise<void>((resolve) => { this.markReady = resolve; });
-    this.frame = this.deps.createFrame();
+    this.ready = new Promise<void>((resolve, reject) => { this.markReady = resolve; this.failReady = reject; });
+    this.ready.catch(() => undefined);
+    try {
+      this.frame = this.deps.createFrame();
+    } catch {
+      this.unavailable = true;
+      const failed = this.ready;
+      this.destroyFrame(new RendererUnavailableError());
+      return failed;
+    }
     this.framesCreated++;
+    this.readyTimer = setTimeout(() => {
+      this.readyTimer = null;
+      this.unavailable = true;
+      this.destroyFrame(new RendererUnavailableError());
+    }, this.deps.readyTimeoutMs ?? MERMAID_RENDERER_READY_TIMEOUT_MS);
     return this.ready;
   }
 
   private destroyFrame(reason: Error): void {
     const p = this.pending;
     this.pending = null;
+    if (this.readyTimer) clearTimeout(this.readyTimer);
+    this.readyTimer = null;
+    this.failReady?.(reason);
     if (this.frame) {
       try { this.frame.destroy(); } catch { /* already gone */ }
     }
     this.frame = null;
     this.ready = null;
     this.markReady = null;
+    this.failReady = null;
     p?.reject(reason);
   }
 
-  private renderOne(id: string, source: string, theme: PageTheme, signal?: AbortSignal): Promise<string> {
+  private renderOne(id: string, source: string, theme: PageTheme, signal?: AbortSignal, onStart?: () => void): Promise<string> {
     if (signal?.aborted) return Promise.reject(new RendererAbortError());
     return new Promise<string>((resolve, reject) => {
       const reqId = `r${++this.seq}`;
@@ -139,7 +192,8 @@ export class MermaidFrameRenderer {
         };
         const req: MermaidRenderRequest = { type: "dp-mermaid-render", reqId, id, source, theme };
         this.frame.target.postMessage(req, "*");
-      });
+        onStart?.();
+      }, (err: Error) => finish(() => reject(err)));
     });
   }
 }
@@ -170,10 +224,23 @@ function listenToWindow(handler: (event: { source: unknown; data: unknown }) => 
   return () => window.removeEventListener("message", fn);
 }
 
+/** The renderer page is served by the daemon over http(s). Any other host
+ *  (the VS Code webview's `vscode-webview:`, `file:`) can't load it. */
+export function rendererHostSupported(protocol: string | undefined): boolean {
+  return protocol === "http:" || protocol === "https:";
+}
+
 let shared: MermaidFrameRenderer | null = null;
 
-/** The companion-wide renderer (created on first use). */
+/** The companion-wide renderer (created on first use). On a non-http(s)
+ *  host it starts unavailable: no frame is ever created, no time is spent. */
 export function sharedMermaidFrameRenderer(): MermaidFrameRenderer {
-  if (!shared) shared = new MermaidFrameRenderer({ createFrame: createSandboxedRendererFrame, listen: listenToWindow });
+  if (!shared) {
+    shared = new MermaidFrameRenderer({
+      createFrame: createSandboxedRendererFrame,
+      listen: listenToWindow,
+      unavailable: !rendererHostSupported(typeof location === "undefined" ? undefined : location.protocol),
+    });
+  }
   return shared;
 }
