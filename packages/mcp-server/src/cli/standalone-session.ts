@@ -10,6 +10,7 @@ import { MAX_DECISION_WAIT_MS } from "../mcp/tools/decision-feedback.js";
 import { createStandaloneSessionId, isStandaloneSessionForProject, isStandaloneSessionId } from "../standalone-session-id.js";
 import type { ToolResult } from "../mcp/tools/types.js";
 import { readBoundedPageFile } from "./page-file.js";
+import type { PageLintWarning } from "../mcp/page-lint.js";
 import { readSessionDirectories } from "./session-selection.js";
 import { pageRevisionFeedbackIdsSchema } from "../store/page-revision-feedback.js";
 
@@ -26,7 +27,9 @@ const requestIdSchema = z.string().uuid().transform((id) => id.toLowerCase());
 export type PresentPageReceipt = { sessionId: string; requestId: string } & (
   | {
     artifactId: string; companionUrl: string; sourcePath?: string; replayed?: true;
-    status?: string; currentArtifactId?: string; currentVersion?: number; currentStatus?: string; note?: string; isError?: never;
+    status?: string; currentArtifactId?: string; currentVersion?: number; currentStatus?: string; note?: string;
+    /** #714 gap 6 — non-blocking authoring lint from the present. */
+    warnings?: PageLintWarning[]; isError?: never;
   }
   | { isError: true; code: string; reason?: string; message: string }
 );
@@ -307,13 +310,14 @@ export function pageReceiptFromResult(
       message: code === ERROR_CODES.standalone_operation_conflict ? message : `${message} ${PRESENT_OPTIONS_RETRY}`,
     };
   }
-  const { artifactId, sourcePath, replayed, status, currentArtifactId, currentVersion, currentStatus } = result.structuredContent ?? {};
+  const { artifactId, sourcePath, replayed, status, currentArtifactId, currentVersion, currentStatus, warnings } = result.structuredContent ?? {};
   if (typeof artifactId !== "string") throw new Error("The daemon did not confirm the page presentation. If retrying, use the same --request-id and page input.");
   const moved = typeof currentArtifactId === "string" && typeof currentVersion === "number";
   return {
     ...receipt, artifactId, companionUrl,
     ...(typeof sourcePath === "string" ? { sourcePath } : {}),
     ...(replayed === true ? { replayed: true as const } : {}),
+    ...(Array.isArray(warnings) && warnings.length > 0 ? { warnings: warnings as PageLintWarning[] } : {}),
     ...(typeof status === "string" ? { status } : {}),
     ...(moved ? { currentArtifactId, currentVersion, ...(typeof currentStatus === "string" ? { currentStatus } : {}) } : {}),
     ...(replayed === true && moved && currentArtifactId !== artifactId
