@@ -93,6 +93,11 @@ describe("extractPageAsks", () => {
     expect(openPageAsks([ask!], [{ author: "human", parentCommentId: null, target: { htmlAnchor: { locator: "#sib", quote: "Sibling" } } }])).toHaveLength(1);
   });
 
+  it("a nested table with an omitted </tr> doesn't leak scope past its </table>", () => {
+    const html = '<table><tr><td id="q" data-dp-question>Q<table><tr><td id="inner">inner</table><td id="sib">S</table>';
+    expect(extractPageAsks(html)).toEqual([{ id: "q", kind: "question", text: "Q inner", childIds: ["inner"] }]);
+  });
+
   it("an implicitly closed item still owns its real children, and a nested list doesn't close it", () => {
     const html = '<ul><li id="q1" data-dp-question>Pick <ul><li id="inner">a</li><li>b</li></ul> <em id="note">n</em><li id="sib">Sibling</ul>';
     expect(extractPageAsks(html)).toEqual([{ id: "q1", kind: "question", text: "Pick a b n", childIds: ["inner", "note"] }]);
@@ -183,52 +188,60 @@ describe("openPageAsks", () => {
     expect(openPageAsks(withChild, [comment({ locator: "#q-note", quote: "eu" })])).toEqual([]);
   });
 
-  it("an earlier version's answer counts for a reused id only if it quoted the ask's current text", () => {
-    const current = { artifactId: "art_v2", version: 2 };
-    const v2 = extractPageAsks('<div id="q1" data-dp-question>Which region?</div><div id="q2" data-dp-question>Which DB?</div>');
-    const onV1 = (locator: string, quote: string) => ({ ...comment({ locator, quote }), target: { artifactId: "art_v1", htmlAnchor: { locator, quote, version: 1 } } });
-    // q1 reused for a NEW question: the v1 answer quoted "Which DB?" → still open.
-    // q2 kept its id and its text → the v1 answer still counts.
-    const open = openPageAsks(v2, [onV1("#q1", "Which DB?"), onV1("#q2", "Which DB?")], current);
-    expect(open.map((a) => a.id)).toEqual(["q1"]);
-    // A same-version comment needs only the anchor match.
-    const same = { ...comment({ locator: "#q1", quote: "anything" }), target: { artifactId: "art_v2", htmlAnchor: { locator: "#q1", quote: "anything", version: 2 } } };
-    expect(openPageAsks(v2, [same], current).map((a) => a.id)).toEqual(["q2"]);
-    // An earlier-version comment quoting only a label of the ask doesn't count.
-    expect(openPageAsks(v2, [onV1("#q2", "Which")], current).map((a) => a.id)).toEqual(["q1", "q2"]);
-  });
-
-  describe("earlier-version answers after a revise", () => {
+  describe("earlier-version answers: ask continuity", () => {
     const current = { artifactId: "art_v2", version: 2 };
     const onV1 = (locator: string, quote: string) => ({
       author: "human", parentCommentId: null, target: { artifactId: "art_v1", htmlAnchor: { locator, quote, version: 1 } },
     });
-    const v2 = extractPageAsks(
+    const V1 =
       '<div id="db" data-dp-decision>Which database for sessions? <ul><li id="pg">Postgres</li><li id="my">MySQL</li></ul></div>' +
       '<p id="ent" data-dp-question>Isn&rsquo;t the &ldquo;caf&eacute;&rdquo; cache enough for now?</p>' +
-      '<p id="d" data-dp-decision>Decide:</p>',
-    );
-    const openIds = (comments: unknown[]) => openPageAsks(v2, comments as never, current).map((a) => a.id);
+      '<p id="d" data-dp-decision>Decide:</p>';
+    const lookup = (versions: Record<string, string>) => (id: string) => (versions[id] !== undefined ? extractPageAsks(versions[id]!) : undefined);
+    const openIds = (v2Html: string, comments: unknown[], versions: Record<string, string> = { art_v1: V1 }) =>
+      openPageAsks(extractPageAsks(v2Html), comments as never, current, lookup(versions)).map((a) => a.id);
 
-    it("a comment on a child option still answers", () => {
-      expect(openIds([onV1("#pg", "Postgres")])).toEqual(["ent", "d"]);
+    it("the same question kept across a revise stays answered: child option, selection, entity Reply, short ask", () => {
+      // v2 respells the entities and adds whitespace: still the same text.
+      const V2 = V1.replace("&rsquo;", "\u2019").replace("Postgres</li>", "Postgres </li>");
+      expect(openIds(V2, [onV1("#pg", "Postgres")])).toEqual(["ent", "d"]);
+      expect(openIds(V2, [onV1("#db", "database for sessions")])).toEqual(["ent", "d"]);
+      expect(openIds(V2, [onV1("#ent", "Isn\u2019t the \u201Ccaf\u00E9\u201D cache enough for now?")])).toEqual(["db", "d"]);
+      expect(openIds(V2, [onV1("#d", "Decide:")])).toEqual(["db", "ent"]);
     });
-    it("a text selection inside the ask still answers", () => {
-      expect(openIds([onV1("#db", "database for sessions")])).toEqual(["ent", "d"]);
+
+    it("a reused id for a DIFFERENT question doesn't inherit the old answer (the Postgres probe)", () => {
+      const V1db = '<div id="q1" data-dp-question>Which DB? <ul><li id="pg">Postgres</li><li>MySQL</li></ul></div>';
+      const V2db = '<div id="q1" data-dp-question>Which Postgres version? <ul><li id="v15">15</li><li>16</li></ul></div>';
+      expect(openIds(V2db, [onV1("#pg", "Postgres"), onV1("#q1", "Which DB? Postgres MySQL")], { art_v1: V1db })).toEqual(["q1"]);
     });
-    it("a Reply quoting the frame's text (curly quotes, accents) still answers", () => {
-      expect(openIds([onV1("#ent", "Isn\u2019t the \u201Ccaf\u00E9\u201D cache enough for now?")])).toEqual(["db", "d"]);
-      // …and straight quotes in the old quote fold to the same text.
-      expect(openIds([onV1("#ent", "Isn't the \"café\" cache enough for now?")])).toEqual(["db", "d"]);
+
+    it("a reworded question reopens", () => {
+      const V2 = V1.replace("Which database for sessions?", "Which database for sessions and caches?");
+      expect(openIds(V2, [onV1("#db", "Which database for sessions?")])).toEqual(["db", "ent", "d"]);
     });
-    it("a reused id whose text changed stays open (the old quote isn't in the new text)", () => {
-      const reused = extractPageAsks('<div id="db" data-dp-decision>Which region for the cluster?</div>');
-      expect(openPageAsks(reused, [onV1("#db", "Which database for sessions?")] as never, current)).toHaveLength(1);
+
+    it("the old version's HTML unavailable, or the ask absent from it: the comment doesn't count", () => {
+      expect(openIds(V1, [onV1("#pg", "Postgres")], {})).toEqual(["db", "ent", "d"]);
+      expect(openPageAsks(extractPageAsks(V1), [onV1("#pg", "Postgres")] as never, current).map((a) => a.id)).toEqual(["db", "ent", "d"]);
+      expect(openIds(V1, [onV1("#pg", "Postgres")], { art_v1: "<p>no asks</p>" })).toEqual(["db", "ent", "d"]);
     });
-    it("a short new ask needs an exact match: an old longer quote doesn't answer 'Decide:'", () => {
-      expect(openIds([onV1("#d", "Decide: a 60s TTL, or invalidate on write?")])).toEqual(["db", "ent", "d"]);
-      expect(openIds([onV1("#d", "Decide:")])).toEqual(["db", "ent"]);
-      expect(openIds([onV1("#db", "Which d")])).toEqual(["db", "ent", "d"]); // under 8 characters
+
+    it("the comment must have targeted the ask IN ITS OWN version (an old child id that moved out doesn't count)", () => {
+      const V1moved = V1.replace('<li id="pg">Postgres</li>', "<li>Postgres</li>") + '<p id="pg">Postgres elsewhere</p>';
+      expect(openIds(V1, [onV1("#pg", "Postgres")], { art_v1: V1moved })).toEqual(["db", "ent", "d"]);
+    });
+
+    it("a same-version comment needs only the anchor match", () => {
+      const same = { author: "human", parentCommentId: null, target: { artifactId: "art_v2", htmlAnchor: { locator: "#d", quote: "x", version: 2 } } };
+      expect(openIds(V1, [same])).toEqual(["db", "ent"]);
+    });
+
+    it("a clipped long ask continues when one text is a prefix of the other at the clip", () => {
+      const long = (tail: string) => `<p id="L" data-dp-question>${"word ".repeat(600)}${tail}</p>`;
+      expect(openIds(long("end"), [onV1("#L", "word")], { art_v1: long("different end") })).toEqual([]);
+      const changedEarly = (w: string) => `<p id="L" data-dp-question>${w} ${"word ".repeat(600)}</p>`;
+      expect(openIds(changedEarly("Alpha"), [onV1("#L", "word")], { art_v1: changedEarly("Beta") })).toEqual(["L"]);
     });
   });
 

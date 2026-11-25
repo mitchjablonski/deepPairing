@@ -22,7 +22,14 @@
  *    on such a child counts as inside the ask. Only the innermost ask gets
  *    them, matching the frame.
  */
-import { PAGE_ASK_LIMITS, PAGE_SANITIZE_DROP_TAGS, isPageAskAnswered, type PageAskKind, type PageAskVersion } from "@deeppairing/shared";
+import {
+  PAGE_ASK_LIMITS,
+  PAGE_SANITIZE_DROP_TAGS,
+  isPageAskAnswered,
+  type EarlierAsksLookup,
+  type PageAskKind,
+  type PageAskVersion,
+} from "@deeppairing/shared";
 import { BLOCK_TAGS, DROP_ELEMENTS, TEXT_ELEMENTS, opensElement } from "./page-text.js";
 import { decodeHtmlEntities } from "./page-anchor-relocate.js";
 
@@ -37,13 +44,13 @@ export interface PageAskScan {
   /** Ids of elements inside the ask (not other asks), capped. */
   childIds?: string[];
   /** More of the ask's text than `text` (up to MATCH_TEXT_MAX), only when it
-   *  is longer: an earlier-version quote of a child or a selection anywhere
-   *  in the ask is matched against it. Internal; never sent to the agent. */
+   *  is longer: ask continuity across versions compares it. Internal; never
+   *  sent to the agent. */
   matchText?: string;
 }
 
-/** How much of an ask's text is kept for matching earlier-version quotes. */
-const MATCH_TEXT_MAX = 2000;
+/** How much of an ask's text is kept for ask continuity across versions. */
+const MATCH_TEXT_MAX = PAGE_ASK_LIMITS.matchText;
 
 /** HTML's implicit end tags: an open element of the key's tag ends when one
  *  of `siblings` opens in the same scope (no new scope container opened in
@@ -69,6 +76,10 @@ const IMPLICIT_CLOSES: Record<string, { siblings: ReadonlySet<string>; scope: re
 })();
 /** Tags whose opening can implicitly close an open ask. */
 const IMPLICIT_TRIGGERS = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.siblings]));
+/** Counts a nested table must not leak: `</table>` restores them to what
+ *  they were when that table opened (an inner unclosed tr/td otherwise
+ *  inflates the outer table's scope). */
+const TABLE_SCOPED = ["tr", "td", "th", "thead", "tbody", "tfoot"] as const;
 /** Tags whose closing can implicitly close an open ask. */
 const IMPLICIT_SCOPES = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.scope]));
 
@@ -247,6 +258,9 @@ export function extractPageAsks(html: string): PageAskScan[] {
     }
   };
 
+  /** Per open table: the TABLE_SCOPED counts just before it opened. */
+  const tableSnapshots: number[][] = [];
+
   let i = 0;
   while (i < n) {
     if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0) break;
@@ -290,8 +304,17 @@ export function extractPageAsks(html: string): PageAskScan[] {
     if (!m) continue;
     const name = m[2]!;
     if (BLOCK_TAGS.has(name)) feed(" ");
-    if (m[1]) { closeTag(name); implicitOnClose(name); continue; }
+    if (m[1]) {
+      closeTag(name);
+      if (name === "table") {
+        const snap = tableSnapshots.pop();
+        if (snap) TABLE_SCOPED.forEach((t, k) => openCount.set(t, snap[k]!));
+      }
+      implicitOnClose(name);
+      continue;
+    }
     implicitOnOpen(name);
+    if (name === "table") tableSnapshots.push(TABLE_SCOPED.map((t) => openCount.get(t) ?? 0));
     if (P_CLOSERS.has(name) && (openCount.get("p") ?? 0) > 0) {
       // An open <p> ends here, however many were left open.
       openCount.set("p", 1);
@@ -345,12 +368,14 @@ export function pageAsksFor(artifactId: string, html: string): PageAskScan[] {
   return asks;
 }
 
-/** The asks no human comment answers yet (the companion's rule, including
- *  the earlier-version quote guard when `current` is given). */
+/** The asks no human comment answers yet (the companion's rule). A comment
+ *  from an earlier version counts only through ask continuity, which needs
+ *  `earlierAsks` (that version's scanned asks); without it, it doesn't. */
 export function openPageAsks(
   asks: readonly PageAskScan[],
   comments: Parameters<typeof isPageAskAnswered>[1],
   current?: PageAskVersion,
+  earlierAsks?: EarlierAsksLookup,
 ): PageAskScan[] {
-  return asks.filter((a) => !isPageAskAnswered(a, comments, current));
+  return asks.filter((a) => !isPageAskAnswered(a, comments, current, earlierAsks));
 }

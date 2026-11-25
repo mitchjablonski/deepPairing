@@ -7,8 +7,10 @@
  * server scans them from the page text; both decide "answered" with the SAME
  * rule, kept here so the two can't drift: an ask is answered once a human
  * comment is anchored to the ask's element (its locator or `#id`) or inside it.
- * A comment made on an EARLIER version must also quote the ask's CURRENT text,
- * because a revision can reuse an id or a position for a different ask.
+ * A comment made on an EARLIER version counts only through ASK CONTINUITY: the
+ * same ask (same id) existed in the comment's own version with the same text,
+ * and the comment targeted it there. A revision can reuse an id for a
+ * different question, and then the old answer doesn't carry.
  */
 
 /** Marks a callout that asks the human to decide something. */
@@ -19,7 +21,7 @@ export const PAGE_QUESTION_ATTR = "data-dp-question";
 export type PageAskKind = "decision" | "question";
 
 /** Bounds shared by the frame collector, the parent schema and the server scanner. */
-export const PAGE_ASK_LIMITS = { max: 50, text: 200, id: 200 } as const;
+export const PAGE_ASK_LIMITS = { max: 50, text: 200, id: 200, matchText: 2000 } as const;
 
 /** Elements whose content never renders in the page frame: the sanitizer
  *  removes them before Run (and they don't render after it), so an ask inside
@@ -119,30 +121,35 @@ export function squashAskText(s: string): string {
     .replace(/\s+/g, "");
 }
 
-/** Below this many squashed characters an ask is too short to match by
- *  substring ("Decide:"): an earlier quote must then equal it exactly. */
-export const ASK_MATCH_MIN_ASK = 12;
-/** The shortest earlier-version quote that may match inside an ask. */
-export const ASK_MATCH_MIN_QUOTE = 8;
-
 /**
- * Does an earlier-version comment still point at THIS ask's text? It guards
- * against a revision reusing an id or a position for a different question,
- * while keeping real answers: a Reply (it quotes the ask text), a click on the
- * ask (its text, perhaps past the clip), a child (an option) or a selection
- * inside it. So: the quote equals the ask's text; or, for an ask of at least
- * ASK_MATCH_MIN_ASK characters, the quote starts with it or is a substring of
- * it of at least ASK_MATCH_MIN_QUOTE characters. A reused id whose text
- * changed fails all three, because the old quote isn't in the new text.
+ * Is `prev` (an ask in an earlier version) the same question as `cur`? Their
+ * texts must be equal after squashAskText, or one a prefix of the other where
+ * the shorter was cut at the clip limit (the companion clips at
+ * PAGE_ASK_LIMITS.text, the server's matchText at PAGE_ASK_LIMITS.matchText).
+ * Empty texts never continue.
  */
-export function quoteMatchesAsk(ask: PageAskRef, quote: string): boolean {
-  const t = squashAskText(ask.matchText ?? ask.text);
-  const q = squashAskText(quote);
-  if (!q || !t) return false;
-  if (q === t || squashAskText(ask.text) === q) return true;
-  if (t.length < ASK_MATCH_MIN_ASK) return false;
-  return q.startsWith(squashAskText(ask.text)) || (q.length >= ASK_MATCH_MIN_QUOTE && t.includes(q));
+export function askTextsContinue(prev: PageAskRef, cur: PageAskRef): boolean {
+  const a = squashAskText(prev.matchText ?? prev.text);
+  const b = squashAskText(cur.matchText ?? cur.text);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [short, shortRef, long] = a.length < b.length ? [a, prev, b] : [b, cur, a];
+  const src = shortRef.matchText ?? shortRef.text;
+  const limit = shortRef.matchText !== undefined ? PAGE_ASK_LIMITS.matchText : PAGE_ASK_LIMITS.text;
+  return src.length >= limit && long.startsWith(short);
 }
+
+/** The ask in an earlier version's list that `cur` continues: same id (an
+ *  id-less ask is matched by its frame locator, when both sides have one). */
+export function findEarlierAsk(cur: PageAskRef, earlier: readonly PageAskRef[]): PageAskRef | undefined {
+  if (cur.id) return earlier.find((o) => o.id === cur.id);
+  if (cur.locator) return earlier.find((o) => !o.id && o.locator === cur.locator);
+  return undefined;
+}
+
+/** The asks of a version, by artifact id; undefined when its HTML isn't
+ *  available (then its comments don't count). */
+export type EarlierAsksLookup = (artifactId: string) => readonly PageAskRef[] | undefined;
 
 /** Is this comment from an earlier version than `current`? */
 export function isEarlierVersionComment(c: PageAskComment, current: PageAskVersion | undefined): boolean {
@@ -153,26 +160,30 @@ export function isEarlierVersionComment(c: PageAskComment, current: PageAskVersi
 }
 
 /**
- * Does this comment answer the ask? A HUMAN root comment, not resolved, whose
- * anchor targets the ask, and — when made on an earlier version — whose quote
- * matches the ask's current text. Companion-side, `insideByFrame` means the
- * frame re-found the comment's spot on THIS version inside this ask: that is
- * evidence enough (re-finding already checked the quoted text against the
- * page), so the quote requirement is skipped. The caller passes it only for a
- * pin the frame found.
+ * Does this comment answer the ask? A HUMAN root comment, not resolved, and:
+ *  - on THIS version: its anchor targets the ask (locator / #id / child id /
+ *    inside), or — companion-side — the frame found its pin inside the ask
+ *    (`insideByFrame`, only ever passed for a current-version comment);
+ *  - on an EARLIER version: ask continuity — `earlierAsks` gives that
+ *    version's asks, the same ask is there (findEarlierAsk) with the same
+ *    text (askTextsContinue), and the comment targeted it THERE. No lookup,
+ *    no such ask, or a reworded ask → it doesn't count (the ask stays open).
  */
 export function commentAnswersAsk(
   ask: PageAskRef,
   c: PageAskComment,
   current?: PageAskVersion,
-  insideByFrame = false,
+  opts: { insideByFrame?: boolean; earlierAsks?: EarlierAsksLookup } = {},
 ): boolean {
   if (c.author !== "human" || c.parentCommentId || c.humanResolvedAt) return false;
   const a = c.target.htmlAnchor;
   if (!a || typeof a.locator !== "string" || typeof a.quote !== "string") return false;
-  if (insideByFrame) return true;
-  if (!anchorTargetsAsk(ask, a)) return false;
-  return !isEarlierVersionComment(c, current) || quoteMatchesAsk(ask, a.quote);
+  if (!isEarlierVersionComment(c, current)) return opts.insideByFrame === true || anchorTargetsAsk(ask, a);
+  const versionId = c.target.artifactId;
+  if (!versionId || versionId === current?.artifactId || !opts.earlierAsks) return false;
+  const list = opts.earlierAsks(versionId);
+  const prev = list ? findEarlierAsk(ask, list) : undefined;
+  return !!prev && askTextsContinue(prev, ask) && anchorTargetsAsk(prev, a);
 }
 
 /** Answered = some comment answers the ask (see commentAnswersAsk). */
@@ -180,6 +191,7 @@ export function isPageAskAnswered(
   ask: PageAskRef,
   comments: ReadonlyArray<PageAskComment>,
   current?: PageAskVersion,
+  earlierAsks?: EarlierAsksLookup,
 ): boolean {
-  return comments.some((c) => commentAnswersAsk(ask, c, current));
+  return comments.some((c) => commentAnswersAsk(ask, c, current, { earlierAsks }));
 }

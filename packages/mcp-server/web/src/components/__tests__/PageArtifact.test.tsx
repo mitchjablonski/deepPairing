@@ -1128,27 +1128,54 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
 
   const states = () => screen.getAllByTestId("page-ask").map((i) => within(i).getByTestId("page-ask-state").textContent);
 
-  it("an earlier version's answer counts for a reused id only if it quoted the ask's current text", () => {
-    const v1: Artifact = { ...pageArtifact, id: "art_ask_v1", version: 1, status: "superseded", content: { title: "P", html: "<p>v1</p>" } };
-    const v2: Artifact = { ...pageArtifact, id: "art_ask_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
-    useArtifactStore.getState().addArtifact(v1);
-    useArtifactStore.getState().addArtifact(v2);
-    const onV1 = (id: string, anchor: Record<string, unknown>): Comment => ({ ...human(id, anchor), target: { artifactId: v1.id, htmlAnchor: anchor as any } });
-    // q1 was "Which DB?" on v1 (answered there); v2 reuses id q1 for a new question.
-    useArtifactStore.getState().addComment(onV1("cmt_1", { kind: "element", locator: "#q1", quote: "Which DB?", version: 1 }));
-    // q2 kept its text: the v1 Reply quoted exactly it.
-    useArtifactStore.getState().addComment(onV1("cmt_2", { kind: "element", locator: "#q2", quote: "Is one more instance in budget?", version: 1 }));
-    render(<PageArtifact artifact={v2} />);
-    const win = fakeFrameWindow();
-    fromFrame(win, {
-      dp: "asks",
-      asks: [
-        { kind: "question", id: "q1", text: "Which region?", locator: "#q1" },
-        { kind: "question", id: "q2", text: "Is one more instance in budget?", locator: "#q2" },
-      ],
-      pinAsks: [],
+  describe("earlier-version answers: ask continuity", () => {
+    const V1 =
+      '<div id="db" data-dp-decision>Which database for sessions? <ul><li id="pg">Postgres</li><li>MySQL</li></ul></div>' +
+      '<p id="cache" data-dp-question>Isn&rsquo;t the &ldquo;caf&eacute;&rdquo; cache enough?</p>';
+    const setup = (v1Html: string | null, v2Asks: Array<Record<string, unknown>>, comments: Array<[string, Record<string, unknown>]>) => {
+      const v1: Artifact = { ...pageArtifact, id: "art_ac_v1", version: 1, status: "superseded", content: { title: "P", html: v1Html ?? "<p>v1</p>" } };
+      const v2: Artifact = { ...pageArtifact, id: "art_ac_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
+      if (v1Html !== null) useArtifactStore.getState().addArtifact(v1);
+      useArtifactStore.getState().addArtifact(v2);
+      comments.forEach(([id, anchor]) =>
+        useArtifactStore.getState().addComment({ ...human(id, anchor), target: { artifactId: v1.id, htmlAnchor: { ...anchor, version: 1 } as any } }),
+      );
+      render(<PageArtifact artifact={v2} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "pins-status", found: comments.map(() => true) });
+      // The frame even says every v1 pin sits inside ask 0: never enough for
+      // an earlier-version comment.
+      fromFrame(win, { dp: "asks", asks: v2Asks, pinAsks: comments.map(() => 0) });
+    };
+    const DB = { kind: "decision", id: "db", text: "Which database for sessions? Postgres MySQL", locator: "#db" };
+    const CACHE = { kind: "question", id: "cache", text: "Isn\u2019t the \u201Ccaf\u00E9\u201D cache enough?", locator: "#cache" };
+
+    it("the same question kept across a revise stays answered: child option, selection, entity Reply", () => {
+      setup(V1, [DB, CACHE], [
+        ["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }],
+        ["cmt_2", { kind: "text", locator: "#cache", quote: "caf\u00E9" }],
+      ]);
+      expect(states()).toEqual(["Answered", "Answered"]);
     });
-    expect(states()).toEqual(["Open", "Answered"]);
+
+    it("a reused id for a different question stays open, even with the frame placing the pin inside it (the Postgres probe)", () => {
+      setup(
+        '<div id="q1" data-dp-question>Which DB? <ul><li id="pg">Postgres</li><li>MySQL</li></ul></div>',
+        [{ kind: "question", id: "q1", text: "Which Postgres version? 15 16", locator: "#q1" }],
+        [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]],
+      );
+      expect(states()).toEqual(["Open"]);
+    });
+
+    it("a reworded question reopens", () => {
+      setup(V1, [{ ...DB, text: "Which database for sessions and caches? Postgres MySQL" }], [["cmt_1", { kind: "element", locator: "#db", quote: "Which database" }]]);
+      expect(states()).toEqual(["Open"]);
+    });
+
+    it("the old version's HTML not loaded: the comment doesn't count", () => {
+      setup(null, [DB], [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]]);
+      expect(states()).toEqual(["Open"]);
+    });
   });
 
   it("an earlier version's comment at the same POSITION doesn't answer an id-less ask (probe)", () => {
@@ -1179,26 +1206,6 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     // A report for a different pin list is not used.
     fromFrame(win, { ...ASKS, pinAsks: [0, 0] });
     expect(states()).toEqual(["Open", "Open"]);
-  });
-
-  it("an earlier version's comment the frame re-found inside the ask answers without a quote match; unfound, it doesn't", () => {
-    const v1: Artifact = { ...pageArtifact, id: "art_in_v1", version: 1, status: "superseded", content: { title: "P", html: "<p>v1</p>" } };
-    const v2: Artifact = { ...pageArtifact, id: "art_in_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
-    useArtifactStore.getState().addArtifact(v1);
-    useArtifactStore.getState().addArtifact(v2);
-    // A comment on a child option ("Postgres") made on v1, with a locator from
-    // v1's structure that no longer names the ask: only the frame can tell.
-    const anchor = { kind: "element", locator: "main > ul > li:nth-of-type(1)", quote: "Postgres", version: 1 };
-    useArtifactStore.getState().addComment({ ...human("cmt_1", anchor), target: { artifactId: v1.id, htmlAnchor: anchor as any } });
-    render(<PageArtifact artifact={v2} />);
-    const win = fakeFrameWindow();
-    const report = { dp: "asks", asks: [{ kind: "decision", id: "db", text: "Which database for sessions? Postgres MySQL", locator: "#db" }], pinAsks: [0] };
-    fromFrame(win, report);
-    expect(states()).toEqual(["Open"]); // no pin status yet: no evidence
-    fromFrame(win, { dp: "pins-status", found: [false] });
-    expect(states()).toEqual(["Open"]);
-    fromFrame(win, { dp: "pins-status", found: [true] });
-    expect(states()).toEqual(["Answered"]);
   });
 
   it("ignores outline, reading progress and asks reports while the page's scripts run (pre-Run values stand)", async () => {

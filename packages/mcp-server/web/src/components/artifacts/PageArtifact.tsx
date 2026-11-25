@@ -28,6 +28,7 @@ import {
 } from "../../lib/pageAnchorMessages";
 import { PageOutline } from "./PageOutline";
 import { PageAsksStrip } from "./PageAsksStrip";
+import { versionAsks } from "../../lib/pageAskVersions";
 import { usePageLineage, usePageVersionDiff } from "../../hooks/usePageVersionDiff";
 import { PageChangeLine, PageRemovedList } from "./PageChangeSummary";
 import type { ChangeLocator } from "../../lib/pageVersionDiff";
@@ -413,25 +414,31 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     postToFrame({ dp: "focus-heading", index, locator: h.locator });
   };
 
-  // #714 gap 5 — an ask is answered once a human comment is anchored to it
-  // (its locator or #id, or inside it — including a child with its own id,
-  // which the frame resolves as pinAsks). Never by a comment the reviewer
-  // resolved or whose spot isn't on this version, and a comment from an
-  // earlier version must also quote the ask's current text (a revision can
-  // reuse an id or a position for a different ask).
+  // #714 gap 5 — an ask is answered once a human comment on THIS version is
+  // anchored to it (its locator or #id, or inside it — including a child
+  // with its own id, which the frame resolves as pinAsks for a found pin).
+  // Never by a comment the reviewer resolved or whose spot isn't on this
+  // version. A comment from an EARLIER version counts only through ask
+  // continuity: the same ask (same id) existed in that version, read from its
+  // parsed HTML, with the same text, and the comment targeted it there — so a
+  // reused id for a different question never inherits an old answer.
   const askAnswered = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
     const pinsAligned = pinAsks.length === anchored.length;
+    const earlierAsks = (versionId: string) => {
+      const entry = lineage.find((l) => l.artifact.id === versionId);
+      return entry ? versionAsks(versionId, coercePageContent(entry.artifact.content).html) ?? undefined : undefined;
+    };
     return asks.map((ask, k) =>
       anchored.some((c, i) => {
         if (found && found[i] === false) return false;
-        // The frame re-found this pin on THIS version inside this ask: that
-        // is evidence enough (no quote check). Only for a pin it reported found.
+        // Only meaningful for a current-version comment (the shared helper
+        // ignores it otherwise), and only for a pin the frame reported found.
         const insideByFrame = pinsAligned && pinAsks[i] === k && found?.[i] === true;
-        return commentAnswersAsk(ask, c, current, insideByFrame);
+        return commentAnswersAsk(ask, c, current, { insideByFrame, earlierAsks });
       }),
     );
-  }, [asks, anchored, pinAsks, found, artifact.id, artifact.version]);
+  }, [asks, anchored, pinAsks, found, artifact.id, artifact.version, lineage]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
     if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });

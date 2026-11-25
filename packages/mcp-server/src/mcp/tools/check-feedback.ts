@@ -137,7 +137,16 @@ async function pageOpenAsksField(
     }
     // Id-less asks can't be matched here (no DOM, no locator): they are
     // reported as unverifiable, never as answered or as owed.
-    return openPageAsks(asks.filter((q) => q.id), comments, { artifactId: a.id, version: a.version }).concat(asks.filter((q) => !q.id));
+    // An earlier version's comment counts only through ask continuity, so
+    // its version's asks are scanned (memoized per id) from that version's
+    // HTML; a version not in this snapshot gives none, and it doesn't count.
+    const earlierAsks = (versionId: string) => {
+      const v = byId.get(versionId);
+      return v && v.type === "page" ? pageAsksFor(v.id, coercePageContent(v.content).html) : undefined;
+    };
+    return openPageAsks(asks.filter((q) => q.id), comments, { artifactId: a.id, version: a.version }, earlierAsks).concat(
+      asks.filter((q) => !q.id),
+    );
   } catch {
     return [];
   }
