@@ -164,9 +164,8 @@ ${renderPageAuthoringGuide()}
   - verdict: present when the human's latest action on this version was
     Request changes (status "revised") or Reject (status "rejected"), with
     "at". "reason" is their explanation, and "commentId" its id, when it can
-    be verified. If "reason" is missing, the response has no verified reason.
-    "reasonTruncated" means only the start of a very long
-    reason fit. Act on the reason before anything else: change the approach
+    be verified. If "reason" is missing, read notes for the human's words.
+    "reasonTruncated" means only the start of a very long reason fit. Act on the reason before anything else: change the approach
     after a Reject, and address it before revising after Request changes.
   - comments: anchored comments. Each has id, content (the human's words),
     parentCommentId (set on a reply), htmlAnchor (where it points: kind,
@@ -218,8 +217,11 @@ ${renderPageAuthoringGuide()}
     -> {"sessionId","requestId","parentArtifactId","artifactId","version","status",...}
   Optionally repeat --ack-comment-id for up to 50 ordinary anchored human
   comments you read on this page or a direct ancestor. Get each ID with
-  read-page-feedback on its exact page version. The receipt lists those IDs
-  in acknowledgedCommentIds once the revision and acknowledgements are saved.
+  read-page-feedback on its exact page version. Pass only ordinary IDs from
+  comments to --ack-comment-id. Verdict reasons and unanchored notes stay on
+  their original version. Read that exact version again after revising.
+  The receipt lists the acknowledgedCommentIds once the revision and
+  acknowledgements are saved.
   Including a comment that is already acknowledged is safe and records no
   additional change. Leave questions and suggestions out of --ack-comment-id.
   You can answer a question in the revised page. Its comment stays pending

@@ -428,10 +428,10 @@ describe("ArtifactStatusActions — draft interactions", () => {
     const reason = "Explain what changed";
     await userEvent.type(screen.getByRole("textbox"), reason);
     if (status === "rejected") {
-      await userEvent.click(screen.getByRole("button", { name: "Reject", exact: true }));
-      await userEvent.click(screen.getByRole("button", { name: "Reject & remember", exact: true }));
+      await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+      await userEvent.click(screen.getByRole("button", { name: "Reject & remember" }));
     } else {
-      await userEvent.click(screen.getByRole("button", { name: "Request changes", exact: true }));
+      await userEvent.click(screen.getByRole("button", { name: "Request changes" }));
     }
 
     await waitFor(() => {
@@ -449,7 +449,7 @@ describe("ArtifactStatusActions — draft interactions", () => {
     render(<ArtifactStatusActions artifact={artifact({ type: "page" })} />);
     const reason = "Please include this detail";
     await userEvent.type(screen.getByRole("textbox"), reason);
-    const action = screen.getByRole("button", { name: "Request changes", exact: true });
+    const action = screen.getByRole("button", { name: "Request changes" });
     await userEvent.click(action);
     await waitFor(() => expect(action).toBeEnabled());
     expect(screen.getByRole("textbox")).toHaveValue(reason);

@@ -69,6 +69,7 @@ describe("deeppairing guide (#681)", () => {
     expect(guide).toContain("at most 50 items and 64 KiB");
     expect(guide).toMatch(/omittedComments counts anchored comments that didn't fit, and\s+omittedNotes counts unanchored notes that didn't fit/);
     expect(guide).toMatch(/Returned comments\s+and notes stay whole/);
+    expect(guide).toContain('If "reason" is missing, read notes for the human\'s words.');
     expect(guide).toContain("File-watch notices are not included.");
     expect(guide).not.toContain("Only anchored human comments are included");
     expect(guide).not.toContain("#679");
@@ -102,6 +103,8 @@ describe("deeppairing guide (#681)", () => {
     expect(guide).toContain("--ack-comment-id <commentId> ...");
     expect(guide).toContain("this page or a direct ancestor");
     expect(guide).toContain("acknowledgedCommentIds");
+    expect(guide).toMatch(/Pass only ordinary IDs from\s+comments to --ack-comment-id/);
+    expect(guide).toMatch(/Verdict reasons and unanchored notes stay on\s+their original version\. Read that exact version again after revising\./);
     expect(guide).toContain("a comment that is already acknowledged is safe");
     expect(guide).toContain("You can answer a question in the revised page.");
     expect(guide).toContain("Use the separate suggestion review flow for suggestions.");
