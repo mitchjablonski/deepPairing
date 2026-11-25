@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Artifact, PlanVisual, PlanVisualFile } from "@deeppairing/shared";
-import { coercePlanContent, coerceSpecContent, coerceDecisionContent, coerceExplainerContent, coerceDebriefContent, coercePageContent } from "@deeppairing/shared";
+import { coercePlanContent, coerceSpecContent, coerceDecisionContent, coerceExplainerContent, coerceDebriefContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { VisualBody } from "./ArtifactVisuals";
 
@@ -82,18 +82,6 @@ function bodyOf(a: Artifact): { title: string; items: DiffItem[] } | null {
   // re-posting, so a revision must show its structural delta. Keyed by heading,
   // detail = the section body (+ overview as its own entry) so a reworded step
   // reads as "changed", a new/dropped step as +/−.
-  // #680 — a PAGE revision: the summary and whether the page itself changed.
-  // The HTML is compared, never rendered here (the live frame is below).
-  if (a.type === "page") {
-    const c = coercePageContent(a.content);
-    return {
-      title: "Page",
-      items: [
-        { key: "summary", label: "Summary", detail: norm(c.summary ?? "") },
-        { key: "html", label: "Page content", detail: c.html },
-      ],
-    };
-  }
   if (a.type === "explainer") {
     const c = coerceExplainerContent(a.content);
     const items: DiffItem[] = [
@@ -209,6 +197,11 @@ export function RevisionDiff({ artifact }: { artifact: Artifact }) {
   // (a first version, or the parent isn't loaded) → nothing to diff.
   const parent = artifact.parentId ? artifacts.find((a) => a.id === artifact.parentId) : undefined;
   if (!parent) return null;
+  // #714 gap 2 — a PAGE shows what changed (reason, section summary, removed
+  // text, highlights) in ONE place: its own header beside the frame, where the
+  // "Changes since vN" toggle, highlight navigation and compare-with selector
+  // live. Repeating a summary here would show the reviewer the same thing twice.
+  if (artifact.type === "page") return null;
 
   return (
     <div className="rounded-lg border border-accent-amber/25 bg-accent-amber-dim/10">

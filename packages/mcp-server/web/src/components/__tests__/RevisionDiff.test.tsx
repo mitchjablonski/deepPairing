@@ -281,3 +281,14 @@ describe("RevisionDiff", () => {
     expect(screen.getByText(/Needs eyes · the expiry check/)).toBeInTheDocument(); // removed
   });
 });
+
+describe("RevisionDiff — page (#714 gap 2)", () => {
+  it("renders nothing for a page: its own header owns the reason and the change summary", () => {
+    const v1 = mkArtifact({ id: "p1", type: "page", version: 1, status: "superseded", content: { title: "P", html: "<p>a</p>" } });
+    const v2 = mkArtifact({ id: "p2", type: "page", version: 2, parentId: "p1", agentReasoning: "Moved to SQLite", content: { title: "P", html: "<p>b</p>" } });
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    const { container } = render(<RevisionDiff artifact={v2} />);
+    expect(container.firstChild).toBeNull();
+  });
+});
