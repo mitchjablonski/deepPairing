@@ -331,3 +331,62 @@ describe("present_page — the rejection gate", () => {
     expect(pages()).toHaveLength(1);
   });
 });
+
+describe("present_page — non-blocking authoring lint (#714 gap 6)", () => {
+  it("returns warnings in the text and structuredContent, and still stores the page", async () => {
+    const res = await callTool("present_page", {
+      title: "CDN page",
+      html: '<p>Diagram below</p><script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>',
+    });
+    expect(res.isError).toBeFalsy();
+    expect(pages()).toHaveLength(1);
+    expect(res.text).toContain("Page warnings (non-blocking; the page was presented)");
+    expect(res.text).toContain("script src x1");
+    expect(res.text).not.toContain("cdn.jsdelivr.net");
+    expect(JSON.stringify(res.structuredContent)).not.toContain("cdn.jsdelivr.net");
+    const codes = (res.structuredContent?.warnings as Array<{ code: string }>).map((w) => w.code);
+    expect(codes).toEqual(["external_asset", "no_headings"]);
+  });
+
+  it("a clean page gets no warnings block and no structured warnings", async () => {
+    const res = await callTool("present_page", {
+      title: "Clean page",
+      html: '<h1>Plan</h1><section id="a"><h2>A</h2><p>See <a href="https://example.com/docs">the docs</a>.</p></section>',
+    });
+    expect(res.isError).toBeFalsy();
+    expect(res.text).not.toContain("Page warnings");
+    expect(res.structuredContent?.warnings).toBeUndefined();
+  });
+
+  it("a page revise_artifact gets the same non-blocking warnings; a clean revision gets none", async () => {
+    await callTool("present_page", { title: "Plan", html: "<h1>Plan</h1><p>v1</p>" });
+    const v1 = pages()[0]!.id;
+    const res = await callTool("revise_artifact", {
+      artifactId: v1, mode: "supersede", reason: "add a chart",
+      content: { html: '<p>v2</p><script src="https://cdn.example.com/chart.js"></script>' },
+    });
+    expect(res.isError).toBeFalsy();
+    expect(res.text).toContain("Superseded");
+    expect(res.text).toContain("Page warnings (non-blocking; the page was presented)");
+    expect((res.structuredContent?.warnings as Array<{ code: string }>).map((w) => w.code)).toEqual(["external_asset", "no_headings"]);
+    const v2 = pages().find((p) => p.status === "draft")!.id;
+    const clean = await callTool("revise_artifact", { artifactId: v2, mode: "supersede", reason: "inline it", content: { html: "<h1>Plan</h1><p>v3</p>" } });
+    expect(clean.isError).toBeFalsy();
+    expect(clean.text).not.toContain("Page warnings");
+    expect(clean.structuredContent?.warnings).toBeUndefined();
+  });
+
+  it("the lint never changes the gate: a page with warnings is still refused on a rejected approach", async () => {
+    store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });
+    const res = await callTool("present_page", {
+      title: "Hosting proposal",
+      html: '<p>We should move the API to Railway.</p><img src="https://x.test/a.png">',
+    });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("too expensive for our scale");
+    expect(res.text).not.toContain("Page warnings");
+    expect(res.structuredContent?.warnings).toBeUndefined();
+    expect(pages()).toHaveLength(0);
+  });
+});
+

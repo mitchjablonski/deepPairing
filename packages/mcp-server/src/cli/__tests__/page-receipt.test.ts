@@ -15,6 +15,13 @@ describe("pageReceiptFromResult", () => {
       .toEqual({ ...receipt, artifactId: "art_1", companionUrl: url, sourcePath: "docs/p.html" });
   });
 
+  it("carries non-blocking lint warnings into the CLI JSON (#714 gap 6)", () => {
+    const warnings = [{ code: "no_headings", message: "The page has no headings." }];
+    expect(pageReceiptFromResult(receipt, url, ok({ artifactId: "art_1", warnings })))
+      .toEqual({ ...receipt, artifactId: "art_1", companionUrl: url, warnings });
+    expect(pageReceiptFromResult(receipt, url, ok({ artifactId: "art_1", warnings: [] }))).not.toHaveProperty("warnings");
+  });
+
   it("carries status, the successor (including currentStatus) and the moved note on a replay", () => {
     expect(pageReceiptFromResult(receipt, url, ok({
       artifactId: "art_1", sourcePath: "docs/p.html", replayed: true, status: "superseded",

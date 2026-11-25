@@ -104,6 +104,55 @@ describe("deeppairing guide (#681)", () => {
     expect(guide).toContain("includes currentArtifactId.");
   });
 
+  it("splits watched (--path) and inline (--file) page flows (#681 Astra findings)", () => {
+    const watched = guide.slice(guide.indexOf("5a. WATCHED PAGE"), guide.indexOf("5b. INLINE PAGE"));
+    const inline = guide.slice(guide.indexOf("5b. INLINE PAGE"), guide.indexOf("6. READ THE DECISION"));
+    expect(watched).toContain("(presented with --path)");
+    expect(watched).toContain("Edit the source file.");
+    expect(watched).toMatch(/read the ORIGINAL page/);
+    expect(watched).toContain("successor.id");
+    expect(watched).toMatch(/asynchronous and gated/);
+    expect(watched).toMatch(/leaves the page unchanged records nothing/);
+    expect(watched).toMatch(/is refused and records nothing/);
+    expect(watched).toMatch(/can't\s+acknowledge comments by ID/);
+    // A gate-refused watched save is silent on read-page-feedback today.
+    expect(watched.replace(/\s+/g, " ")).toContain("A save the gate refuses writes a notice on the live version that read-page-feedback doesn't return yet");
+    expect(watched).toMatch(/check the page in\s+the companion/);
+    expect(watched).not.toContain("deeppairing revise-page");
+    expect(watched).not.toContain("--ack-comment-id");
+    expect(inline).toContain("(presented with --file)");
+    expect(inline).toContain("deeppairing revise-page");
+    expect(inline).toContain("--ack-comment-id");
+    // Both presents are shown, not just --path.
+    expect(guide).toContain("deeppairing present page --session-id <sessionId> --request-id <uuid> --path page.html");
+    expect(guide).toContain("deeppairing present page --session-id <sessionId> --request-id <uuid> --file page.html");
+    // New-UUID-on-changed-bytes applies to --file input only; --path binds the path.
+    expect(guide).toMatch(/the bytes of a --file page or revision/);
+    expect(guide).toMatch(/A --path present binds the path, not the bytes/);
+    expect(guide).toMatch(/currentArtifactId and currentVersion/);
+  });
+
+  it("tells the agent to share the URL and wait for review before trusting an empty read", () => {
+    expect(guide).toMatch(/The receipt only confirms the page was created/);
+    expect(guide).toMatch(/then wait for them to\s+review it/);
+    // Empty means "no pending anchored comments", not "not reviewed" (Codex P2).
+    expect(guide).not.toMatch(/means\s+they haven't reviewed yet/);
+    expect(guide).toMatch(/Don't read an empty read-page-feedback result as "no feedback"/);
+    const flat = guide.replace(/\s+/g, " ");
+    expect(flat).toContain('An empty "comments" list means only that there are no PENDING ANCHORED comments.');
+    for (const reason of ["may not have reviewed yet", "may have approved with no comments", "may have left only an unanchored note", "acknowledged their comments already"]) {
+      expect(flat).toContain(reason);
+    }
+    expect(flat).toMatch(/check artifact\.status .* and successor, or wait for the human/);
+    expect(guide).toMatch(/give the human the companionUrl and wait\s+for their review/);
+  });
+
+  it("names the clone CLI entry and never conflates it with the MCP server", () => {
+    expect(guide).toContain("packages/mcp-server/dist/cli/init.js");
+    expect(guide).toMatch(/dist\/standalone\.js\s+next to it is the MCP server, not this CLI/);
+    expect(guide).not.toMatch(/node \S*standalone\.js/);
+  });
+
   it("mentions no command outside the known list", () => {
     const mentioned = new Set<string>();
     for (const match of guide.matchAll(/deeppairing ([a-z-]+)(?: (options|page))?/g)) {
