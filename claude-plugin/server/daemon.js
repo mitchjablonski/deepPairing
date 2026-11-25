@@ -21535,6 +21535,61 @@ var PageRuleOutBodySchema = external_exports.object({
   reason: external_exports.string().max(PAGE_RULE_OUT_REASON_MAX).refine((s) => s.trim().length > 0, { message: "Say why you're ruling this out" })
 });
 
+// ../shared/dist/schemas/page-asks.js
+var PAGE_ASK_BREAK_TAGS = [
+  "br",
+  "hr",
+  "p",
+  "div",
+  "li",
+  "ul",
+  "ol",
+  "menu",
+  "dl",
+  "dt",
+  "dd",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "table",
+  "caption",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "td",
+  "th",
+  "section",
+  "article",
+  "aside",
+  "nav",
+  "main",
+  "header",
+  "footer",
+  "address",
+  "blockquote",
+  "pre",
+  "listing",
+  "figure",
+  "figcaption",
+  "details",
+  "summary",
+  "dialog",
+  "fieldset",
+  "legend",
+  "form",
+  "hgroup",
+  "search",
+  "select",
+  "option",
+  "optgroup",
+  "center"
+];
+var BREAK_TAG_SET = new Set(PAGE_ASK_BREAK_TAGS);
+
 // ../shared/dist/schemas/annotation.js
 var SessionAnnotationSchema = external_exports.object({
   id: external_exports.string(),

@@ -23859,21 +23859,97 @@ function anchorTargetsAsk(ask, anchor) {
       return true;
   return false;
 }
-function squashAskText(s) {
-  return s.normalize("NFKC").replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'").replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"').replace(/\s+/g, "");
+var PAGE_ASK_BREAK_TAGS = [
+  "br",
+  "hr",
+  "p",
+  "div",
+  "li",
+  "ul",
+  "ol",
+  "menu",
+  "dl",
+  "dt",
+  "dd",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "table",
+  "caption",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "td",
+  "th",
+  "section",
+  "article",
+  "aside",
+  "nav",
+  "main",
+  "header",
+  "footer",
+  "address",
+  "blockquote",
+  "pre",
+  "listing",
+  "figure",
+  "figcaption",
+  "details",
+  "summary",
+  "dialog",
+  "fieldset",
+  "legend",
+  "form",
+  "hgroup",
+  "search",
+  "select",
+  "option",
+  "optgroup",
+  "center"
+];
+var BREAK_TAG_SET = new Set(PAGE_ASK_BREAK_TAGS);
+function isAskBreakTag(tag) {
+  return BREAK_TAG_SET.has(tag);
+}
+function foldAskChars(s) {
+  return s.normalize("NFKC").replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'").replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
 }
 var AskTextHasher = class {
   h1 = 3735928559;
   h2 = 1103547991;
   chars = 0;
+  /** A whitespace run was seen after some text and not emitted yet. */
+  pendingSpace = false;
+  emit(ch) {
+    this.h1 = Math.imul(this.h1 ^ ch, 2654435761);
+    this.h2 = Math.imul(this.h2 ^ ch, 1597334677);
+    this.chars++;
+  }
   push(chunk) {
-    const s = squashAskText(chunk);
+    const s = foldAskChars(chunk);
     for (let i = 0; i < s.length; i++) {
       const ch = s.charCodeAt(i);
-      this.h1 = Math.imul(this.h1 ^ ch, 2654435761);
-      this.h2 = Math.imul(this.h2 ^ ch, 1597334677);
+      if (/\s/.test(s[i])) {
+        if (this.chars > 0)
+          this.pendingSpace = true;
+        continue;
+      }
+      if (this.pendingSpace) {
+        this.emit(32);
+        this.pendingSpace = false;
+      }
+      this.emit(ch);
     }
-    this.chars += s.length;
+  }
+  /** A `<br>` or a block boundary: one separator, under the same collapse
+   *  and trim rules as whitespace (never doubled, never leading/trailing). */
+  separate() {
+    if (this.chars > 0)
+      this.pendingSpace = true;
   }
   /** The hash, or undefined when no text was pushed. */
   digest() {
@@ -36718,6 +36794,12 @@ var CONTAINER_DROPS = PAGE_SANITIZE_DROP_TAGS.filter(
   (t) => !DROP_ELEMENTS.includes(t) && t !== "base" && t !== "embed"
 );
 var CHILD_IDS_MAX = 50;
+var LEADING_NEWLINE_TAGS = /* @__PURE__ */ new Set(["pre", "listing", "textarea"]);
+function dropLeadingNewline(body, tag) {
+  if (!LEADING_NEWLINE_TAGS.has(tag)) return body;
+  if (body.startsWith("\r\n")) return body.slice(2);
+  return body[0] === "\n" || body[0] === "\r" ? body.slice(1) : body;
+}
 var VOID_TAGS = /* @__PURE__ */ new Set([
   "area",
   "base",
@@ -36850,10 +36932,10 @@ function extractPageAsks(html) {
     c.ask.fullHash = c.hasher.digest() ?? (c.fallback ? askTextHash(c.fallback) : void 0) ?? "";
     if (!c.ask.fullHash) delete c.ask.fullHash;
   };
-  const feed = (s) => {
-    if (!s) return;
-    if (hashing.length > 0 && /\S/.test(s)) {
-      const text = decode3(s);
+  const feed = (s, source = s) => {
+    if (!s && !source) return;
+    if (hashing.length > 0 && source) {
+      const text = decode3(source);
       let closed = false;
       for (const c of hashing) {
         if (c.closed) closed = true;
@@ -36861,7 +36943,7 @@ function extractPageAsks(html) {
       }
       if (closed) hashing = hashing.filter((c) => !c.closed);
     }
-    if (hungry.length === 0) return;
+    if (hungry.length === 0 || !s) return;
     let full = false;
     for (const c of hungry) {
       if (c.done) {
@@ -36917,7 +36999,7 @@ function extractPageAsks(html) {
   const tableSnapshots = [];
   let i = 0;
   while (i < n) {
-    if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0) break;
+    if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0 && hashing.every((c2) => c2.closed)) break;
     const lt = html.indexOf("<", i);
     if (lt === -1) {
       feed(html.slice(i));
@@ -36941,11 +37023,11 @@ function extractPageAsks(html) {
     }
     const gt = tagEnd(lt);
     if (gt === -1) {
-      feed(html.slice(lt));
+      feed(html.slice(lt), "");
       break;
     }
     if (opensElement(lower, lt, "plaintext")) {
-      feed(" " + html.slice(gt + 1));
+      feed(" " + html.slice(gt + 1), html.slice(gt + 1));
       break;
     }
     const hidden = CONTAINER_DROPS.find((t) => opensElement(lower, lt, t));
@@ -36965,7 +37047,10 @@ function extractPageAsks(html) {
         i = gt + 1;
         continue;
       }
-      if (literal2) feed(" " + html.slice(gt + 1, close) + " ");
+      if (literal2) {
+        const body = dropLeadingNewline(html.slice(gt + 1, close), literal2);
+        feed(" " + body + " ", body);
+      }
       const closeEnd = html.indexOf(">", close);
       i = closeEnd === -1 ? n : closeEnd + 1;
       continue;
@@ -36973,8 +37058,15 @@ function extractPageAsks(html) {
     const m = /^<(\/?)\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
     i = gt + 1;
     if (!m) continue;
+    if (!m[1] && LEADING_NEWLINE_TAGS.has(m[2])) {
+      if (html.startsWith("\r\n", i)) i += 2;
+      else if (html[i] === "\n" || html[i] === "\r") i += 1;
+    }
     const name = m[2];
-    if (BLOCK_TAGS.has(name)) feed(" ");
+    if (BLOCK_TAGS.has(name)) feed(" ", "");
+    if (hashing.length > 0 && isAskBreakTag(name)) {
+      for (const c2 of hashing) if (!c2.closed) c2.hasher.separate();
+    }
     if (m[1]) {
       closeTag(name);
       if (name === "table") {
