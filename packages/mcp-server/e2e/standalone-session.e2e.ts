@@ -367,6 +367,20 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     expect(JSON.parse(staleRevision.stdout)).toMatchObject({
       isError: true, code: "parent_superseded", currentArtifactId: revised.artifactId, currentVersion: 2,
     });
+
+    // #714 gap 11 — a <pre class="mermaid"> block is rendered to SVG by the
+    // companion (real Mermaid in a real browser), with Mermaid's node ids kept
+    // for the annotator's diagram-node anchor.
+    const mermaidFile = path.join(root, "mermaid-page.html");
+    await fs.writeFile(mermaidFile, '<h1>Flow</h1><pre class="mermaid">flowchart LR\n  Start[Start here] --&gt; Done[Done]</pre>');
+    const mermaidPage = JSON.parse((await run(project, "present", "page", "--session-id", resumed.sessionId,
+      "--request-id", randomUUID(), "--file", mermaidFile, "--title", "Mermaid page")).stdout);
+    await page.locator(`button[data-artifact-item="${mermaidPage.artifactId}"]`).click();
+    const mermaidFrame = page.locator(`[data-dp-pane][data-artifact-id="${mermaidPage.artifactId}"]:not([inert])`)
+      .getByTestId("page-artifact").frameLocator("iframe");
+    await expect(mermaidFrame.locator('[data-dp-mermaid="rendered"] svg g.node[data-id="Start"]')).toBeVisible({ timeout: 15_000 });
+    await expect(mermaidFrame.locator("pre.mermaid")).toHaveCount(0);
+    await expect(mermaidFrame.locator("[data-dp-mermaid-note]")).toHaveCount(0);
   } finally {
     await page.close();
     await stopProjectDaemon(project);

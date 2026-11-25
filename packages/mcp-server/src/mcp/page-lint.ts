@@ -102,19 +102,56 @@ function externalSrcsetCount(value: string): number {
   return count;
 }
 
-/** CSS with every comment blanked out, by one forward indexOf walk. */
-function stripCssComments(css: string): string {
+/**
+ * CSS with every comment blanked out, in one forward pass. String-aware: a
+ * `/*` inside a quoted string (single or double, with backslash escapes) or an
+ * unquoted `url(...)` is literal text, not a comment, so
+ * `content:"/*"` cannot hide the rest of the stylesheet from the lint. A
+ * string ends at its closing quote, an unescaped newline (CSS's bad-string
+ * rule) or the end of input. Every character is visited once.
+ */
+export function stripCssComments(css: string): string {
   let out = "";
   let i = 0;
-  while (i < css.length) {
-    const open = css.indexOf("/*", i);
-    if (open === -1) { out += css.slice(i); break; }
-    out += css.slice(i, open) + " ";
-    const close = css.indexOf("*/", open + 2);
-    if (close === -1) break; // an unterminated comment runs to the end
-    i = close + 2;
+  let from = 0; // start of the pending literal run copied into `out`
+  const n = css.length;
+  while (i < n) {
+    const c = css.charCodeAt(i);
+    if (c === 0x2f /* / */ && css.charCodeAt(i + 1) === 0x2a /* * */) {
+      out += css.slice(from, i) + " ";
+      const close = css.indexOf("*/", i + 2);
+      if (close === -1) return out; // an unterminated comment runs to the end
+      i = close + 2;
+      from = i;
+    } else if (c === 0x22 /* " */ || c === 0x27 /* ' */) {
+      i++;
+      while (i < n) {
+        const d = css.charCodeAt(i);
+        if (d === 0x5c /* \ */) { i += 2; continue; }
+        i++;
+        if (d === c || d === 0x0a) break;
+      }
+    } else if ((c === 0x28 /* ( */) && i >= 3 && css.slice(i - 3, i).toLowerCase() === "url") {
+      // An unquoted url( ... ) token: copy it through to its `)`. A quoted
+      // one falls back to the string branch on the next character.
+      let j = i + 1;
+      while (j < n && isSpace(css.charCodeAt(j))) j++;
+      const q = css.charCodeAt(j);
+      if (q === 0x22 || q === 0x27) { i = j; continue; }
+      while (j < n) {
+        const d = css.charCodeAt(j);
+        if (d === 0x5c) { j += 2; continue; }
+        j++;
+        if (d === 0x29 /* ) */) break;
+      }
+      i = j;
+    } else if (c === 0x5c /* \\ */) {
+      i += 2; // an escaped character (e.g. \" ) never opens a string or comment
+    } else {
+      i++;
+    }
   }
-  return out;
+  return out + css.slice(from, Math.min(i, n));
 }
 
 /**

@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { PrototypeFrame } from "../PrototypeFrame";
+import { PrototypeFrame, type FrameAnnotation } from "../PrototypeFrame";
+import { sanitizePageHtml } from "../../lib/pageSanitize";
+import { renderPageMermaid, type MermaidRenderer } from "../../lib/pageMermaid";
+import { usePreferencesStore } from "../../stores/preferences";
 
 describe("PrototypeFrame", () => {
   it("is click-to-run: no iframe until the user opts in", () => {
@@ -63,5 +66,69 @@ describe("PrototypeFrame", () => {
     expect(iframe.getAttribute("sandbox")).toBe("");
     await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
     expect(document.querySelector("iframe")!.getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  // #714 gap 11 — the page's Mermaid blocks are rendered parent-side (a fake
+  // renderer here: happy-dom has no layout) before the srcdoc is built.
+  describe("Mermaid prepare pass", () => {
+    const fakeRenderer = (themes: string[]): MermaidRenderer => async (id, _src, theme) => {
+      themes.push(theme);
+      return `<svg id="${id}" onload="alert(1)"><g class="node" id="${id}-flowchart-A-0" data-id="A"><text>A</text></g></svg>`;
+    };
+    function annotationWith(themes: string[], gate?: Promise<void>): FrameAnnotation {
+      return {
+        script: "/*annotator*/",
+        sanitize: sanitizePageHtml,
+        prepare: {
+          needed: (h) => h.includes("mermaid"),
+          run: async (h, theme) => {
+            await gate;
+            return (await renderPageMermaid(h, { theme, renderer: fakeRenderer(themes) })).html;
+          },
+        },
+      };
+    }
+    const PAGE = '<h1>Flow</h1><pre class="mermaid">flowchart LR\n  A[A]</pre><script>1</script>';
+
+    it("shows a placeholder, then frames the rendered, sanitized SVG before and after Run", async () => {
+      let open!: () => void;
+      const gate = new Promise<void>((r) => { open = r; });
+      const themes: string[] = [];
+      render(<PrototypeFrame html={PAGE} staticFirst noun="page" annotation={annotationWith(themes, gate)} />);
+      expect(screen.getByTestId("frame-diagrams-rendering")).toHaveTextContent(/rendering diagrams/i);
+      expect(document.querySelector("iframe")).toBeNull();
+      await act(async () => { open(); });
+      await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+      const before = document.querySelector("iframe")!.getAttribute("srcdoc") ?? "";
+      expect(before).toContain('data-id="A"');
+      expect(before).toContain("dp-page-mermaid-0-flowchart-A-0");
+      expect(before).not.toContain("pre class=\"mermaid\"");
+      expect(before).not.toMatch(/onload=/);
+      await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+      const after = document.querySelector("iframe")!.getAttribute("srcdoc") ?? "";
+      expect(after).toContain('data-id="A"');
+      expect(after).not.toMatch(/onload=/);
+      // The Run document is still the agent's own page (its script included).
+      expect(after).toContain("<script>1</script>");
+    });
+
+    it("re-renders for the companion theme", async () => {
+      const themes: string[] = [];
+      act(() => usePreferencesStore.getState().setTheme("light"));
+      const { unmount } = render(<PrototypeFrame html={PAGE} staticFirst noun="page" annotation={annotationWith(themes)} />);
+      await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+      act(() => usePreferencesStore.getState().setTheme("dark"));
+      await waitFor(() => expect(themes).toEqual(["light", "dark"]));
+      await waitFor(() => expect(document.querySelector("iframe")!.getAttribute("srcdoc")).toContain("background:#1f2020"));
+      unmount();
+    });
+
+    it("a page without Mermaid frames at once, with no prepare pass", () => {
+      const themes: string[] = [];
+      render(<PrototypeFrame html="<h1>Plain</h1>" staticFirst noun="page" annotation={annotationWith(themes)} />);
+      expect(screen.queryByTestId("frame-diagrams-rendering")).toBeNull();
+      expect(document.querySelector("iframe")!.getAttribute("srcdoc")).toContain("<h1>Plain</h1>");
+      expect(themes).toEqual([]);
+    });
   });
 });
