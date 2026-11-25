@@ -110,38 +110,59 @@ export function anchorTargetsAsk(ask: PageAskRef, anchor: { locator: string }): 
   return false;
 }
 
-/** Text as the matcher compares it: NFKC, curly quotes and apostrophes
- *  folded to ASCII, every whitespace character removed. The frame and the
- *  server space block boundaries differently (a `<br>`) and may spell a
- *  character differently (an entity, a ligature), never the words. */
-export function squashAskText(s: string): string {
+/** NFKC, with curly quotes and apostrophes folded to ASCII. Per character
+ *  class only, so it can run on each chunk of a streamed text. */
+function foldAskChars(s: string): string {
   return s
     .normalize("NFKC")
     .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")
-    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, "\"")
-    .replace(/\s+/g, "");
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, "\"");
+}
+
+/** Text as the matcher compares it: foldAskChars, every whitespace run
+ *  collapsed to one space, trimmed. Words stay apart ("now here" is not
+ *  "nowhere"); spelling (an entity, a curly quote) and layout don't matter. */
+export function squashAskText(s: string): string {
+  return foldAskChars(s).replace(/\s+/g, " ").trim();
 }
 
 /**
- * Incremental hash of an ask's FULL text as squashAskText reads it, fed one
- * text chunk at a time (a DOM text node in the companion, the text between
- * two tags on the server — the same boundaries), so neither side has to hold
- * a large ask's text. cyrb53: 53 bits, stable, dependency-free. Squashing is
- * per chunk (NFKC can't join across a tag boundary on either side).
+ * Incremental hash of an ask's FULL text, equal to hashing squashAskText of
+ * the concatenated chunks: fed one chunk at a time (a DOM text node in the
+ * companion, the source text between two tags on the server — the same
+ * boundaries), so neither side holds a large ask's text. A whitespace run is
+ * one separator even when it spans chunks; leading and trailing whitespace is
+ * dropped; two chunks that meet without whitespace in the source get no
+ * separator (`a<b>c</b>d` → "acd", `a <b>c</b>` → "a c"). cyrb53: 53 bits,
+ * stable, dependency-free.
  */
 export class AskTextHasher {
   private h1 = 0xdeadbeef;
   private h2 = 0x41c6ce57;
   private chars = 0;
+  /** A whitespace run was seen after some text and not emitted yet. */
+  private pendingSpace = false;
+
+  private emit(ch: number): void {
+    this.h1 = Math.imul(this.h1 ^ ch, 2654435761);
+    this.h2 = Math.imul(this.h2 ^ ch, 1597334677);
+    this.chars++;
+  }
 
   push(chunk: string): void {
-    const s = squashAskText(chunk);
+    const s = foldAskChars(chunk);
     for (let i = 0; i < s.length; i++) {
       const ch = s.charCodeAt(i);
-      this.h1 = Math.imul(this.h1 ^ ch, 2654435761);
-      this.h2 = Math.imul(this.h2 ^ ch, 1597334677);
+      if (/\s/.test(s[i]!)) {
+        if (this.chars > 0) this.pendingSpace = true;
+        continue;
+      }
+      if (this.pendingSpace) {
+        this.emit(32);
+        this.pendingSpace = false;
+      }
+      this.emit(ch);
     }
-    this.chars += s.length;
   }
 
   /** The hash, or undefined when no text was pushed. */

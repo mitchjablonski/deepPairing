@@ -24,6 +24,11 @@ const CASES: Array<[string, string]> = [
   ["fallback", '<button id="a" data-dp-decision aria-label="Ship it?"></button>'],
   ["long", `<div id="a" data-dp-decision>${"Context sentence. ".repeat(300)}Which region?</div>`],
   ["comment inside", '<p id="a" data-dp-question>Split<!-- x -->text</p>'],
+  ["chunks meeting without whitespace", '<p id="a" data-dp-question>a<b>c</b>d</p>'],
+  ["chunks meeting at whitespace", '<p id="a" data-dp-question>a <b>c</b></p>'],
+  ["whitespace-only node between blocks", '<div id="a" data-dp-decision><p>One</p>\n  <p>Two</p><p>Three</p></div>'],
+  ["leading and trailing whitespace", '<p id="a" data-dp-question>\n   padded   \n</p>'],
+  ["nbsp", '<p id="a" data-dp-question>no&nbsp;break&#160;here</p>'],
 ];
 
 describe("full-text hash parity: companion parse vs server scan", () => {
@@ -38,6 +43,14 @@ describe("full-text hash parity: companion parse vs server scan", () => {
     const h = (html: string) => extractVersionAsks(html)![0]!.fullHash;
     expect(h('<p id="a" data-dp-question>Which DB?</p>')).not.toBe(h('<p id="a" data-dp-question>Which region?</p>'));
     expect(h('<p id="a" data-dp-question>Isn&rsquo;t it?</p>')).toBe(h("<p id=\"a\" data-dp-question>Isn't  it?</p>"));
+    // Words stay apart: "now here" is not "nowhere", on either side.
+    expect(h('<p id="a" data-dp-question>now here</p>')).not.toBe(h('<p id="a" data-dp-question>nowhere</p>'));
+    const sv = (html: string) => extractPageAsks(html)[0]!.fullHash;
+    expect(sv('<p id="a" data-dp-question>now here</p>')).not.toBe(sv('<p id="a" data-dp-question>nowhere</p>'));
+    // A tag between two words isn't a space; whitespace across a tag is one.
+    expect(h('<p id="a" data-dp-question>a<b>c</b>d</p>')).toBe(h('<p id="a" data-dp-question>acd</p>'));
+    expect(h('<p id="a" data-dp-question>a <b>c</b></p>')).toBe(h('<p id="a" data-dp-question>a c</p>'));
+    expect(h('<p id="a" data-dp-question>a <b> c</b></p>')).toBe(h('<p id="a" data-dp-question>a c</p>'));
   });
 
   it("skips asks inside drop containers and keeps only id'd asks with their own child ids", () => {

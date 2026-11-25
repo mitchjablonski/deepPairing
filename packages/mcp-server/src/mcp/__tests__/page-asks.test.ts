@@ -206,7 +206,7 @@ describe("openPageAsks", () => {
 
     it("the same question kept across a revise stays answered: child option, selection, entity Reply, short ask", () => {
       // v2 respells the entities and adds whitespace: still the same text.
-      const V2 = V1.replace("&rsquo;", "\u2019").replace("Postgres</li>", "Postgres </li>");
+      const V2 = V1.replace("&rsquo;", "\u2019").replace("database for", "database \n  for");
       expect(openIds(V2, [onV1("#pg", "Postgres")])).toEqual(["ent", "d"]);
       expect(openIds(V2, [onV1("#db", "database for sessions")])).toEqual(["ent", "d"]);
       expect(openIds(V2, [onV1("#ent", "Isn\u2019t the \u201Ccaf\u00E9\u201D cache enough for now?")])).toEqual(["db", "d"]);
@@ -246,6 +246,22 @@ describe("openPageAsks", () => {
       expect(openIds(ask("Which region?"), [onV1("#d", "Context")], { art_v1: ask("Which DB?") })).toEqual(["d"]);
       // …while the unchanged long ask carries.
       expect(openIds(ask("Which DB?"), [onV1("#d", "Context")], { art_v1: ask("Which DB?") })).toEqual([]);
+    });
+
+    it("words that only differ by a space are different text: 'now here' doesn't carry to 'nowhere'", () => {
+      const ask = (q: string) => `<p id="w" data-dp-question>Is the cache needed ${q}?</p>`;
+      expect(openIds(ask("nowhere"), [onV1("#w", "Is the cache")], { art_v1: ask("now here") })).toEqual(["w"]);
+      expect(openIds(ask("now  here"), [onV1("#w", "Is the cache")], { art_v1: ask("now here") })).toEqual([]);
+    });
+
+    it("at the 50-ask cap the last ask is still read to its close: a long-tail edit stays open", () => {
+      const page = (q: string) =>
+        Array.from({ length: 49 }, (_, i) => `<p id="a${i}" data-dp-question>Ask ${i}?</p>`).join("") +
+        `<div id="last" data-dp-decision>${"Context sentence. ".repeat(200)}${q}</div><p id="extra" data-dp-question>Over the cap</p>`;
+      const v2 = page("Which region?");
+      expect(extractPageAsks(v2)).toHaveLength(50);
+      expect(openIds(v2, [onV1("#last", "Context")], { art_v1: page("Which DB?") })).toContain("last");
+      expect(openIds(page("Which DB?"), [onV1("#last", "Context")], { art_v1: page("Which DB?") })).not.toContain("last");
     });
 
     it("a 2100-character preamble with a changed tail stays open", () => {

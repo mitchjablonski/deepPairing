@@ -35,7 +35,7 @@ import type { ChangeLocator } from "../../lib/pageVersionDiff";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
-import { commentAnswersAsk, pageRuleOutKey } from "@deeppairing/shared";
+import { commentAnswersAsk, isEarlierVersionComment, pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -139,6 +139,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const { rows: rememberedRows, remember } = useRememberedRejections(owner);
   const liveStances = useMemo(() => new Set(rememberedRows.map((r) => r.description)), [rememberedRows]);
   const anchored = useMemo(() => anchoredPageComments(comments), [comments]);
+  /** Identifies the anchored-comment list (the pin order the frame reports in). */
+  const anchoredKey = useMemo(() => anchored.map((c) => c.id).join("\u0000"), [anchored]);
+  const anchoredKeyRef = useRef(anchoredKey);
+  anchoredKeyRef.current = anchoredKey;
   const anchors = useMemo(() => anchored.map((c) => c.target.htmlAnchor as HtmlAnchor), [anchored]);
 
   const [draft, setDraft] = useState<HtmlAnchor | null>(null);
@@ -172,12 +176,19 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const [outline, setOutline] = useState<PageOutlineMessage | null>(null);
   const [activeSection, setActiveSection] = useState(-1);
   const [asks, setAsks] = useState<PageAsk[]>([]);
-  const [pinAsks, setPinAsks] = useState<number[]>([]);
+  // Ask completion reads the frame's pre-Run reports only, each tagged with
+  // the page and the anchored-comment list it describes: `pinAsks` (which
+  // ask each pin sits in) and the pre-Run pin status. A live post-Run
+  // pins-status (agent script shares the frame then) never mixes in; the
+  // pin list itself keeps showing live status.
+  const [pinAsks, setPinAsks] = useState<{ forId: string; key: string; list: number[] } | null>(null);
+  const [askPinStatus, setAskPinStatus] = useState<{ forId: string; key: string; found: boolean[] } | null>(null);
   useEffect(() => {
     setOutline(null);
     setActiveSection(-1);
     setAsks([]);
-    setPinAsks([]);
+    setPinAsks(null);
+    setAskPinStatus(null);
   }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
 
@@ -271,6 +282,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       const status = acceptPinsStatus(event, frame);
       if (status) {
         setFound(status);
+        if (!runningRef.current) setAskPinStatus({ forId: artifactIdRef.current, key: anchoredKeyRef.current, found: status });
         return;
       }
       // #714 gaps 4+5 — outline, reading progress and asks follow the same
@@ -291,7 +303,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       if (reportedAsks) {
         if (!runningRef.current) {
           setAsks(reportedAsks.asks);
-          setPinAsks(reportedAsks.pinAsks);
+          setPinAsks({ forId: artifactIdRef.current, key: anchoredKeyRef.current, list: reportedAsks.pinAsks });
         }
         return;
       }
@@ -436,7 +448,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && earlierVersionIds.size > 0);
   const askAnswered = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
-    const pinsAligned = pinAsks.length === anchored.length;
+    // The pre-Run reports, only when they describe this page's current pins.
+    const scoped = <T extends { forId: string; key: string }>(r: T | null) =>
+      r && r.forId === artifact.id && r.key === anchoredKey ? r : null;
+    const askPins = scoped(pinAsks)?.list ?? null;
+    const preRunFound = scoped(askPinStatus)?.found ?? null;
+    const pinsAligned = !!askPins && askPins.length === anchored.length;
     const currentParsed = parsedAsks(artifact.id);
     const earlierAsks = (versionId: string) => (versionId === artifact.id ? undefined : parsedAsks(versionId));
     return asks.map((ask, k) => {
@@ -444,14 +461,18 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       const fullHash = ask.id ? currentParsed?.find((p) => p.id === ask.id)?.fullHash : undefined;
       const ref = { ...ask, ...(fullHash ? { fullHash } : {}) };
       return anchored.some((c, i) => {
-        if (found && found[i] === false) return false;
-        // Only meaningful for a current-version comment (the shared helper
-        // ignores it otherwise), and only for a pin the frame reported found.
-        const insideByFrame = pinsAligned && pinAsks[i] === k && found?.[i] === true;
-        return commentAnswersAsk(ref, c, current, { insideByFrame, earlierAsks });
+        // An earlier version's comment is judged only against its own source
+        // version (ask continuity); whether its pin relocates in the current
+        // view is irrelevant to it, as it is for check_feedback.
+        if (isEarlierVersionComment(c, current)) return commentAnswersAsk(ref, c, current, { earlierAsks });
+        // A current-version comment whose spot the (pre-Run) frame can't find
+        // doesn't count; one it found inside this ask does.
+        if (preRunFound && preRunFound[i] === false) return false;
+        const insideByFrame = pinsAligned && askPins![i] === k && preRunFound?.[i] === true;
+        return commentAnswersAsk(ref, c, current, { insideByFrame });
       });
     });
-  }, [asks, anchored, pinAsks, found, artifact.id, artifact.version, parsedAsks]);
+  }, [asks, anchored, anchoredKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
     if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });

@@ -1158,7 +1158,7 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
 
     it("the same question kept across a revise stays answered (child option, entity selection) once the parse lands", async () => {
       // v2 spells the apostrophe as the character and adds whitespace: same full text.
-      const V2 = V1.replace("&rsquo;", "\u2019").replace("Postgres</li>", "Postgres </li>");
+      const V2 = V1.replace("&rsquo;", "\u2019").replace("database for", "database \n  for");
       await setup(V1, V2, [DB, CACHE], [
         ["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }],
         ["cmt_2", { kind: "text", locator: "#cache", quote: "caf\u00E9" }],
@@ -1198,6 +1198,15 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
       expect(states()).toEqual(["Open"]);
     });
 
+    it("an earlier answer isn't vetoed by its pin failing to relocate here: same text, renamed child id (agrees with check_feedback)", async () => {
+      const v2Html = V1.replace('id="pg"', 'id="postgres"');
+      await setup(V1, v2Html, [DB], [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]]);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "pins-status", found: [false] }); // #pg is gone from v2's DOM
+      await flush();
+      expect(states()).toEqual(["Answered"]);
+    });
+
     it("the old version's HTML not loaded: the comment doesn't count", async () => {
       await setup(null, V1, [DB], [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]]);
       await flush();
@@ -1232,6 +1241,37 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     expect(states()).toEqual(["Answered", "Open"]);
     // A report for a different pin list is not used.
     fromFrame(win, { ...ASKS, pinAsks: [0, 0] });
+    expect(states()).toEqual(["Open", "Open"]);
+  });
+
+  it("ask completion uses the pre-Run pin status, never a live post-Run one (the pin list stays live)", async () => {
+    // A current-version comment on a child of ask 0 the frame resolves inside it.
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#ttl-note", quote: "60s is fine" }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    let win = fakeFrameWindow();
+    fromFrame(win, { dp: "pins-status", found: [true] });
+    fromFrame(win, { ...ASKS, pinAsks: [0] });
+    expect(states()).toEqual(["Answered", "Open"]);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    win = fakeFrameWindow();
+    // After Run, page script could post anything: a forged "not found"…
+    fromFrame(win, { dp: "pins-status", found: [false] });
+    expect(states()).toEqual(["Answered", "Open"]);
+    // …which the pin list does show (it renders live status).
+    expect(screen.getByTestId("page-anchor-missing")).toBeInTheDocument();
+  });
+
+  it("a pre-Run pin report for a different comment list is not used for ask completion", () => {
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#ttl-note", quote: "60s is fine" }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pins-status", found: [true] });
+    fromFrame(win, { ...ASKS, pinAsks: [0] });
+    expect(states()).toEqual(["Answered", "Open"]);
+    // A new comment arrives: the earlier reports described a different pin list.
+    act(() => {
+      useArtifactStore.getState().addComment(human("cmt_2", { kind: "element", locator: "#elsewhere", quote: "x" }));
+    });
     expect(states()).toEqual(["Open", "Open"]);
   });
 
