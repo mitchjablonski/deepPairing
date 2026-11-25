@@ -1132,9 +1132,15 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     const V1 =
       '<div id="db" data-dp-decision>Which database for sessions? <ul><li id="pg">Postgres</li><li>MySQL</li></ul></div>' +
       '<p id="cache" data-dp-question>Isn&rsquo;t the &ldquo;caf&eacute;&rdquo; cache enough?</p>';
-    const setup = (v1Html: string | null, v2Asks: Array<Record<string, unknown>>, comments: Array<[string, Record<string, unknown>]>) => {
-      const v1: Artifact = { ...pageArtifact, id: "art_ac_v1", version: 1, status: "superseded", content: { title: "P", html: v1Html ?? "<p>v1</p>" } };
-      const v2: Artifact = { ...pageArtifact, id: "art_ac_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
+    const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const setup = async (
+      v1Html: string | null,
+      v2Html: string,
+      v2Asks: Array<Record<string, unknown>>,
+      comments: Array<[string, Record<string, unknown>]>,
+    ) => {
+      const v1: Artifact = { ...pageArtifact, id: `art_ac_v1_${Math.random()}`, version: 1, status: "superseded", content: { title: "P", html: v1Html ?? "<p>v1</p>" } };
+      const v2: Artifact = { ...pageArtifact, id: `art_ac_v2_${Math.random()}`, version: 2, parentId: v1.id, content: { title: "P", html: v2Html } };
       if (v1Html !== null) useArtifactStore.getState().addArtifact(v1);
       useArtifactStore.getState().addArtifact(v2);
       comments.forEach(([id, anchor]) =>
@@ -1150,30 +1156,51 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     const DB = { kind: "decision", id: "db", text: "Which database for sessions? Postgres MySQL", locator: "#db" };
     const CACHE = { kind: "question", id: "cache", text: "Isn\u2019t the \u201Ccaf\u00E9\u201D cache enough?", locator: "#cache" };
 
-    it("the same question kept across a revise stays answered: child option, selection, entity Reply", () => {
-      setup(V1, [DB, CACHE], [
+    it("the same question kept across a revise stays answered (child option, entity selection) once the parse lands", async () => {
+      // v2 spells the apostrophe as the character and adds whitespace: same full text.
+      const V2 = V1.replace("&rsquo;", "\u2019").replace("Postgres</li>", "Postgres </li>");
+      await setup(V1, V2, [DB, CACHE], [
         ["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }],
         ["cmt_2", { kind: "text", locator: "#cache", quote: "caf\u00E9" }],
       ]);
+      expect(states()).toEqual(["Open", "Open"]); // parse pending: not counted yet
+      await flush();
       expect(states()).toEqual(["Answered", "Answered"]);
     });
 
-    it("a reused id for a different question stays open, even with the frame placing the pin inside it (the Postgres probe)", () => {
-      setup(
+    it("a reused id for a different question stays open, even with the frame placing the pin inside it (the Postgres probe)", async () => {
+      await setup(
         '<div id="q1" data-dp-question>Which DB? <ul><li id="pg">Postgres</li><li>MySQL</li></ul></div>',
+        '<div id="q1" data-dp-question>Which Postgres version? <ul><li id="v15">15</li><li>16</li></ul></div>',
         [{ kind: "question", id: "q1", text: "Which Postgres version? 15 16", locator: "#q1" }],
         [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]],
       );
+      await flush();
       expect(states()).toEqual(["Open"]);
     });
 
-    it("a reworded question reopens", () => {
-      setup(V1, [{ ...DB, text: "Which database for sessions and caches? Postgres MySQL" }], [["cmt_1", { kind: "element", locator: "#db", quote: "Which database" }]]);
+    it("a long preamble with only the trailing question changed reopens (the frame's 200-char text is never compared)", async () => {
+      const preamble = "Context: " + "we measured the session store under load and ".repeat(8);
+      const ask = (q: string) => `<div id="d" data-dp-decision>${preamble}${q}</div>`;
+      const frameText = (q: string) => (preamble + q).slice(0, 200); // identical for both questions
+      await setup(ask("Which DB?"), ask("Which region?"), [{ kind: "decision", id: "d", text: frameText("Which region?"), locator: "#d" }], [
+        ["cmt_1", { kind: "element", locator: "#d", quote: frameText("Which DB?") }],
+      ]);
+      await flush();
       expect(states()).toEqual(["Open"]);
     });
 
-    it("the old version's HTML not loaded: the comment doesn't count", () => {
-      setup(null, [DB], [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]]);
+    it("a reworded question reopens", async () => {
+      await setup(V1, V1.replace("Which database for sessions?", "Which database for sessions and caches?"), [DB], [
+        ["cmt_1", { kind: "element", locator: "#db", quote: "Which database" }],
+      ]);
+      await flush();
+      expect(states()).toEqual(["Open"]);
+    });
+
+    it("the old version's HTML not loaded: the comment doesn't count", async () => {
+      await setup(null, V1, [DB], [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]]);
+      await flush();
       expect(states()).toEqual(["Open"]);
     });
   });

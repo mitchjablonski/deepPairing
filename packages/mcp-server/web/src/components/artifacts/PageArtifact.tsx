@@ -28,7 +28,7 @@ import {
 } from "../../lib/pageAnchorMessages";
 import { PageOutline } from "./PageOutline";
 import { PageAsksStrip } from "./PageAsksStrip";
-import { versionAsks } from "../../lib/pageAskVersions";
+import { usePageAskVersions } from "../../hooks/usePageAskVersions";
 import { usePageLineage, usePageVersionDiff } from "../../hooks/usePageVersionDiff";
 import { PageChangeLine, PageRemovedList } from "./PageChangeSummary";
 import type { ChangeLocator } from "../../lib/pageVersionDiff";
@@ -419,26 +419,39 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // with its own id, which the frame resolves as pinAsks for a found pin).
   // Never by a comment the reviewer resolved or whose spot isn't on this
   // version. A comment from an EARLIER version counts only through ask
-  // continuity: the same ask (same id) existed in that version, read from its
-  // parsed HTML, with the same text, and the comment targeted it there — so a
-  // reused id for a different question never inherits an old answer.
+  // continuity: the same ask (same id) exists in that version and this one
+  // with the same FULL text — both read from parsed HTML, never from the
+  // frame's clipped display text — and the comment targeted it there. The
+  // parse runs off the render path; until it lands, earlier answers don't
+  // count yet (the ask shows open).
+  const earlierVersionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of anchored) if (c.target.artifactId && c.target.artifactId !== artifact.id) ids.add(c.target.artifactId);
+    return ids;
+  }, [anchored, artifact.id]);
+  const askVersions = useMemo(
+    () => [artifact, ...lineage.map((l) => l.artifact).filter((a) => earlierVersionIds.has(a.id))],
+    [artifact, lineage, earlierVersionIds],
+  );
+  const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && earlierVersionIds.size > 0);
   const askAnswered = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
     const pinsAligned = pinAsks.length === anchored.length;
-    const earlierAsks = (versionId: string) => {
-      const entry = lineage.find((l) => l.artifact.id === versionId);
-      return entry ? versionAsks(versionId, coercePageContent(entry.artifact.content).html) ?? undefined : undefined;
-    };
-    return asks.map((ask, k) =>
-      anchored.some((c, i) => {
+    const currentParsed = parsedAsks(artifact.id);
+    const earlierAsks = (versionId: string) => (versionId === artifact.id ? undefined : parsedAsks(versionId));
+    return asks.map((ask, k) => {
+      // Continuity compares the full-text hash from THIS version's parsed HTML.
+      const fullHash = ask.id ? currentParsed?.find((p) => p.id === ask.id)?.fullHash : undefined;
+      const ref = { ...ask, ...(fullHash ? { fullHash } : {}) };
+      return anchored.some((c, i) => {
         if (found && found[i] === false) return false;
         // Only meaningful for a current-version comment (the shared helper
         // ignores it otherwise), and only for a pin the frame reported found.
         const insideByFrame = pinsAligned && pinAsks[i] === k && found?.[i] === true;
-        return commentAnswersAsk(ask, c, current, { insideByFrame, earlierAsks });
-      }),
-    );
-  }, [asks, anchored, pinAsks, found, artifact.id, artifact.version, lineage]);
+        return commentAnswersAsk(ref, c, current, { insideByFrame, earlierAsks });
+      });
+    });
+  }, [asks, anchored, pinAsks, found, artifact.id, artifact.version, parsedAsks]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
     if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });

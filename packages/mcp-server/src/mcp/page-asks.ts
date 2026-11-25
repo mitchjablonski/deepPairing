@@ -25,6 +25,8 @@
 import {
   PAGE_ASK_LIMITS,
   PAGE_SANITIZE_DROP_TAGS,
+  AskTextHasher,
+  askTextHash,
   isPageAskAnswered,
   type EarlierAsksLookup,
   type PageAskKind,
@@ -43,14 +45,11 @@ export interface PageAskScan {
   text: string;
   /** Ids of elements inside the ask (not other asks), capped. */
   childIds?: string[];
-  /** More of the ask's text than `text` (up to MATCH_TEXT_MAX), only when it
-   *  is longer: ask continuity across versions compares it. Internal; never
+  /** Hash of the ask's FULL text (AskTextHasher, fed every text chunk while
+   *  the ask is open), for ask continuity across versions. Internal; never
    *  sent to the agent. */
-  matchText?: string;
+  fullHash?: string;
 }
-
-/** How much of an ask's text is kept for ask continuity across versions. */
-const MATCH_TEXT_MAX = PAGE_ASK_LIMITS.matchText;
 
 /** HTML's implicit end tags: an open element of the key's tag ends when one
  *  of `siblings` opens in the same scope (no new scope container opened in
@@ -101,7 +100,7 @@ const P_CLOSERS = new Set([
   "section", "table", "ul",
 ]);
 /** Raw characters kept per ask before decoding (entities shrink when decoded). */
-const RAW_BUDGET = MATCH_TEXT_MAX * 2;
+const RAW_BUDGET = PAGE_ASK_LIMITS.text * 5;
 
 function isSpace(c: number): boolean {
   return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
@@ -155,6 +154,8 @@ interface Collector {
   closed: boolean;
   /** For an implicitly closed tag (li, td, …): its scope depth when opened. */
   scope?: number;
+  /** Fed every decoded text chunk until the ask closes (no budget). */
+  hasher: AskTextHasher;
 }
 
 /** The asks marked on a page, in document order. */
@@ -205,10 +206,28 @@ export function extractPageAsks(html: string): PageAskScan[] {
     c.done = true;
     const full = decode(c.raw).replace(/\s+/g, " ").trim() || c.fallback;
     c.ask.text = full.length > PAGE_ASK_LIMITS.text ? full.slice(0, PAGE_ASK_LIMITS.text) : full;
-    if (full.length > c.ask.text.length) c.ask.matchText = full.slice(0, MATCH_TEXT_MAX);
+  };
+  /** Asks whose full-text hash is still being fed (open, not yet closed). */
+  let hashing: Collector[] = [];
+  /** The ask closed: its full-text hash is final (the fallback's when it had
+   *  no text, as the companion reads it). */
+  const seal = (c: Collector) => {
+    if (c.ask.fullHash !== undefined) return;
+    c.ask.fullHash = c.hasher.digest() ?? (c.fallback ? askTextHash(c.fallback) : undefined) ?? "";
+    if (!c.ask.fullHash) delete c.ask.fullHash;
   };
   const feed = (s: string) => {
-    if (hungry.length === 0 || !s) return;
+    if (!s) return;
+    if (hashing.length > 0 && /\S/.test(s)) {
+      const text = decode(s);
+      let closed = false;
+      for (const c of hashing) {
+        if (c.closed) closed = true;
+        else c.hasher.push(text);
+      }
+      if (closed) hashing = hashing.filter((c) => !c.closed);
+    }
+    if (hungry.length === 0) return;
     let full = false;
     for (const c of hungry) {
       if (c.done) { full = true; continue; }
@@ -225,6 +244,7 @@ export function extractPageAsks(html: string): PageAskScan[] {
       const c = stack.pop()!;
       c.closed = true;
       finish(c);
+      seal(c);
     }
   };
 
@@ -237,6 +257,7 @@ export function extractPageAsks(html: string): PageAskScan[] {
   const implicitClose = (c: Collector) => {
     c.closed = true;
     finish(c);
+    seal(c);
     const stack = stacks.get(c.tag);
     const at = stack ? stack.indexOf(c) : -1;
     if (at !== -1) stack!.splice(at, 1);
@@ -341,27 +362,40 @@ export function extractPageAsks(html: string): PageAskScan[] {
     const id = decode(attrs.get("id") ?? "");
     if (id && id.length <= PAGE_ASK_LIMITS.id && !/\s/.test(id)) ask.id = id;
     out.push(ask);
-    const fallback = decode(attrs.get("aria-label") ?? attrs.get("title") ?? attrs.get("alt") ?? "").replace(/\s+/g, " ").trim();
-    const c: Collector = { ask, tag: name, level: openCount.get(name) ?? 0, raw: "", fallback, done: false, closed: false };
+    // Same order as the annotator: alt, aria-label, title, value.
+    const fallback = decode(attrs.get("alt") || attrs.get("aria-label") || attrs.get("title") || attrs.get("value") || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const c: Collector = {
+      ask, tag: name, level: openCount.get(name) ?? 0, raw: "", fallback, done: false, closed: false, hasher: new AskTextHasher(),
+    };
     if (IMPLICIT_CLOSES[name]) c.scope = scopeDepth(name);
-    if (isVoid) { c.closed = true; finish(c); continue; }
+    if (isVoid) { c.closed = true; finish(c); seal(c); continue; }
+    hashing.push(c);
     openOrder.push(c);
     const stack = stacks.get(name) ?? [];
     stack.push(c);
     stacks.set(name, stack);
     hungry.push(c);
   }
-  for (const stack of stacks.values()) for (const c of stack) finish(c);
+  for (const stack of stacks.values()) for (const c of stack) { finish(c); seal(c); }
+  for (const c of hashing) seal(c);
   return out;
 }
 
 /** Scans are memoized per artifact id: a version's HTML never changes. */
 const scanCache = new Map<string, PageAskScan[]>();
-const SCAN_CACHE_MAX = 32;
+/** The version-chain cap: a whole chain's scans stay cached. */
+const SCAN_CACHE_MAX = 50;
 
 export function pageAsksFor(artifactId: string, html: string): PageAskScan[] {
   const hit = scanCache.get(artifactId);
-  if (hit) return hit;
+  if (hit) {
+    // LRU: a hit moves to the back of the eviction order.
+    scanCache.delete(artifactId);
+    scanCache.set(artifactId, hit);
+    return hit;
+  }
   const asks = extractPageAsks(html);
   scanCache.set(artifactId, asks);
   if (scanCache.size > SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value!);

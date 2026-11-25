@@ -7,6 +7,9 @@ import { describe, it, expect } from "vitest";
 import { PAGE_ASK_LIMITS } from "@deeppairing/shared";
 import { extractPageAsks, openPageAsks, tagAttributes } from "../page-asks.js";
 
+/** Scanned asks without their full-text hash (checked on its own below). */
+const scan = (html: string) => extractPageAsks(html).map(({ fullHash: _h, ...rest }) => rest);
+
 const SKELETON = `<!doctype html><html><body>
 <header id="tldr"><h1>Profile cache</h1><p><strong>TL;DR:</strong> Redis.</p></header>
 <section id="asks">
@@ -18,18 +21,18 @@ const SKELETON = `<!doctype html><html><body>
 
 describe("extractPageAsks", () => {
   it("reads the skeleton's asks: id, kind and text, in document order", () => {
-    expect(extractPageAsks(SKELETON)).toEqual([
+    expect(scan(SKELETON)).toEqual([
       { id: "decide-ttl", kind: "decision", text: "Decide: a 60s TTL, or invalidate on every write?" },
       { id: "ask-budget", kind: "question", text: "Question: is one more Redis instance in budget?" },
     ]);
   });
 
   it("returns nothing for a page without asks (fast path)", () => {
-    expect(extractPageAsks("<h1>Plain</h1><p>No asks here.</p>")).toEqual([]);
+    expect(scan("<h1>Plain</h1><p>No asks here.</p>")).toEqual([]);
   });
 
   it("decision wins when both are set; an ask without an id is still reported", () => {
-    expect(extractPageAsks('<div data-dp-question data-dp-decision id="both">Pick</div><p data-dp-question>No id?</p>')).toEqual([
+    expect(scan('<div data-dp-question data-dp-decision id="both">Pick</div><p data-dp-question>No id?</p>')).toEqual([
       { id: "both", kind: "decision", text: "Pick" },
       { kind: "question", text: "No id?" },
     ]);
@@ -37,19 +40,19 @@ describe("extractPageAsks", () => {
 
   it("an ask runs to its balancing close tag, nested same-name elements included", () => {
     const html = '<div id="a" data-dp-decision>Outer <div>inner</div> tail</div><div>after</div>';
-    expect(extractPageAsks(html)).toEqual([{ id: "a", kind: "decision", text: "Outer inner tail" }]);
+    expect(scan(html)).toEqual([{ id: "a", kind: "decision", text: "Outer inner tail" }]);
   });
 
   it("nested asks each get their own text", () => {
     const html = '<section id="o" data-dp-question>Q1 <p id="i" data-dp-decision>D1</p> more</section>';
-    expect(extractPageAsks(html)).toEqual([
+    expect(scan(html)).toEqual([
       { id: "o", kind: "question", text: "Q1 D1 more" },
       { id: "i", kind: "decision", text: "D1" },
     ]);
   });
 
   it("an unclosed <p> ask ends at the next block, as a browser closes it", () => {
-    expect(extractPageAsks('<p id="q" data-dp-question>Is this ok?<p>Unrelated paragraph.')).toEqual([
+    expect(scan('<p id="q" data-dp-question>Is this ok?<p>Unrelated paragraph.')).toEqual([
       { id: "q", kind: "question", text: "Is this ok?" },
     ]);
   });
@@ -60,7 +63,7 @@ describe("extractPageAsks", () => {
       '<script>const s = \'<p id="s" data-dp-decision>in script</p>\';</script>' +
       '<p title="a > b" id="t&amp;1" data-dp-question>Fish &amp; chips &lt;b&gt;?</p>' +
       '<p data-note="data-dp-decision" id="x">not an ask</p>';
-    expect(extractPageAsks(html)).toEqual([{ id: "t&1", kind: "question", text: "Fish & chips <b>?" }]);
+    expect(scan(html)).toEqual([{ id: "t&1", kind: "question", text: "Fish & chips <b>?" }]);
   });
 
   it("skips asks inside containers the sanitizer drops (the human never sees them)", () => {
@@ -71,13 +74,13 @@ describe("extractPageAsks", () => {
       '<applet><p id="ap" data-dp-decision>A</p></applet><portal><p id="po" data-dp-decision>P</p></portal>' +
       '<frameset><frame></frameset><embed src="x"><p id="seen" data-dp-question>Seen?</p>' +
       '<noscript><p id="tail" data-dp-question>Unclosed noscript hides the rest</p>';
-    expect(extractPageAsks(html)).toEqual([{ id: "seen", kind: "question", text: "Seen?" }]);
+    expect(scan(html)).toEqual([{ id: "seen", kind: "question", text: "Seen?" }]);
   });
 
   it("treats self-closed drop tags as open (HTML ignores /> on them): their content stays hidden", () => {
     for (const tag of ["iframe", "noscript", "object"]) {
       const html = `<${tag}/><p id="hidden" data-dp-question>Hidden?</p></${tag}><p id="seen" data-dp-question>Seen?</p>`;
-      expect(extractPageAsks(html).map((a) => a.id)).toEqual(["seen"]);
+      expect(scan(html).map((a) => a.id)).toEqual(["seen"]);
     }
   });
 
@@ -89,36 +92,36 @@ describe("extractPageAsks", () => {
     ["tr", '<table><tbody><tr id="q1" data-dp-question><td>Pick<tr id="sib"><td>Sibling</table>'],
   ])("an unclosed %s ask ends where HTML closes it: a sibling's id is not a child, its text not the ask's", (_tag, html) => {
     const [ask] = extractPageAsks(html);
-    expect(ask).toEqual({ id: "q1", kind: "question", text: "Pick" });
+    expect(scan(html)[0]).toEqual({ id: "q1", kind: "question", text: "Pick" });
     expect(openPageAsks([ask!], [{ author: "human", parentCommentId: null, target: { htmlAnchor: { locator: "#sib", quote: "Sibling" } } }])).toHaveLength(1);
   });
 
   it("a nested table with an omitted </tr> doesn't leak scope past its </table>", () => {
     const html = '<table><tr><td id="q" data-dp-question>Q<table><tr><td id="inner">inner</table><td id="sib">S</table>';
-    expect(extractPageAsks(html)).toEqual([{ id: "q", kind: "question", text: "Q inner", childIds: ["inner"] }]);
+    expect(scan(html)).toEqual([{ id: "q", kind: "question", text: "Q inner", childIds: ["inner"] }]);
   });
 
   it("an implicitly closed item still owns its real children, and a nested list doesn't close it", () => {
     const html = '<ul><li id="q1" data-dp-question>Pick <ul><li id="inner">a</li><li>b</li></ul> <em id="note">n</em><li id="sib">Sibling</ul>';
-    expect(extractPageAsks(html)).toEqual([{ id: "q1", kind: "question", text: "Pick a b n", childIds: ["inner", "note"] }]);
+    expect(scan(html)).toEqual([{ id: "q1", kind: "question", text: "Pick a b n", childIds: ["inner", "note"] }]);
   });
 
   it("decodes every named entity the way the frame shows it (curly quotes, accents)", () => {
-    expect(extractPageAsks('<p id="q" data-dp-question>Isn&rsquo;t &ldquo;caf&eacute;&rdquo; fine?</p>')).toEqual([
+    expect(scan('<p id="q" data-dp-question>Isn&rsquo;t &ldquo;caf&eacute;&rdquo; fine?</p>')).toEqual([
       { id: "q", kind: "question", text: "Isn\u2019t \u201Ccaf\u00E9\u201D fine?" },
     ]);
   });
 
   it("keeps ids of children inside the innermost ask (not of nested asks)", () => {
     const html = '<div id="o" data-dp-question>Q <em id="o-note">n</em><p id="i" data-dp-decision>D <b id="i-b">b</b></p></div><p id="after">x</p>';
-    expect(extractPageAsks(html)).toEqual([
+    expect(scan(html)).toEqual([
       { id: "o", kind: "question", text: "Q n D b", childIds: ["o-note"] },
       { id: "i", kind: "decision", text: "D b", childIds: ["i-b"] },
     ]);
   });
 
   it("falls back to aria-label / title when the ask has no text", () => {
-    expect(extractPageAsks('<button id="b" data-dp-decision aria-label="Ship it?"></button><img id="i" data-dp-question alt="Diagram right?">')).toEqual([
+    expect(scan('<button id="b" data-dp-decision aria-label="Ship it?"></button><img id="i" data-dp-question alt="Diagram right?">')).toEqual([
       { id: "b", kind: "decision", text: "Ship it?" },
       { id: "i", kind: "question", text: "Diagram right?" },
     ]);
@@ -129,7 +132,7 @@ describe("extractPageAsks", () => {
     const asks = extractPageAsks(many);
     expect(asks).toHaveLength(PAGE_ASK_LIMITS.max);
     expect(asks.every((a) => a.text.length === PAGE_ASK_LIMITS.text)).toBe(true);
-    expect(extractPageAsks(`<p id="${"x".repeat(201)}" data-dp-question>Q</p>`)).toEqual([{ kind: "question", text: "Q" }]);
+    expect(scan(`<p id="${"x".repeat(201)}" data-dp-question>Q</p>`)).toEqual([{ kind: "question", text: "Q" }]);
   });
 
   it("stays linear on hostile input", () => {
@@ -237,11 +240,26 @@ describe("openPageAsks", () => {
       expect(openIds(V1, [same])).toEqual(["db", "ent"]);
     });
 
-    it("a clipped long ask continues when one text is a prefix of the other at the clip", () => {
-      const long = (tail: string) => `<p id="L" data-dp-question>${"word ".repeat(600)}${tail}</p>`;
-      expect(openIds(long("end"), [onV1("#L", "word")], { art_v1: long("different end") })).toEqual([]);
-      const changedEarly = (w: string) => `<p id="L" data-dp-question>${w} ${"word ".repeat(600)}</p>`;
-      expect(openIds(changedEarly("Alpha"), [onV1("#L", "word")], { art_v1: changedEarly("Beta") })).toEqual(["L"]);
+    it("a long preamble with only the trailing question changed reopens (full-text hash, no clip tolerance)", () => {
+      const preamble = "Context: " + "we measured the session store under load and ".repeat(8);
+      const ask = (q: string) => `<div id="d" data-dp-decision>${preamble}${q}</div>`;
+      expect(openIds(ask("Which region?"), [onV1("#d", "Context")], { art_v1: ask("Which DB?") })).toEqual(["d"]);
+      // …while the unchanged long ask carries.
+      expect(openIds(ask("Which DB?"), [onV1("#d", "Context")], { art_v1: ask("Which DB?") })).toEqual([]);
+    });
+
+    it("a 2100-character preamble with a changed tail stays open", () => {
+      const long = (tail: string) => `<p id="L" data-dp-question>${"x".repeat(2100)} ${tail}</p>`;
+      expect(openIds(long("end"), [onV1("#L", "x")], { art_v1: long("different end") })).toEqual(["L"]);
+    });
+
+    it("hashes the whole text in one pass without holding it: a 2 MB ask", () => {
+      const big = `<div id="B" data-dp-decision>${"word ".repeat(400_000)}</div>`;
+      const started = Date.now();
+      const [ask] = extractPageAsks(big);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(ask!.fullHash).toBeTruthy();
+      expect(ask!.text).toHaveLength(200);
     });
   });
 

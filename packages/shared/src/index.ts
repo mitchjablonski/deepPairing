@@ -216,6 +216,8 @@ export {
   isPageAskAnswered,
   squashAskText,
   askTextsContinue,
+  askTextHash,
+  AskTextHasher,
   findEarlierAsk,
   type EarlierAsksLookup,
   type PageAskComment,

@@ -8,8 +8,8 @@
  * rule, kept here so the two can't drift: an ask is answered once a human
  * comment is anchored to the ask's element (its locator or `#id`) or inside it.
  * A comment made on an EARLIER version counts only through ASK CONTINUITY: the
- * same ask (same id) existed in the comment's own version with the same text,
- * and the comment targeted it there. A revision can reuse an id for a
+ * same ask (same id) existed in the comment's own version with the same FULL
+ * text (equal full-text hashes), and the comment targeted it there. A revision can reuse an id for a
  * different question, and then the old answer doesn't carry.
  */
 
@@ -21,7 +21,7 @@ export const PAGE_QUESTION_ATTR = "data-dp-question";
 export type PageAskKind = "decision" | "question";
 
 /** Bounds shared by the frame collector, the parent schema and the server scanner. */
-export const PAGE_ASK_LIMITS = { max: 50, text: 200, id: 200, matchText: 2000 } as const;
+export const PAGE_ASK_LIMITS = { max: 50, text: 200, id: 200 } as const;
 
 /** Elements whose content never renders in the page frame: the sanitizer
  *  removes them before Run (and they don't render after it), so an ask inside
@@ -39,9 +39,10 @@ export interface PageAskRef {
   locator?: string;
   childIds?: readonly string[];
   text: string;
-  /** More of the ask's text than `text` (server-side, for matching a quote of
-   *  a child or a selection anywhere in the ask); defaults to `text`. */
-  matchText?: string;
+  /** Hash of the ask's FULL text (AskTextHasher over every text chunk, never
+   *  the clipped display text). Ask continuity across versions compares it;
+   *  absent → the ask can't continue (earlier answers don't carry). */
+  fullHash?: string;
 }
 
 /** The version a comment is judged against. A comment is from an earlier
@@ -122,21 +123,56 @@ export function squashAskText(s: string): string {
 }
 
 /**
+ * Incremental hash of an ask's FULL text as squashAskText reads it, fed one
+ * text chunk at a time (a DOM text node in the companion, the text between
+ * two tags on the server — the same boundaries), so neither side has to hold
+ * a large ask's text. cyrb53: 53 bits, stable, dependency-free. Squashing is
+ * per chunk (NFKC can't join across a tag boundary on either side).
+ */
+export class AskTextHasher {
+  private h1 = 0xdeadbeef;
+  private h2 = 0x41c6ce57;
+  private chars = 0;
+
+  push(chunk: string): void {
+    const s = squashAskText(chunk);
+    for (let i = 0; i < s.length; i++) {
+      const ch = s.charCodeAt(i);
+      this.h1 = Math.imul(this.h1 ^ ch, 2654435761);
+      this.h2 = Math.imul(this.h2 ^ ch, 1597334677);
+    }
+    this.chars += s.length;
+  }
+
+  /** The hash, or undefined when no text was pushed. */
+  digest(): string | undefined {
+    if (this.chars === 0) return undefined;
+    let h1 = this.h1;
+    let h2 = this.h2;
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+    h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+    h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    const n = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+    return `${n.toString(36)}:${this.chars.toString(36)}`;
+  }
+}
+
+/** The full-text hash of a whole string (one chunk). */
+export function askTextHash(text: string): string | undefined {
+  const h = new AskTextHasher();
+  h.push(text);
+  return h.digest();
+}
+
+/**
  * Is `prev` (an ask in an earlier version) the same question as `cur`? Their
- * texts must be equal after squashAskText, or one a prefix of the other where
- * the shorter was cut at the clip limit (the companion clips at
- * PAGE_ASK_LIMITS.text, the server's matchText at PAGE_ASK_LIMITS.matchText).
- * Empty texts never continue.
+ * FULL-text hashes must be equal: exact, no prefix tolerance, so an edit
+ * anywhere — including the question at the end of a long preamble — reopens
+ * it. A side without a hash (not computed yet, or no text) never continues.
  */
 export function askTextsContinue(prev: PageAskRef, cur: PageAskRef): boolean {
-  const a = squashAskText(prev.matchText ?? prev.text);
-  const b = squashAskText(cur.matchText ?? cur.text);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  const [short, shortRef, long] = a.length < b.length ? [a, prev, b] : [b, cur, a];
-  const src = shortRef.matchText ?? shortRef.text;
-  const limit = shortRef.matchText !== undefined ? PAGE_ASK_LIMITS.matchText : PAGE_ASK_LIMITS.text;
-  return src.length >= limit && long.startsWith(short);
+  return !!prev.fullHash && prev.fullHash === cur.fullHash;
 }
 
 /** The ask in an earlier version's list that `cur` continues: same id (an
