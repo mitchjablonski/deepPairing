@@ -817,13 +817,35 @@ describe("annotator main — version change marks (#714 gap 2)", () => {
 });
 
 describe("annotator change marks — caching, ownership and parity (#714 gap 2 review)", () => {
+  type ChildListRecord = {
+    type: "childList";
+    target: Node;
+    addedNodes: Node[];
+    removedNodes: Node[];
+  };
   let uninstall: () => void;
   let posted: any[];
   let finds: number;
+  let deliver: (records: ChildListRecord[]) => void;
+  const observe = vi.fn<(target: Node, options: MutationObserverInit) => void>();
+  const disconnect = vi.fn();
+  class TestMutationObserver {
+    observe = observe;
+    disconnect = disconnect;
+    constructor(callback: (records: ChildListRecord[]) => void) {
+      // Keep a strong reference so the fixture can deliver observer records directly.
+      deliver = callback;
+    }
+  }
+
   beforeEach(() => {
     document.body.innerHTML = PAGE;
     posted = [];
     finds = 0;
+    observe.mockClear();
+    disconnect.mockClear();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.stubGlobal("MutationObserver", TestMutationObserver);
     vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
       posted.push(msg);
     }) as typeof window.postMessage);
@@ -831,40 +853,80 @@ describe("annotator change marks — caching, ownership and parity (#714 gap 2 r
     const real = core.findChanges;
     core.findChanges = (list: unknown, cache: unknown) => { finds++; return real(list, cache); };
     uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, core) as () => void;
+    expect(observe).toHaveBeenCalledExactlyOnceWith(document, {
+      subtree: true, childList: true, attributes: true, characterData: true,
+    });
   });
   afterEach(() => {
-    uninstall();
-    vi.restoreAllMocks();
+    try {
+      uninstall();
+      expect(disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
   const send = (data: unknown) => window.dispatchEvent(new MessageEvent("message", { data, source: window }));
-  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const change = (target: Node, addedNodes: Node[], removedNodes: Node[]) =>
+    deliver([{ type: "childList", target, addedNodes, removedNodes }]);
 
-  it("a scroll only re-places the bars; a page mutation re-finds them", async () => {
+  it("a scroll only re-places the bars; removing a matched node re-finds them", () => {
+    const paragraph = document.querySelector("section p")!;
+    const rect = vi.spyOn(paragraph, "getBoundingClientRect");
     send({ dp: "changes", marks: [{ kind: "moved", tag: "p", text: "First paragraph.", occurrence: 0 }], show: true });
     expect(finds).toBe(1);
     const box = document.querySelector("dp-annotator-change")!;
     expect(box.getAttribute("data-dp-change-kind")).toBe("moved");
+    rect.mockClear();
     window.dispatchEvent(new Event("scroll"));
-    await wait(200);
+    vi.advanceTimersByTime(119);
+    expect(rect).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(rect).toHaveBeenCalledTimes(1);
     expect(finds).toBe(1);
     expect(document.querySelector("dp-annotator-change")).toBe(box);
-    document.body.appendChild(document.createElement("p")).textContent = "page changed";
-    // The redraw is coalesced (~120 ms); poll rather than race it on a slow CI host.
-    await vi.waitFor(() => expect(finds).toBe(2), { timeout: 3000, interval: 25 });
-  });
 
-  it("drawing bars never re-triggers a redraw (bars are ours by reference)", async () => {
-    send({ dp: "changes", marks: [{ kind: "added", tag: "p", text: "First paragraph.", occurrence: 0 }], show: true });
-    await wait(250);
+    const section = paragraph.parentElement!;
+    paragraph.remove();
+    change(section, [], [paragraph]);
     expect(finds).toBe(1);
+    vi.advanceTimersByTime(120);
+    expect(finds).toBe(2);
+    expect(posted.filter((m) => m?.dp === "changes-status").at(-1)?.found).toEqual([false]);
+    expect(box.isConnected).toBe(false);
+    expect(document.querySelector("dp-annotator-change")).toBeNull();
   });
 
-  it("a mutation inside authored [data-dp-annotator] content still invalidates the cache", async () => {
+  it("drawing bars never re-triggers a redraw (bars are ours by reference)", () => {
+    const paragraph = document.querySelector("section p")!;
+    const rect = vi.spyOn(paragraph, "getBoundingClientRect");
+    send({ dp: "changes", marks: [{ kind: "added", tag: "p", text: "First paragraph.", occurrence: 0 }], show: true });
+    const layer = document.querySelector("dp-annotator-layer")!;
+    const box = layer.querySelector("dp-annotator-change")!;
+    rect.mockClear();
+    // Deliver both real insertions: the layer into the authored document and
+    // the change bar into the layer.
+    change(document.documentElement, [layer], []);
+    change(layer, [box], []);
+    vi.advanceTimersByTime(120);
+    expect(rect).not.toHaveBeenCalled();
+    expect(finds).toBe(1);
+    expect(layer.querySelector("dp-annotator-change")).toBe(box);
+  });
+
+  it("a mutation inside authored [data-dp-annotator] content still invalidates the cache", () => {
     document.body.innerHTML = "<div data-dp-annotator><p>Authored</p></div>";
     send({ dp: "changes", marks: [{ kind: "changed", tag: "p", text: "Authored", occurrence: 0 }], show: true });
     expect(finds).toBe(1);
-    document.querySelector("[data-dp-annotator]")!.appendChild(document.createElement("p")).textContent = "more";
-    await vi.waitFor(() => expect(finds).toBe(2), { timeout: 3000, interval: 25 });
+    const authored = document.body.querySelector("[data-dp-annotator]")!;
+    const inserted = authored.appendChild(document.createElement("p"));
+    inserted.textContent = "more";
+    change(authored, [inserted], []);
+    expect(finds).toBe(1);
+    vi.advanceTimersByTime(120);
+    expect(finds).toBe(2);
   });
 
   it("authored data-dp-annotator content is still found and marked", () => {

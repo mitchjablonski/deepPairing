@@ -1443,9 +1443,9 @@ ${helpInvocations}
                                            Read a saved choice and linked rejection reasons without consuming feedback.
                                            Optionally wait 1–30000 ms for the choice.
     dp read-page-feedback --session-id ID --artifact-id ID
-                                           Read pending anchored human comments for one page version as JSON.
-                                           Returns newest comments first, up to 50 comments and 64 KiB of JSON.
-                                           omittedComments counts entries that do not fit. Returned comments stay whole.
+                                           Read the verdict and pending human feedback for one exact page version.
+                                           JSON includes anchored comments and unanchored notes without acknowledging them.
+                                           The verdict comes first within 50 items and 64 KiB. omittedComments and omittedNotes count overflow.
     dp revise-page --session-id ID --artifact-id ID --request-id UUID --file page.html --reason TEXT [--ack-comment-id ID ...]
                                            Replace the HTML on an inline page. Use a new request ID for changed input.
                                            Acknowledge up to 50 ordinary anchored comments on this page or a direct ancestor.
