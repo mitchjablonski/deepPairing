@@ -265,7 +265,7 @@ describe("openPageAsks", () => {
     it("at the 50-ask cap the last ask is still read to its close: a long-tail edit stays open", () => {
       const page = (q: string) =>
         Array.from({ length: 49 }, (_, i) => `<p id="a${i}" data-dp-question>Ask ${i}?</p>`).join("") +
-        `<div id="last" data-dp-decision>${"Context sentence. ".repeat(200)}${q}</div><p id="extra" data-dp-question>Over the cap</p>`;
+        `<div id="last" data-dp-decision>${"Context sentence. ".repeat(200)}<span>${q}</span></div><p id="extra" data-dp-question>Over the cap</p>`;
       const v2 = page("Which region?");
       expect(extractPageAsks(v2)).toHaveLength(50);
       expect(openIds(v2, [onV1("#last", "Context")], { art_v1: page("Which DB?") })).toContain("last");
