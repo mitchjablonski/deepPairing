@@ -6,7 +6,8 @@
  * anything the page script chose (including text the reviewer typed into a
  * prototype field, or an instruction aimed at the agent). So what reaches the
  * AGENT is data only, in a closed grammar the daemon re-parses at its boundary:
- * kinds, counts, error CLASS names (`TypeError`; anything else is `Error`),
+ * kinds, counts, error CLASS names from a fixed allowlist (`TypeError`;
+ * anything else is `Error`),
  * resource keys (tag + loading attribute) and CSP directive names. No free
  * text, no URL. The human's banner keeps the redacted samples; they never
  * leave the companion.
@@ -16,8 +17,16 @@
 
 export const PAGE_RENDER_ISSUES_VISUAL_ID = "dp-page-render-issues";
 
-/** An error class name the agent may see; anything else becomes "Error". */
-export const PAGE_ERROR_CLASS_RE = /^[A-Z][A-Za-z0-9]{0,40}(Error|Exception)$/;
+/** The ONLY error class names the agent may see (standard JS errors and
+ *  common DOMException names); anything else becomes "Error". A fixed list,
+ *  not a pattern: a pattern like /[A-Z]\w*Error/ would let the page spell a
+ *  word of its choosing ("Hunter2Error"). The annotator carries a copy (it
+ *  runs in the frame and can't import); a parity test holds the two equal. */
+export const PAGE_ERROR_CLASSES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "AggregateError", "InternalError", "DOMException", "SecurityError", "NetworkError", "AbortError", "NotAllowedError", "NotFoundError", "NotSupportedError", "InvalidStateError", "QuotaExceededError", "TimeoutError", "DataCloneError"] as const;
+const PAGE_ERROR_CLASS_SET: ReadonlySet<string> = new Set(PAGE_ERROR_CLASSES);
+export function isPageErrorClass(name: unknown): name is string {
+  return typeof name === "string" && PAGE_ERROR_CLASS_SET.has(name);
+}
 /** A resource named only by tag + loading attribute ("img src"). */
 export const PAGE_RESOURCE_KEY_RE = /^[a-z][a-z0-9-]{0,31} (?:src|srcset|href|xlink:href|poster|data)$/;
 /** A CSP block named only by its directive ("img-src"). */
@@ -41,11 +50,11 @@ export interface PageRenderIssues {
 export const PAGE_RENDER_ISSUES_LIMITS = { perKind: 8, maxCount: 9999, maxLength: 500 } as const;
 
 export function pageErrorClass(name: unknown): string {
-  return typeof name === "string" && PAGE_ERROR_CLASS_RE.test(name) ? name : "Error";
+  return isPageErrorClass(name) ? name : "Error";
 }
 
 function validKey(kind: PageRenderIssueKind, key: string): boolean {
-  if (kind === "script" || kind === "rejection") return key === "Error" || PAGE_ERROR_CLASS_RE.test(key);
+  if (kind === "script" || kind === "rejection") return isPageErrorClass(key);
   if (kind === "resource") return PAGE_RESOURCE_KEY_RE.test(key);
   return PAGE_DIRECTIVE_RE.test(key);
 }
@@ -60,7 +69,9 @@ export function formatPageRenderIssues(p: PageRenderIssues): string | null {
   const merged: PageRenderIssueItem[] = [];
   const perKind: Record<string, number> = {};
   for (const kind of PAGE_RENDER_ISSUE_KINDS) {
-    for (const it of p.items) {
+    for (const raw of p.items) {
+      // A class name outside the allowlist is reported as "Error", never dropped.
+      const it = raw.kind === "script" || raw.kind === "rejection" ? { ...raw, key: pageErrorClass(raw.key) } : raw;
       if (it.kind !== kind || !validKey(kind, it.key) || !Number.isInteger(it.count) || it.count < 1) continue;
       const count = Math.min(it.count, PAGE_RENDER_ISSUES_LIMITS.maxCount);
       const same = merged.find((m) => m.kind === kind && m.key === it.key);

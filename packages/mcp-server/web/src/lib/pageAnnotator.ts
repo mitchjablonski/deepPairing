@@ -1523,13 +1523,15 @@ var DIAG_ATTRS = { img: ["src", "srcset"], source: ["src", "srcset"], video: ["s
   script: ["src"], link: ["href"], iframe: ["src"], frame: ["src"], embed: ["src"], object: ["data"], input: ["src"],
   image: ["href", "xlink:href"], use: ["href", "xlink:href"] };
 var diag = { script: 0, rejection: 0, scriptSamples: [], rejectionSamples: [], scriptClasses: [], rejectionClasses: [], resources: [], blocked: [] };
-/** An error's CLASS name (the only part of an error the agent sees):
- *  TypeError, RangeError, DOMException...; anything else is "Error". */
-var CLASS_RE = /^[A-Z][A-Za-z0-9]{0,40}(Error|Exception)$/;
+/** An error's CLASS name (the only part of an error the agent sees), from
+ *  a fixed allowlist; anything else is "Error". Must equal the shared
+ *  PAGE_ERROR_CLASSES (a parity test checks). */
+var ERROR_CLASSES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "AggregateError", "InternalError", "DOMException", "SecurityError", "NetworkError", "AbortError", "NotAllowedError", "NotFoundError", "NotSupportedError", "InvalidStateError", "QuotaExceededError", "TimeoutError", "DataCloneError"];
+function knownClass(n) { return typeof n === "string" && ERROR_CLASSES.indexOf(n) !== -1; }
 function errClass(name, message) {
-  if (typeof name === "string" && CLASS_RE.test(name)) return name;
-  var m = /^(?:Uncaught )?([A-Z][A-Za-z0-9]{0,40}(?:Error|Exception))\b/.exec(typeof message === "string" ? message : "");
-  return m && CLASS_RE.test(m[1]) ? m[1] : "Error";
+  if (knownClass(name)) return name;
+  var m = /^(?:Uncaught )?([A-Za-z]{1,40})\b/.exec(typeof message === "string" ? message : "");
+  return m && knownClass(m[1]) ? m[1] : "Error";
 }
 var diagSeen = typeof WeakSet === "function" ? new WeakSet() : null, diagPending = 0, lastDiagJson = "";
 function redactDiag(v) {

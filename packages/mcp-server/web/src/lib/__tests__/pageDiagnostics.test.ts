@@ -46,7 +46,17 @@ describe("acceptDiagnosticsMessage", () => {
     expect(bad({ scriptErrors: { count: 1, samples: ["a", "b", "c", "d"], classes: [] } })).toBeNull();
     expect(bad({ scriptErrors: { count: 1, samples: ["x".repeat(121)], classes: [] } })).toBeNull();
     expect(bad({ scriptErrors: { count: 10_000, samples: [], classes: [] } })).toBeNull();
-    expect(bad({ scriptErrors: { count: 1, samples: [], classes: [{ key: "Typed password hunter2", count: 1 }] } })).toBeNull();
+    expect(bad({ scriptErrors: { count: 1, samples: [], classes: [{ key: "x".repeat(65), count: 1 }] } })).toBeNull();
+  });
+
+  it("maps any class name outside the shared allowlist to Error (Hunter2Error, free text)", () => {
+    const bad = (patch: Record<string, unknown>) => acceptDiagnosticsMessage({ source: frame, data: { ...report, ...patch } }, frame);
+    const r = acceptDiagnosticsMessage(
+      { source: frame, data: { ...report, scriptErrors: { count: 3, samples: [], classes: [{ key: "Hunter2Error", count: 1 }, { key: "Typed password hunter2", count: 1 }, { key: "RangeError", count: 1 }] } } },
+      frame,
+    )!;
+    expect(r.scriptErrors.classes).toEqual([{ key: "Error", count: 1 }, { key: "Error", count: 1 }, { key: "RangeError", count: 1 }]);
+    expect(diagnosticsAgentSummary(r, { version: 1, running: true })).toBe("v1 scripts-on | script Error=2; script RangeError=1; resource img src=3; blocked img-src=3");
     expect(bad({ resources: Array.from({ length: 9 }, (_, i) => ({ key: `img${i} src`, count: 1 })) })).toBeNull();
     expect(bad({ extra: "field" })).toBeNull();
     expect(acceptDiagnosticsMessage({ source: frame, data: { ...report, dp: "anchor" } }, frame)).toBeNull();

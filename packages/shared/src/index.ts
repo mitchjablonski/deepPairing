@@ -523,7 +523,8 @@ export {
 } from "./skeleton.js";
 export {
   PAGE_RENDER_ISSUES_VISUAL_ID,
-  PAGE_ERROR_CLASS_RE,
+  PAGE_ERROR_CLASSES,
+  isPageErrorClass,
   PAGE_RESOURCE_KEY_RE,
   PAGE_DIRECTIVE_RE,
   PAGE_RENDER_ISSUE_KINDS,

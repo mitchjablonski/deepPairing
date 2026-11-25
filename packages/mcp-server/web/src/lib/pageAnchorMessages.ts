@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, PAGE_DIRECTIVE_RE, PAGE_ERROR_CLASS_RE, PAGE_RESOURCE_KEY_RE, type HtmlAnchor } from "@deeppairing/shared";
+import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, PAGE_DIRECTIVE_RE, pageErrorClass, PAGE_RESOURCE_KEY_RE, type HtmlAnchor } from "@deeppairing/shared";
 import { LOCATOR_TEXT_MAX, MAX_CHANGE_MARKS } from "./pageVersionDiff";
 
 /**
@@ -263,9 +263,9 @@ export const PAGE_DIAGNOSTICS_LIMITS = { samples: 3, text: 120, keys: 8, max: 99
 
 const DiagCountSchema = z.number().int().min(0).max(PAGE_DIAGNOSTICS_LIMITS.max);
 const DiagSampleSchema = z.string().min(1).max(PAGE_DIAGNOSTICS_LIMITS.text);
-/** An error CLASS name ("TypeError"; else "Error"): the only part of an
- *  error that may reach the agent. */
-const ErrorClassSchema = z.string().refine((v) => v === "Error" || PAGE_ERROR_CLASS_RE.test(v));
+/** An error CLASS name: the only part of an error that may reach the agent.
+ *  Bounded, then mapped onto the shared allowlist (anything else is "Error"). */
+const ErrorClassSchema = z.string().min(1).max(64).transform((v) => pageErrorClass(v));
 const DiagMessagesSchema = z
   .object({
     count: DiagCountSchema,

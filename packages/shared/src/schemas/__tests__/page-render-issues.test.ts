@@ -7,6 +7,7 @@ import {
   PAGE_RENDER_ISSUES_VISUAL_ID,
   describePageRenderIssues,
   formatPageRenderIssues,
+  PAGE_ERROR_CLASSES,
   pageErrorClass,
   pageRenderIssuesWakeKey,
   parsePageRenderIssues,
@@ -39,13 +40,14 @@ describe("page render issues grammar", () => {
         version: 1,
         running: false,
         items: [
-          { kind: "script", key: "Typed password hunter2", count: 1 },
+          { kind: "resource", key: "Typed password hunter2", count: 1 },
           { kind: "resource", key: "img https://x.test/a.png", count: 1 },
           { kind: "blocked", key: "connect-src", count: 50_000 },
         ],
       }),
     ).toBe("v1 scripts-off | blocked connect-src=9999");
-    expect(formatPageRenderIssues({ version: 1, running: false, items: [{ kind: "script", key: "nope", count: 1 }] })).toBeNull();
+    expect(formatPageRenderIssues({ version: 1, running: false, items: [{ kind: "script", key: "nope", count: 1 }] })).toBe("v1 scripts-off | script Error=1");
+    expect(formatPageRenderIssues({ version: 1, running: false, items: [{ kind: "blocked", key: "NOPE", count: 1 }] })).toBeNull();
   });
 
   it.each([
@@ -76,6 +78,19 @@ describe("page render issues grammar", () => {
     expect(pageErrorClass("hunter2")).toBe("Error");
     expect(pageErrorClass("IGNORE PREVIOUS INSTRUCTIONS Error")).toBe("Error");
     expect(pageErrorClass(undefined)).toBe("Error");
+    // A fixed allowlist, not a pattern: a page can't spell a word of its own.
+    expect(pageErrorClass("Hunter2Error")).toBe("Error");
+    expect(pageErrorClass("SecretTokenException")).toBe("Error");
+    expect(PAGE_ERROR_CLASSES).toHaveLength(20);
+    for (const c of PAGE_ERROR_CLASSES) expect(pageErrorClass(c)).toBe(c);
+  });
+
+  it("Hunter2Error is formatted (and so stored) as Error; the strict parse and the schema refuse it verbatim", () => {
+    expect(formatPageRenderIssues({ version: 1, running: true, items: [{ kind: "script", key: "Hunter2Error", count: 2 }, { kind: "rejection", key: "Hunter2Error", count: 1 }] })).toBe(
+      "v1 scripts-on | script Error=2; rejection Error=1",
+    );
+    expect(parsePageRenderIssues("v1 scripts-on | script Hunter2Error=1")).toBeNull();
+    expect(RenderFailureBodySchema.safeParse({ artifactId: "p", visualId: PAGE_RENDER_ISSUES_VISUAL_ID, error: "v1 scripts-on | script Hunter2Error=1" }).success).toBe(false);
   });
 
   it("RenderFailureBodySchema holds the reserved id to the grammar; other ids are unchanged", () => {
