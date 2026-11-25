@@ -911,10 +911,10 @@ function nativeUnder(el) {
 /** Would this badge cover a native control? Hit-tests the page under the
  *  badge's centre and corners. A badge off screen is never live until a redraw finds it on
  *  screen (scrolling redraws). */
-function badgeCoversNative(badge, target) {
-  // No hit-testing (old engines, test DOMs): conservatively keep a badge
-  // inert when its own target is such a control.
-  if (typeof document.elementsFromPoint !== "function") return nativeUnder(target);
+function badgeCoversNative(badge) {
+  // No hit-testing (old engines, test DOMs): we can't know what lies under
+  // the offset badge, so it stays inert (conservative).
+  if (typeof document.elementsFromPoint !== "function") return true;
   var r = badge.getBoundingClientRect();
   var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
   if (!r.width || r.right < 0 || r.bottom < 0 || (vw && r.left > vw) || (vh && r.top > vh)) return true;
@@ -987,7 +987,7 @@ function drawPins() {
       "pointer-events": "none", cursor: "default" });
     pin.appendChild(badge);
     l.appendChild(pin);
-    var ok = !!id && !!badgeIds && !!badgeOk && !badgeCoversNative(badge, hit.el);
+    var ok = !!id && !!badgeIds && !!badgeOk && !badgeCoversNative(badge);
     if (badgeOk) badgeOk.set(badge, ok);
     var live = ok && badgesLive();
     if (live) important(badge, { "pointer-events": "auto", cursor: "pointer" });
@@ -1101,17 +1101,22 @@ function schedule() {
   if ((!current.length && !(showChanges && changes.length)) || pending) return;
   pending = setTimeout(function () { reconcile(false); }, 120);
 }
-/** #714 gap 8 — put an element near the top of THIS frame's viewport.
- *  window.scrollTo moves only the frame's own document, never the companion. */
-function scrollNearTop(el) {
+/** #714 gap 8 — put an element near the BOTTOM of THIS frame's viewport
+ *  (~24px above its bottom edge), next to the composer docked under the
+ *  frame. window.scrollTo moves only the frame's own document, never the
+ *  companion. An element taller than the viewport keeps its top in view. */
+function scrollNearBottom(el) {
   if (!el || !el.getBoundingClientRect) return;
   var r = el.getBoundingClientRect();
+  var vh = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
   var sx = window.scrollX || window.pageXOffset || 0, sy = window.scrollY || window.pageYOffset || 0;
-  try { window.scrollTo(sx, Math.max(0, r.top + sy - 24)); } catch (e) { /* ignore */ }
+  var y = r.bottom + sy - (vh - 24);
+  if (r.height > vh - 48) y = r.top + sy - 24;
+  try { window.scrollTo(sx, Math.max(0, y)); } catch (e) { /* ignore */ }
 }
 /** {dp:"focus", index[, block]} scrolls to a pin; {dp:"focus", anchor,
  *  block} (a spot that has no pin yet: the composer just opened on it)
- *  re-finds the anchor and scrolls to it. block "start" = near the top. */
+ *  re-finds the anchor and scrolls to it. block "end" = near the bottom edge. */
 function focusPin(index, anchorArg, block) {
   var i = typeof index === "number" && index >= 0 && index < current.length ? Math.floor(index) : -1;
   var a = i >= 0 ? current[i] : anchorArg && typeof anchorArg === "object" ? anchorArg : null;
@@ -1120,7 +1125,7 @@ function focusPin(index, anchorArg, block) {
   var hit = null;
   try { hit = core.findAnchor(a); } catch (e) { hit = null; }
   if (hit && hit.el) {
-    if (block === "start") scrollNearTop(hit.el);
+    if (block === "end") scrollNearBottom(hit.el);
     else if (hit.el.scrollIntoView) hit.el.scrollIntoView({ block: "center", behavior: "smooth" });
   }
   if (i < 0) { schedule(); return; }

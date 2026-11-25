@@ -325,8 +325,8 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     expect(within(screen.getByTestId("page-annotations")).getByText(/a sentence from v1/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("page-annotation"));
-    // Narrow (the composer docks below the frame): the pin goes near the frame's top.
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", index: 0, block: "start" }, "*");
+    // Narrow (the composer docks below the frame): the pin goes near the frame's bottom, next to the composer.
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", index: 0, block: "end" }, "*");
     // An explicit open from the companion still focuses the composer.
     expect(document.activeElement).toBe(screen.getByLabelText("Comment on the selected spot"));
   });
@@ -1473,7 +1473,7 @@ describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)",
       }
     });
 
-    it("narrow panel: the composer docks below the frame, never over it, and the frame scrolls the spot near its top", () => {
+    it("narrow panel: the composer docks below the frame, never over it, and the frame scrolls the spot near its bottom", () => {
       const { spy } = stubLayout(600, 600);
       const scroll = vi.fn();
       Element.prototype.scrollIntoView = scroll;
@@ -1493,10 +1493,10 @@ describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)",
           expect(el.style.position).not.toMatch(/absolute|fixed/);
         }
         expect(screen.queryByTestId("page-composer-floating")).not.toBeInTheDocument();
-        // The frame is asked to put the spot near its top; the composer is
+        // The frame is asked to put the spot near its bottom edge (next to the composer); the composer is
         // brought into view with the least scroll; focus is in the textarea
         // on the FIRST open.
-        expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", anchor: cellAnchor, block: "start" }, "*");
+        expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", anchor: cellAnchor, block: "end" }, "*");
         expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
         expect(document.activeElement).toBe(within(composer).getByLabelText("Comment on the selected spot", { selector: "textarea" }));
       } finally {

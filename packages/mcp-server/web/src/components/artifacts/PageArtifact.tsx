@@ -147,7 +147,7 @@ export function anchoredPageComments(comments: Comment[]): Comment[] {
  * row here, never posts) and hovering it shows the comment's snippet, rendered
  * here from the store. The composer sits in the right-hand review rail on a
  * wide panel, or is docked directly below the frame on a narrow one (never
- * over the page's content), with the frame scrolling the spot near its top so
+ * over the page's content), with the frame scrolling the spot near its bottom edge so
  * it stays in view; Escape returns focus to the frame.
  *
  * The footer is the standard ArtifactStatusActions: Respond / Ask, Request
@@ -470,7 +470,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
 
   // Frame-initiated focus: re-check ownership at the moment of moving it.
   // preventScroll, then (narrow) bring the docked composer into view with the
-  // least scroll and ask the frame to put the spot near ITS top, so both the
+  // least scroll and ask the frame to put the spot near ITS bottom (next to the docked composer;
+  // on a short pane, scrolling the composer into view can push the frame's top
+  // off screen), so both the
   // spot and the composer are on screen. A scroll message never moves focus.
   useEffect(() => {
     if (!frameFocusNonce || !frameOwnsFocus(acceptingFrame.current)) return;
@@ -478,7 +480,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     if (!wideRef.current && draftRef.current) {
       composerBoxRef.current?.scrollIntoView?.({ block: "nearest" });
       const { version: _v, ...anchor } = draftRef.current;
-      postToFrame({ dp: "focus", anchor, block: "start" });
+      postToFrame({ dp: "focus", anchor, block: "end" });
     }
   }, [frameFocusNonce, frameOwnsFocus, postToFrame]);
 
@@ -509,8 +511,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     const anchor = anchors[index];
     if (!anchor) return;
     // Narrow: the composer docks below the frame, so the pin goes near the
-    // frame's top rather than its centre.
-    postToFrame(wide ? { dp: "focus", index } : { dp: "focus", index, block: "start" });
+    // frame's bottom edge, next to it, rather than its centre.
+    postToFrame(wide ? { dp: "focus", index } : { dp: "focus", index, block: "end" });
     setHighlightId(anchored[index]?.id ?? null);
     if (!readOnly) {
       acceptingFrame.current = null;

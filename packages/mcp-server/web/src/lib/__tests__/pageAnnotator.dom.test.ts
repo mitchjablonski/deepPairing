@@ -335,6 +335,18 @@ describe("annotator main — event wiring", () => {
       source: window,
     });
   const badges = () => Array.from(document.querySelectorAll("dp-annotator-badge")) as HTMLElement[];
+  /** Real browsers hit-test: give the DOM an elementsFromPoint (plain page
+   *  text under every badge unless `under` says otherwise) and on-screen
+   *  boxes. Without it badges stay inert (the conservative fallback). */
+  function hitTesting(under: () => Element = () => document.body) {
+    (document as any).elementsFromPoint = () => [under()];
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 40, y: 40, left: 40, top: 40, right: 58, bottom: 58, width: 18, height: 18, toJSON: () => ({}),
+    } as DOMRect);
+  }
+  afterEach(() => {
+    delete (document as any).elementsFromPoint;
+  });
 
   it("colours each pin by the state the parent sent: open amber, addressed greyed", () => {
     window.dispatchEvent(pinsMsg());
@@ -351,6 +363,7 @@ describe("annotator main — event wiring", () => {
   });
 
   it("a click on a pin's badge posts {dp:'pin-click', id} and no anchor; the page under it is untouched", () => {
+    hitTesting();
     window.dispatchEvent(pinsMsg());
     const pageClick = vi.fn();
     document.body.addEventListener("click", pageClick);
@@ -364,6 +377,7 @@ describe("annotator main — event wiring", () => {
   });
 
   it("badges are hit targets only while pointing is on and page scripts aren't running", () => {
+    hitTesting();
     window.dispatchEvent(pinsMsg());
     expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["auto", "auto"]);
     window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: false, scripts: false }, source: window }));
@@ -378,6 +392,7 @@ describe("annotator main — event wiring", () => {
   });
 
   it("a pin without a valid id gets no hit target", () => {
+    hitTesting();
     window.dispatchEvent(pinsMsg({ ids: ["", "x".repeat(129)] }));
     expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
     badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -385,6 +400,7 @@ describe("annotator main — event wiring", () => {
   });
 
   it("an authored element named like our badge is never treated as a pin", () => {
+    hitTesting();
     window.dispatchEvent(pinsMsg());
     const fake = document.createElement("dp-annotator-badge");
     fake.setAttribute("data-dp-annotator", "");
@@ -395,10 +411,11 @@ describe("annotator main — event wiring", () => {
   });
 
   it("hovering a badge posts {dp:'pin-hover', id, x, y}; moving off posts id:null (never comment text)", () => {
+    hitTesting();
     window.dispatchEvent(pinsMsg());
     badges()[0]!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 3, clientY: 4 }));
     const hovers = () => posted.filter((m) => m?.dp === "pin-hover");
-    expect(hovers()).toEqual([{ dp: "pin-hover", id: "c_open", x: 0, y: 0 }]);
+    expect(hovers()).toEqual([{ dp: "pin-hover", id: "c_open", x: 40, y: 58 }]);
     // Moving within the same badge doesn't re-post.
     badges()[0]!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
     expect(hovers()).toHaveLength(1);
@@ -407,6 +424,7 @@ describe("annotator main — event wiring", () => {
   });
 
   it("Cmd/Ctrl-click on a badge passes through (no pin click); holding the key makes badges inert", () => {
+    hitTesting();
     window.dispatchEvent(pinsMsg());
     badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
     badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
@@ -426,23 +444,9 @@ describe("annotator main — event wiring", () => {
     expect(badges()[0]!.style.getPropertyValue("top")).toBe("-20px");
   });
 
-  it("no live badge over a control that keeps its own click (no hit-testing: judged by the pinned element)", () => {
-    document.body.innerHTML = "<details><summary id=\"sum\">More</summary><p>x</p></details><p id=\"plain\">Plain text</p>";
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        data: {
-          dp: "pins",
-          anchors: [
-            { kind: "element", locator: "#sum", quote: "More" },
-            { kind: "element", locator: "#plain", quote: "Plain text" },
-          ],
-          states: ["open", "open"],
-          ids: ["c_sum", "c_plain"],
-        },
-        source: window,
-      }),
-    );
-    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "auto"]);
+  it("without hit-testing (no elementsFromPoint) every badge stays inert: what lies under it is unknown", () => {
+    window.dispatchEvent(pinsMsg());
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
     badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
   });
@@ -472,17 +476,20 @@ describe("annotator main — event wiring", () => {
     }
   });
 
-  it("{dp:'focus', anchor, block:'start'} scrolls the frame itself so the spot sits near its top", () => {
+  it("{dp:'focus', anchor, block:'end'} scrolls the frame itself so the spot sits ~24px above its bottom edge", () => {
     const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     window.dispatchEvent(
       new MessageEvent("message", {
-        data: { dp: "focus", anchor: { kind: "element", locator: "#title", quote: "Cache invalidation" }, block: "start" },
+        data: { dp: "focus", anchor: { kind: "element", locator: "#title", quote: "Cache invalidation" }, block: "end" },
         source: window,
       }),
     );
     expect(scrollTo).toHaveBeenCalledTimes(1);
+    // Bottom of the spot lands 24px above the frame's bottom edge.
+    const r = document.getElementById("title")!.getBoundingClientRect();
+    expect(scrollTo).toHaveBeenLastCalledWith(0, Math.max(0, r.bottom - (window.innerHeight - 24)));
     // A bogus anchor does nothing.
-    window.dispatchEvent(new MessageEvent("message", { data: { dp: "focus", anchor: "nope", block: "start" }, source: window }));
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "focus", anchor: "nope", block: "end" }, source: window }));
     expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
