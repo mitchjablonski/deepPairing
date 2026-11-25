@@ -849,8 +849,8 @@ describe("annotator change marks — caching, ownership and parity (#714 gap 2 r
     expect(finds).toBe(1);
     expect(document.querySelector("dp-annotator-change")).toBe(box);
     document.body.appendChild(document.createElement("p")).textContent = "page changed";
-    await wait(200);
-    expect(finds).toBe(2);
+    // The redraw is coalesced (~120 ms); poll rather than race it on a slow CI host.
+    await vi.waitFor(() => expect(finds).toBe(2), { timeout: 3000, interval: 25 });
   });
 
   it("drawing bars never re-triggers a redraw (bars are ours by reference)", async () => {
@@ -864,8 +864,7 @@ describe("annotator change marks — caching, ownership and parity (#714 gap 2 r
     send({ dp: "changes", marks: [{ kind: "changed", tag: "p", text: "Authored", occurrence: 0 }], show: true });
     expect(finds).toBe(1);
     document.querySelector("[data-dp-annotator]")!.appendChild(document.createElement("p")).textContent = "more";
-    await wait(200);
-    expect(finds).toBe(2);
+    await vi.waitFor(() => expect(finds).toBe(2), { timeout: 3000, interval: 25 });
   });
 
   it("authored data-dp-annotator content is still found and marked", () => {
