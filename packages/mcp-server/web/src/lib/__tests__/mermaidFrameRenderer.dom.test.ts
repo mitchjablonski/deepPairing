@@ -6,7 +6,8 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
-  MermaidFrameRenderer, RendererAbortError, RendererFailedError, RendererUnavailableError, rendererHostSupported,
+  MermaidFrameRenderer, RendererAbortError, RendererColdError, RendererExhaustedError, RendererFailedError,
+  RendererUnavailableError, rendererHostSupported, MERMAID_RENDERER_MAX_READY_MISSES, MERMAID_RENDERER_READY_BACKOFF_MS,
   MERMAID_RENDERER_READY_TIMEOUT_MS, type RendererFrame,
 } from "../mermaidFrameRenderer";
 import { PAGE_MERMAID_NOTES, renderPageMermaid } from "../pageMermaid";
@@ -134,7 +135,7 @@ describe("availability: ready deadline, non-http hosts, cold load", () => {
   const notes = (html: string) =>
     Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("[data-dp-mermaid-note]")).map((n) => n.textContent);
 
-  it("a frame that never says ready (VS Code webview CSP) marks the renderer unavailable: one 3 s wait, then instant fallback", async () => {
+  it("on http(s) a missed ready deadline is a timeout, not a verdict: fast fallback, then a retry after the backoff", async () => {
     vi.useFakeTimers();
     const host = fakeHost({ autoReady: false });
     const r = new MermaidFrameRenderer(host);
@@ -142,19 +143,73 @@ describe("availability: ready deadline, non-http hosts, cold load", () => {
     const p = renderPageMermaid(PAGE, { theme: "light", renderer: r.render });
     await vi.advanceTimersByTimeAsync(MERMAID_RENDERER_READY_TIMEOUT_MS);
     const out = await p;
-    // No 15 s budget burn: everything settled at the ready deadline.
+    // One ready wait, then the other blocks fail fast: no 15 s budget burn.
     expect(Date.now() - start).toBe(MERMAID_RENDERER_READY_TIMEOUT_MS);
-    expect(out).toMatchObject({ rendered: 0, fallback: 3, timedOut: 0, unavailable: 3 });
-    expect(notes(out.html)).toEqual(Array(3).fill(PAGE_MERMAID_NOTES.unavailable));
-    expect(r.unavailable).toBe(true);
-    expect(r.framesCreated).toBe(1);
+    expect(out).toMatchObject({ rendered: 0, fallback: 3, timedOut: 3 });
+    expect(out.unavailable).toBeUndefined();
+    expect(notes(out.html)).toEqual(Array(3).fill(PAGE_MERMAID_NOTES.timedOut));
+    expect(r.unavailable).toBe(false);
+    expect(r.readyMisses).toBe(1);
     expect(host.frames[0]!.destroyed).toBe(true);
-    // Session-wide: the next page fails over at once, with no new frame.
-    const again = renderPageMermaid(PAGE, { theme: "light", renderer: r.render });
-    await vi.advanceTimersByTimeAsync(0);
-    expect((await again).unavailable).toBe(3);
+    // Inside the backoff: fails fast, no new frame.
+    await expect(r.render("dp-page-mermaid-0", "x", "light")).rejects.toBeInstanceOf(RendererColdError);
     expect(r.framesCreated).toBe(1);
+    // After the backoff the next mount retries with a fresh frame, which works.
+    await vi.advanceTimersByTimeAsync(MERMAID_RENDERER_READY_BACKOFF_MS);
+    const retry = renderPageMermaid(PAGE, { theme: "light", renderer: r.render });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(r.framesCreated).toBe(2);
+    host.toParent(host.frames[1]!.win, { type: "dp-mermaid-ready" });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await retry).toMatchObject({ rendered: 3, fallback: 0 });
+    expect(r.readyMisses).toBe(0);
+  });
+
+  it("three consecutive missed readies cap the tab with an honest reload message (not the VS Code one)", async () => {
+    vi.useFakeTimers();
+    const host = fakeHost({ autoReady: false });
+    const r = new MermaidFrameRenderer(host);
+    let last = "";
+    for (let miss = 1; miss <= MERMAID_RENDERER_MAX_READY_MISSES; miss++) {
+      const p = renderPageMermaid(PAGE, { theme: "light", renderer: r.render });
+      await vi.advanceTimersByTimeAsync(MERMAID_RENDERER_READY_TIMEOUT_MS);
+      last = (await p).html;
+      expect(r.readyMisses).toBe(miss);
+      await vi.advanceTimersByTimeAsync(MERMAID_RENDERER_READY_BACKOFF_MS);
+    }
+    expect(r.framesCreated).toBe(MERMAID_RENDERER_MAX_READY_MISSES);
+    // The miss that hit the cap already says so for its first block.
+    expect(notes(last)[0]).toBe(PAGE_MERMAID_NOTES.exhausted);
+    const capped = await renderPageMermaid(PAGE, { theme: "light", renderer: r.render });
+    expect(notes(capped.html)).toEqual(Array(3).fill(PAGE_MERMAID_NOTES.exhausted));
+    expect(capped.timedOut).toBe(0);
+    expect(r.framesCreated).toBe(MERMAID_RENDERER_MAX_READY_MISSES);
+    expect(PAGE_MERMAID_NOTES.exhausted).not.toBe(PAGE_MERMAID_NOTES.unavailable);
+    await expect(r.render("dp-page-mermaid-0", "x", "light")).rejects.toBeInstanceOf(RendererExhaustedError);
+  });
+
+  it("a request already queued when the renderer is marked unavailable never creates a frame", async () => {
+    const host = fakeHost({ autoReady: false });
+    const r = new MermaidFrameRenderer(host);
+    const ctl = new AbortController();
+    const first = r.render("dp-page-mermaid-0", "x", "light", ctl.signal);
+    const queued = r.render("dp-page-mermaid-1", "y", "light");
+    await Promise.resolve();
+    expect(r.framesCreated).toBe(1);
+    r.unavailable = true;
+    ctl.abort();
+    await expect(first).rejects.toBeInstanceOf(RendererAbortError);
+    await expect(queued).rejects.toBeInstanceOf(RendererUnavailableError);
+    expect(r.framesCreated).toBe(1);
+  });
+
+  it("createFrame throwing marks the host unavailable for the session", async () => {
+    let calls = 0;
+    const r = new MermaidFrameRenderer({ listen: () => () => {}, createFrame: () => { calls++; throw new Error("no window"); } });
     await expect(r.render("dp-page-mermaid-0", "x", "light")).rejects.toBeInstanceOf(RendererUnavailableError);
+    await expect(r.render("dp-page-mermaid-0", "x", "light")).rejects.toBeInstanceOf(RendererUnavailableError);
+    expect(r.unavailable).toBe(true);
+    expect(calls).toBe(1);
   });
 
   it("a non-http(s) host skips the renderer entirely: no frame, immediate source + note", async () => {

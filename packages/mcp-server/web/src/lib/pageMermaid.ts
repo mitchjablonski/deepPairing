@@ -31,7 +31,9 @@
  */
 import { PAGE_SANITIZE_DROP_TAGS } from "@deeppairing/shared";
 import { isDangerousUrl } from "./pageSanitize";
-import { RendererUnavailableError, sharedMermaidFrameRenderer } from "./mermaidFrameRenderer";
+import {
+  RendererColdError, RendererExhaustedError, RendererUnavailableError, sharedMermaidFrameRenderer,
+} from "./mermaidFrameRenderer";
 
 export type PageTheme = "light" | "dark";
 
@@ -276,6 +278,7 @@ export const PAGE_MERMAID_NOTES = {
   tooMany: "Diagram couldn't be rendered: this page has more diagrams than the companion renders; showing its source.",
   timedOut: "Diagram took too long to render; showing its source. Reopen the page to retry.",
   unavailable: "Diagrams render in the browser companion; showing source here.",
+  exhausted: "Diagrams couldn't load in this tab; reload to retry.",
 } as const;
 
 function noteAfter(doc: Document, block: Element, text: string): void {
@@ -363,9 +366,15 @@ export async function renderPageMermaid(html: string, opts: PageMermaidOptions):
     try {
       svgText = await renderWithTimeout(renderer, pageMermaidId(i), source, opts.theme, timeoutMs, left);
     } catch (err) {
-      const late = err instanceof Timeout;
-      const absent = err instanceof RendererUnavailableError;
-      noteAfter(doc, block, late ? PAGE_MERMAID_NOTES.timedOut : absent ? PAGE_MERMAID_NOTES.unavailable : PAGE_MERMAID_NOTES.failed);
+      // A renderer that didn't load in time is a timeout (retried later);
+      // one that gave up for this tab, or can't run here, is "unavailable"
+      // (also never cached), each with its own honest note.
+      const late = err instanceof Timeout || err instanceof RendererColdError;
+      const gaveUp = err instanceof RendererExhaustedError;
+      const absent = gaveUp || err instanceof RendererUnavailableError;
+      noteAfter(doc, block, late ? PAGE_MERMAID_NOTES.timedOut
+        : gaveUp ? PAGE_MERMAID_NOTES.exhausted
+          : absent ? PAGE_MERMAID_NOTES.unavailable : PAGE_MERMAID_NOTES.failed);
       fallback++;
       if (late) timedOut++;
       if (absent) unavailable++;

@@ -13,11 +13,14 @@
  * or long render) and the next request gets a fresh one, so nothing queues
  * behind abandoned work. Otherwise the frame stays warm across pages.
  *
- * Availability: the frame must say "ready" within a short deadline of its
- * own (cold load is NOT charged to any diagram's render timeout). If it
- * doesn't — e.g. the VS Code webview, whose CSP has no frame-src, or any
- * non-http(s) host — the renderer is marked unavailable for the session and
- * every request fails at once, so pages fall back to source immediately. The plan-card MermaidDiagram keeps its own renderer
+ * Availability. A host that can NEVER load the frame (a non-http(s) page
+ * such as the VS Code webview, or `createFrame` throwing) marks the renderer
+ * unavailable for the session: every request fails at once with source and
+ * an "open the browser companion" note. On http(s) the frame gets its own
+ * ready deadline (10 s; cold load is NOT charged to any diagram's render
+ * timeout). A miss there is treated like a timeout, not a verdict: the
+ * request fails fast for a 30 s backoff, then the next mount retries; after
+ * 3 consecutive misses the tab gives up with a "reload to retry" message. The plan-card MermaidDiagram keeps its own renderer
  * and shares no Mermaid state with this one.
  */
 import {
@@ -36,14 +39,20 @@ export interface FrameRendererDeps {
   createFrame: () => RendererFrame;
   /** Subscribe to messages arriving at the parent window. */
   listen: (handler: (event: { source: unknown; data: unknown }) => void) => () => void;
-  /** How long a new frame may take to post "ready" (default 3 s). */
+  /** How long a new frame may take to post "ready" (default 10 s). */
   readyTimeoutMs?: number;
+  /** After a missed ready, fail fast for this long before retrying (30 s). */
+  readyBackoffMs?: number;
+  /** Consecutive missed readies before the tab gives up (3). */
+  maxReadyMisses?: number;
   /** Start out unavailable (a host that can't load the frame at all). */
   unavailable?: boolean;
 }
 
 /** Default deadline for a new frame's "ready". */
-export const MERMAID_RENDERER_READY_TIMEOUT_MS = 3_000;
+export const MERMAID_RENDERER_READY_TIMEOUT_MS = 10_000;
+export const MERMAID_RENDERER_READY_BACKOFF_MS = 30_000;
+export const MERMAID_RENDERER_MAX_READY_MISSES = 3;
 
 export class RendererAbortError extends Error {
   constructor() {
@@ -54,11 +63,29 @@ export class RendererAbortError extends Error {
 
 export class RendererFailedError extends Error {}
 
-/** The renderer frame can't run here (it never became ready). */
+/** The renderer frame can never run on this host (non-http(s) page, or the
+ *  frame couldn't be created). */
 export class RendererUnavailableError extends Error {
   constructor() {
     super("diagram renderer unavailable");
     this.name = "RendererUnavailableError";
+  }
+}
+
+/** The frame missed its ready deadline (or we're in the backoff after one):
+ *  timeout-like, retried on a later mount. */
+export class RendererColdError extends Error {
+  constructor() {
+    super("diagram renderer did not load in time");
+    this.name = "RendererColdError";
+  }
+}
+
+/** The frame missed its ready deadline too many times in this tab. */
+export class RendererExhaustedError extends Error {
+  constructor() {
+    super("diagram renderer could not load in this tab");
+    this.name = "RendererExhaustedError";
   }
 }
 
@@ -74,8 +101,12 @@ export class MermaidFrameRenderer {
   private markReady: (() => void) | null = null;
   private failReady: ((err: Error) => void) | null = null;
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Session-wide: once the frame missed its ready deadline, stop trying. */
+  /** Session-wide: this host can never run the frame. */
   unavailable: boolean;
+  /** Consecutive missed readies (reset by a ready). */
+  readyMisses = 0;
+  /** No new frame before this time (ms epoch) after a missed ready. */
+  private backoffUntil = 0;
   private pending: Pending | null = null;
   private unlisten: (() => void) | null = null;
   private chain: Promise<unknown> = Promise.resolve();
@@ -87,7 +118,8 @@ export class MermaidFrameRenderer {
     this.unavailable = !!deps.unavailable;
     this.render = Object.assign(
       (id: string, source: string, theme: PageTheme, signal?: AbortSignal, onStart?: () => void) => {
-        if (this.unavailable) return Promise.reject(new RendererUnavailableError());
+        const blocked = this.blockedError();
+        if (blocked) return Promise.reject(blocked);
         const run = () => this.renderOne(id, source, theme, signal, onStart);
         const p = this.chain.then(run, run);
         this.chain = p.catch(() => undefined);
@@ -101,6 +133,14 @@ export class MermaidFrameRenderer {
 
   /** A MermaidRenderer bound to this instance; requests run one at a time. */
   readonly render: MermaidRenderer;
+
+  /** Why a request must fail without trying, if it must. */
+  private blockedError(): Error | null {
+    if (this.unavailable) return new RendererUnavailableError();
+    if (this.readyMisses >= (this.deps.maxReadyMisses ?? MERMAID_RENDERER_MAX_READY_MISSES)) return new RendererExhaustedError();
+    if (!this.frame && Date.now() < this.backoffUntil) return new RendererColdError();
+    return null;
+  }
 
   /** Tear down the frame (and fail any in-flight request). */
   dispose(): void {
@@ -117,6 +157,7 @@ export class MermaidFrameRenderer {
     if (msg.type === "dp-mermaid-ready") {
       if (this.readyTimer) clearTimeout(this.readyTimer);
       this.readyTimer = null;
+      this.readyMisses = 0;
       this.markReady?.();
       return;
     }
@@ -142,9 +183,12 @@ export class MermaidFrameRenderer {
     }
     this.framesCreated++;
     this.readyTimer = setTimeout(() => {
+      // A slow cold load is not a verdict on the host: back off, then retry.
       this.readyTimer = null;
-      this.unavailable = true;
-      this.destroyFrame(new RendererUnavailableError());
+      this.readyMisses++;
+      this.backoffUntil = Date.now() + (this.deps.readyBackoffMs ?? MERMAID_RENDERER_READY_BACKOFF_MS);
+      const capped = this.readyMisses >= (this.deps.maxReadyMisses ?? MERMAID_RENDERER_MAX_READY_MISSES);
+      this.destroyFrame(capped ? new RendererExhaustedError() : new RendererColdError());
     }, this.deps.readyTimeoutMs ?? MERMAID_RENDERER_READY_TIMEOUT_MS);
     return this.ready;
   }
@@ -167,6 +211,10 @@ export class MermaidFrameRenderer {
 
   private renderOne(id: string, source: string, theme: PageTheme, signal?: AbortSignal, onStart?: () => void): Promise<string> {
     if (signal?.aborted) return Promise.reject(new RendererAbortError());
+    // Re-check: a request queued before the renderer was marked unavailable
+    // (or entered backoff) must not create a frame.
+    const blocked = this.blockedError();
+    if (blocked) return Promise.reject(blocked);
     return new Promise<string>((resolve, reject) => {
       const reqId = `r${++this.seq}`;
       let settled = false;
