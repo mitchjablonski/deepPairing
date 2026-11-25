@@ -1,4 +1,5 @@
 import path from "node:path";
+import { safeLintPage, formatPageLintWarnings } from "../mcp/page-lint.js";
 import { ArtifactStatusSchema, PageContentSchema, PreflightTraceSchema, type Artifact } from "@deeppairing/shared";
 import { z } from "zod";
 import { ERROR_CODES, TOOL_ERROR_CODES, type ErrorCode } from "../error-codes.js";
@@ -317,6 +318,18 @@ export async function reviseStandalonePage(
     }
     const parent = target();
     if ("isError" in parent) return parent;
+  }
+  // #714 gap 6 — the same non-blocking authoring lint as present page, on a
+  // fresh revision only (a replay returns the stored receipt as it was).
+  if (!result.isError && result.structuredContent?.replayed !== true) {
+    const warnings = safeLintPage(html);
+    if (warnings.length > 0) {
+      return {
+        ...result,
+        content: result.content.map((c, i) => (i === 0 && c.type === "text" ? { ...c, text: c.text + formatPageLintWarnings(warnings) } : c)),
+        structuredContent: { ...result.structuredContent, warnings },
+      };
+    }
   }
   return result;
 }

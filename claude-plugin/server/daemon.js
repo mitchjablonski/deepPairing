@@ -39940,6 +39940,250 @@ import path26 from "node:path";
 // src/mcp/tools/present-page.ts
 import fs25 from "node:fs";
 import path25 from "node:path";
+
+// src/mcp/page-lint.ts
+var PAGE_LINT_LONG_PAGE_BYTES = 16 * 1024;
+var PAGE_LINT_CODES = {
+  external_asset: "external_asset",
+  no_headings: "no_headings",
+  no_section_ids: "no_section_ids"
+};
+var SKIPPED_BODY = ["script", "style", "textarea", "xmp", "title", "template", "noembed", "noframes", "noscript"];
+var RESOURCE_ATTRS = {
+  script: ["src"],
+  img: ["src", "srcset"],
+  iframe: ["src"],
+  frame: ["src"],
+  source: ["src", "srcset"],
+  video: ["src", "poster"],
+  audio: ["src"],
+  track: ["src"],
+  embed: ["src"],
+  object: ["data"],
+  input: ["src"],
+  image: ["href", "xlink:href"],
+  // SVG <image>
+  use: ["href", "xlink:href"]
+  // SVG <use> pointing at another document
+};
+var HEADINGS = /* @__PURE__ */ new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+function isSpace(c) {
+  return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
+}
+function isAlpha(c) {
+  return c >= 97 && c <= 122 || c >= 65 && c <= 90;
+}
+function externalAt(lower, at) {
+  let i = at;
+  while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
+  return lower.startsWith("http://", i) || lower.startsWith("https://", i) || lower.startsWith("//", i);
+}
+function isExternal(value) {
+  return externalAt(value.toLowerCase(), 0);
+}
+function externalSrcsetCount(value) {
+  let count2 = 0;
+  for (const candidate of value.split(",")) {
+    const url2 = candidate.trim().split(/\s/, 1)[0] ?? "";
+    if (url2 && isExternal(url2)) count2++;
+  }
+  return count2;
+}
+function stripCssComments(css) {
+  let out = "";
+  let i = 0;
+  while (i < css.length) {
+    const open = css.indexOf("/*", i);
+    if (open === -1) {
+      out += css.slice(i);
+      break;
+    }
+    out += css.slice(i, open) + " ";
+    const close = css.indexOf("*/", open + 2);
+    if (close === -1) break;
+    i = close + 2;
+  }
+  return out;
+}
+function externalCssRefs(rawCss) {
+  const lower = stripCssComments(rawCss).toLowerCase();
+  const counts = { url: 0, import: 0 };
+  const target = (from) => {
+    let i = from;
+    while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
+    if (lower[i] === '"' || lower[i] === "'") i++;
+    return i;
+  };
+  let at = lower.indexOf("@import");
+  while (at !== -1) {
+    let i = target(at + 7);
+    if (lower.startsWith("url(", i)) i = target(i + 4);
+    if (externalAt(lower, i)) counts.import++;
+    at = lower.indexOf("@import", at + 7);
+  }
+  at = lower.indexOf("url(");
+  while (at !== -1) {
+    let k = at - 1;
+    while (k >= 0 && isSpace(lower.charCodeAt(k))) k--;
+    const isImportTarget = k >= 6 && lower.startsWith("@import", k - 6);
+    if (!isImportTarget && externalAt(lower, target(at + 4))) counts.url++;
+    at = lower.indexOf("url(", at + 4);
+  }
+  return counts;
+}
+function readStartTag(html, lower, at) {
+  const n = html.length;
+  let i = at;
+  while (i < n && !isSpace(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">") i++;
+  const name = lower.slice(at, i);
+  const attrs = /* @__PURE__ */ Object.create(null);
+  while (i < n) {
+    while (i < n && (isSpace(lower.charCodeAt(i)) || lower[i] === "/")) i++;
+    if (i >= n) break;
+    if (lower[i] === ">") return { name, attrs, end: i + 1 };
+    const nameStart = i;
+    i++;
+    while (i < n && !isSpace(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">" && lower[i] !== "=") i++;
+    const attr = lower.slice(nameStart, i);
+    let j = i;
+    while (j < n && isSpace(lower.charCodeAt(j))) j++;
+    let value = "";
+    if (lower[j] === "=") {
+      j++;
+      while (j < n && isSpace(lower.charCodeAt(j))) j++;
+      const q = html[j];
+      if (q === '"' || q === "'") {
+        const close = html.indexOf(q, j + 1);
+        value = html.slice(j + 1, close === -1 ? n : close);
+        j = close === -1 ? n : close + 1;
+      } else {
+        const start = j;
+        while (j < n && !isSpace(lower.charCodeAt(j)) && lower[j] !== ">") j++;
+        value = html.slice(start, j);
+      }
+      i = j;
+    }
+    if (!(attr in attrs)) attrs[attr] = value;
+  }
+  return { name, attrs, end: n };
+}
+function lintPage(html) {
+  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  const n = html.length;
+  const lastAt = /* @__PURE__ */ new Map();
+  const findClose = (tag, from) => {
+    const needle = `</${tag}`;
+    const prev = lastAt.get(needle);
+    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
+    const at = lower.indexOf(needle, from);
+    lastAt.set(needle, at);
+    return at;
+  };
+  let commentEnd = -2;
+  const blocked = /* @__PURE__ */ new Map();
+  const add = (source, count2 = 1) => {
+    if (count2 > 0) blocked.set(source, (blocked.get(source) ?? 0) + count2);
+  };
+  const addCss = (css, where) => {
+    const refs = externalCssRefs(css);
+    add(`CSS url() in ${where}`, refs.url);
+    add(`CSS @import in ${where}`, refs.import);
+  };
+  let headings = 0;
+  let sectionIds = 0;
+  let i = 0;
+  while (i < n) {
+    const lt = lower.indexOf("<", i);
+    if (lt === -1) break;
+    if (lower.startsWith("<!--", lt)) {
+      if (commentEnd !== -1 && commentEnd < lt + 4) commentEnd = lower.indexOf("-->", lt + 4);
+      i = commentEnd === -1 ? n : commentEnd + 3;
+      continue;
+    }
+    const next = lower.charCodeAt(lt + 1);
+    if (next === 47 || next === 33 || next === 63) {
+      const gt = lower.indexOf(">", lt + 2);
+      i = gt === -1 ? n : gt + 1;
+      continue;
+    }
+    if (!isAlpha(next)) {
+      i = lt + 1;
+      continue;
+    }
+    const tag = readStartTag(html, lower, lt + 1);
+    i = tag.end;
+    if (tag.name === "plaintext") break;
+    if (HEADINGS.has(tag.name)) {
+      headings++;
+      if (tag.attrs.id?.trim()) sectionIds++;
+    } else if (tag.name === "section" && tag.attrs.id?.trim()) {
+      sectionIds++;
+    }
+    const resourceAttrs = RESOURCE_ATTRS[tag.name];
+    if (resourceAttrs) {
+      for (const attr of resourceAttrs) {
+        const value = tag.attrs[attr];
+        if (value === void 0) continue;
+        if (attr === "srcset") add(`${tag.name} srcset`, externalSrcsetCount(value));
+        else if (isExternal(value)) add(`${tag.name} ${attr}`);
+      }
+    }
+    if (tag.name === "link" && tag.attrs.href !== void 0 && isExternal(tag.attrs.href)) {
+      const rels = (tag.attrs.rel ?? "").toLowerCase().split(/\s+/);
+      const kind = ["stylesheet", "modulepreload", "preload", "icon"].find((r) => rels.includes(r));
+      if (kind) add(`link href (${kind})`);
+    }
+    if (tag.attrs.style) addCss(tag.attrs.style, "a style attribute");
+    if (SKIPPED_BODY.includes(tag.name)) {
+      const close = findClose(tag.name, tag.end);
+      if (close === -1) continue;
+      if (tag.name === "style") addCss(html.slice(tag.end, close), "<style>");
+      const gt = lower.indexOf(">", close);
+      i = gt === -1 ? n : gt + 1;
+    }
+  }
+  const warnings = [];
+  if (blocked.size > 0) {
+    const sources = [...blocked].map(([source, count2]) => ({ source, count: count2 }));
+    const total = sources.reduce((sum, s) => sum + s.count, 0);
+    warnings.push({
+      code: PAGE_LINT_CODES.external_asset,
+      count: total,
+      sources,
+      message: `${total} external asset reference${total === 1 ? "" : "s"} will not load (the page has no network): ${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. Inline images and fonts as data: URIs and styles and scripts as inline <style>/<script>; video, audio, iframes and objects won't load at all.`
+    });
+  }
+  if (headings === 0) {
+    warnings.push({
+      code: PAGE_LINT_CODES.no_headings,
+      message: "The page has no headings (<h1>-<h6>). Add an <h1> and an <h2> per section so your pair can skim it."
+    });
+  }
+  if (sectionIds === 0 && Buffer.byteLength(html, "utf8") > PAGE_LINT_LONG_PAGE_BYTES) {
+    warnings.push({
+      code: PAGE_LINT_CODES.no_section_ids,
+      message: `The page is over ${PAGE_LINT_LONG_PAGE_BYTES / 1024} KiB but no <section> or heading has an id. Wrap each part in <section id="..."> so your pair can navigate it and comments stay anchored across revisions.`
+    });
+  }
+  return warnings;
+}
+function formatPageLintWarnings(warnings) {
+  if (warnings.length === 0) return "";
+  return `
+
+Page warnings (non-blocking; the page was presented):
+${warnings.map((w) => `- ${w.message}`).join("\n")}`;
+}
+function safeLintPage(html) {
+  if (typeof html !== "string") return [];
+  try {
+    return lintPage(html);
+  } catch {
+    return [];
+  }
+}
+
+// src/mcp/tools/present-page.ts
 function refuse(message) {
   const code = TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED;
   return {
@@ -40105,13 +40349,15 @@ async function presentPage(ctx, args, opts = {}) {
   const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "page", input.title, id);
+  const warnings = safeLintPage(html);
   const from = sourcePath ? ` from ${sourcePath}` : "";
   const watchNote = sourcePath ? ` While it is under review, saving ${sourcePath} records a new version automatically (after ~2s of quiet, at most one per 10s); check_feedback tells you when, and which page comments lost their spot.` : "";
   return {
     content: [{
       type: "text",
-      text: `Page "${artifact.title}" presented for review (${id})${from}. Your pair reviews it at localhost:${reviewPort}, in a sandboxed frame with no network; scripts run only when they click Run. Call check_feedback for their verdict and comments.${watchNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
-    }]
+      text: `Page "${artifact.title}" presented for review (${id})${from}. Your pair reviews it at localhost:${reviewPort}, in a sandboxed frame with no network; scripts run only when they click Run. Call check_feedback for their verdict and comments.${watchNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${formatPageLintWarnings(warnings)}${await ctx.helpers.getPassiveFeedback()}`
+    }],
+    ...warnings.length > 0 ? { structuredContent: { warnings } } : {}
   };
 }
 
@@ -41115,8 +41361,10 @@ Skeleton change: your pair re-reviews the reshaped skeleton on the card. Fills a
     const advisory = pre?.ok && pre.advisory ? `
 
 \u26A0 Recalled stance \u2014 advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}` : "";
+    const pageWarnings = old.type === "page" ? safeLintPage(newArtifact.content.html) : [];
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${old.type === "debrief" ? debriefReviseNotes(newArtifact, debriefPin, await store.getArtifacts()) : ""}${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }]
+      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${old.type === "debrief" ? debriefReviseNotes(newArtifact, debriefPin, await store.getArtifacts()) : ""}${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}${formatPageLintWarnings(pageWarnings)}` }],
+      ...pageWarnings.length > 0 ? { structuredContent: { warnings: pageWarnings } } : {}
     };
   }
   if (!mcp) return { content: [{ type: "text", text: "Standalone page revision requires supersede mode." }], isError: true };
@@ -41429,6 +41677,16 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
     }
     const parent2 = target();
     if ("isError" in parent2) return parent2;
+  }
+  if (!result.isError && result.structuredContent?.replayed !== true) {
+    const warnings = safeLintPage(html);
+    if (warnings.length > 0) {
+      return {
+        ...result,
+        content: result.content.map((c, i) => i === 0 && c.type === "text" ? { ...c, text: c.text + formatPageLintWarnings(warnings) } : c),
+        structuredContent: { ...result.structuredContent, warnings }
+      };
+    }
   }
   return result;
 }
@@ -43316,9 +43574,11 @@ function relocatePageComments(html, comments) {
   return out;
 }
 
-// src/daemon/page-watch.ts
+// src/page-watch-timing.ts
 var PAGE_WATCH_QUIET_MS = 2e3;
 var PAGE_WATCH_MIN_INTERVAL_MS = 1e4;
+
+// src/daemon/page-watch.ts
 var PAGE_WATCH_POLL_MS = 1e3;
 function statSig(p) {
   try {

@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { safeLintPage, formatPageLintWarnings } from "../page-lint.js";
 import { retirementFailure } from "../../store/retirement.js";
 import { ParentSupersededError } from "../../store/file-store.js";
 import { readFileWatch } from "@deeppairing/shared";
@@ -388,8 +389,12 @@ export async function handleReviseArtifact(ctx: ToolContext | StandalonePageRevi
     const advisory = pre?.ok && pre.advisory
       ? `\n\n⚠ Recalled stance — advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}`
       : "";
+    // #714 gap 6 — a page revision gets the same non-blocking authoring lint
+    // as present_page. It runs after the gate and the write: it never refuses.
+    const pageWarnings = old.type === "page" ? safeLintPage((newArtifact.content as { html?: unknown }).html) : [];
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${old.type === "debrief" ? debriefReviseNotes(newArtifact, debriefPin, await store.getArtifacts()) : ""}${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${old.type === "debrief" ? debriefReviseNotes(newArtifact, debriefPin, await store.getArtifacts()) : ""}${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}${formatPageLintWarnings(pageWarnings)}` }],
+      ...(pageWarnings.length > 0 ? { structuredContent: { warnings: pageWarnings } } : {}),
     };
   }
 
