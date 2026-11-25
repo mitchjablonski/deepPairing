@@ -1314,3 +1314,194 @@ describe("ask attributes: annotator selector vs shared constants (#714 gap 5)", 
     expect(core.ASK_SEL).toBe(`[${PAGE_DECISION_ATTR}], [${PAGE_QUESTION_ATTR}]`);
   });
 });
+
+// --- #714 gap 10: anchors carry section context ------------------------------
+
+describe("annotator core — section context and element affixes (#714 gap 10)", () => {
+  type CtxCore = Core & { sectionFor(el: Element): { heading?: string; id?: string } | null };
+  const ctxCore = () => makeCore() as CtxCore;
+
+  it("an element anchor carries prefix, suffix and its section (heading text + the heading's id)", () => {
+    const core = ctxCore();
+    const second = document.querySelectorAll("section p")[1]!;
+    const a = core.anchorForTarget(second)!;
+    expect(a).toMatchObject({ kind: "element", quote: "Second bold paragraph." });
+    // The page text just outside the element, as the annotator reads it
+    // (adjacent blocks with no whitespace between them run together, exactly
+    // as for a text anchor's context), up to 32 characters each side.
+    expect(a.prefix).toBe("e session cache.First paragraph.");
+    expect(String(a.suffix).startsWith("StrategyStaleness")).toBe(true);
+    expect(a.prefix.length).toBeLessThanOrEqual(32);
+    expect(a.suffix.length).toBeLessThanOrEqual(32);
+    expect(a.section).toEqual({ heading: "Cache invalidation", id: "title" });
+    expect(HtmlAnchorSchema.safeParse(a).success).toBe(true);
+  });
+
+  it("cell, node, link and text anchors carry section context too, and all still parse", () => {
+    const core = ctxCore();
+    const cell = core.anchorForTarget(document.querySelectorAll("tbody td")[1]!)!;
+    expect(cell).toMatchObject({ kind: "cell", table: { row: "TTL expiry", col: "Staleness" }, section: { heading: "Cache invalidation" } });
+    expect(cell.prefix).toMatch(/TTL expiry$/);
+    expect(cell.suffix).toMatch(/^Write-through purge/);
+    const node = core.anchorForTarget(document.querySelector("g.node text")!)!;
+    expect(node).toMatchObject({ kind: "diagram-node", nodeId: "AuthGate", section: { heading: "Cache invalidation" } });
+    const link = core.anchorForTarget(document.getElementById("rfc")!)!;
+    // The link's own id is its nearest ancestor-or-self id.
+    expect(link).toMatchObject({ kind: "link", section: { heading: "Cache invalidation", id: "rfc" } });
+    const intro = document.querySelector(".intro")!.firstChild!;
+    const r = document.createRange();
+    r.setStart(intro, 8);
+    r.setEnd(intro, 12);
+    const text = core.textAnchor(r)!;
+    expect(text.section).toEqual({ heading: "Cache invalidation", id: "title" });
+    for (const a of [cell, node, link, text]) expect(HtmlAnchorSchema.safeParse(a).success).toBe(true);
+  });
+
+  it("names the section by the nearest preceding heading; a page-wide wrapper id yields to the heading's own id", () => {
+    document.body.innerHTML =
+      '<main id="app"><h2 id="rollout">Rollout</h2><div><p id="p1x">Step one</p><p class="a">Plain</p></div>' +
+      '<h2>Risks</h2><p class="b">Step two</p>' +
+      '<section id="faq"><h3>FAQ</h3><p>Q?</p></section></main>';
+    const core = ctxCore();
+    expect(core.sectionFor(document.querySelector(".a")!)).toEqual({ heading: "Rollout", id: "rollout" });
+    // No heading id in the Risks section: the nearest ancestor id stands.
+    expect(core.sectionFor(document.querySelector(".b")!)).toEqual({ heading: "Risks", id: "app" });
+    // A clicked container is named by the first heading inside it and its own id.
+    expect(core.sectionFor(document.getElementById("faq")!)).toEqual({ heading: "FAQ", id: "faq" });
+    // An element with its own id is the most specific name.
+    expect(core.sectionFor(document.getElementById("p1x")!)).toEqual({ heading: "Rollout", id: "p1x" });
+  });
+
+  it("caps the heading at 120 characters, skips an over-long id, and returns null with no heading or id", () => {
+    const long = "H".repeat(300);
+    document.body.innerHTML = `<h4 id="${"x".repeat(201)}">${long}</h4><p class="t">text</p>`;
+    const core = ctxCore();
+    expect(core.sectionFor(document.querySelector(".t")!)).toEqual({ heading: "H".repeat(120) });
+    document.body.innerHTML = '<p class="t">No headings, no ids</p>';
+    expect(core.sectionFor(document.querySelector(".t")!)).toBeNull();
+    const a = core.anchorForTarget(document.querySelector(".t")!)!;
+    expect(a.section).toBeUndefined();
+  });
+
+  it("re-finds an id-less element by its saved prefix after the nth-of-type locator drifts", () => {
+    document.body.innerHTML = '<h2 id="a">Alpha</h2><p>Same text</p><h2 id="b">Beta</h2><p>Same text</p>';
+    const core = ctxCore();
+    const target = document.querySelectorAll("p")[1]!;
+    const a = core.anchorForTarget(target)!;
+    expect(a.locator).toBe("body > p:nth-of-type(2)");
+    expect(a.prefix).toBe("AlphaSame textBeta");
+    // A new first paragraph shifts nth-of-type: the old locator now hits the
+    // FIRST "Same text", but the saved context still names the right one.
+    document.body.insertAdjacentHTML("afterbegin", "<p>New intro</p>");
+    expect(document.querySelector(a.locator)).not.toBe(target);
+    expect(core.findAnchor(a)?.el).toBe(target);
+    // Without the new context (an anchor saved before gap 10) the drifted
+    // locator wins, exactly as before: existing scoring is unchanged.
+    const legacy = { kind: "element", locator: a.locator, quote: a.quote };
+    expect(core.findAnchor(legacy)?.el).toBe(document.querySelectorAll("p")[1]);
+  });
+
+  it("uses section.id to break a tie between equal text in different sections; without it a tie stays not found", () => {
+    document.body.innerHTML = '<h2 id="a">Alpha</h2><p>Same text</p><h2 id="b">Beta</h2><p>Same text</p>';
+    const core = ctxCore();
+    const base = { kind: "element", locator: "#gone", quote: "Same text" };
+    expect(core.findAnchor(base)).toBeNull();
+    expect(core.findAnchor({ ...base, section: { id: "b" } })?.el).toBe(document.querySelectorAll("p")[1]);
+    expect(core.findAnchor({ ...base, section: { id: "a" } })?.el).toBe(document.querySelectorAll("p")[0]);
+  });
+});
+
+// --- #714 gap 12: render diagnostics ------------------------------------------
+
+describe("annotator main — render diagnostics (#714 gap 12)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    posted = [];
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+  });
+  afterEach(() => {
+    uninstall();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const diagnostics = () => posted.filter((m) => m?.dp === "diagnostics");
+  const scriptError = (message: string) => window.dispatchEvent(new ErrorEvent("error", { message }));
+  const cspViolation = (directive: string) => {
+    const ev = new Event("securitypolicyviolation", { bubbles: true }) as Event & Record<string, unknown>;
+    Object.defineProperty(ev, "effectiveDirective", { value: directive });
+    document.dispatchEvent(ev);
+  };
+
+  it("posts nothing on a clean page", () => {
+    vi.advanceTimersByTime(1000);
+    expect(diagnostics()).toEqual([]);
+  });
+
+  it("counts script errors, rejections, failed resources (by tag + attribute) and CSP blocks (by directive), redacted", () => {
+    scriptError("TypeError: x is undefined at https://user:secret@cdn.example.com/a.js?token=abc");
+    scriptError("TypeError: x is undefined at https://user:secret@cdn.example.com/a.js?token=abc");
+    scriptError("ReferenceError: y is not defined");
+    const rej = new Event("unhandledrejection") as Event & { reason?: unknown };
+    rej.reason = new Error("fetch failed for //api.example.com/v1?key=k data:text/plain;base64,QUJD");
+    window.dispatchEvent(rej);
+    document.body.insertAdjacentHTML("beforeend", '<img id="i1" src="shot.png"><img id="i2" srcset="a.png 1x"><video id="v" poster="p.png"></video>');
+    for (const id of ["i1", "i2", "v"]) document.getElementById(id)!.dispatchEvent(new Event("error"));
+    // The same element failing again (a srcset retry) counts once.
+    document.getElementById("i1")!.dispatchEvent(new Event("error"));
+    cspViolation("img-src");
+    cspViolation("img-src");
+    cspViolation("connect-src");
+    vi.advanceTimersByTime(300);
+    const all = diagnostics();
+    expect(all).toHaveLength(1);
+    const d = all[0];
+    expect(d.scriptErrors.count).toBe(3);
+    // De-duplicated samples; every URL replaced.
+    expect(d.scriptErrors.samples).toEqual(["TypeError: x is undefined at [url]", "ReferenceError: y is not defined"]);
+    expect(d.rejections).toEqual({ count: 1, samples: ["Error: fetch failed for [url] [data URI]"] });
+    expect(d.resources).toEqual([
+      { key: "img src", count: 1 },
+      { key: "img srcset", count: 1 },
+      { key: "video poster", count: 1 },
+    ]);
+    expect(d.blocked).toEqual([{ key: "img-src", count: 2 }, { key: "connect-src", count: 1 }]);
+    const json = JSON.stringify(d);
+    for (const leak of ["secret", "cdn.example.com", "token", "api.example.com", "shot.png", "QUJD"]) expect(json).not.toContain(leak);
+  });
+
+  it("is bounded: at most 3 samples of at most 120 characters, 8 keys, counts capped at 9999", () => {
+    for (let i = 0; i < 10_050; i++) scriptError(`Error number ${i} ${"z".repeat(200)}`);
+    for (let i = 0; i < 12; i++) cspViolation(`dir-${String.fromCharCode(97 + i)}-src`);
+    cspViolation("NOT A DIRECTIVE https://x.test");
+    vi.advanceTimersByTime(300);
+    const d = diagnostics().at(-1);
+    expect(d.scriptErrors.count).toBe(9999);
+    expect(d.scriptErrors.samples).toHaveLength(3);
+    for (const s of d.scriptErrors.samples) expect(s.length).toBeLessThanOrEqual(120);
+    expect(d.blocked).toHaveLength(8);
+  });
+
+  it("names an unparseable directive 'other', ignores our own nodes, and coalesces bursts into one report per change", () => {
+    cspViolation("https://x.test/evil");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics().at(-1).blocked).toEqual([{ key: "other", count: 1 }]);
+    vi.advanceTimersByTime(1000);
+    expect(diagnostics()).toHaveLength(1);
+    // An unchanged report is not re-posted.
+    window.dispatchEvent(new Event("load"));
+    expect(diagnostics()).toHaveLength(1);
+  });
+
+  it("stops listening on uninstall", () => {
+    uninstall();
+    scriptError("late");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics()).toEqual([]);
+    uninstall = () => {};
+  });
+});

@@ -169,7 +169,9 @@ ${renderPageAuthoringGuide()}
         "comments":[...],"omittedComments"}
   Each comment has id, content (the human's words), parentCommentId (set on
   a reply), htmlAnchor (where it points: kind, locator, quote, and when
-  present prefix, suffix, table, nodeId, href, version), and optionally
+  present prefix, suffix, table, nodeId, href, version, and section:
+  {heading, id}, the nearest heading's text and the nearest id, so you can
+  find the part of the page it is in), and optionally
   intent ("comment" | "question" | "suggestion"), followUp and ruleOut.
   - ruleOut: the human ruled the anchored text out. Take it out of the page;
     don't argue for it. The comment content is their reason.

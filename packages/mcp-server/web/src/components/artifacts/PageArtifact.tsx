@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import type { Artifact, Comment, HtmlAnchor } from "@deeppairing/shared";
-import { coercePageContent, PAGE_HTML_MAX_BYTES, readFileWatch } from "@deeppairing/shared";
+import { coercePageContent, PAGE_HTML_MAX_BYTES, PAGE_RENDER_ISSUES_VISUAL_ID, readFileWatch } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { ConceptBadge } from "../ConceptBadge";
 import { PrototypeFrame, type FrameAnnotation } from "../PrototypeFrame";
@@ -21,6 +21,8 @@ import {
   type PinStateValue,
   acceptAsksMessage,
   acceptChangesStatus,
+  acceptDiagnosticsMessage,
+  type PageDiagnostics,
   acceptOutlineActive,
   acceptOutlineMessage,
   acceptPinsStatus,
@@ -50,6 +52,8 @@ import {
 } from "../../lib/pageReviewQueue";
 import { commentPriorVersion } from "../../stores/artifact";
 import { PageRuleOutControl } from "./PageRuleOutControl";
+import { PageRenderIssues } from "./PageRenderIssues";
+import { diagnosticsAgentSummary, hasDiagnostics } from "../../lib/pageDiagnostics";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
 import { commentAnswersAsk, pageRuleOutKey } from "@deeppairing/shared";
 
@@ -92,6 +96,15 @@ function snippet(text: string): string {
   const t = text.trim().replace(/\s+/g, " ");
   return t.length > 200 ? `${t.slice(0, 200)}…` : t;
 }
+
+/** #714 gap 12 — the render-issue summary last reported to the agent, per
+ *  page artifact id, so re-mounting a page (or re-selecting it) doesn't
+ *  re-post the same report. After a reload it is posted again, and the store
+ *  re-delivers it only if the summary changed (its upsert keeps an
+ *  acknowledged, identical report acknowledged). */
+const reportedRenderIssues: Record<string, string> = {};
+/** How long a frame's diagnostics must hold still before they're reported. */
+const RENDER_ISSUES_REPORT_DELAY_MS = 1500;
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -275,6 +288,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     setPinAsks([]);
   }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
+  // #714 gap 12 — the frame's render diagnostics (script errors, assets that
+  // didn't load, policy blocks). Per frame mount: Run remounts the frame.
+  const [diagnostics, setDiagnostics] = useState<PageDiagnostics | null>(null);
 
   // #714 gap 2 — what changed since the previous version: a block diff of the
   // two versions' PARSED text (DOMParser, inert; nothing runs), highlighted in
@@ -419,6 +435,14 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       // Trust model: once the page's own scripts run they share the frame and
       // could forge this report, so it is ignored then; the companion's own
       // computed count stands.
+      // #714 gap 12 — render diagnostics are accepted after Run too (that is
+      // when script errors happen). Display-only: a passive banner (text) and
+      // a bounded note to the agent about its own page; never an action.
+      const diag = acceptDiagnosticsMessage(event, frame);
+      if (diag) {
+        setDiagnostics(diag);
+        return;
+      }
       const changeStatus = acceptChangesStatus(event, frame);
       if (changeStatus && !runningRef.current) setChangesFound(changeStatus);
     }
@@ -461,7 +485,25 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     setFound(null);
     setChangesFound(null);
     setHover(null);
+    setDiagnostics(null);
   }, [running]);
+  useEffect(() => {
+    setDiagnostics(null);
+  }, [artifact.id]);
+  // #714 gap 12 — tell the agent (check_feedback) on the render-failure lane,
+  // under the page's reserved visual id, once the report settles. Never from a
+  // read-only page (closed, or a replay).
+  useEffect(() => {
+    if (readOnly || !hasDiagnostics(diagnostics)) return;
+    const summary = diagnosticsAgentSummary(diagnostics, { version: artifact.version, running });
+    const id = artifact.id;
+    if (reportedRenderIssues[id] === summary) return;
+    const t = setTimeout(() => {
+      reportedRenderIssues[id] = summary;
+      void useArtifactStore.getState().reportRenderFailure(id, PAGE_RENDER_ISSUES_VISUAL_ID, summary, artifact.title || undefined);
+    }, RENDER_ISSUES_REPORT_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [diagnostics, readOnly, running, artifact.id, artifact.version, artifact.title]);
   useEffect(() => {
     setHighlightId(null);
     setHover(null);
@@ -885,6 +927,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
           </span>
         </div>
       )}
+      <PageRenderIssues diagnostics={diagnostics} />
       <PageAsksStrip asks={asks} answered={askAnswered} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
       {/* #714 gap 4 — the outline: a sticky rail beside the frame when the
           panel is wide, a collapsible disclosure above it when narrow.

@@ -255,3 +255,45 @@ export function acceptPinHover(
   const at = FramePointSchema.safeParse({ x: d.x, y: d.y });
   return id.success && at.success ? { id: id.data, at: at.data } : undefined;
 }
+
+// --- #714 gap 12: render diagnostics ---------------------------------------------
+
+/** Bounds the annotator applies (DIAG in pageAnnotator.ts); re-checked here. */
+export const PAGE_DIAGNOSTICS_LIMITS = { samples: 3, text: 120, keys: 8, max: 9999 } as const;
+
+const DiagCountSchema = z.number().int().min(0).max(PAGE_DIAGNOSTICS_LIMITS.max);
+const DiagSampleSchema = z.string().min(1).max(PAGE_DIAGNOSTICS_LIMITS.text);
+const DiagMessagesSchema = z
+  .object({ count: DiagCountSchema, samples: z.array(DiagSampleSchema).max(PAGE_DIAGNOSTICS_LIMITS.samples) })
+  .strict();
+/** A resource is named only by tag + loading attribute ("img src"): the shape
+ *  admits no URL, even from a forged report. */
+const ResourceKeySchema = z.string().regex(/^[a-z][a-z0-9-]{0,31} (?:src|srcset|href|xlink:href|poster|data)$/);
+/** A CSP block is named only by its directive ("img-src", "connect-src"). */
+const DirectiveKeySchema = z.string().regex(/^[a-z][a-z-]{0,39}$/);
+
+export const PageDiagnosticsMessageSchema = z
+  .object({
+    dp: z.literal("diagnostics"),
+    scriptErrors: DiagMessagesSchema,
+    rejections: DiagMessagesSchema,
+    resources: z.array(z.object({ key: ResourceKeySchema, count: DiagCountSchema.min(1) }).strict()).max(PAGE_DIAGNOSTICS_LIMITS.keys),
+    blocked: z.array(z.object({ key: DirectiveKeySchema, count: DiagCountSchema.min(1) }).strict()).max(PAGE_DIAGNOSTICS_LIMITS.keys),
+  })
+  .strict();
+export type PageDiagnosticsMessage = z.infer<typeof PageDiagnosticsMessageSchema>;
+export type PageDiagnostics = Omit<PageDiagnosticsMessage, "dp">;
+
+/** A valid `{dp:"diagnostics"}` from this frame → the report; else null.
+ *  DISPLAY-ONLY, and the one frame report still accepted after Run (that is
+ *  when script errors happen): it can only ever render a passive banner (as
+ *  text) and a bounded note to the agent about its own page. It never opens
+ *  the composer, changes a filter, focuses anything, or posts a comment. */
+export function acceptDiagnosticsMessage(event: FrameMessage, frame: Window | null | undefined): PageDiagnostics | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "diagnostics") return null;
+  const parsed = PageDiagnosticsMessageSchema.safeParse(d);
+  if (!parsed.success) return null;
+  const { dp: _dp, ...rest } = parsed.data;
+  return rest;
+}

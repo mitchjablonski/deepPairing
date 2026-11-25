@@ -16,7 +16,7 @@ import {
   standaloneGuideJson,
 } from "../standalone-guide.js";
 import { validatePresentOptionsInput } from "../../mcp/validate-tool-input.js";
-import { DECISION_NON_ANSWERABLE_STATUSES } from "@deeppairing/shared";
+import { DECISION_NON_ANSWERABLE_STATUSES, HtmlAnchorSchema } from "@deeppairing/shared";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 
@@ -73,6 +73,16 @@ describe("deeppairing guide (#681)", () => {
     expect(guide).toMatch(/use a NEW UUID/);
     expect(guide).toContain("companionUrl");
     expect(guide).toContain(INVOCATION);
+  });
+
+  it("lists every htmlAnchor field the schema defines, section included (#714 gap 10)", () => {
+    const start = guide.indexOf("htmlAnchor (where it points:");
+    expect(start).toBeGreaterThan(-1);
+    const list = guide.slice(start, guide.indexOf(")", guide.indexOf("section:", start)) + 1);
+    const keys = Object.keys(HtmlAnchorSchema.shape);
+    expect(keys).toContain("section");
+    for (const key of keys) expect(list, `guide names htmlAnchor.${key}`).toMatch(new RegExp(`\\b${key}\\b`));
+    expect(list).toMatch(/section:\s+\{heading, id\}/);
   });
 
   it("keeps Claude Code-only features inside the one marked note", () => {

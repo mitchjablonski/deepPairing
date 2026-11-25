@@ -1580,3 +1580,69 @@ describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)",
     });
   });
 });
+
+describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
+  const DIAG = {
+    dp: "diagnostics",
+    scriptErrors: { count: 2, samples: ["<img src=x onerror=alert(1)>"] },
+    rejections: { count: 0, samples: [] },
+    resources: [{ key: "img src", count: 3 }],
+    blocked: [{ key: "img-src", count: 3 }],
+  };
+  const renderFailurePosts = () =>
+    (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).endsWith("/api/render-failures"));
+
+  it("accepts a report AFTER Run and renders a passive, text-only banner with details; a spoofed source is ignored", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    const win = fakeFrameWindow();
+    // Another window (the page's own child frame, a stray tab): ignored.
+    fromFrame({ postMessage: vi.fn() }, DIAG);
+    expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+    win.postMessage.mockClear();
+    fromFrame(win, DIAG, { frameFocused: false });
+    const banner = screen.getByTestId("page-render-issues");
+    expect(banner).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("page-render-issues-headline")).toHaveTextContent("This page has 2 script errors and 3 images that didn't load.");
+    const details = screen.getByTestId("page-render-issues-details");
+    expect(details).toHaveTextContent("Script errors (2): <img src=x onerror=alert(1)>");
+    expect(details).toHaveTextContent("Didn't load: img src ×3");
+    // Frame text is never markup, and the report triggers nothing: no
+    // composer, no message back to the frame.
+    expect(banner.querySelector("img")).toBeNull();
+    expect(screen.queryByTestId("page-anchor-context")).not.toBeInTheDocument();
+    expect(win.postMessage).not.toHaveBeenCalled();
+    // Its only controls: the details disclosure and dismiss.
+    expect(within(banner).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Dismiss render issues"]);
+    await userEvent.click(within(banner).getByRole("button", { name: "Dismiss render issues" }));
+    expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+    // A different report shows it again.
+    fromFrame(win, { ...DIAG, scriptErrors: { count: 3, samples: ["late"] } });
+    expect(screen.getByTestId("page-render-issues-headline")).toHaveTextContent("3 script errors");
+  });
+
+  it("refuses a malformed report (a URL in a resource key)", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { ...DIAG, resources: [{ key: "img https://x.test/a.png", count: 1 }] });
+    expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+  });
+
+  it("reports a settled summary to the agent on the render-failure lane under the page's reserved id, once", async () => {
+    render(<PageArtifact artifact={{ ...pageArtifact, id: "art_page_diag" }} />);
+    useArtifactStore.getState().addArtifact({ ...pageArtifact, id: "art_page_diag" });
+    const win = fakeFrameWindow();
+    fromFrame(win, { ...DIAG, scriptErrors: { count: 0, samples: [] }, resources: [{ key: "img src", count: 1 }] });
+    await new Promise((r) => setTimeout(r, 1700));
+    const posts = renderFailurePosts();
+    expect(posts).toHaveLength(1);
+    const body = JSON.parse(String((posts[0]![1] as RequestInit).body));
+    expect(body).toMatchObject({ artifactId: "art_page_diag", visualId: "dp-page-render-issues" });
+    expect(body.error).toBe("v1, before Run (scripts off): didn't load: img src x1; blocked by the frame's no-network CSP: img-src x3");
+    // The same report again (a remount): not re-posted.
+    fromFrame(win, { ...DIAG, scriptErrors: { count: 0, samples: [] }, resources: [{ key: "img src", count: 2 }] });
+    fromFrame(win, { ...DIAG, scriptErrors: { count: 0, samples: [] }, resources: [{ key: "img src", count: 1 }] });
+    await new Promise((r) => setTimeout(r, 1700));
+    expect(renderFailurePosts()).toHaveLength(1);
+  });
+});

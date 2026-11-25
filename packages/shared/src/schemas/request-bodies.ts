@@ -279,6 +279,16 @@ export const RenderFailureBodySchema = z.object({
 });
 export type RenderFailureBody = z.infer<typeof RenderFailureBodySchema>;
 
+/**
+ * #714 gap 12 — the reserved `visualId` under which the companion reports a
+ * `page` artifact's render issues (script errors, assets that didn't load,
+ * requests the frame's policy blocked) on the same render-failure lane. A page
+ * has no visuals, so the id can't collide with a real diagram. The `error` is
+ * a bounded, redacted summary built in the companion: counts, a few clipped
+ * messages, and tag + attribute / directive names, never a URL.
+ */
+export const PAGE_RENDER_ISSUES_VISUAL_ID = "dp-page-render-issues";
+
 // POST /api/prompts — save a repair prompt for a decision.
 export const PromptBodySchema = z.object({
   content: z.string().min(1),

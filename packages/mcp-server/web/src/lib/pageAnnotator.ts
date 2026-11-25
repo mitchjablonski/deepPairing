@@ -65,7 +65,8 @@
 /** Function body; parameters `(document, window)`; returns the helper object. */
 export const ANNOTATOR_CORE_SOURCE = String.raw`
 "use strict";
-var LIMITS = { locator: 512, quote: 280, affix: 32, header: 200, nodeId: 200, href: 512 };
+var LIMITS = { locator: 512, quote: 280, affix: 32, header: 200, nodeId: 200, href: 512, sectionHeading: 120, sectionId: 200 };
+var SECTION_HEADS = "h1, h2, h3, h4, h5, h6";
 var SKIP = "script,style,noscript,template,[data-dp-annotator]";
 var STABLE_DATA = ["data-testid", "data-test", "data-id", "data-key", "data-name"];
 var NODE_SEL = "g.node, g[id^='flowchart-'], g[id*='-flowchart-']";
@@ -246,14 +247,64 @@ function elementText(el) {
   return t;
 }
 
+/** #714 gap 10 — the headings a section can be named by (h1–h6, document
+ *  order), unrendered subtrees skipped, capped so a hostile page stays cheap. */
+function sectionHeads() {
+  var els = document.querySelectorAll(SECTION_HEADS), out = [];
+  for (var i = 0; i < els.length && out.length < 2000; i++) {
+    if (inChangeSkip(els[i]) || els[i].closest(SKIP)) continue;
+    out.push(els[i]);
+  }
+  return out;
+}
+/** #714 gap 10 — which part of the page an element is in: heading = the
+ *  nearest preceding h1–h6 (or the first heading inside a clicked container),
+ *  id = the nearest ancestor-or-self id, except that a heading with its own id
+ *  INSIDE that ancestor is the more specific name (a page-wide wrapper id says
+ *  nothing). Falls back to the heading's id. An id over the cap is skipped,
+ *  never clipped (a clipped id names nothing). null when neither is known. */
+function sectionFor(el, heads) {
+  if (!isEl(el)) return null;
+  var hs = heads || sectionHeads();
+  var hi = sectionOf(el, hs), h = hi >= 0 ? hs[hi] : null, out = {};
+  if (h) { var ht = textPrefix(h, LIMITS.sectionHeading); if (ht) out.heading = ht; }
+  var hid = h && typeof h.id === "string" && h.id && h.id.length <= LIMITS.sectionId ? h.id : "";
+  var id = "";
+  for (var n = el; isEl(n) && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+    if (typeof n.id === "string" && n.id && n.id.length <= LIMITS.sectionId) {
+      id = hid && n !== h && n.contains(h) ? hid : n.id;
+      break;
+    }
+  }
+  if (!id) id = hid;
+  if (id) out.id = id;
+  return out.heading || out.id ? out : null;
+}
+/** #714 gap 10 — an element-grain anchor's context: the page text just
+ *  outside the element (up to LIMITS.affix each side, read exactly as
+ *  support() re-checks it) and its section. Best effort: a failure leaves the
+ *  anchor as it was. */
+function withContext(a, el) {
+  try {
+    var body = document.body || document.documentElement;
+    var ctx = contextOf(el, textIndex(body));
+    var p = norm(norm(ctx.before).slice(-LIMITS.affix));
+    var sx = norm(norm(ctx.after).slice(0, LIMITS.affix));
+    if (p) a.prefix = clip(p, LIMITS.affix);
+    if (sx) a.suffix = clip(sx, LIMITS.affix);
+    var sec = sectionFor(el);
+    if (sec) a.section = sec;
+  } catch (e) { /* context is optional */ }
+  return a;
+}
 function elementAnchor(el) {
-  return { kind: "element", locator: buildLocator(el), quote: clip(elementText(el), LIMITS.quote) };
+  return withContext({ kind: "element", locator: buildLocator(el), quote: clip(elementText(el), LIMITS.quote) }, el);
 }
 function linkAnchor(link) {
   var a = { kind: "link", locator: buildLocator(link), quote: clip(elementText(link), LIMITS.quote) };
   var href = link.getAttribute("href");
   if (href) a.href = clip(href, LIMITS.href);
-  return a;
+  return withContext(a, link);
 }
 function mermaidNodeId(g) {
   var d = g.getAttribute && g.getAttribute("data-id");
@@ -266,7 +317,7 @@ function nodeAnchor(g) {
   var a = { kind: "diagram-node", locator: buildLocator(g), quote: clip(elementText(g), LIMITS.quote) };
   var id = mermaidNodeId(g);
   if (id) a.nodeId = id;
-  return a;
+  return withContext(a, g);
 }
 function isCell(n) { return isEl(n) && (n.localName === "td" || n.localName === "th"); }
 function spanOf(c) { var n = parseInt(c.getAttribute("colspan") || "1", 10); return n > 0 ? n : 1; }
@@ -308,8 +359,8 @@ function headerRow(table) {
   }
   return null;
 }
-function cellAnchor(cell) {
-  var a = { kind: "cell", locator: buildLocator(cell), quote: clip(elementText(cell), LIMITS.quote) };
+/** A cell's row/column header text ({row?, col?}), as a cell anchor's table. */
+function cellTable(cell) {
   var row = cell.parentElement, table = cell.closest("table"), t = {};
   if (table && row && row.localName === "tr") {
     var hr = headerRow(table);
@@ -329,8 +380,13 @@ function cellAnchor(cell) {
       if (rt) t.row = clip(rt, LIMITS.header);
     }
   }
+  return t;
+}
+function cellAnchor(cell) {
+  var a = { kind: "cell", locator: buildLocator(cell), quote: clip(elementText(cell), LIMITS.quote) };
+  var t = cellTable(cell);
   if (t.row || t.col) a.table = t;
-  return a;
+  return withContext(a, cell);
 }
 function textAnchor(range) {
   var body = document.body || document.documentElement;
@@ -346,6 +402,10 @@ function textAnchor(range) {
   var suffix = norm(index.text.slice(e, e + LIMITS.affix));
   if (prefix) a.prefix = clip(prefix, LIMITS.affix);
   if (suffix) a.suffix = clip(suffix, LIMITS.affix);
+  try {
+    var sec = sectionFor(elementOf(range.startContainer) || common);
+    if (sec) a.section = sec;
+  } catch (e2) { /* section is optional */ }
   return a;
 }
 /** What a click on this target points at: link, then Mermaid node, then table
@@ -384,7 +444,7 @@ function closestOf(el, kind) {
 /** Does this element carry the anchor's identity? Required checks: the kind's
  *  element type, the quote, a cell's saved row/column headers, a node's id, a
  *  link's href. Returns a support score (>= 0) or -1 when it is not the spot. */
-function support(a, el, bodyIndex, fromLocator) {
+function support(a, el, bodyIndex, fromLocator, heads) {
   var kind = String(a.kind || "");
   if (!isEl(el)) return -1;
   if (kind === "cell" && !isCell(el)) return -1;
@@ -394,7 +454,7 @@ function support(a, el, bodyIndex, fromLocator) {
   // A saved Mermaid node id is identity enough: a revision may relabel the node.
   if (!idMatch && !textMatches(el, a.quote)) return -1;
   if (kind === "cell" && a.table && typeof a.table === "object") {
-    var t = cellAnchor(el).table || {};
+    var t = cellTable(el);
     if (typeof a.table.row === "string" && a.table.row && t.row !== a.table.row) return -1;
     if (typeof a.table.col === "string" && a.table.col && t.col !== a.table.col) return -1;
   }
@@ -407,7 +467,17 @@ function support(a, el, bodyIndex, fromLocator) {
     if (p && norm(ctx.before).slice(-p.length) === p) score += 2;
     if (sx && norm(ctx.after).slice(0, sx.length) === sx) score += 2;
   }
-  return score;
+  return score + sectionBonus(a, el, heads);
+}
+/** #714 gap 10 — +1 when the anchor saved a section id and the candidate is
+ *  in a section with that id (a tie-break between equal text in different
+ *  sections). Anchors saved without one score exactly as before. */
+function sectionBonus(a, el, heads) {
+  var want = a && a.section && typeof a.section === "object" ? a.section.id : null;
+  if (typeof want !== "string" || !want) return 0;
+  var sec = null;
+  try { sec = sectionFor(el, heads); } catch (e) { sec = null; }
+  return sec && sec.id === want ? 1 : 0;
 }
 /** Re-find an anchor in the current document. Every candidate (the saved
  *  locator's element, elements carrying the saved node id / href, and each
@@ -424,6 +494,7 @@ function findAnchor(a) {
   var bodyIndex = textIndex(body);
   var locEl = typeof a.locator === "string" && a.locator ? safeQuery(a.locator) : null;
   var i, j;
+  var heads = a.section && typeof a.section === "object" && typeof a.section.id === "string" && a.section.id ? sectionHeads() : null;
   if (kind === "text") {
     var hits = quoteHits(bodyIndex.text, quote, prefix, suffix);
     var qlen = norm(quote).length, scored = [];
@@ -432,7 +503,7 @@ function findAnchor(a) {
       if (!r) continue;
       var host = elementOf(r.commonAncestorContainer);
       var inLoc = !!(locEl && host && (locEl === host || locEl.contains(host)));
-      scored.push({ el: host || body, range: r, score: hits[i].score + (inLoc ? 1 : 0) });
+      scored.push({ el: host || body, range: r, score: hits[i].score + (inLoc ? 1 : 0) + (heads ? sectionBonus(a, host || body, heads) : 0) });
     }
     return pickBest(scored);
   }
@@ -468,7 +539,7 @@ function findAnchor(a) {
   }
   var out = [];
   for (i = 0; i < cands.length; i++) {
-    var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator);
+    var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator, heads);
     if (sc >= 0) out.push({ el: cands[i].el, range: null, score: sc });
   }
   return pickBest(out);
@@ -663,6 +734,7 @@ return {
   linkAnchor: linkAnchor,
   nodeAnchor: nodeAnchor,
   cellAnchor: cellAnchor,
+  sectionFor: sectionFor,
   mermaidNodeId: mermaidNodeId,
   CHANGE_SKIP: CHANGE_SKIP,
   clippedText: clippedText,
@@ -1428,10 +1500,97 @@ function onScroll(e) {
   schedule();
   scheduleActive();
 }
+/** #714 gap 12 — render diagnostics: script errors, unhandled rejections,
+ *  resources that failed to load (capture phase: element errors don't
+ *  bubble) and requests the frame's CSP blocked. Installed with the other
+ *  listeners, before any page markup is parsed, so both the pre-Run document
+ *  and the running page are covered. Reported as bounded, de-duplicated
+ *  counts: at most DIAG.samples distinct messages per kind, each redacted
+ *  (URLs, data: and blob: URIs replaced) and clipped to DIAG.text; a resource
+ *  is named only by tag + attribute and a block only by its directive, never
+ *  by URL (a URL can carry credentials). Display-only for the parent. */
+var DIAG = { samples: 3, text: 120, keys: 8, max: 9999 };
+var DIAG_ATTRS = { img: ["src", "srcset"], source: ["src", "srcset"], video: ["src", "poster"], audio: ["src"], track: ["src"],
+  script: ["src"], link: ["href"], iframe: ["src"], frame: ["src"], embed: ["src"], object: ["data"], input: ["src"],
+  image: ["href", "xlink:href"], use: ["href", "xlink:href"] };
+var diag = { script: 0, rejection: 0, scriptSamples: [], rejectionSamples: [], resources: [], blocked: [] };
+var diagSeen = typeof WeakSet === "function" ? new WeakSet() : null, diagPending = 0, lastDiagJson = "";
+function redactDiag(v) {
+  var t = core.norm(v);
+  t = t.replace(/\b(?:data|blob):[^\s"'<>()]*/gi, "[data URI]");
+  t = t.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>()]*/gi, "[url]");
+  t = t.replace(/(^|[\s("'=])\/\/[^\s"'<>()]+/g, "$1[url]");
+  return core.clip(t, DIAG.text);
+}
+function diagBump(n) { return n < DIAG.max ? n + 1 : n; }
+function diagSample(list, v) {
+  var t = redactDiag(v);
+  if (t && list.length < DIAG.samples && list.indexOf(t) === -1) list.push(t);
+}
+function diagKey(list, key) {
+  for (var i = 0; i < list.length; i++) if (list[i].key === key) { list[i].count = diagBump(list[i].count); return; }
+  if (list.length < DIAG.keys) list.push({ key: key, count: 1 });
+}
+function diagHas(el, attr) {
+  if (attr === "xlink:href") return !!(el.getAttributeNS && el.getAttributeNS(XLINK, "href") !== null);
+  return !!(el.hasAttribute && el.hasAttribute(attr));
+}
+function onDiagError(e) {
+  var t = e ? e.target : null;
+  if (t && t.nodeType === 1) {
+    if (own(t)) return;
+    var tag = String(t.localName || "").toLowerCase(), attrs = DIAG_ATTRS[tag];
+    if (!attrs) return;
+    if (diagSeen) { if (diagSeen.has(t)) return; diagSeen.add(t); }
+    var attr = attrs[0];
+    for (var i = 0; i < attrs.length; i++) if (diagHas(t, attrs[i])) { attr = attrs[i]; break; }
+    diagKey(diag.resources, tag + " " + attr);
+  } else {
+    diag.script = diagBump(diag.script);
+    var m = "";
+    try { m = e && typeof e.message === "string" ? e.message : ""; } catch (x) { m = ""; }
+    diagSample(diag.scriptSamples, m || "Script error");
+  }
+  scheduleDiag();
+}
+function onDiagRejection(e) {
+  var m = "";
+  try {
+    var r = e ? e.reason : undefined;
+    if (r && typeof r === "object" && typeof r.message === "string") m = (typeof r.name === "string" && r.name ? r.name + ": " : "") + r.message;
+    else m = String(r);
+  } catch (x) { m = "Unhandled rejection"; }
+  diag.rejection = diagBump(diag.rejection);
+  diagSample(diag.rejectionSamples, m || "Unhandled rejection");
+  scheduleDiag();
+}
+function onDiagCsp(e) {
+  var d = "";
+  try { d = String((e && (e.effectiveDirective || e.violatedDirective)) || "").toLowerCase().split(" ")[0]; } catch (x) { d = ""; }
+  if (!/^[a-z][a-z-]{0,39}$/.test(d)) d = "other";
+  diagKey(diag.blocked, d);
+  scheduleDiag();
+}
+function copyKeys(list) { var out = []; for (var i = 0; i < list.length; i++) out.push({ key: list[i].key, count: list[i].count }); return out; }
+function reportDiag() {
+  diagPending = 0;
+  if (!diag.script && !diag.rejection && !diag.resources.length && !diag.blocked.length) return;
+  var msg = { dp: "diagnostics",
+    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice() },
+    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice() },
+    resources: copyKeys(diag.resources), blocked: copyKeys(diag.blocked) };
+  var json = JSON.stringify(msg);
+  if (json !== lastDiagJson) { lastDiagJson = json; post(msg); }
+}
+function scheduleDiag() {
+  if (diagPending) return;
+  try { diagPending = setTimeout(reportDiag, 250); } catch (e) { diagPending = 0; }
+}
 function onReady() {
   if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
   post({ dp: "ready" });
   reportOutline();
+  reportDiag();
 }
 window.addEventListener("click", onClick, true);
 window.addEventListener("auxclick", onAuxClick, true);
@@ -1444,6 +1603,9 @@ window.addEventListener("keyup", onKey, true);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
 window.addEventListener("scroll", onScroll, true);
+window.addEventListener("error", onDiagError, true);
+window.addEventListener("unhandledrejection", onDiagRejection);
+document.addEventListener("securitypolicyviolation", onDiagCsp, true);
 observe();
 if (document.readyState === "complete") onReady(); else window.addEventListener("load", onReady);
 return function uninstall() {
@@ -1459,6 +1621,10 @@ return function uninstall() {
   window.removeEventListener("resize", onResize);
   window.removeEventListener("scroll", onScroll, true);
   window.removeEventListener("load", onReady);
+  window.removeEventListener("error", onDiagError, true);
+  window.removeEventListener("unhandledrejection", onDiagRejection);
+  document.removeEventListener("securitypolicyviolation", onDiagCsp, true);
+  if (diagPending) clearTimeout(diagPending);
   if (mo) mo.disconnect();
   if (ro) ro.disconnect();
   if (pending) clearTimeout(pending);

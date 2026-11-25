@@ -134,6 +134,7 @@ export {
   DetailDensitySchema,
   PersonaSchema,
   RenderFailureBodySchema,
+  PAGE_RENDER_ISSUES_VISUAL_ID,
   PromptBodySchema,
   SuggestionResolveBodySchema,
   SuggestionUpdateBodySchema,
