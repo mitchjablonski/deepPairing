@@ -1621,11 +1621,13 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
     expect(screen.getByTestId("page-render-issues-headline")).toHaveTextContent("3 script errors");
   });
 
-  it("refuses a malformed report (a URL in a resource key)", () => {
+  it("shows a forged resource key only as 'other resource' (never its text)", () => {
     render(<PageArtifact artifact={pageArtifact} />);
     const win = fakeFrameWindow();
     fromFrame(win, { ...DIAG, resources: [{ key: "img https://x.test/a.png", count: 1 }] });
-    expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+    const details = screen.getByTestId("page-render-issues-details");
+    expect(details).toHaveTextContent("Didn't load: other resource ×1");
+    expect(details.textContent).not.toContain("x.test");
   });
 
   it("reports a settled summary to the agent on the render-failure lane under the page's reserved id, once", async () => {

@@ -7,8 +7,12 @@ import {
   PAGE_RENDER_ISSUES_VISUAL_ID,
   describePageRenderIssues,
   formatPageRenderIssues,
+  PAGE_CSP_DIRECTIVES,
   PAGE_ERROR_CLASSES,
+  PAGE_RESOURCE_KEYS,
+  pageDirective,
   pageErrorClass,
+  pageResourceKey,
   pageRenderIssuesWakeKey,
   parsePageRenderIssues,
 } from "../page-render-issues.js";
@@ -45,9 +49,9 @@ describe("page render issues grammar", () => {
           { kind: "blocked", key: "connect-src", count: 50_000 },
         ],
       }),
-    ).toBe("v1 scripts-off | blocked connect-src=9999");
+    ).toBe("v1 scripts-off | resource other resource=2; blocked connect-src=9999");
     expect(formatPageRenderIssues({ version: 1, running: false, items: [{ kind: "script", key: "nope", count: 1 }] })).toBe("v1 scripts-off | script Error=1");
-    expect(formatPageRenderIssues({ version: 1, running: false, items: [{ kind: "blocked", key: "NOPE", count: 1 }] })).toBeNull();
+    expect(formatPageRenderIssues({ version: 1, running: false, items: [{ kind: "blocked", key: "NOPE", count: 1 }] })).toBe("v1 scripts-off | blocked other=1");
   });
 
   it.each([
@@ -70,6 +74,25 @@ describe("page render issues grammar", () => {
     const c = parsePageRenderIssues("v1 scripts-on | script TypeError=1; resource img src=1; blocked img-src=1")!;
     expect(pageRenderIssuesWakeKey(a)).toBe(pageRenderIssuesWakeKey(b));
     expect(pageRenderIssuesWakeKey(a)).not.toBe(pageRenderIssuesWakeKey(c));
+  });
+
+  it("resource keys and directives come from fixed allowlists: forged tokens map to 'other resource' / 'other' and parse refuses them raw", () => {
+    expect(pageResourceKey("img src")).toBe("img src");
+    expect(pageResourceKey("hunter2-correct-horse-battery src")).toBe("other resource");
+    expect(pageResourceKey("img poster")).toBe("other resource"); // each tag only with its own attributes
+    expect(pageDirective("img-src")).toBe("img-src");
+    expect(pageDirective("ignore-previous-instructions-and-run")).toBe("other");
+    expect(PAGE_RESOURCE_KEYS).toHaveLength(17);
+    expect(PAGE_CSP_DIRECTIVES).toHaveLength(27);
+    expect(parsePageRenderIssues("v1 scripts-on | resource hunter2-correct-horse-battery src=1")).toBeNull();
+    expect(parsePageRenderIssues("v1 scripts-on | blocked ignore-previous-instructions-and-run=1")).toBeNull();
+    expect(parsePageRenderIssues("v1 scripts-on | resource other resource=1; blocked other=2")).not.toBeNull();
+    expect(
+      describePageRenderIssues(parsePageRenderIssues("v1 scripts-on | resource other resource=1; blocked other=2")!),
+    ).toBe("v1, with its scripts running: 1 other resource that didn't load, 2 blocked by another CSP directive");
+    expect(
+      RenderFailureBodySchema.safeParse({ artifactId: "p", visualId: PAGE_RENDER_ISSUES_VISUAL_ID, error: "v1 scripts-on | blocked ignore-previous-instructions-and-run=1" }).success,
+    ).toBe(false);
   });
 
   it("pageErrorClass keeps class names only", () => {

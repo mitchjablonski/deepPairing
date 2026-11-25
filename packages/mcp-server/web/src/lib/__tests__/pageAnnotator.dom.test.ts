@@ -6,7 +6,7 @@
  * only and reported back, messages from anyone but the parent ignored).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { HtmlAnchorSchema, PAGE_ERROR_CLASSES } from "@deeppairing/shared";
+import { HtmlAnchorSchema, PAGE_CSP_DIRECTIVES, PAGE_ERROR_CLASSES, PAGE_RESOURCE_KEYS } from "@deeppairing/shared";
 import { ANNOTATOR_CORE_SOURCE, ANNOTATOR_MAIN_SOURCE, ANNOTATOR_SCRIPT } from "../pageAnnotator";
 import { clippedText as diffClippedText, TEXT_SKIP_SELECTOR } from "../pageVersionDiff";
 
@@ -1401,15 +1401,22 @@ describe("annotator core — section context and element affixes (#714 gap 10)",
     expect(core.findAnchor(legacy)?.el).toBe(document.querySelectorAll("p")[1]);
   });
 
-  it("REVIEW: context that lifts another card to the locator's score never turns a found pin into not found", () => {
-    document.body.innerHTML = '<h2 id="a">A</h2><div>Card</div><h2 id="b">B</h2><div>Card</div>';
+  it("REVIEW: a tie goes to the locator's element only when its context matches too", () => {
+    document.body.innerHTML = '<h2 id="a">X</h2><div>Card</div><h2 id="b">X</h2><div>Card</div>';
     const core = ctxCore();
     const cards = document.querySelectorAll("div");
-    // Card A: locator +1, section a +1 = 2. Card B: prefix "B" +2 = 2. The
-    // locator's element wins the tie (without context it was found too).
-    const hit = core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "B", section: { id: "a" } });
+    // Card A: locator +1, prefix "X" +2 = 3. Card B: prefix "X" +2, section b +1 = 3.
+    const hit = core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "X", section: { id: "b" } });
     expect(hit?.el).toBe(cards[0]);
     expect(core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card" })?.el).toBe(cards[0]);
+  });
+
+  it("REVIEW: a moved element is not found rather than pinned on the element now at its old locator", () => {
+    document.body.innerHTML = '<h2 id="s">S</h2><div>Card</div><h2 id="t">T</h2><p>P</p><div>Card</div>';
+    const core = ctxCore();
+    // The true element (second card) scores prefix "P" +2. The card now at the
+    // old locator scores locator +1 and section s +1 = 2, without matching context.
+    expect(core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "P", section: { id: "s" } })).toBeNull();
   });
 
   it("uses section.id to break a tie between equal text in different sections; without it a tie stays not found", () => {
@@ -1503,7 +1510,7 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
 
   it("is bounded: at most 3 samples of at most 120 characters, 8 keys, counts capped at 9999", () => {
     for (let i = 0; i < 10_050; i++) scriptError(`Error number ${i} ${"z".repeat(200)}`);
-    for (let i = 0; i < 12; i++) cspViolation(`dir-${String.fromCharCode(97 + i)}-src`);
+    for (const dir of PAGE_CSP_DIRECTIVES.slice(0, 12)) cspViolation(dir);
     cspViolation("NOT A DIRECTIVE https://x.test");
     vi.advanceTimersByTime(300);
     const d = diagnostics().at(-1);
@@ -1511,6 +1518,18 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
     expect(d.scriptErrors.samples).toHaveLength(3);
     for (const s of d.scriptErrors.samples) expect(s.length).toBeLessThanOrEqual(120);
     expect(d.blocked).toHaveLength(8);
+  });
+
+  it("maps a resource outside the allowlist to 'other resource' and an unknown directive to 'other'; xlink:href is 'href'", () => {
+    document.body.insertAdjacentHTML("beforeend", '<custom-el id="c" src="x"></custom-el><svg><image id="si" xlink:href="a.png"/></svg>');
+    document.getElementById("si")!.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "a.png");
+    document.getElementById("si")!.dispatchEvent(new Event("error"));
+    cspViolation("ignore-previous-instructions-and-run");
+    cspViolation("img-src");
+    vi.advanceTimersByTime(300);
+    const d = diagnostics().at(-1);
+    expect(d.resources).toEqual([{ key: "image href", count: 1 }]);
+    expect(d.blocked).toEqual([{ key: "other", count: 1 }, { key: "img-src", count: 1 }]);
   });
 
   it("names an unparseable directive 'other', ignores our own nodes, and coalesces bursts into one report per change", () => {
@@ -1534,10 +1553,16 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
 });
 
 describe("annotator error-class allowlist parity (#714 gap 12)", () => {
-  it("the frame's copy equals the shared PAGE_ERROR_CLASSES", () => {
-    const m = /var ERROR_CLASSES = (\[[^\]]*\]);/.exec(ANNOTATOR_MAIN_SOURCE);
-    expect(m).not.toBeNull();
-    expect(JSON.parse(m![1]!)).toEqual([...PAGE_ERROR_CLASSES]);
+  it("the frame's copies equal the shared allowlists (error classes, resource keys, CSP directives)", () => {
+    for (const [name, shared] of [
+      ["ERROR_CLASSES", PAGE_ERROR_CLASSES],
+      ["RESOURCE_KEYS", PAGE_RESOURCE_KEYS],
+      ["CSP_DIRECTIVES", PAGE_CSP_DIRECTIVES],
+    ] as const) {
+      const m = new RegExp(`var ${name} = (\\[[^\\]]*\\]);`).exec(ANNOTATOR_MAIN_SOURCE);
+      expect(m, name).not.toBeNull();
+      expect(JSON.parse(m![1]!), name).toEqual([...shared]);
+    }
   });
 });
 

@@ -6,10 +6,11 @@
  * anything the page script chose (including text the reviewer typed into a
  * prototype field, or an instruction aimed at the agent). So what reaches the
  * AGENT is data only, in a closed grammar the daemon re-parses at its boundary:
- * kinds, counts, error CLASS names from a fixed allowlist (`TypeError`;
- * anything else is `Error`),
- * resource keys (tag + loading attribute) and CSP directive names. No free
- * text, no URL. The human's banner keeps the redacted samples; they never
+ * kinds, counts, and keys from FIXED allowlists only: error class names
+ * (`TypeError`; else `Error`), resource tag + attribute pairs (`img src`;
+ * else `other resource`) and CSP3 directive names (`img-src`; else `other`).
+ * No free text, no URL. (Counts are the one page-influenced value left: a
+ * narrow, accepted residual.) The human's banner keeps the redacted samples; they never
  * leave the companion.
  *
  *   v2 scripts-on | script TypeError=3; rejection Error=1; resource img src=2; blocked img-src=2
@@ -27,10 +28,32 @@ const PAGE_ERROR_CLASS_SET: ReadonlySet<string> = new Set(PAGE_ERROR_CLASSES);
 export function isPageErrorClass(name: unknown): name is string {
   return typeof name === "string" && PAGE_ERROR_CLASS_SET.has(name);
 }
-/** A resource named only by tag + loading attribute ("img src"). */
-export const PAGE_RESOURCE_KEY_RE = /^[a-z][a-z0-9-]{0,31} (?:src|srcset|href|xlink:href|poster|data)$/;
-/** A CSP block named only by its directive ("img-src"). */
-export const PAGE_DIRECTIVE_RE = /^[a-z][a-z-]{0,39}$/;
+/** A resource is named only by one of these tag + loading-attribute pairs
+ *  (each tag with its own attributes); anything else is PAGE_RESOURCE_OTHER.
+ *  A fixed list, not a pattern: a token pattern would let a forged report
+ *  spell words of its choosing. The annotator carries a copy (parity test). */
+export const PAGE_RESOURCE_KEYS = ["img src", "img srcset", "source src", "source srcset", "video src", "video poster", "audio src", "track src", "script src", "link href", "iframe src", "frame src", "embed src", "object data", "input src", "image href", "use href"] as const;
+export const PAGE_RESOURCE_OTHER = "other resource";
+/** A CSP block is named only by a CSP3 directive name; anything else is
+ *  PAGE_DIRECTIVE_OTHER. The annotator carries a copy (parity test). */
+export const PAGE_CSP_DIRECTIVES = ["default-src", "script-src", "script-src-elem", "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src", "connect-src", "media-src", "object-src", "frame-src", "child-src", "worker-src", "manifest-src", "base-uri", "form-action", "frame-ancestors", "navigate-to", "prefetch-src", "sandbox", "trusted-types", "require-trusted-types-for", "upgrade-insecure-requests", "report-uri", "report-to"] as const;
+export const PAGE_DIRECTIVE_OTHER = "other";
+const RESOURCE_SET: ReadonlySet<string> = new Set<string>([...PAGE_RESOURCE_KEYS, PAGE_RESOURCE_OTHER]);
+const DIRECTIVE_SET: ReadonlySet<string> = new Set<string>([...PAGE_CSP_DIRECTIVES, PAGE_DIRECTIVE_OTHER]);
+export function isPageResourceKey(key: unknown): key is string {
+  return typeof key === "string" && RESOURCE_SET.has(key);
+}
+export function isPageDirective(key: unknown): key is string {
+  return typeof key === "string" && DIRECTIVE_SET.has(key);
+}
+/** Onto the allowlist: a known pair stays, anything else is "other resource". */
+export function pageResourceKey(key: unknown): string {
+  return isPageResourceKey(key) ? key : PAGE_RESOURCE_OTHER;
+}
+/** Onto the allowlist: a CSP3 directive stays, anything else is "other". */
+export function pageDirective(key: unknown): string {
+  return isPageDirective(key) ? key : PAGE_DIRECTIVE_OTHER;
+}
 
 export const PAGE_RENDER_ISSUE_KINDS = ["script", "rejection", "resource", "blocked"] as const;
 export type PageRenderIssueKind = (typeof PAGE_RENDER_ISSUE_KINDS)[number];
@@ -55,8 +78,8 @@ export function pageErrorClass(name: unknown): string {
 
 function validKey(kind: PageRenderIssueKind, key: string): boolean {
   if (kind === "script" || kind === "rejection") return isPageErrorClass(key);
-  if (kind === "resource") return PAGE_RESOURCE_KEY_RE.test(key);
-  return PAGE_DIRECTIVE_RE.test(key);
+  if (kind === "resource") return isPageResourceKey(key);
+  return isPageDirective(key);
 }
 
 /**
@@ -70,8 +93,11 @@ export function formatPageRenderIssues(p: PageRenderIssues): string | null {
   const perKind: Record<string, number> = {};
   for (const kind of PAGE_RENDER_ISSUE_KINDS) {
     for (const raw of p.items) {
-      // A class name outside the allowlist is reported as "Error", never dropped.
-      const it = raw.kind === "script" || raw.kind === "rejection" ? { ...raw, key: pageErrorClass(raw.key) } : raw;
+      // A key outside its allowlist is mapped ("Error", "other resource",
+      // "other"), never dropped.
+      const key = raw.kind === "script" || raw.kind === "rejection" ? pageErrorClass(raw.key)
+        : raw.kind === "resource" ? pageResourceKey(raw.key) : pageDirective(raw.key);
+      const it = { ...raw, key };
       if (it.kind !== kind || !validKey(kind, it.key) || !Number.isInteger(it.count) || it.count < 1) continue;
       const count = Math.min(it.count, PAGE_RENDER_ISSUES_LIMITS.maxCount);
       const same = merged.find((m) => m.kind === kind && m.key === it.key);
@@ -132,7 +158,7 @@ export function describePageRenderIssues(p: PageRenderIssues): string {
     if (i.kind === "script") return `${i.count} ${i.key}`;
     if (i.kind === "rejection") return `${i.count} unhandled rejection${i.count === 1 ? "" : "s"} (${i.key})`;
     if (i.kind === "resource") return `${i.count} ${i.key} that didn't load`;
-    return `${i.count} blocked by CSP ${i.key}`;
+    return i.key === PAGE_DIRECTIVE_OTHER ? `${i.count} blocked by another CSP directive` : `${i.count} blocked by CSP ${i.key}`;
   });
   return `v${p.version}, ${p.running ? "with its scripts running" : "before Run"}: ${parts.join(", ")}`;
 }

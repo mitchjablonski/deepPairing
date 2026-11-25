@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, PAGE_DIRECTIVE_RE, pageErrorClass, PAGE_RESOURCE_KEY_RE, type HtmlAnchor } from "@deeppairing/shared";
+import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, pageDirective, pageErrorClass, pageResourceKey, type HtmlAnchor } from "@deeppairing/shared";
 import { LOCATOR_TEXT_MAX, MAX_CHANGE_MARKS } from "./pageVersionDiff";
 
 /**
@@ -273,11 +273,11 @@ const DiagMessagesSchema = z
     classes: z.array(z.object({ key: ErrorClassSchema, count: DiagCountSchema.min(1) }).strict()).max(PAGE_DIAGNOSTICS_LIMITS.keys),
   })
   .strict();
-/** A resource is named only by tag + loading attribute ("img src"): the shape
- *  admits no URL, even from a forged report. */
-const ResourceKeySchema = z.string().regex(PAGE_RESOURCE_KEY_RE);
-/** A CSP block is named only by its directive ("img-src", "connect-src"). */
-const DirectiveKeySchema = z.string().regex(PAGE_DIRECTIVE_RE);
+/** A resource is named only by an allowlisted tag + attribute pair ("img
+ *  src"); anything else, even from a forged report, becomes "other resource". */
+const ResourceKeySchema = z.string().min(1).max(64).transform((v) => pageResourceKey(v));
+/** A CSP block is named only by a CSP3 directive ("img-src"); else "other". */
+const DirectiveKeySchema = z.string().min(1).max(64).transform((v) => pageDirective(v));
 
 export const PageDiagnosticsMessageSchema = z
   .object({
@@ -303,5 +303,21 @@ export function acceptDiagnosticsMessage(event: FrameMessage, frame: Window | nu
   const parsed = PageDiagnosticsMessageSchema.safeParse(d);
   if (!parsed.success) return null;
   const { dp: _dp, ...rest } = parsed.data;
-  return rest;
+  // Keys mapped onto an allowlist can collide ("other resource"): merge them.
+  return {
+    scriptErrors: { ...rest.scriptErrors, classes: mergeKeys(rest.scriptErrors.classes) },
+    rejections: { ...rest.rejections, classes: mergeKeys(rest.rejections.classes) },
+    resources: mergeKeys(rest.resources),
+    blocked: mergeKeys(rest.blocked),
+  };
+}
+
+function mergeKeys(list: ReadonlyArray<{ key: string; count: number }>): Array<{ key: string; count: number }> {
+  const out: Array<{ key: string; count: number }> = [];
+  for (const x of list) {
+    const same = out.find((o) => o.key === x.key);
+    if (same) same.count = Math.min(same.count + x.count, PAGE_DIAGNOSTICS_LIMITS.max);
+    else out.push({ key: x.key, count: x.count });
+  }
+  return out;
 }

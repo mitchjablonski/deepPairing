@@ -540,14 +540,26 @@ function findAnchor(a) {
   var out = [];
   for (i = 0; i < cands.length; i++) {
     var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator, heads);
-    if (sc >= 0) out.push({ el: cands[i].el, range: null, score: sc, fromLocator: cands[i].fromLocator });
+    if (sc >= 0) {
+      out.push({ el: cands[i].el, range: null, score: sc, fromLocator: cands[i].fromLocator,
+        ctx: cands[i].fromLocator ? contextMatches(a, cands[i].el, bodyIndex) : false });
+    }
   }
   return pickBest(out);
 }
-/** The single best-scored candidate; on a tie, the saved locator's element
- *  if it is one of the tied (#714 gap 10: context can lift another candidate
- *  to the locator's score, and "found where it was" beats "not found");
- *  otherwise a tie is "not found". */
+/** Does the element's surrounding text match the anchor's saved prefix or
+ *  suffix (the same check support() scores)? */
+function contextMatches(a, el, bodyIndex) {
+  var p = norm(a.prefix), sx = norm(a.suffix);
+  if (!p && !sx) return false;
+  var ctx = contextOf(el, bodyIndex);
+  return !!((p && norm(ctx.before).slice(-p.length) === p) || (sx && norm(ctx.after).slice(0, sx.length) === sx));
+}
+/** The single best-scored candidate. On a tie, the saved locator's element
+ *  wins only if its surrounding text also matches the saved prefix/suffix
+ *  (#714 gap 10: "found where it was, in the same context"); otherwise a tie
+ *  is "not found", never a guess (an element that merely moved into the old
+ *  locator's place must not take the pin). */
 function pickBest(list) {
   var best = null, tied = false, i;
   for (i = 0; i < list.length; i++) {
@@ -556,7 +568,7 @@ function pickBest(list) {
   }
   if (best && tied) {
     var loc = null;
-    for (i = 0; i < list.length; i++) if (list[i].score === best.score && list[i].fromLocator) loc = list[i];
+    for (i = 0; i < list.length; i++) if (list[i].score === best.score && list[i].fromLocator && list[i].ctx) loc = list[i];
     if (loc) return { el: loc.el, range: loc.range };
   }
   return best && !tied ? { el: best.el, range: best.range } : null;
@@ -1522,6 +1534,11 @@ var DIAG = { samples: 3, text: 120, keys: 8, max: 9999 };
 var DIAG_ATTRS = { img: ["src", "srcset"], source: ["src", "srcset"], video: ["src", "poster"], audio: ["src"], track: ["src"],
   script: ["src"], link: ["href"], iframe: ["src"], frame: ["src"], embed: ["src"], object: ["data"], input: ["src"],
   image: ["href", "xlink:href"], use: ["href", "xlink:href"] };
+/** Fixed allowlists, equal to the shared PAGE_RESOURCE_KEYS and
+ *  PAGE_CSP_DIRECTIVES (a parity test checks): anything else is reported as
+ *  "other resource" / "other". */
+var RESOURCE_KEYS = ["img src", "img srcset", "source src", "source srcset", "video src", "video poster", "audio src", "track src", "script src", "link href", "iframe src", "frame src", "embed src", "object data", "input src", "image href", "use href"];
+var CSP_DIRECTIVES = ["default-src", "script-src", "script-src-elem", "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src", "connect-src", "media-src", "object-src", "frame-src", "child-src", "worker-src", "manifest-src", "base-uri", "form-action", "frame-ancestors", "navigate-to", "prefetch-src", "sandbox", "trusted-types", "require-trusted-types-for", "upgrade-insecure-requests", "report-uri", "report-to"];
 var diag = { script: 0, rejection: 0, scriptSamples: [], rejectionSamples: [], scriptClasses: [], rejectionClasses: [], resources: [], blocked: [] };
 /** An error's CLASS name (the only part of an error the agent sees), from
  *  a fixed allowlist; anything else is "Error". Must equal the shared
@@ -1563,7 +1580,8 @@ function onDiagError(e) {
     if (diagSeen) { if (diagSeen.has(t)) return; diagSeen.add(t); }
     var attr = attrs[0];
     for (var i = 0; i < attrs.length; i++) if (diagHas(t, attrs[i])) { attr = attrs[i]; break; }
-    diagKey(diag.resources, tag + " " + attr);
+    var rk = tag + " " + (attr === "xlink:href" ? "href" : attr);
+    diagKey(diag.resources, RESOURCE_KEYS.indexOf(rk) !== -1 ? rk : "other resource");
   } else {
     diag.script = diagBump(diag.script);
     var m = "", cls = "Error";
@@ -1594,7 +1612,7 @@ function onDiagRejection(e) {
 function onDiagCsp(e) {
   var d = "";
   try { d = String((e && (e.effectiveDirective || e.violatedDirective)) || "").toLowerCase().split(" ")[0]; } catch (x) { d = ""; }
-  if (!/^[a-z][a-z-]{0,39}$/.test(d)) d = "other";
+  if (CSP_DIRECTIVES.indexOf(d) === -1) d = "other";
   diagKey(diag.blocked, d);
   scheduleDiag();
 }

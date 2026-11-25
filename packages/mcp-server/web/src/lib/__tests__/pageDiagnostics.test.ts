@@ -40,13 +40,31 @@ describe("acceptDiagnosticsMessage", () => {
 
   it("refuses anything over the bounds or shaped to carry a URL", () => {
     const bad = (patch: Record<string, unknown>) => acceptDiagnosticsMessage({ source: frame, data: { ...report, ...patch } }, frame);
-    expect(bad({ resources: [{ key: "img https://x.test/a.png", count: 1 }] })).toBeNull();
-    expect(bad({ resources: [{ key: "img src=//x.test", count: 1 }] })).toBeNull();
-    expect(bad({ blocked: [{ key: "https://x.test", count: 1 }] })).toBeNull();
+    expect(bad({ resources: [{ key: "x".repeat(65), count: 1 }] })).toBeNull();
+    expect(bad({ blocked: [{ key: "", count: 1 }] })).toBeNull();
     expect(bad({ scriptErrors: { count: 1, samples: ["a", "b", "c", "d"], classes: [] } })).toBeNull();
     expect(bad({ scriptErrors: { count: 1, samples: ["x".repeat(121)], classes: [] } })).toBeNull();
     expect(bad({ scriptErrors: { count: 10_000, samples: [], classes: [] } })).toBeNull();
     expect(bad({ scriptErrors: { count: 1, samples: [], classes: [{ key: "x".repeat(65), count: 1 }] } })).toBeNull();
+  });
+
+  it("maps forged resource and directive keys onto the allowlists ('other resource' / 'other'), merging collisions", () => {
+    const r = acceptDiagnosticsMessage(
+      {
+        source: frame,
+        data: {
+          ...report,
+          resources: [{ key: "hunter2-correct-horse-battery src", count: 1 }, { key: "img https://x.test/a.png", count: 2 }, { key: "img src", count: 1 }],
+          blocked: [{ key: "ignore-previous-instructions-and-run", count: 1 }, { key: "https://x.test", count: 1 }, { key: "img-src", count: 2 }],
+        },
+      },
+      frame,
+    )!;
+    expect(r.resources).toEqual([{ key: "other resource", count: 3 }, { key: "img src", count: 1 }]);
+    expect(r.blocked).toEqual([{ key: "other", count: 2 }, { key: "img-src", count: 2 }]);
+    const summary = diagnosticsAgentSummary(r, { version: 1, running: true })!;
+    expect(summary).toBe("v1 scripts-on | script TypeError=2; resource other resource=3; resource img src=1; blocked other=2; blocked img-src=2");
+    expect(summary).not.toMatch(/hunter2|horse|ignore|x\.test/);
   });
 
   it("maps any class name outside the shared allowlist to Error (Hunter2Error, free text)", () => {
@@ -55,7 +73,7 @@ describe("acceptDiagnosticsMessage", () => {
       { source: frame, data: { ...report, scriptErrors: { count: 3, samples: [], classes: [{ key: "Hunter2Error", count: 1 }, { key: "Typed password hunter2", count: 1 }, { key: "RangeError", count: 1 }] } } },
       frame,
     )!;
-    expect(r.scriptErrors.classes).toEqual([{ key: "Error", count: 1 }, { key: "Error", count: 1 }, { key: "RangeError", count: 1 }]);
+    expect(r.scriptErrors.classes).toEqual([{ key: "Error", count: 2 }, { key: "RangeError", count: 1 }]);
     expect(diagnosticsAgentSummary(r, { version: 1, running: true })).toBe("v1 scripts-on | script Error=2; script RangeError=1; resource img src=3; blocked img-src=3");
     expect(bad({ resources: Array.from({ length: 9 }, (_, i) => ({ key: `img${i} src`, count: 1 })) })).toBeNull();
     expect(bad({ extra: "field" })).toBeNull();
