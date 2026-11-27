@@ -1644,6 +1644,37 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
     }
   });
 
+  it("REVIEW: a one-off error before ready is held until ready, then sent as the full snapshot right after it", () => {
+    uninstall();
+    posted.length = 0;
+    Object.defineProperty(document, "readyState", { get: () => "loading", configurable: true });
+    try {
+      uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+      scriptError("TypeError: early");
+      vi.advanceTimersByTime(1000);
+      // Nothing is published before ready (the parent has nothing to bind it to).
+      expect(posted.filter((m) => m?.dp === "ready" || m?.dp === "diagnostics")).toEqual([]);
+      window.dispatchEvent(new Event("load"));
+      const seq = posted.filter((m) => m?.dp === "ready" || m?.dp === "diagnostics").map((m) => m.dp);
+      expect(seq).toEqual(["ready", "diagnostics"]);
+      expect(diagnostics()[0].scriptErrors.count).toBe(1);
+    } finally {
+      delete (document as any).readyState;
+    }
+  });
+
+  it("REVIEW: an injected document id is used on ready and diagnostics", () => {
+    uninstall();
+    posted.length = 0;
+    const doc = "00112233445566778899aabbccddeeff";
+    uninstall = new Function("document", "window", "parent", "core", "DP_DOC", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore(), doc) as () => void;
+    if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+    expect(posted.find((m) => m?.dp === "ready").doc).toBe(doc);
+    scriptError("TypeError: x");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics().at(-1).doc).toBe(doc);
+  });
+
   it("posts nothing on a clean page", () => {
     vi.advanceTimersByTime(1000);
     expect(diagnostics()).toEqual([]);

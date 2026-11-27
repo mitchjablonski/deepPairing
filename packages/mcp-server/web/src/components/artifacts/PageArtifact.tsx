@@ -10,7 +10,7 @@ import { useChainComments } from "../../hooks/useChainComments";
 import { useReplayStore } from "../../stores/replay";
 import { useArtifactStore } from "../../stores/artifact";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
-import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
+import { ANNOTATOR_SCRIPT, annotatorScript } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
 import {
   acceptAnchorMessage,
@@ -29,7 +29,6 @@ import {
   askAnchor,
   buildChangesMessage,
   isReadyMessage,
-  readyDoc,
   isTogglePointingMessage,
   type PageAsk,
   type PageOutlineMessage,
@@ -112,7 +111,7 @@ const RENDER_ISSUES_REPORT_DELAY_MS = 1500;
 const RENDER_ISSUES_REPORT_MAX_WAIT_MS = 5000;
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
-const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
+const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, scriptFor: annotatorScript, sanitize: sanitizePageHtml };
 const NO_MARKS: ChangeLocator[] = [];
 
 /** #714 — the pointing toggle's shortcut, as shown on this platform. */
@@ -314,10 +313,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const [annotate, setAnnotate] = useState(true);
   // #714 gap 12 — the frame's render diagnostics (script errors, assets that
   // didn't load, policy blocks), bound to the frame DOCUMENT that reported
-  // them: the annotator draws an instance id per document and announces it in
-  // its ready. srcDoc updates can reuse the iframe's WindowProxy, so the
-  // source check alone would let an old document's queued report through
-  // after a revision; the id doesn't. A revision that leaves the document
+  // them: PrototypeFrame mints an id per srcdoc, injects it into that
+  // document's annotator and sets it on the iframe (data-dp-doc). Only
+  // reports naming the id of the srcdoc the frame shows NOW are accepted.
+  // srcDoc updates can reuse the iframe's WindowProxy, so the source check
+  // alone would let an old document's queued ready or report through after a
+  // revision; the expected id doesn't. A revision that leaves the document
   // live (a version-only change, unchanged srcdoc) keeps its report.
   const frameDocRef = useRef<string | null>(null);
   const [diagState, setDiagState] = useState<{ doc: string; id: string; diag: PageDiagnostics } | null>(null);
@@ -400,13 +401,6 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         setOpenNonce((n) => n + 1);
         setFrameFocusNonce((n) => n + 1);
         return;
-      }
-      // A new frame document announced itself: reports from any other
-      // document (an old one's queued messages) are no longer current.
-      const doc = readyDoc(event, frame);
-      if (doc !== null && doc !== frameDocRef.current) {
-        frameDocRef.current = doc;
-        setDiagState(null);
       }
       if (isReadyMessage(event, frame)) {
         sendersRef.current.sendMode();
@@ -526,19 +520,15 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     setChangesFound(null);
     setHover(null);
   }, [running]);
-  // The frame's document is actually being replaced (a different iframe
-  // element, as at Run, or a changed srcdoc): no document is current until the
-  // new one's ready, so the old document's late reports are dropped and its
-  // report (banner, pending post) goes with it. Checked after every commit,
-  // against what the frame really shows, never inferred from artifact fields.
-  const lastFrameRef = useRef<{ el: HTMLIFrameElement | null; src: string | null } | undefined>(undefined);
+  // The document the frame shows now: the id minted for its current srcdoc
+  // (a new srcdoc or a new iframe element, as at Run, means a new id). On a
+  // change the old document's report (banner, pending post) is dropped and
+  // its late messages no longer match. Checked after every commit, against
+  // what the frame really shows, never inferred from artifact fields.
   useLayoutEffect(() => {
-    const el = iframeRef.current;
-    const src = el ? el.getAttribute("srcdoc") : null;
-    const last = lastFrameRef.current;
-    if (last && last.el === el && last.src === src) return;
-    lastFrameRef.current = { el, src };
-    frameDocRef.current = null;
+    const doc = iframeRef.current?.getAttribute("data-dp-doc") ?? null;
+    if (doc === frameDocRef.current) return;
+    frameDocRef.current = doc;
     setDiagState(null);
   });
   // #714 gap 12 — tell the agent (check_feedback) on the render-failure lane,

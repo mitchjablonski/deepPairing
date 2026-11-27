@@ -1704,21 +1704,24 @@ describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)",
 });
 
 describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
-  // Every report names the frame document it came from (the annotator's
-  // per-document instance id, announced in its "ready").
-  const DOC = "0123456789abcdef0123456789abcdef";
+  // Every report names the frame document it came from: the id the companion
+  // minted for that srcdoc and injected into its annotator (the iframe's
+  // data-dp-doc). `doc` reads the CURRENT frame's id at the time it is sent.
+  const frameDoc = () => frame()?.getAttribute("data-dp-doc") ?? "none";
   const DIAG = {
     dp: "diagnostics",
-    doc: DOC,
+    get doc() {
+      return frameDoc();
+    },
     scriptErrors: { count: 2, samples: ["<img src=x onerror=alert(1)>"], classes: [{ key: "TypeError", count: 2 }] },
     rejections: { count: 0, samples: [], classes: [] },
     resources: [{ key: "img src", count: 3 }],
     blocked: [{ key: "img-src", count: 3 }],
   };
   /** The frame's document announced itself: its ready carries its instance id. */
-  const liveFrame = (doc = DOC) => {
+  const liveFrame = () => {
     const win = fakeFrameWindow();
-    fromFrame(win, { dp: "ready", doc });
+    fromFrame(win, { dp: "ready", doc: frameDoc() });
     return win;
   };
   const renderFailurePosts = () =>
@@ -1820,8 +1823,8 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
       });
       expect(renderFailurePosts()).toHaveLength(0);
       // A report from the new document is posted under the new frame.
-      win = liveFrame("fedcba9876543210fedcba9876543210");
-      fromFrame(win, { ...DIAG, doc: "fedcba9876543210fedcba9876543210" });
+      win = liveFrame();
+      fromFrame(win, DIAG);
       act(() => {
         vi.advanceTimersByTime(2_000);
       });
@@ -1838,13 +1841,23 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
       useArtifactStore.getState().addArtifact(art);
       const { rerender } = render(<PageArtifact artifact={art} />);
       const win = liveFrame();
+      const oldDoc = frameDoc();
+      expect(oldDoc).toMatch(/^[0-9a-f]{32}$/);
       rerender(<PageArtifact artifact={{ ...art, content: { ...(art.content as Record<string, unknown>), html: "<p>v2</p>" } } as Artifact} />);
-      // The old document's queued report lands before the new one is ready...
-      fromFrame(win, DIAG);
+      // The companion minted a new id for the new srcdoc.
+      expect(frameDoc()).toMatch(/^[0-9a-f]{32}$/);
+      expect(frameDoc()).not.toBe(oldDoc);
+      // The old document's queued report lands after the reload...
+      fromFrame(win, { ...DIAG, doc: oldDoc });
       expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
-      // ...and after it: the new document's id is current, the old one never is.
+      // ...and so does its queued READY followed by another report: an old
+      // ready can never claim the current document.
+      fromFrame(win, { dp: "ready", doc: oldDoc });
+      fromFrame(win, { ...DIAG, doc: oldDoc });
+      expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+      // A ready naming some other id can't either.
       fromFrame(win, { dp: "ready", doc: "fedcba9876543210fedcba9876543210" });
-      fromFrame(win, DIAG);
+      fromFrame(win, { ...DIAG, doc: "fedcba9876543210fedcba9876543210" });
       expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
       act(() => {
         vi.advanceTimersByTime(10_000);
@@ -1854,6 +1867,9 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
       const { doc: _doc, ...anonymous } = DIAG;
       fromFrame(win, anonymous);
       expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+      // The new document's own report is accepted.
+      fromFrame(win, DIAG);
+      expect(screen.getByTestId("page-render-issues")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

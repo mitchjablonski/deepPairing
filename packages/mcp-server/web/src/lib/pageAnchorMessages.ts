@@ -67,19 +67,12 @@ export function isReadyMessage(event: FrameMessage, frame: Window | null | undef
   return !!d && d.dp === "ready";
 }
 
-/** #714 gap 12 — the per-document instance id the annotator draws at boot and
- *  puts on its ready and diagnostics messages. Updating srcDoc can reuse the
- *  iframe's WindowProxy, so the source check alone can't tell an old
- *  document's queued report from the new document's: this id can. */
+/** #714 gap 12 — the per-document id PrototypeFrame mints for each srcdoc
+ *  and injects into that document's annotator, which puts it on its ready
+ *  and diagnostics messages. srcDoc updates can reuse the iframe's
+ *  WindowProxy, so the source check alone can't tell an old document's
+ *  queued messages from the new document's: the expected id can. */
 export const FrameDocSchema = z.string().regex(/^[0-9a-f]{16,64}$/);
-
-/** The document id of a `{dp:"ready", doc}` from this frame; else null. */
-export function readyDoc(event: FrameMessage, frame: Window | null | undefined): string | null {
-  const d = fromFrame(event, frame);
-  if (!d || d.dp !== "ready") return null;
-  const doc = FrameDocSchema.safeParse(d.doc);
-  return doc.success ? doc.data : null;
-}
 
 /** #714 — `{dp:"toggle-pointing"}` from this frame: the reviewer pressed the
  *  pointing shortcut while focus was inside the page. It can only flip the

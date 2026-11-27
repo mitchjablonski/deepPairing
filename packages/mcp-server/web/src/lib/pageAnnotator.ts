@@ -811,11 +811,16 @@ function own(el) {
   return false;
 }
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
-/** #714 gap 12 — this document's instance id, drawn once at boot and put on
- *  ready and diagnostics: srcDoc updates can reuse the frame's WindowProxy,
- *  so the parent tells an old document's late report from the new
- *  document's by this id, not by the message source. */
+/** #714 gap 12 — this document's instance id, put on ready and diagnostics:
+ *  srcDoc updates can reuse the frame's WindowProxy, so the parent tells an
+ *  old document's late messages from the new document's by this id, not by
+ *  the message source. The companion mints it per srcdoc and injects it
+ *  (DP_DOC, a parameter of our wrapper, so page script can't read it from a
+ *  global) and accepts only the id it injected into the CURRENT srcdoc: an
+ *  old document's queued ready can never claim the new one. Without an
+ *  injected id (a harness), a random one. */
 var docId = (function () {
+  if (typeof DP_DOC === "string" && /^[0-9a-f]{16,64}$/.test(DP_DOC)) return DP_DOC;
   var hex = "", i;
   try {
     var c = window.crypto || (typeof crypto !== "undefined" ? crypto : null);
@@ -1624,6 +1629,9 @@ function errClass(name, message) {
   return m && knownClass(m[1]) ? m[1] : "Error";
 }
 var diagSeen = typeof WeakSet === "function" ? new WeakSet() : null, diagPending = 0, lastDiagJson = "";
+/** Nothing is published before ready: until then the parent may not know
+ *  this document, and a report it dropped would be deduped away for good. */
+var readySent = false;
 function redactDiag(v) {
   var t = core.norm(v);
   t = t.replace(/\b(?:data|blob):[^\s"'<>()]*/gi, "[data URI]");
@@ -1704,6 +1712,7 @@ function canonKeys(list, allow) {
 }
 function reportDiag() {
   diagPending = 0;
+  if (!readySent) return;
   if (!diag.script && !diag.rejection && !diag.resources.length && !diag.blocked.length) return;
   var msg = { dp: "diagnostics", doc: docId,
     scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: canonKeys(diag.scriptClasses, ERROR_CLASSES) },
@@ -1719,6 +1728,11 @@ function scheduleDiag() {
 function onReady() {
   if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
   post({ dp: "ready", doc: docId });
+  // Ready opens publication: the full current snapshot follows at once,
+  // never suppressed by a dedupe from before ready.
+  readySent = true;
+  lastDiagJson = "";
+  if (diagPending) { clearTimeout(diagPending); diagPending = 0; }
   reportOutline();
   reportDiag();
 }
@@ -1765,9 +1779,18 @@ return function uninstall() {
 `;
 
 /** The script inlined first into the frame document. */
-export const ANNOTATOR_SCRIPT =
-  "(function(){try{var core=(function(document,window){" +
-  ANNOTATOR_CORE_SOURCE +
-  "\n})(document,window);(function(document,window,parent,core){" +
-  ANNOTATOR_MAIN_SOURCE +
-  "\n})(document,window,window.parent,core);}catch(e){}})();";
+/** The annotator script for one frame document. `doc` is the id the
+ *  companion minted for that srcdoc (#714 gap 12): it rides into the main
+ *  source as the DP_DOC parameter, never a global. Only a hex id is ever
+ *  embedded; anything else is dropped (the annotator then draws its own). */
+export function annotatorScript(doc?: string): string {
+  const id = typeof doc === "string" && /^[0-9a-f]{16,64}$/.test(doc) ? JSON.stringify(doc) : "undefined";
+  return (
+    "(function(){try{var core=(function(document,window){" +
+    ANNOTATOR_CORE_SOURCE +
+    "\n})(document,window);(function(document,window,parent,core,DP_DOC){" +
+    ANNOTATOR_MAIN_SOURCE +
+    "\n})(document,window,window.parent,core," + id + ");}catch(e){}})();"
+  );
+}
+export const ANNOTATOR_SCRIPT = annotatorScript();

@@ -99,6 +99,11 @@ export function wrapHtml(
  *  component, which prototype visuals also use, carries neither by default. */
 export interface FrameAnnotation {
   script: string;
+  /** #714 gap 12 — optional: the script for one frame document, given the id
+   *  minted for that srcdoc. The id is also set on the iframe as
+   *  `data-dp-doc` (parent DOM only; the opaque-origin frame can't read it),
+   *  so the renderer can accept messages from exactly that document. */
+  scriptFor?: (doc: string) => string;
   /** Returns the cleaned markup plus the page's safe `<html>`/`<body>`
    *  presentation attributes, which go on our wrapper elements. */
   sanitize: (html: string) => { html: string; htmlAttrs?: Record<string, string>; bodyAttrs?: Record<string, string> };
@@ -156,21 +161,31 @@ export function PrototypeFrame({
   // #680 slice 2 — the before-Run document: sanitised agent markup, our
   // annotator first, and a nonce CSP so only the annotator can run. Memoized
   // so a re-render doesn't hand the iframe a new srcdoc (which would reload it).
-  const staticDoc = useMemo(() => {
-    if (!staticFirst || tooBig) return "";
-    if (!annotation) return wrapHtml(html);
+  // #714 gap 12 — each annotated srcdoc gets its own document id (with
+  // scriptFor), minted with it in the same memo: a new srcdoc, a new id.
+  const staticFrame = useMemo((): { src: string; doc?: string } => {
+    if (!staticFirst || tooBig) return { src: "" };
+    if (!annotation) return { src: wrapHtml(html) };
     const clean = annotation.sanitize(html);
-    return wrapHtml(clean.html, {
-      headScript: annotation.script,
-      nonce: makeNonce(),
-      htmlAttrs: clean.htmlAttrs,
-      bodyAttrs: clean.bodyAttrs,
-    });
+    const doc = annotation.scriptFor ? makeNonce() : undefined;
+    return {
+      doc,
+      src: wrapHtml(clean.html, {
+        headScript: doc && annotation.scriptFor ? annotation.scriptFor(doc) : annotation.script,
+        nonce: makeNonce(),
+        htmlAttrs: clean.htmlAttrs,
+        bodyAttrs: clean.bodyAttrs,
+      }),
+    };
   }, [html, staticFirst, tooBig, annotation]);
-  const runDoc = useMemo(
-    () => (running ? wrapHtml(html, annotating && annotation ? { headScript: annotation.script } : {}) : ""),
-    [html, running, annotating, annotation],
-  );
+  const staticDoc = staticFrame.src;
+  const runFrame = useMemo((): { src: string; doc?: string } => {
+    if (!running) return { src: "" };
+    if (!(annotating && annotation)) return { src: wrapHtml(html, {}) };
+    const doc = annotation.scriptFor ? makeNonce() : undefined;
+    return { doc, src: wrapHtml(html, { headScript: doc && annotation.scriptFor ? annotation.scriptFor(doc) : annotation.script }) };
+  }, [html, running, annotating, annotation]);
+  const runDoc = runFrame.src;
 
   if (!html.trim()) {
     return <div className="text-2xs text-text-muted">No {noun} HTML provided.</div>;
@@ -201,6 +216,7 @@ export function PrototypeFrame({
           ref={iframeRef}
           sandbox="allow-scripts"
           srcDoc={runDoc}
+          data-dp-doc={runFrame.doc}
           title={`Sandboxed ${noun}`}
           className={frameClassName}
         />
@@ -216,6 +232,7 @@ export function PrototypeFrame({
             // anything else. Never `allow-same-origin` in either mode.
             sandbox={annotating ? "allow-scripts" : ""}
             srcDoc={staticDoc}
+            data-dp-doc={staticFrame.doc}
             title={`Sandboxed ${noun} (scripts paused)`}
             className={frameClassName}
           />
