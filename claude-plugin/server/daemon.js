@@ -20281,6 +20281,14 @@ var PAGE_RULE_OUT_KEY_MAX = 120;
 var CommentRuleOutSchema = external_exports.object({
   description: external_exports.string().min(1).max(PAGE_RULE_OUT_KEY_MAX)
 });
+var CommentAddressedInSchema = external_exports.object({
+  artifactId: external_exports.string().min(1).max(256),
+  version: external_exports.number().int().positive(),
+  /** When that revision was made (its createdAt), so a later human reply can
+   *  reopen the comment. Optional: older stamps fall back to the revision's
+   *  own artifact record. */
+  at: external_exports.string().datetime().optional()
+});
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -20302,6 +20310,8 @@ var CommentSchema = external_exports.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  // #714 gap 7 — the page revision that addressed this comment (see above).
+  addressedIn: CommentAddressedInSchema.optional(),
   /** Server-stamped only for the note owned by a page verdict history entry. */
   verdictFeedback: external_exports.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
@@ -31038,9 +31048,14 @@ var FileStore = class _FileStore {
       const { artifacts, merged, filePath, diskBytes } = this.readDurablePageRevisionFeedback(parentId, proof, false);
       verifyRevision(artifacts);
       const selected = new Set(proof.commentIds);
-      const updated = merged.map(
-        (comment) => selected.has(comment.id) && !comment.acknowledged ? { ...comment, acknowledged: true } : comment
-      );
+      const successor = artifacts.find((artifact) => artifact.parentId === parentId);
+      const addressedIn = successor ? { artifactId: successor.id, version: successor.version, ...successor.createdAt ? { at: successor.createdAt } : {} } : void 0;
+      const updated = merged.map((comment) => {
+        if (!selected.has(comment.id)) return comment;
+        const advances = addressedIn && (!comment.addressedIn || addressedIn.version > comment.addressedIn.version);
+        const stamp = advances ? { addressedIn } : {};
+        return comment.acknowledged && !("addressedIn" in stamp) ? comment : { ...comment, acknowledged: true, ...stamp };
+      });
       this.writePageRevisionComments(updated, filePath, diskBytes);
       return updated.filter((comment) => selected.has(comment.id));
     });
