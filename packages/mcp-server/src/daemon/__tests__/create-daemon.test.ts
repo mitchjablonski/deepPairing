@@ -184,6 +184,76 @@ it("waits for the exact committed standalone choice and releases a disconnected 
   }
 });
 
+it("wakes only the ended review's exact decision waiters after the marker commits", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const siblingId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  const sibling = daemon.createSession(siblingId);
+  for (const [source, id] of [[store, "pending"], [store, "closed"], [store, "picked"], [sibling, "pending"]] as const) {
+    source.createArtifact({ id: `art_${id}`, type: "decision", title: "Which cache?", content: { decisionId: id } });
+    source.recordDecisionRequest({ decisionId: id, artifactId: `art_${id}`, context: "Which cache?", options: OPTS });
+  }
+  store.updateArtifactStatus("art_closed", "obsolete", "agent_obsolete");
+  const headers = {
+    "X-Project-Hash": projectHashOf(tmpDir), "X-Session-Id": sessionId,
+    "Content-Type": "application/json", Authorization: "Bearer test-token",
+  };
+  const picked = await daemon.app.request("/api/decisions/picked", {
+    method: "POST", headers, body: JSON.stringify({ optionId: "o2" }),
+  });
+  expect(picked.status).toBe(200);
+  store.forceFlush();
+  const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  const decisionFile = path.join(dir, "decisions.json");
+  const decisionsBefore = fs.readFileSync(decisionFile, "utf8");
+  const cancel = new AbortController();
+  const read = (sid: string, decisionId: string, waitMs?: number) =>
+    daemon.app.request(`/api/internal/sessions/${sid}/read-decision`, {
+      method: "POST", headers: { ...headers, "X-Session-Id": sid }, signal: cancel.signal,
+      body: JSON.stringify({ expectedProjectRoot: tmpDir, decisionId, waitMs }),
+    });
+  const waiters = (source: typeof store) =>
+    (source as unknown as { feedbackWaiters: Array<() => void> }).feedbackWaiters;
+
+  try {
+    const pending = read(sessionId, "pending", 10_000);
+    const otherPending = read(siblingId, "pending", 10_000);
+    const generalPending = store.waitForFeedback(10_000, cancel.signal);
+    await vi.waitFor(() => {
+      expect(waiters(store)).toHaveLength(2);
+      expect(waiters(sibling)).toHaveLength(1);
+    });
+    const before = [...waiters(store)];
+    const flush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("End flush failed"); });
+    try {
+      await expect(daemon.standaloneCloseout.end(sessionId)).rejects.toThrow("End flush failed");
+      expect(waiters(store)).toEqual(before);
+    } finally {
+      flush.mockRestore();
+    }
+    const marker = await daemon.standaloneCloseout.end(sessionId);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "review-ended.json"), "utf8"))).toEqual(marker);
+    expect(fs.readFileSync(decisionFile, "utf8")).toBe(decisionsBefore);
+    const ended = await (await pending).json();
+    expect(ended).toMatchObject({ waitStatus: "session_ended", artifactStatus: "draft", decisionId: "pending", sessionId });
+    expect(ended).not.toHaveProperty("selectedOptionId");
+    expect(await (await read(sessionId, "pending", 10_000)).json()).toEqual(ended);
+    expect(await (await read(sessionId, "pending")).json()).not.toHaveProperty("waitStatus");
+    expect(await (await read(sessionId, "closed", 10_000)).json()).toMatchObject({ waitStatus: "closed" });
+    expect(await (await read(sessionId, "picked", 10_000)).json()).toMatchObject({ waitStatus: "resolved", selectedOptionId: "o2" });
+    expect((await read(sessionId, "unknown", 10_000)).status).toBe(404);
+    expect(await daemon.standaloneCloseout.end(sessionId)).toEqual(marker);
+    expect(fs.readFileSync(decisionFile, "utf8")).toBe(decisionsBefore);
+    expect(waiters(store)).toHaveLength(1);
+    expect(waiters(sibling)).toHaveLength(1);
+    cancel.abort();
+    await Promise.all([otherPending, generalPending]);
+  } finally {
+    cancel.abort();
+  }
+});
+
 it("reads bounded feedback from one warm page version without activity, a lease, or acknowledgement", async () => {
   vi.useFakeTimers();
   const { tmpDir, daemon, exits } = makeDaemon();
