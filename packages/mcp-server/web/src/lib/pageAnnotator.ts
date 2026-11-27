@@ -927,6 +927,44 @@ function badgeCoversNative(badge) {
   for (var i = 0; i < pts.length; i++) if (nativeUnder(pageElAt(pts[i][0], pts[i][1]))) return true;
   return false;
 }
+/** Badge spots, in the pin box's coordinates (the box is the anchor +2px on
+ *  every side): outside top-left (preferred: never on the element itself),
+ *  outside top-right, then inside the anchor's top-left / top-right corners. */
+function badgeSpots(r, bw) {
+  var w = r.width + 4;
+  return [[-20, -20], [w + 2, -20], [4, 4], [w - 4 - bw, 4]];
+}
+/** Place the badge on the first spot that is fully inside the viewport
+ *  horizontally (and not above the document's top) AND clear of native
+ *  controls; else the first spot that is on screen (it stays inert); else
+ *  clamp it to the viewport edge. Returns badgeCoversNative() for the spot
+ *  chosen, so a badge over a control is never live. */
+function placeBadge(badge, r) {
+  var bw = Math.max(18, badge.offsetWidth || 0);
+  var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var sy = window.scrollY || window.pageYOffset || 0;
+  var spots = badgeSpots(r, bw), fallback = null;
+  function fits(s) {
+    var x = r.left - 2 + s[0], y = r.top - 2 + s[1];
+    return x >= 0 && (!vw || x + bw <= vw) && y + sy >= 0;
+  }
+  function put(s) { important(badge, { left: s[0] + "px", top: s[1] + "px" }); }
+  for (var i = 0; i < spots.length; i++) {
+    if (!fits(spots[i])) continue;
+    put(spots[i]);
+    if (!badgeCoversNative(badge)) return false;
+    if (!fallback) fallback = spots[i];
+  }
+  if (!fallback) {
+    // Nothing fits (e.g. an anchor scrolled partly out horizontally): clamp
+    // the outside-top-left spot into the viewport and the document.
+    var x = Math.min(Math.max(r.left - 22, 0), vw ? Math.max(vw - bw, 0) : Infinity);
+    var y = Math.max(r.top - 22, -sy);
+    fallback = [x - (r.left - 2), y - (r.top - 2)];
+  }
+  put(fallback);
+  return badgeCoversNative(badge);
+}
 function setModHeld(v) {
   if (v === modHeld) return;
   modHeld = v;
@@ -983,16 +1021,17 @@ function drawPins() {
     badge.textContent = String(j + 1);
     var id = pinIds[j];
     if (id && badgeIds) badgeIds.set(badge, id);
-    // Fully OUTSIDE the anchored element's top-left corner (the pin box is
-    // the element +2px; the 18px badge ends 2px before it), so it never sits
-    // on the element's own interactive area.
+    // Preferably fully OUTSIDE the anchored element's top-left corner (the
+    // pin box is the element +2px; the 18px badge ends 2px before it), so it
+    // never sits on the element's own interactive area; placeBadge() moves it
+    // to a viewport-visible spot clear of native controls when that's off-screen.
     important(badge, { position: "absolute", left: "-20px", top: "-20px", display: "block", "box-sizing": "border-box",
       "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: color,
       color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center",
       "pointer-events": "none", cursor: "default" });
     pin.appendChild(badge);
     l.appendChild(pin);
-    var ok = !!id && !!badgeIds && !!badgeOk && !badgeCoversNative(badge);
+    var ok = !!id && !!badgeIds && !!badgeOk && !placeBadge(badge, r);
     if (badgeOk) badgeOk.set(badge, ok);
     var live = ok && badgesLive();
     if (live) important(badge, { "pointer-events": "auto", cursor: "pointer" });
