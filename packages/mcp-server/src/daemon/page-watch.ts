@@ -57,6 +57,10 @@ import { relocatePageComments } from "../mcp/page-anchor-relocate.js";
 import { PAGE_WATCH_MIN_INTERVAL_MS, PAGE_WATCH_QUIET_MS } from "../page-watch-timing.js";
 export { PAGE_WATCH_MIN_INTERVAL_MS, PAGE_WATCH_QUIET_MS };
 export const PAGE_WATCH_POLL_MS = 1_000;
+/** How long End waits before deciding a watched file that vanished at the cut
+ *  was really deleted (see drainQueuedSaves). */
+export const PAGE_WATCH_MISSING_RECHECK_MS = 50;
+const MISSING = "missing";
 
 /** The subset of fs.FSWatcher the watch uses (injectable for tests). */
 export interface PageDirWatcher {
@@ -87,6 +91,12 @@ export interface PageWatchDeps {
    *  size, inode. Tests pass a coarse fake (a filesystem whose timestamps
    *  don't move) to prove nothing correctness-critical relies on it. */
   statSig?: (absPath: string) => string;
+  /** End's one bounded recheck of a file that was missing at the cut.
+   *  Default PAGE_WATCH_MISSING_RECHECK_MS through a real setTimeout. */
+  missingRecheckMs?: number;
+  /** The recheck's wait. Tests pass a fake that recreates (or keeps deleted)
+   *  the file instead of advancing a clock. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 interface Entry {
@@ -115,8 +125,12 @@ function statSig(p: string): string {
     // the same coarse mtime tick) still moves ctime, so the poll notices it.
     return `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
   } catch {
-    return "missing";
+    return MISSING;
   }
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
 function sha256(s: string): string {
@@ -153,6 +167,7 @@ export class PageWatcher {
   private readonly quietMs: number;
   private readonly minIntervalMs: number;
   private readonly pollMs: number;
+  private readonly missingRecheckMs: number;
   private disposed = false;
 
   constructor(private readonly deps: PageWatchDeps) {
@@ -162,6 +177,7 @@ export class PageWatcher {
     this.quietMs = deps.quietMs ?? PAGE_WATCH_QUIET_MS;
     this.minIntervalMs = deps.minIntervalMs ?? PAGE_WATCH_MIN_INTERVAL_MS;
     this.pollMs = deps.pollIntervalMs ?? PAGE_WATCH_POLL_MS;
+    this.missingRecheckMs = Math.max(0, deps.missingRecheckMs ?? PAGE_WATCH_MISSING_RECHECK_MS);
   }
 
   private sig(p: string): string {
@@ -232,15 +248,35 @@ export class PageWatcher {
     for (const e of [...this.entries.values()]) if (e.sessionId === sessionId) this.stop(e);
   }
 
-  /** Bypass quiet/rate timers only for work already observed at the cut. */
+  /**
+   * Bypass quiet/rate timers only for work already observed at the cut.
+   *
+   * Missing files. An editor that saves by unlink-then-recreate can be caught
+   * mid-replace by the sweep: the file is "missing" and the entry is dirty.
+   * Reading it then records nothing, and the rewrite that lands moments later
+   * would be post-cut and lost. So a dirty (or mid-read) entry whose cut
+   * signature is missing gets ONE bounded recheck (missingRecheckMs, ~50ms)
+   * inside its drain, before anything is read. If the file is back, that is the same save
+   * completing: its new signature becomes this drain's generation and it is
+   * recorded before End commits. If it is still missing, it is treated as a
+   * genuine delete: nothing is recorded and End proceeds. The entry is already
+   * marked draining during the wait, so no quiet timer or poll can start a
+   * read that would wait on End's own admission. A file that returns only
+   * after the recheck is post-cut, like any other save on a clean entry.
+   *
+   * Post-cut saves otherwise. A save seen after the cut on an entry that was
+   * dirty at the cut makes End fail with session_save_pending (retry End). On
+   * an entry that was clean at the cut it is not part of this review.
+   */
   async drainQueuedSaves(sessionId: string): Promise<void> {
     const entries = [...this.entries.values()].filter((entry) => entry.sessionId === sessionId);
     // A filesystem that missed the watch event might not have polled this
     // save yet. Observe signatures before fixing the generation for End.
     for (const entry of entries) this.checkSignature(entry);
     const drains = entries.filter((entry) => entry.dirty || entry.processing || entry.draining).map((entry) => {
-      const generation = entry.gen;
+      let generation = entry.gen;
       const signature = entry.lastSig;
+      const vanished = signature === MISSING && (entry.dirty || entry.processing !== null);
       const checkGeneration = () => {
         if (entry.gen !== generation || entry.dirty) {
           throw new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
@@ -254,6 +290,24 @@ export class PageWatcher {
         await entry.processing;
         if (entry.stopped) return;
         try {
+          if (vanished && entry.gen === generation) {
+            let returned = this.sig(entry.absPath);
+            if (returned === MISSING) {
+              await (this.deps.sleep ?? defaultSleep)(this.missingRecheckMs);
+              if (entry.stopped) return;
+              returned = this.sig(entry.absPath);
+            }
+            if (returned !== MISSING && entry.gen === generation) {
+              // The replace finished inside the window: process it as this save.
+              this.onChange(entry, returned);
+              generation = entry.gen;
+            } else if (returned !== MISSING && entry.lastSig === returned) {
+              // A watcher event or poll tick already recorded this same
+              // recreate during the wait (gen moved, lastSig is the file as it
+              // is now). Adopt it rather than fail End as pending.
+              generation = entry.gen;
+            }
+          }
           // Another eventless save may have landed during the wait. Mark
           // that save dirty before reading so it cannot pass as pre-cut work.
           this.checkSignature(entry, signature);

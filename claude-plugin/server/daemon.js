@@ -45214,13 +45214,20 @@ var PAGE_WATCH_MIN_INTERVAL_MS = 1e4;
 
 // src/daemon/page-watch.ts
 var PAGE_WATCH_POLL_MS = 1e3;
+var PAGE_WATCH_MISSING_RECHECK_MS = 50;
+var MISSING = "missing";
 function statSig(p) {
   try {
     const st = fs31.statSync(p);
     return `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
   } catch {
-    return "missing";
+    return MISSING;
   }
+}
+function defaultSleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 function sha256(s) {
   return crypto6.createHash("sha256").update(s).digest("hex");
@@ -45255,6 +45262,7 @@ var PageWatcher = class {
     this.quietMs = deps.quietMs ?? PAGE_WATCH_QUIET_MS;
     this.minIntervalMs = deps.minIntervalMs ?? PAGE_WATCH_MIN_INTERVAL_MS;
     this.pollMs = deps.pollIntervalMs ?? PAGE_WATCH_POLL_MS;
+    this.missingRecheckMs = Math.max(0, deps.missingRecheckMs ?? PAGE_WATCH_MISSING_RECHECK_MS);
   }
   deps;
   entries = /* @__PURE__ */ new Map();
@@ -45262,6 +45270,7 @@ var PageWatcher = class {
   quietMs;
   minIntervalMs;
   pollMs;
+  missingRecheckMs;
   disposed = false;
   sig(p) {
     return (this.deps.statSig ?? statSig)(p);
@@ -45319,13 +45328,33 @@ var PageWatcher = class {
   stopSession(sessionId) {
     for (const e of [...this.entries.values()]) if (e.sessionId === sessionId) this.stop(e);
   }
-  /** Bypass quiet/rate timers only for work already observed at the cut. */
+  /**
+   * Bypass quiet/rate timers only for work already observed at the cut.
+   *
+   * Missing files. An editor that saves by unlink-then-recreate can be caught
+   * mid-replace by the sweep: the file is "missing" and the entry is dirty.
+   * Reading it then records nothing, and the rewrite that lands moments later
+   * would be post-cut and lost. So a dirty (or mid-read) entry whose cut
+   * signature is missing gets ONE bounded recheck (missingRecheckMs, ~50ms)
+   * inside its drain, before anything is read. If the file is back, that is the same save
+   * completing: its new signature becomes this drain's generation and it is
+   * recorded before End commits. If it is still missing, it is treated as a
+   * genuine delete: nothing is recorded and End proceeds. The entry is already
+   * marked draining during the wait, so no quiet timer or poll can start a
+   * read that would wait on End's own admission. A file that returns only
+   * after the recheck is post-cut, like any other save on a clean entry.
+   *
+   * Post-cut saves otherwise. A save seen after the cut on an entry that was
+   * dirty at the cut makes End fail with session_save_pending (retry End). On
+   * an entry that was clean at the cut it is not part of this review.
+   */
   async drainQueuedSaves(sessionId) {
     const entries = [...this.entries.values()].filter((entry) => entry.sessionId === sessionId);
     for (const entry of entries) this.checkSignature(entry);
     const drains = entries.filter((entry) => entry.dirty || entry.processing || entry.draining).map((entry) => {
-      const generation = entry.gen;
+      let generation = entry.gen;
       const signature = entry.lastSig;
+      const vanished = signature === MISSING && (entry.dirty || entry.processing !== null);
       const checkGeneration = () => {
         if (entry.gen !== generation || entry.dirty) {
           throw new StandaloneCloseoutError(
@@ -45341,6 +45370,20 @@ var PageWatcher = class {
         await entry.processing;
         if (entry.stopped) return;
         try {
+          if (vanished && entry.gen === generation) {
+            let returned = this.sig(entry.absPath);
+            if (returned === MISSING) {
+              await (this.deps.sleep ?? defaultSleep)(this.missingRecheckMs);
+              if (entry.stopped) return;
+              returned = this.sig(entry.absPath);
+            }
+            if (returned !== MISSING && entry.gen === generation) {
+              this.onChange(entry, returned);
+              generation = entry.gen;
+            } else if (returned !== MISSING && entry.lastSig === returned) {
+              generation = entry.gen;
+            }
+          }
           this.checkSignature(entry, signature);
           const queued = entry.dirty;
           entry.dirty = false;
