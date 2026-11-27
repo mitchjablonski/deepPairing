@@ -26,6 +26,10 @@ export const HTML_ANCHOR_LIMITS = {
   header: 200,
   nodeId: 200,
   href: 512,
+  /** #714 gap 10 — the nearest preceding heading's text. */
+  sectionHeading: 120,
+  /** #714 gap 10 — the nearest ancestor (or section heading) id. */
+  sectionId: 200,
 } as const;
 
 export const HtmlAnchorKindSchema = z.enum(["element", "text", "cell", "diagram-node", "link"]);
@@ -39,6 +43,14 @@ export type HtmlAnchorKind = z.infer<typeof HtmlAnchorKindSchema>;
  * when the locator no longer matches. `table` names a cell by its header TEXT
  * (not indices), `nodeId` names a Mermaid node, `href` is the link target (link
  * anchors only). `version` is the page version the anchor was made on.
+ *
+ * #714 gap 10 — `section` says which part of the page the spot is in:
+ * `heading` is the nearest preceding h1–h6 text (or the first heading inside
+ * a clicked container), `id` the nearest ancestor-or-self id, else that
+ * heading's own id. Element, cell, node and link anchors carry `prefix` /
+ * `suffix` too (the page text just outside the element), so a click on a
+ * generic container in a generated page can still be told apart. All optional:
+ * every anchor stored before this loads unchanged.
  */
 export const HtmlAnchorSchema = z
   .object({
@@ -56,6 +68,12 @@ export const HtmlAnchorSchema = z
     nodeId: z.string().max(HTML_ANCHOR_LIMITS.nodeId).optional(),
     href: z.string().max(HTML_ANCHOR_LIMITS.href).optional(),
     version: z.number().int().positive().optional(),
+    section: z
+      .object({
+        heading: z.string().max(HTML_ANCHOR_LIMITS.sectionHeading).optional(),
+        id: z.string().max(HTML_ANCHOR_LIMITS.sectionId).optional(),
+      })
+      .optional(),
   })
   .superRefine((a, ctx) => {
     if (a.kind === "text" && a.quote.trim().length === 0) {
@@ -241,6 +259,24 @@ export const CommentRuleOutSchema = z.object({
 });
 export type CommentRuleOut = z.infer<typeof CommentRuleOutSchema>;
 
+/**
+ * #714 gap 7 — stamped on an anchored page comment when the agent revised the
+ * page and named this comment as addressed (standalone `revise-page
+ * --ack-comment-id`). `artifactId`/`version` are the revision that addressed
+ * it, so the companion can say "Addressed in vN" instead of conflating it with
+ * the MCP drain-on-read `acknowledged` bit. Server-set only (the public comment
+ * routes never accept it); optional, so older records load unchanged.
+ */
+export const CommentAddressedInSchema = z.object({
+  artifactId: z.string().min(1).max(256),
+  version: z.number().int().positive(),
+  /** When that revision was made (its createdAt), so a later human reply can
+   *  reopen the comment. Optional: older stamps fall back to the revision's
+   *  own artifact record. */
+  at: z.string().datetime().optional(),
+});
+export type CommentAddressedIn = z.infer<typeof CommentAddressedInSchema>;
+
 export const CommentSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
@@ -262,6 +298,8 @@ export const CommentSchema = z.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  // #714 gap 7 — the page revision that addressed this comment (see above).
+  addressedIn: CommentAddressedInSchema.optional(),
   /** Server-stamped only for the note owned by a page verdict history entry. */
   verdictFeedback: z.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */

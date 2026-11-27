@@ -174,6 +174,51 @@ describe("PrototypeFrame", () => {
       unmount();
     });
 
+    it("#714 gap 12: each displayed srcdoc gets its own document id; the frozen Run document keeps its id through a late theme render", async () => {
+      const themes: string[] = [];
+      let openDark!: () => void;
+      const darkGate = new Promise<void>((r) => { openDark = r; });
+      const scripts: string[] = [];
+      const annotation: FrameAnnotation = {
+        script: "/*annotator*/",
+        scriptFor: (doc) => { scripts.push(doc); return `/*annotator ${doc}*/`; },
+        sanitize: sanitizePageHtml,
+        prepare: {
+          needed: (h) => h.includes("mermaid"),
+          run: async (h, theme) => {
+            if (theme === "dark") await darkGate;
+            return (await renderPageMermaid(h, { theme, renderer: fakeRenderer(themes) })).html;
+          },
+        },
+      };
+      act(() => usePreferencesStore.getState().setTheme("light"));
+      const { unmount } = render(<PrototypeFrame html={PAGE} staticFirst noun="page" annotation={annotation} />);
+      await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+      const staticFrame = document.querySelector("iframe")!;
+      const staticId = staticFrame.getAttribute("data-dp-doc")!;
+      expect(staticId).toMatch(/^[0-9a-f]{32}$/);
+      // The id is the one injected into THAT srcdoc's annotator.
+      expect(staticFrame.getAttribute("srcdoc")).toContain(`/*annotator ${staticId}*/`);
+      act(() => usePreferencesStore.getState().setTheme("dark"));
+      await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+      const runningFrame = document.querySelector("iframe")!;
+      const runId = runningFrame.getAttribute("data-dp-doc")!;
+      expect(runId).toMatch(/^[0-9a-f]{32}$/);
+      expect(runId).not.toBe(staticId);
+      expect(runningFrame.getAttribute("srcdoc")).toContain(`/*annotator ${runId}*/`);
+      const minted = scripts.length;
+      // The late dark render: no new srcdoc for the running frame, no new id.
+      await act(async () => { openDark(); });
+      await waitFor(() => expect(themes).toEqual(["light", "dark"]));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(document.querySelector("iframe")).toBe(runningFrame);
+      expect(runningFrame.getAttribute("data-dp-doc")).toBe(runId);
+      expect(runningFrame.getAttribute("srcdoc")).toContain(`/*annotator ${runId}*/`);
+      // (The before-Run document may be rebuilt off screen; the running one is not.)
+      expect(scripts.slice(minted)).not.toContain(runId);
+      unmount();
+    });
+
     it("the real gate: a page that only mentions Mermaid frames at once, no placeholder", () => {
       const real: FrameAnnotation = { script: "/*a*/", sanitize: sanitizePageHtml, prepare: PAGE_MERMAID_PREPARE };
       render(<PrototypeFrame html="<h1>Why not mermaid?</h1><p class='mermaid-ish'>We drew SVG.</p>" staticFirst noun="page" annotation={real} />);

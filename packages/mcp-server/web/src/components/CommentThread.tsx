@@ -180,9 +180,23 @@ function CommentBubble({ comment, fromVersion, roomy, questionOpen }: { comment:
           {/* Read-only delivery signal on YOUR comments, derived purely from the
               agent's drain queue (`acknowledged`). We NEVER set acknowledged
               here — that's the agent's check_feedback path. */}
-          {isHuman && (comment.acknowledged
+          {/* #714 gap 7 — two different agent acts, said differently: a page
+              revision that NAMED this comment addressed (standalone
+              revise-page --ack-comment-id stamps addressedIn), versus the MCP
+              check_feedback drain, which only means the agent read it. */}
+          {isHuman && comment.addressedIn
             ? (
-              <span className="text-text-muted text-2xs" title="The agent has drained this comment">
+              <span
+                className="text-text-muted text-2xs"
+                title={`The agent revised the page and named this comment as addressed in v${comment.addressedIn.version}`}
+                data-testid="comment-addressed-in"
+              >
+                ✓ addressed in v{comment.addressedIn.version}
+              </span>
+            )
+            : isHuman && (comment.acknowledged
+            ? (
+              <span className="text-text-muted text-2xs" title="The agent has read this comment (check_feedback); that alone doesn't mean it acted on it">
                 ✓ seen by agent
               </span>
             )
@@ -628,6 +642,9 @@ export function AskTrigger({
                   send();
                 }
                 if (e.key === "Escape") {
+                  // Handled here: an enclosing surface (the page composer)
+                  // must not also act on this Escape.
+                  e.preventDefault();
                   setOpen(false);
                   setQuestion("");
                 }

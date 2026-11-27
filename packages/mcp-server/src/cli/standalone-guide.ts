@@ -170,8 +170,10 @@ ${renderPageAuthoringGuide()}
   - comments: anchored comments. Each has id, content (the human's words),
     parentCommentId (set on a reply), htmlAnchor (where it points: kind,
     locator, quote, and when present prefix, suffix, table, nodeId, href,
-    version), and optionally intent ("comment" | "question" |
-    "suggestion"), followUp and ruleOut.
+    version, and section: {heading, id}, the nearest heading's text and the
+    nearest id, so you can find the part of the page it is in), and
+    optionally intent ("comment" | "question" | "suggestion"), followUp and
+    ruleOut.
     - ruleOut: the human ruled the anchored text out. Take it out of the
       page. The comment content is their reason.
   - notes: the human's pending notes with no anchor (same fields, no

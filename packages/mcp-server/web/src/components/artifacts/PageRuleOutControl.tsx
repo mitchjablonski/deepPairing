@@ -141,6 +141,15 @@ export function PageRuleOutControl({
       aria-label="Rule this out"
       className="w-full p-2 bg-surface-secondary border border-accent-red/30 rounded-lg"
       data-testid="page-rule-out-panel"
+      onKeyDown={(e) => {
+        // #714 — Escape anywhere in the confirm step (its buttons included)
+        // cancels just this step; preventDefault tells an enclosing composer
+        // it was handled.
+        if (e.key === "Escape" && !e.defaultPrevented) {
+          e.preventDefault();
+          cancel();
+        }
+      }}
     >
       <label htmlFor={reasonId} className="block text-2xs text-text-muted mb-1.5">
         Rule out “<span className="text-text-primary">{phrase}</span>”? Claude won't present a page that still contains this

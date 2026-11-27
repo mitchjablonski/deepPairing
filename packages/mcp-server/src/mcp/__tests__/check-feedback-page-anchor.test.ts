@@ -116,3 +116,55 @@ describe("check_feedback — page anchors (#680 slice 2)", () => {
     expect(res.text).not.toContain("— on page");
   });
 });
+
+describe("check_feedback — page anchor section context (#714 gap 10)", () => {
+  it("names the section in the prose and mirrors it (with element affixes) in the structured anchor", async () => {
+    const id = await presentPage();
+    await store.addComment({
+      id: "cmt_section",
+      artifactId: id,
+      content: "move this before the risks",
+      author: "human",
+      target: {
+        artifactId: id,
+        htmlAnchor: {
+          kind: "element",
+          locator: "main > div:nth-of-type(4)",
+          quote: "Ship behind a flag",
+          prefix: "Rollout",
+          suffix: "Risks",
+          section: { heading: "Rollout", id: "rollout" },
+        },
+      },
+    });
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain('on page element "Ship behind a flag" (in "Rollout" #rollout) at `main > div:nth-of-type(4)`');
+    const c = (res.structuredContent as any).comments.find((x: any) => x.id === "cmt_section");
+    expect(c.htmlAnchor).toEqual({
+      kind: "element",
+      locator: "main > div:nth-of-type(4)",
+      quote: "Ship behind a flag",
+      prefix: "Rollout",
+      suffix: "Risks",
+      section: { heading: "Rollout", id: "rollout" },
+    });
+  });
+
+  it("a heading-only or id-only section, and none at all", async () => {
+    const id = await presentPage();
+    const add = (cid: string, section?: { heading?: string; id?: string }) =>
+      store.addComment({
+        id: cid, artifactId: id, content: `note ${cid}`, author: "human",
+        target: { artifactId: id, htmlAnchor: { kind: "element", locator: `#${cid}`, quote: cid, ...(section ? { section } : {}) } },
+      });
+    await add("c_h", { heading: "Risks" });
+    await add("c_i", { id: "faq" });
+    await add("c_n");
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain('"c_h" (in "Risks") at `#c_h`');
+    expect(res.text).toContain('"c_i" (in #faq) at `#c_i`');
+    expect(res.text).toContain('"c_n" at `#c_n`');
+    const sc = res.structuredContent as any;
+    expect(sc.comments.find((x: any) => x.id === "c_n").htmlAnchor.section).toBeUndefined();
+  });
+});

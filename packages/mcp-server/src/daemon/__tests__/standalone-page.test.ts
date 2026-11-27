@@ -21,6 +21,7 @@ import { createDaemon, type Daemon } from "../create-daemon.js";
 import { FileStore } from "../../store/file-store.js";
 import { reviseStandalonePage } from "../standalone-revise-page.js";
 import { provePageRevisionFeedback } from "../../store/page-revision-feedback.js";
+import { deriveCommentState } from "../../../web/src/lib/pageReviewQueue.js";
 
 const b64 = (html: string | Buffer) => Buffer.from(html).toString("base64");
 const page = (html: string, extra: Record<string, unknown> = {}) => ({ title: "Replay backend", htmlBase64: b64(html), ...extra });
@@ -258,6 +259,58 @@ describe("standalone page verdict and notes", () => {
 });
 
 describe("authenticated standalone page revision", () => {
+  it("advances addressedIn when a later revision re-addresses a reopened thread, never rolling it back", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const first = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const v1 = first.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+      store.addComment({ id: "cmt_root", artifactId: v1, author: "human", content: "Clarify the intro", target: anchored });
+      await tick();
+      const v2Op = randomUUID();
+      const second = await (await f.revise(daemon, v2Op, v1, "<p>Second draft</p>", "Read feedback", ["cmt_root"])).json();
+      const v2 = second.structuredContent.artifactId as string;
+      const v2Row = store.getArtifacts().find((a) => a.id === v2)!;
+      expect(store.getComment("cmt_root")?.addressedIn).toEqual({ artifactId: v2, version: 2, at: v2Row.createdAt });
+      await tick();
+      store.addComment({
+        id: "cmt_reply", artifactId: v2, author: "human", content: "Still unclear", parentCommentId: "cmt_root",
+        target: { artifactId: v1 },
+      });
+      const state = () => deriveCommentState(store.getComment("cmt_root")!, [store.getComment("cmt_reply")!], false);
+      expect(state()).toMatchObject({ kind: "open", reopened: true });
+      await tick();
+      const v3Op = randomUUID();
+      const third = await (await f.revise(daemon, v3Op, v2, "<p>Third draft</p>", "Read feedback", ["cmt_root"])).json();
+      const v3 = third.structuredContent.artifactId as string;
+      const v3Row = store.getArtifacts().find((a) => a.id === v3)!;
+      const v3Stamp = { artifactId: v3, version: 3, at: v3Row.createdAt };
+      expect(store.getComment("cmt_root")?.addressedIn).toEqual(v3Stamp);
+      expect(state()).toEqual({ kind: "addressed", via: "revision", version: 3 });
+      const diskStamp = () => JSON.parse(fs.readFileSync(path.join(f.root, ".deeppairing", "sessions", f.sessionId, "comments.json"), "utf8"))
+        .find((c: { id: string }) => c.id === "cmt_root").addressedIn;
+      expect(diskStamp()).toEqual(v3Stamp);
+      // Same-receipt retry is idempotent.
+      expect(await (await f.revise(daemon, v3Op, v2, "<p>Third draft</p>", "Read feedback", ["cmt_root"])).json())
+        .toMatchObject({ structuredContent: { artifactId: v3, replayed: true } });
+      const prove = (parentId: string) => provePageRevisionFeedback(store.getArtifacts(), store.getComments(), f.sessionId, parentId, ["cmt_root"])!;
+      store.acknowledgePageRevisionFeedback(v2, prove(v2), () => {});
+      expect(store.getComment("cmt_root")?.addressedIn).toEqual(v3Stamp);
+      // Replay and recovery of the OLDER v2 receipt never roll the stamp back.
+      expect(await (await f.revise(daemon, v2Op, v1, "<p>Second draft</p>", "Read feedback", ["cmt_root"])).json())
+        .toMatchObject({ structuredContent: { artifactId: v2, replayed: true } });
+      store.acknowledgePageRevisionFeedback(v1, prove(v1), () => {});
+      expect(store.getComment("cmt_root")?.addressedIn).toEqual(v3Stamp);
+      expect(diskStamp()).toEqual(v3Stamp);
+      expect(state()).toEqual({ kind: "addressed", via: "revision", version: 3 });
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("acknowledges only selected ordinary comments from the exact direct lineage", async () => {
     const f = fixture();
     try {
@@ -328,10 +381,16 @@ describe("authenticated standalone page revision", () => {
         .toEqual(["cmt_current", "cmt_old"]);
       expect(store.getSessionMemory()).toEqual(memory);
       expect(store.getComment("cmt_old")?.ruleOut).toEqual({ description });
+      // #714 gap 7 — each acknowledged comment names the revision that addressed it.
+      const revised = store.getArtifacts().find((a) => a.id === success.structuredContent.artifactId)!;
+      const addressedIn = { artifactId: revised.id, version: 3, at: revised.createdAt };
+      expect(store.getComment("cmt_old")?.addressedIn).toEqual(addressedIn);
+      expect(store.getComment("cmt_current")?.addressedIn).toEqual(addressedIn);
+      expect(store.getComment("cmt_left_pending")?.addressedIn).toBeUndefined();
       expect(store.getArtifacts()).toHaveLength(4);
       const disk = JSON.parse(fs.readFileSync(path.join(f.root, ".deeppairing", "sessions", f.sessionId, "comments.json"), "utf8"));
       expect(disk).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: "cmt_old", acknowledged: true }),
+        expect.objectContaining({ id: "cmt_old", acknowledged: true, addressedIn }),
         expect.objectContaining({ id: "cmt_left_pending", acknowledged: false }),
       ]));
     } finally {
@@ -813,6 +872,42 @@ describe("authenticated standalone page revision", () => {
 });
 
 describe("authenticated standalone page", () => {
+  it("keeps End behind an admitted page presentation through preflight and receipt commit", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const store = daemon.sessions.get(f.sessionId)!;
+      const closeout = daemon.standaloneCloseout;
+      const operationId = randomUUID();
+      const readMemory = store.getSessionMemory.bind(store);
+      const createArtifact = store.createArtifact.bind(store);
+      let ending: ReturnType<typeof closeout.end> | undefined;
+      let stateAtWrite: string | undefined;
+      vi.spyOn(store, "getSessionMemory").mockImplementationOnce(() => {
+        // Preflight awaits this read. Start End before the presentation resumes.
+        ending = closeout.end(f.sessionId);
+        void ending.catch(() => {});
+        return readMemory();
+      });
+      vi.spyOn(store, "createArtifact").mockImplementationOnce((input) => {
+        stateAtWrite = closeout.state(f.sessionId).state;
+        return createArtifact(input);
+      });
+
+      const response = await f.present(daemon, operationId, page("<p>Accepted before End</p>"));
+      expect(await response.json()).toMatchObject({ structuredContent: { artifactId: expect.any(String) } });
+      expect(ending).toBeDefined();
+      await ending;
+      expect(stateAtWrite).toBe("closing");
+      expect(closeout.state(f.sessionId).state).toBe("ended");
+      const receipt = path.join(f.root, ".deeppairing", "sessions", f.sessionId, `present-page-${operationId}.json`);
+      expect(JSON.parse(fs.readFileSync(receipt, "utf8"))).toMatchObject({ committed: true });
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("presents an inline page, replays the same request ID, and refuses changed input on it", async () => {
     const f = fixture();
     try {
