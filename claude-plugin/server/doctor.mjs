@@ -15765,7 +15765,11 @@ var HTML_ANCHOR_LIMITS = {
   affix: 32,
   header: 200,
   nodeId: 200,
-  href: 512
+  href: 512,
+  /** #714 gap 10 — the nearest preceding heading's text. */
+  sectionHeading: 120,
+  /** #714 gap 10 — the nearest ancestor (or section heading) id. */
+  sectionId: 200
 };
 var HtmlAnchorKindSchema = external_exports.enum(["element", "text", "cell", "diagram-node", "link"]);
 var HtmlAnchorSchema = external_exports.object({
@@ -15780,7 +15784,11 @@ var HtmlAnchorSchema = external_exports.object({
   }).optional(),
   nodeId: external_exports.string().max(HTML_ANCHOR_LIMITS.nodeId).optional(),
   href: external_exports.string().max(HTML_ANCHOR_LIMITS.href).optional(),
-  version: external_exports.number().int().positive().optional()
+  version: external_exports.number().int().positive().optional(),
+  section: external_exports.object({
+    heading: external_exports.string().max(HTML_ANCHOR_LIMITS.sectionHeading).optional(),
+    id: external_exports.string().max(HTML_ANCHOR_LIMITS.sectionId).optional()
+  }).optional()
 }).superRefine((a, ctx) => {
   if (a.kind === "text" && a.quote.trim().length === 0) {
     ctx.addIssue({ code: "custom", path: ["quote"], message: "a text anchor needs the selected text as its quote" });
@@ -16276,6 +16284,61 @@ var RequestSchema = external_exports.object({
   scope: RequestScopeSchema.optional()
 });
 
+// ../shared/dist/schemas/page-render-issues.js
+var PAGE_RENDER_ISSUES_VISUAL_ID = "dp-page-render-issues";
+var PAGE_ERROR_CLASSES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "AggregateError", "InternalError", "DOMException", "SecurityError", "NetworkError", "AbortError", "NotAllowedError", "NotFoundError", "NotSupportedError", "InvalidStateError", "QuotaExceededError", "TimeoutError", "DataCloneError"];
+var PAGE_ERROR_CLASS_SET = new Set(PAGE_ERROR_CLASSES);
+function isPageErrorClass(name) {
+  return typeof name === "string" && PAGE_ERROR_CLASS_SET.has(name);
+}
+var PAGE_RESOURCE_KEYS = ["img src", "img srcset", "source src", "source srcset", "video src", "video poster", "audio src", "track src", "script src", "link href", "iframe src", "frame src", "embed src", "object data", "input src", "image href", "use href"];
+var PAGE_RESOURCE_OTHER = "other resource";
+var PAGE_CSP_DIRECTIVES = ["default-src", "script-src", "script-src-elem", "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src", "connect-src", "media-src", "object-src", "frame-src", "child-src", "worker-src", "manifest-src", "base-uri", "form-action", "frame-ancestors", "navigate-to", "prefetch-src", "sandbox", "trusted-types", "require-trusted-types-for", "upgrade-insecure-requests", "report-uri", "report-to"];
+var PAGE_DIRECTIVE_OTHER = "other";
+var RESOURCE_SET = /* @__PURE__ */ new Set([...PAGE_RESOURCE_KEYS, PAGE_RESOURCE_OTHER]);
+var DIRECTIVE_SET = /* @__PURE__ */ new Set([...PAGE_CSP_DIRECTIVES, PAGE_DIRECTIVE_OTHER]);
+function isPageResourceKey(key) {
+  return typeof key === "string" && RESOURCE_SET.has(key);
+}
+function isPageDirective(key) {
+  return typeof key === "string" && DIRECTIVE_SET.has(key);
+}
+var PAGE_RENDER_ISSUES_LIMITS = { perKind: 8, maxCount: 9999, maxLength: 500 };
+function validKey(kind, key) {
+  if (kind === "script" || kind === "rejection")
+    return isPageErrorClass(key);
+  if (kind === "resource")
+    return isPageResourceKey(key);
+  return isPageDirective(key);
+}
+var HEAD_RE = /^v([1-9][0-9]{0,5}) (scripts-on|scripts-off) \| (.+)$/;
+var ITEM_RE = /^(script|rejection|resource|blocked) (.+)=([1-9][0-9]{0,3})$/;
+function parsePageRenderIssues(text) {
+  if (typeof text !== "string" || text.length > PAGE_RENDER_ISSUES_LIMITS.maxLength)
+    return null;
+  const head = HEAD_RE.exec(text);
+  if (!head)
+    return null;
+  const items = [];
+  const perKind = {};
+  for (const raw of head[3].split("; ")) {
+    const m = ITEM_RE.exec(raw);
+    if (!m)
+      return null;
+    const kind = m[1];
+    const key = m[2];
+    if (!validKey(kind, key))
+      return null;
+    if (items.some((i) => i.kind === kind && i.key === key))
+      return null;
+    perKind[kind] = (perKind[kind] ?? 0) + 1;
+    if (perKind[kind] > PAGE_RENDER_ISSUES_LIMITS.perKind)
+      return null;
+    items.push({ kind, key, count: Number(m[3]) });
+  }
+  return { version: Number(head[1]), running: head[2] === "scripts-on", items };
+}
+
 // ../shared/dist/schemas/request-bodies.js
 var CreateRequestBodySchema = external_exports.object({
   text: external_exports.string().min(1).max(2e3),
@@ -16403,6 +16466,10 @@ var RenderFailureBodySchema = external_exports.object({
   error: external_exports.string().min(1).max(500),
   /** The diagram's human title, when it has one. Optional + bounded. */
   title: external_exports.string().max(200).optional()
+}).superRefine((b, ctx) => {
+  if (b.visualId === PAGE_RENDER_ISSUES_VISUAL_ID && !parsePageRenderIssues(b.error)) {
+    ctx.addIssue({ code: "custom", path: ["error"], message: "page render issues must use the structured page-issues grammar (no free text)" });
+  }
 });
 var PromptBodySchema = external_exports.object({
   content: external_exports.string().min(1),
