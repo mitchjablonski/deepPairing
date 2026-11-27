@@ -15,11 +15,24 @@ type IdleWindow = Window & {
  * `get(id)` is undefined until a version is parsed; callers treat that as
  * "not yet counted" (an earlier answer doesn't carry until then).
  */
-export function usePageAskVersions(versions: readonly Artifact[], enabled: boolean): (artifactId: string) => PageAskRef[] | undefined {
+export interface PageAskVersions {
+  /** A version's asks; undefined until it is parsed (null parses count as parsed, with no asks). */
+  get: (artifactId: string) => PageAskRef[] | undefined;
+  /** #727 — some requested version hasn't been parsed yet. */
+  pending: boolean;
+}
+
+export function usePageAskVersions(versions: readonly Artifact[], enabled: boolean): PageAskVersions {
   const key = enabled ? versions.map((v) => v.id).join("\u0000") : "";
   const [tick, setTick] = useState(0);
+  // Which requested versions aren't in the cache NOW: also re-requests a
+  // version the shared LRU evicted while this page is mounted. A version
+  // whose HTML didn't parse is cached as null — parsed, never retried.
+  const missingKey = key
+    ? versions.filter((v) => peekVersionAsks(v.id) === undefined).map((v) => v.id).join("\u0000")
+    : "";
   useEffect(() => {
-    if (!key) return;
+    if (!missingKey) return;
     const missing = versions.filter((v) => peekVersionAsks(v.id) === undefined);
     if (missing.length === 0) return;
     let cancelled = false;
@@ -41,12 +54,15 @@ export function usePageAskVersions(versions: readonly Artifact[], enabled: boole
       cancelled = true;
       clearTimeout(t);
     };
-    // `versions` is captured through `key` (their ids); a version's HTML never changes.
+    // `versions` is captured through `missingKey` (their ids); a version's HTML never changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [missingKey]);
   return useMemo(() => {
     void tick;
     const ids = new Set(key ? key.split("\u0000") : []);
-    return (artifactId: string) => (ids.has(artifactId) ? peekVersionAsks(artifactId) ?? undefined : undefined);
-  }, [key, tick]);
+    return {
+      get: (artifactId: string) => (ids.has(artifactId) ? peekVersionAsks(artifactId) ?? undefined : undefined),
+      pending: missingKey !== "",
+    };
+  }, [key, tick, missingKey]);
 }
