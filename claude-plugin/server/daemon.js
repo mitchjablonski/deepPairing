@@ -45274,10 +45274,11 @@ var PageWatcher = class {
   }
   /** Bypass quiet/rate timers only for work already observed at the cut. */
   async drainQueuedSaves(sessionId) {
-    const drains = [...this.entries.values()].filter(
-      (entry) => entry.sessionId === sessionId && (entry.dirty || entry.processing || entry.draining)
-    ).map((entry) => {
+    const entries = [...this.entries.values()].filter((entry) => entry.sessionId === sessionId);
+    for (const entry of entries) this.checkSignature(entry);
+    const drains = entries.filter((entry) => entry.dirty || entry.processing || entry.draining).map((entry) => {
       const generation = entry.gen;
+      const signature = entry.lastSig;
       const checkGeneration = () => {
         if (entry.gen !== generation || entry.dirty) {
           throw new StandaloneCloseoutError(
@@ -45292,9 +45293,10 @@ var PageWatcher = class {
       entry.draining = Promise.resolve().then(async () => {
         await entry.processing;
         if (entry.stopped) return;
-        const queued = entry.dirty;
-        entry.dirty = false;
         try {
+          this.checkSignature(entry, signature);
+          const queued = entry.dirty;
+          entry.dirty = false;
           checkGeneration();
           if (queued) await this.processAdmitted(entry);
           checkGeneration();
@@ -45365,12 +45367,7 @@ var PageWatcher = class {
     entry.dirty = true;
     this.arm(entry, this.quietMs);
     if (this.pollMs > 0) {
-      entry.poll = setInterval(() => {
-        const sig = this.sig(entry.absPath);
-        if (sig === entry.lastSig) return;
-        entry.lastSig = sig;
-        this.onChange(entry);
-      }, this.pollMs);
+      entry.poll = setInterval(() => this.checkSignature(entry), this.pollMs);
       entry.poll.unref?.();
     }
   }
@@ -45392,9 +45389,13 @@ var PageWatcher = class {
     const k = this.key(entry.sessionId, entry.artifactId);
     if (this.entries.get(k) === entry) this.entries.delete(k);
   }
-  onChange(entry) {
+  checkSignature(entry, previous = entry.lastSig) {
+    const signature = this.sig(entry.absPath);
+    if (signature !== previous && signature !== entry.lastSig) this.onChange(entry, signature);
+  }
+  onChange(entry, signature) {
     if (entry.stopped) return;
-    entry.lastSig = this.sig(entry.absPath);
+    entry.lastSig = signature ?? this.sig(entry.absPath);
     entry.dirty = true;
     entry.gen++;
     if (entry.processing || entry.draining) return;
