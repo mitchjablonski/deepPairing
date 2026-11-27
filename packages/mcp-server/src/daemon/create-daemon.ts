@@ -265,7 +265,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // is why the daemon used to leak a process per project forever.
   const activeSessions = new Set<string>();
   const standaloneCloseout: StandaloneCloseout = new StandaloneCloseout(projectRoot, (sessionId) => sessions.get(sessionId),
-    undefined, (sessionId) => pageWatcher.stopSession(sessionId), (sessionId) => pageWatcher.drainQueuedSaves(sessionId));
+    undefined, (sessionId) => {
+      pageWatcher.stopSession(sessionId);
+      sessions.get(sessionId)?.notifyStandaloneReviewEnded();
+    }, (sessionId) => pageWatcher.drainQueuedSaves(sessionId));
   const demoRuns = new Map<string, () => void>();
   // #470 — active allowances live ONLY here (O1). A restart ends every grant:
   // each registrationId embeds this instanceId.

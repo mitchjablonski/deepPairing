@@ -3437,22 +3437,30 @@ export class FileStore implements IStore {
   // --- Feedback notification (for long-poll) ---
 
   private feedbackWaiters: Array<() => void> = [];
+  private reviewEndWaiters = new Set<() => void>();
 
   /** Register a waiter until feedback arrives, the budget expires, or the caller leaves. */
-  waitForFeedback(timeoutMs = 30000, signal?: AbortSignal): Promise<void> {
+  waitForFeedback(timeoutMs = 30000, signal?: AbortSignal, wakeOn?: "review_end"): Promise<void> {
     if (signal?.aborted) return Promise.resolve();
     return new Promise((resolve) => {
       const finish = () => {
         clearTimeout(timer);
         signal?.removeEventListener("abort", finish);
+        this.reviewEndWaiters.delete(finish);
         const index = this.feedbackWaiters.indexOf(finish);
         if (index !== -1) this.feedbackWaiters.splice(index, 1);
         resolve();
       };
       const timer = setTimeout(finish, timeoutMs);
       this.feedbackWaiters.push(finish);
+      if (wakeOn === "review_end") this.reviewEndWaiters.add(finish);
       signal?.addEventListener("abort", finish, { once: true });
     });
+  }
+
+  /** Exact decision readers recheck under the resolve lock after this wake. */
+  notifyStandaloneReviewEnded(): void {
+    for (const finish of this.reviewEndWaiters) finish();
   }
 
   /** Notify all waiters that feedback has arrived */

@@ -712,7 +712,7 @@ export function createDaemonRoutes(
           const decision = store.getDecision(decisionId);
           const artifacts = decision ? store.getArtifacts() : [];
           const artifact = decision && artifacts.find((a) =>
-            a.type === "decision" && a.id === decision.artifactId &&
+            a.sessionId === sessionId && a.type === "decision" && a.id === decision.artifactId &&
             (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
           if (!decision || !artifact) return null;
           let waitStatus: StandaloneDecisionRead["waitStatus"];
@@ -722,13 +722,16 @@ export function createDaemonRoutes(
               waitStatus = "resolved";
             } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
               waitStatus = "closed";
+            } else if (standaloneCloseout?.state(sessionId).state === "ended") {
+              waitStatus = "session_ended";
             } else if (remaining > 0) {
               // Give an accepted wait a fresh idle interval without a wrapper lease.
               if (!idleRefreshed) {
                 refreshCompanionLink();
                 idleRefreshed = true;
               }
-              return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+              // The marker check and waiter registration are synchronous.
+              return { wake: store.waitForFeedback(Math.ceil(remaining), signal, "review_end") };
             } else {
               waitStatus = "timed_out";
             }
