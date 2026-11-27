@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { nanoid } from "nanoid";
 import type { Artifact, DecisionOption } from "@deeppairing/shared";
 import {
@@ -58,6 +58,9 @@ export interface ReviewRoutesDeps {
   broadcast: BroadcastFn;
   log: LogFn;
   updateTaskStatus: TaskStatusFn;
+  withReviewWrite?: (
+    c: Context, store: ReviewStore, sid: string | undefined, run: (sid: string | undefined) => Promise<Response>,
+  ) => Promise<Response>;
 }
 
 /**
@@ -71,6 +74,7 @@ export function createReviewRoutes({
   broadcast,
   log,
   updateTaskStatus,
+  withReviewWrite = (_c, _store, sid, run) => run(sid),
 }: ReviewRoutesDeps) {
   const app = new Hono();
 
@@ -116,7 +120,7 @@ export function createReviewRoutes({
     // unknown option → 400 (F2). #197 (F3) — no prediction from the UI.
     // Serialized per store from the atomic write through its flush — see
     // withDecisionResolveLock.
-    return withDecisionResolveLock(store, async () => {
+    return withReviewWrite(c, store, sid, (sid) => withDecisionResolveLock(store, async () => {
       const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
       // #484 review — a `resolved` write is settled exactly once: committed after
       // a durable flush, otherwise ROLLED BACK so memory matches disk (the 503 the
@@ -270,7 +274,7 @@ export function createReviewRoutes({
       } finally {
         if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
       }
-    });
+    }));
   });
 
   // #549 — the explicit per-option "Never suggest this". Resolving a decision
