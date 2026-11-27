@@ -27,7 +27,7 @@ let live: boolean;
 let fakeWatchers: Array<{ dir: string; fire: (name: string | null) => void; closed: boolean }>;
 let watcher: PageWatcher;
 
-function makeWatcher(opts: Partial<Pick<PageWatchDeps, "pollIntervalMs" | "gate" | "statSig" | "getStore">> = {}): PageWatcher {
+function makeWatcher(opts: Partial<Pick<PageWatchDeps, "pollIntervalMs" | "gate" | "statSig" | "getStore" | "sleep">> = {}): PageWatcher {
   return new PageWatcher({
     projectRoot: root,
     getStore: opts.getStore ?? ((sid) => (sid === SID ? store : undefined)),
@@ -42,6 +42,7 @@ function makeWatcher(opts: Partial<Pick<PageWatchDeps, "pollIntervalMs" | "gate"
     pollIntervalMs: opts.pollIntervalMs ?? 0,
     ...(opts.gate ? { gate: opts.gate } : {}),
     ...(opts.statSig ? { statSig: opts.statSig } : {}),
+    ...(opts.sleep ? { sleep: opts.sleep } : {}),
   });
 }
 
@@ -584,6 +585,71 @@ describe("page file watch — a save landing during the gate check (Codex review
     await end;
     expect(pages()).toHaveLength(2);
     expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Save held in the gate</p>" } });
+  });
+
+  /** A signature that moves on every write regardless of size (ctime/ino in
+   *  production), and reads "missing" while the file is gone. */
+  function counterSig(): { statSig: PageWatchDeps["statSig"]; bump: () => void } {
+    let writes = 0;
+    return {
+      statSig: (file) => (fs.existsSync(file) ? `w${writes}` : "missing"),
+      bump: () => { writes++; },
+    };
+  }
+
+  it("End captures a same-size silent save through a counter signature (#730 review)", async () => {
+    const sig = counterSig();
+    watcher.dispose();
+    watcher = makeWatcher({ pollIntervalMs: 60_000, statSig: sig.statSig });
+    const v1 = presentFilePage("docs/page.html", "<p>aaaa</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+    expect(pages()).toHaveLength(1);
+
+    disk("<p>bbbb</p>"); // same size: a size-only signature cannot see it
+    sig.bump();
+    await watcher.drainQueuedSaves(SID);
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>bbbb</p>" } });
+  });
+
+  it("End caught mid unlink-then-recreate rechecks once and records the rewrite (#730 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    const waits: number[] = [];
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      // The editor finishes its replace while End waits.
+      sleep: async (ms) => { waits.push(ms); fs.writeFileSync(file, "<p>Recreated</p>"); sig.bump(); },
+    });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file); // the sweep sees "missing"
+    await watcher.drainQueuedSaves(SID);
+    expect(waits).toEqual([50]);
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Recreated</p>" } });
+  });
+
+  it("End still completes for a genuine delete after one bounded recheck (#730 review)", async () => {
+    const sig = counterSig();
+    const waits: number[] = [];
+    watcher.dispose();
+    watcher = makeWatcher({ pollIntervalMs: 60_000, statSig: sig.statSig, sleep: async (ms) => { waits.push(ms); } });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(path.join(root, "docs/page.html"));
+    await watcher.drainQueuedSaves(SID);
+    expect(waits).toEqual([50]);
+    expect(pages()).toHaveLength(1);
+    expect(liveTip()!.id).toBe(v1.id);
+    // An unchanged deletion is not rechecked again on a later End.
+    await watcher.drainQueuedSaves(SID);
+    expect(waits).toEqual([50]);
   });
 
   it("stat-poll path: B on disk before the next tick — A records nothing, B gets its own quiet period", async () => {
