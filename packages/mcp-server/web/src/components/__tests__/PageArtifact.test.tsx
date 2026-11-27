@@ -1091,7 +1091,10 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     useArtifactStore.getState().addComment(human("cmt_1", { kind: "text", locator: "#ask-budget > strong:nth-of-type(1)", quote: "budget" }));
     render(<PageArtifact artifact={pageArtifact} />);
     const win = fakeFrameWindow();
-    fromFrame(win, ASKS);
+    const key = keyOf(win);
+    fromFrame(win, { dp: "pins-status", found: [true], key });
+    fromFrame(win, { ...ASKS, pinAsks: [-1], key });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); // this version's parse lands
     const strip = screen.getByTestId("page-asks");
     expect(within(strip).getByText("Wants from you (2)")).toBeInTheDocument();
     const items = within(strip).getAllByTestId("page-ask");
@@ -1182,7 +1185,7 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
         ["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }],
         ["cmt_2", { kind: "text", locator: "#cache", quote: "caf\u00E9" }],
       ]);
-      expect(states()).toEqual(["Open", "Open"]); // parse pending: not counted yet
+      expect(states()).toEqual(["Checking\u2026", "Checking\u2026"]); // parse pending: not counted yet, not "Open" either (#727)
       await flush();
       expect(states()).toEqual(["Answered", "Answered"]);
     });
@@ -1233,7 +1236,7 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     });
   });
 
-  it("an earlier version's comment at the same POSITION doesn't answer an id-less ask (probe)", () => {
+  it("an earlier version's comment at the same POSITION doesn't answer an id-less ask (probe)", async () => {
     const v1: Artifact = { ...pageArtifact, id: "art_pos_v1", version: 1, status: "superseded", content: { title: "P", html: "<p>v1</p>" } };
     const v2: Artifact = { ...pageArtifact, id: "art_pos_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
     useArtifactStore.getState().addArtifact(v1);
@@ -1243,6 +1246,7 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     render(<PageArtifact artifact={v2} />);
     const win = fakeFrameWindow();
     fromFrame(win, { dp: "asks", asks: [{ kind: "decision", text: "Ship on Friday?", locator: "body > div:nth-of-type(2)" }], pinAsks: [0] });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); // v1's parse lands
     expect(states()).toEqual(["Open"]);
   });
 
@@ -1259,11 +1263,12 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     // The frame says pin 3 (#ttl-note) sits inside ask 0.
     fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0], key });
     expect(states()).toEqual(["Answered", "Open"]);
-    // A report without the pin list's key (or for another list) is not used.
+    // A report without the pin list's key (or for another list) is not used:
+    // nothing reported for the list on screen yet, so not settled (#727).
     fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0] });
-    expect(states()).toEqual(["Open", "Open"]);
+    expect(states()).toEqual(["Checking\u2026", "Checking\u2026"]);
     fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0], key: "x0:1" });
-    expect(states()).toEqual(["Open", "Open"]);
+    expect(states()).toEqual(["Checking\u2026", "Checking\u2026"]);
   });
 
   it("ask completion uses the pre-Run pin status, never a live post-Run one (the pin list stays live)", async () => {
@@ -1298,13 +1303,74 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     // The in-flight report for the old list lands now.
     fromFrame(win, { dp: "pins-status", found: [true], key: oldKey });
     fromFrame(win, { ...ASKS, pinAsks: [0], key: oldKey });
-    expect(states()).toEqual(["Open", "Open"]);
+    expect(states()).toEqual(["Checking\u2026", "Checking\u2026"]); // never Answered; awaiting the new list's report (#727)
     // The frame's report for the new list (cmt_2 isn't in any ask) agrees.
     const newKey = keyOf(win);
     expect(newKey).not.toBe(oldKey);
     fromFrame(win, { dp: "pins-status", found: [true], key: newKey });
     fromFrame(win, { ...ASKS, pinAsks: [-1], key: newKey });
     expect(states()).toEqual(["Open", "Open"]);
+  });
+
+  describe("#727 — neutral checking state before the frame's first report", () => {
+    it("an unanswered ask reads Checking\u2026 until the frame reports for the pin list on screen, then Open", () => {
+      useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#elsewhere", quote: "x" }));
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      const key = keyOf(win);
+      fromFrame(win, { ...ASKS, pinAsks: [-1], key });
+      expect(states()).toEqual(["Checking\u2026", "Checking\u2026"]);
+      expect(screen.getAllByTestId("page-ask").map((i) => i.getAttribute("data-state"))).toEqual(["checking", "checking"]);
+      expect(screen.getByTestId("page-asks-tally")).toHaveTextContent("2 checking · 0 answered");
+      expect(screen.getByTestId("page-asks")).toHaveAccessibleName("Wants from you: 2 asks, 2 checking");
+      fromFrame(win, { dp: "pins-status", found: [true], key });
+      expect(states()).toEqual(["Open", "Open"]);
+      expect(screen.getByTestId("page-asks-tally")).toHaveTextContent("2 open · 0 answered");
+    });
+
+    it("an answer already known shows Answered while the rest are checking", () => {
+      useArtifactStore.getState().addComment(human("cmt_1", { kind: "text", locator: "#ask-budget > strong:nth-of-type(1)", quote: "budget" }));
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, { ...ASKS, key: keyOf(win) });
+      expect(states()).toEqual(["Checking\u2026", "Answered"]);
+      expect(screen.getByTestId("page-asks-tally")).toHaveTextContent("1 checking · 1 answered");
+    });
+
+    it("no comments: nothing can answer an ask, so it is Open at once", () => {
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, ASKS);
+      expect(states()).toEqual(["Open", "Open"]);
+    });
+
+    it("read-only still settles from the frame's report and offers no Reply", () => {
+      useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#elsewhere", quote: "x" }));
+      render(<PageArtifact artifact={{ ...pageArtifact, status: "superseded" }} />);
+      const win = fakeFrameWindow();
+      const key = keyOf(win);
+      fromFrame(win, { ...ASKS, pinAsks: [-1], key });
+      expect(states()).toEqual(["Checking\u2026", "Checking\u2026"]);
+      fromFrame(win, { dp: "pins-status", found: [true], key });
+      expect(states()).toEqual(["Open", "Open"]);
+      expect(screen.queryByRole("button", { name: /Reply to/ })).toBeNull();
+    });
+
+    it("after Run the frozen reports aren't awaited: a comment added then doesn't leave asks checking", async () => {
+      const page: Artifact = { ...pageArtifact, id: "art_page_727run", content: { title: "P", html: '<p id="decide-ttl" data-dp-decision>Decide?</p><script>1</script>' } };
+      useArtifactStore.getState().addArtifact(page);
+      render(<PageArtifact artifact={page} />);
+      let win = fakeFrameWindow();
+      fromFrame(win, { ...ASKS, key: keyOf(win) });
+      expect(states()).toEqual(["Open", "Open"]);
+      await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+      win = fakeFrameWindow();
+      act(() => {
+        useArtifactStore.getState().addComment({ ...human("cmt_r", { kind: "element", locator: "#elsewhere", quote: "x" }), target: { artifactId: page.id, htmlAnchor: { kind: "element", locator: "#elsewhere", quote: "x", version: page.version } as any } });
+      });
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); // this version's parse lands
+      expect(states()).toEqual(["Open", "Open"]);
+    });
   });
 
   it("after Run, a new comment on a child with its own id inside an ask answers it (child ids from this version's parse)", async () => {

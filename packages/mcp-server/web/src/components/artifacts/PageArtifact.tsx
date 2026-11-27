@@ -905,7 +905,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // own id, also after Run when the frame's reports are frozen).
   const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && anchored.length > 0);
   // #725 — also which comments answer an ask (no Resolve/Reopen on those).
-  const { answered: askAnswered, answerIds: askAnswerIds } = useMemo(() => {
+  const { answered: askAnswered, answerIds: askAnswerIds, checking: askChecking } = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
     // The pre-Run reports, only when they describe this page's current pins.
     const scoped = <T extends { forId: string; key: string }>(r: T | null) =>
@@ -944,8 +944,15 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         return commentAnswersAsk(ref, c, current, { insideByFrame });
       }
     });
-    return { answered, answerIds };
-  }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
+    // #727 — not settled yet, so an unanswered ask reads "checking…" rather
+    // than a definitive "Open": a version these comments need is still being
+    // parsed, or (before Run) the frame hasn't reported for the pin list on
+    // screen. After Run the reports are frozen, so the frame isn't awaited.
+    const parsePending = asks.length > 0 && anchored.length > 0 && askVersions.some((v) => parsedAsks(v.id) === undefined);
+    const hasCurrentComment = anchored.some((c) => !isEarlierVersionComment(c, current));
+    const framePending = !running && hasCurrentComment && (!askPins || !preRunFound);
+    return { answered, answerIds, checking: parsePending || framePending };
+  }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks, askVersions, running]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
     if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });
@@ -1295,7 +1302,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         </div>
       )}
       <PageRenderIssues diagnostics={diagnostics} />
-      <PageAsksStrip asks={asks} answered={askAnswered} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
+      <PageAsksStrip asks={asks} answered={askAnswered} checking={askChecking} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
       {/* #714 gap 4 — the outline: a sticky rail beside the frame when the
           panel is wide, a collapsible disclosure above it when narrow.
           #714 gaps 7+8 — ONE review column (composer + queue), always the same
