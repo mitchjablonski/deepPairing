@@ -74,10 +74,12 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtml(webviewView.webview);
   }
 
-  /** Webview options. #727 — `portMapping` maps the daemon port for content
-   *  inside the webview (the renderer frame) so it resolves on the extension
-   *  host's side in remote workspaces; WS traffic goes through the extension
-   *  host already. */
+  /** Webview options. #727 — `portMapping` for the daemon port is
+   *  best-effort: VS Code applies it in the webview service worker's fetch
+   *  handler, which likely misses the renderer frame's navigation and script
+   *  loads. Remotely the frame works only when the port reaches the same local
+   *  port (auto-forwarding, WSL2 localhost); otherwise diagrams fall back to
+   *  source. WS traffic goes through the extension host already. */
   private applyOptions(webview: vscode.Webview): void {
     const port = validDaemonPort(this.discoveredPort);
     webview.options = {

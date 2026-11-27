@@ -40,8 +40,13 @@ live VS Code smoke test.
   Each switch reloads the webview.
 - **Remote workspaces are untested.** The webview's WebSocket runs in the
   extension host, so it reaches a daemon on the remote side. The renderer
-  frame loads inside the webview, so the provider sets `portMapping` for the
-  daemon port, which VS Code resolves on the extension host's side. Nobody
+  frame loads inside the webview, on the local machine. The provider sets
+  `portMapping` for the daemon port, but that is best-effort: VS Code applies
+  it in the webview service worker's fetch handler, which likely doesn't
+  cover the frame's navigation or its script loads. In a remote setup the
+  frame works only when the daemon port reaches the same local port, either
+  because VS Code auto-forwards it (`remote.autoForwardPorts`) or through
+  WSL2's localhost forwarding. Otherwise diagrams fall back to source. Nobody
   has exercised this over SSH, WSL or Codespaces.
 - **VS Code for Web is unsupported.** The extension needs Node (`fs` to read
   `daemon.json`, `ws` for the socket), so it doesn't run in a browser-hosted

@@ -35,4 +35,11 @@ describe("#727 P2-1 choosing the daemon in a multi-root workspace", () => {
   it("the same daemon advertised by two folders counts as present", () => {
     expect(chooseDaemonPort(29001, [fresh(29002, 0), fresh(29001, 1_000), fresh(29001, 50_000)], NOW)).toBe(29001);
   });
+
+  it("a far-future mtime (clock skew) is not fresh forever and can't pin a dead daemon", () => {
+    const future = { port: 29001, mtimeMs: NOW + DAEMON_STALE_MS + 1 };
+    expect(chooseDaemonPort(29001, [future, fresh(29002, 1_000)], NOW)).toBe(29002);
+    // A small skew inside the window still counts as fresh.
+    expect(chooseDaemonPort(29001, [{ port: 29001, mtimeMs: NOW + 5_000 }, fresh(29002, 0)], NOW)).toBe(29001);
+  });
 });

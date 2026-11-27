@@ -29,12 +29,15 @@ export function chooseDaemonPort(
   staleMs: number = DAEMON_STALE_MS,
 ): number | null {
   if (candidates.length === 0) return current;
-  const isFresh = (c: DaemonCandidate) => now - c.mtimeMs <= staleMs;
-  const freshest = candidates.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a));
-  if (current === null) return freshest.port;
+  // Fresh = rewritten within the window either side of now: a future mtime
+  // (clock skew) further out than the window is suspect, not fresh forever.
+  const isFresh = (c: DaemonCandidate) => Math.abs(now - c.mtimeMs) <= staleMs;
+  const newest = (list: readonly DaemonCandidate[]) => list.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a));
+  const fresh = candidates.filter(isFresh);
+  const best = fresh.length > 0 ? newest(fresh) : null;
   const mine = candidates.filter((c) => c.port === current);
-  if (mine.length === 0) return freshest.port;
+  if (current === null || mine.length === 0) return (best ?? newest(candidates)).port;
   if (mine.some(isFresh)) return current;
   // Current is stale: move only to a fresh alternative.
-  return isFresh(freshest) ? freshest.port : current;
+  return best ? best.port : current;
 }
