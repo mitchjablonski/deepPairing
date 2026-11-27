@@ -298,7 +298,7 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     expect(pageFeedback).toEqual({
       sessionId: resumed.sessionId,
       artifact: { id: presentedPage.artifactId, version: 1, status: "draft" },
-      omittedComments: 0,
+      notes: [], omittedNotes: 0, omittedComments: 0,
       comments: [
         { id: expect.any(String), parentCommentId: null, intent: "comment", content: rejectedReason,
           htmlAnchor: expect.objectContaining({ kind: "element", locator: expect.any(String), quote: rejectedText, version: 1 }),
@@ -327,7 +327,7 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     const successor = { id: movedReplay.currentArtifactId as string, version: 2, status: "draft" };
     expect(await readPage()).toEqual({ ...pageFeedback, artifact: { ...pageFeedback.artifact, status: "superseded" }, successor });
     expect(await readPage(successor.id)).toEqual({
-      sessionId: resumed.sessionId, artifact: successor, comments: [], omittedComments: 0,
+      sessionId: resumed.sessionId, artifact: successor, notes: [], omittedNotes: 0, comments: [], omittedComments: 0,
     });
 
     const inlineFile = path.join(root, "inline-page.html");
@@ -343,7 +343,24 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     await resumedClient.addComment({
       id: pendingId, artifactId: inline.artifactId, author: "human", content: "Where are the logs?", intent: "question", target: anchor,
     });
+    await page.locator(`button[data-artifact-item="${inline.artifactId}"]`).click();
+    const inlinePane = page.locator(`[data-dp-pane][data-artifact-id="${inline.artifactId}"]:not([inert])`);
+    const collapsed = inlinePane.getByRole("button", { name: /Respond \/ Request changes \/ Reject/ });
+    if (await collapsed.isVisible()) await collapsed.click();
+    const verdictReason = "Please show the event order.";
+    await inlinePane.getByPlaceholder(/Respond to the agent on this artifact/).fill(verdictReason);
+    const [verdictResponse] = await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith(`/api/artifacts/${inline.artifactId}/status`) &&
+        response.request().method() === "POST"),
+      inlinePane.getByRole("button", { name: "Request changes", exact: true }).click(),
+    ]);
+    expect(verdictResponse.ok()).toBe(true);
     const inlineFeedback = await readPage(inline.artifactId);
+    expect(inlineFeedback).toMatchObject({
+      artifact: { id: inline.artifactId, status: "revised" },
+      verdict: { at: expect.any(String), commentId: expect.any(String), status: "revised", reason: verdictReason },
+      notes: [], omittedNotes: 0,
+    });
     expect(inlineFeedback.comments.map((comment: { id: string }) => comment.id)).toEqual(expect.arrayContaining([acknowledgedId, pendingId]));
     await fs.writeFile(inlineFile, "<h1>Inline page</h1><p>Read retained event logs in order.</p>");
     const revisionId = randomUUID();
@@ -360,7 +377,7 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     expect(await readPage(inline.artifactId)).toMatchObject({
       artifact: { id: inline.artifactId, status: "superseded" },
       successor: { id: revised.artifactId, status: "draft", version: 2 },
-      comments: [{ id: pendingId }],
+      verdict: inlineFeedback.verdict, comments: [{ id: pendingId }],
     });
     const staleRevision = await revise(randomUUID()).catch((err: { code: number; stdout: string; stderr: string }) => err);
     expect(staleRevision).toMatchObject({ code: 1, stderr: "" });
@@ -384,6 +401,11 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     await expect(page.locator('iframe[data-dp-mermaid-renderer][sandbox="allow-scripts"]')).toHaveCount(1);
     await expect(mermaidFrame.locator("pre.mermaid")).toHaveCount(0);
     await expect(mermaidFrame.locator("[data-dp-mermaid-note]")).toHaveCount(0);
+    await page.goto("about:blank");
+    await stopProjectDaemon(project);
+    await receipt("resume", resumed.sessionId);
+    expect((await readPage(inline.artifactId)).verdict).toEqual(inlineFeedback.verdict);
+    expect(await readPage(revised.artifactId)).not.toHaveProperty("verdict");
   } finally {
     await page.close();
     await stopProjectDaemon(project);

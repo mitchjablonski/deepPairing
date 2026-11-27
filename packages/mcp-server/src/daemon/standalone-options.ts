@@ -16,6 +16,7 @@ import {
   receiptDigestSchema as digestSchema,
   standaloneOperationConflict,
   standaloneOperationKey,
+  type StandaloneCloseoutSnapshot,
 } from "./standalone-receipts.js";
 
 const receiptSchema = z.object({
@@ -26,19 +27,15 @@ const receiptSchema = z.object({
   committed: z.literal(true).optional(),
 }).strict();
 
-/** The route validates the project, standalone session and operation id before entering here. */
-export async function presentStandaloneOptions(
+function optionsOperation(
   projectRoot: string,
   store: FileStore,
   operationId: string,
-  args: Record<string, unknown>,
-  port: number,
   broadcast: BroadcastFn,
-): Promise<ToolResult> {
+) {
   const sessionId = store.getSessionId();
   const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
   const receiptPath = path.join(dir, `present-options-${operationId}.json`);
-  const fingerprint = callFingerprint("present_options", args);
   const key = standaloneOperationKey(projectRoot, sessionId, "present_options", operationId);
   const artifactId = `art_${key}`;
   const decisionId = `dec_${key}`;
@@ -50,11 +47,11 @@ export async function presentStandaloneOptions(
     content: [{ type: "text", text: `This operation already presented artifact ${artifactId} and decision ${decisionId}.` }],
     structuredContent: { artifactId, decisionId, replayed: true },
   });
-  const conflict = (): ToolResult => standaloneOperationConflict("options input");
 
-  function recover(receipt: z.infer<typeof receiptSchema>, verifyOnly = false): ToolResult | null {
-    const diskArtifact = readRecord(dir, "artifacts.json", "id", artifactId);
-    const diskDecision = readRecord(dir, "decisions.json", "decisionId", decisionId);
+  function recover(receipt: z.infer<typeof receiptSchema>, verifyOnly = false, durableOnly = false,
+    snapshot?: StandaloneCloseoutSnapshot): ToolResult | null {
+    const diskArtifact = snapshot ? snapshot.record("artifacts.json", "id", artifactId) : readRecord(dir, "artifacts.json", "id", artifactId);
+    const diskDecision = snapshot ? snapshot.record("decisions.json", "decisionId", decisionId) : readRecord(dir, "decisions.json", "decisionId", decisionId);
     if (diskDecision && !diskArtifact) throw new Error("Standalone decision has no durable artifact.");
     if (diskArtifact && diskDecision) {
       const link = z.object({ decisionId: z.literal(decisionId) }).safeParse(diskArtifact.content);
@@ -70,14 +67,17 @@ export async function presentStandaloneOptions(
             digest(DecisionRequestSchema.parse(diskDecision)) !== receipt.decisionDigest) {
           throw new Error("Durable standalone decision does not match its prepared receipt.");
         }
-        save({ ...receipt, committed: true });
+        if (!snapshot) save({ ...receipt, committed: true });
       }
       return reply();
     }
     if (receipt.committed || verifyOnly) throw new Error("Standalone operation is missing one or both durable records.");
 
-    const bufferedArtifact = store.getArtifacts().find((row) => row.id === artifactId);
+    const bufferedArtifact = snapshot ? snapshot.artifact(artifactId) : store.getArtifacts().find((row) => row.id === artifactId);
     const bufferedDecision = store.getDecision(decisionId);
+    if (durableOnly && !diskArtifact && (bufferedArtifact || bufferedDecision)) {
+      throw new Error("Standalone decision has buffered effects without a durable artifact.");
+    }
     const artifact = diskArtifact ?? bufferedArtifact;
     if (!artifact) {
       if (bufferedDecision) throw new Error("Standalone operation is missing its artifact.");
@@ -103,14 +103,40 @@ export async function presentStandaloneOptions(
       if (artifact.status !== "draft" || bufferedArtifact.status !== "draft") {
         throw new Error("Cannot recreate a missing decision for a reviewed standalone artifact.");
       }
-      store.recordDecisionRequest(expected);
+      if (!snapshot) store.recordDecisionRequest(expected);
     }
+    if (snapshot) return reply();
     store.forceFlush();
     const repaired = recover(receipt, true);
     broadcast({ type: "daemon_resumed" });
     return repaired;
   }
 
+  return { artifactId, decisionId, receiptPath, save, lock, readReceipt, recover };
+}
+
+/** Validate the closeout snapshot before returning any repair work. */
+export function planStandaloneOptionsRecovery(projectRoot: string, store: FileStore, operationId: string,
+  broadcast: BroadcastFn, snapshot: StandaloneCloseoutSnapshot): (() => void) | undefined {
+  const operation = optionsOperation(projectRoot, store, operationId, broadcast);
+  const receipt = operation.readReceipt();
+  const found = operation.recover(receipt, false, true, snapshot);
+  if (!found || receipt.committed) return;
+  return () => { operation.lock(() => operation.recover(operation.readReceipt(), false, true)); };
+}
+
+/** The route validates the project, standalone session and operation id before entering here. */
+export async function presentStandaloneOptions(
+  projectRoot: string,
+  store: FileStore,
+  operationId: string,
+  args: Record<string, unknown>,
+  port: number,
+  broadcast: BroadcastFn,
+): Promise<ToolResult> {
+  const { artifactId, decisionId, receiptPath, save, lock, readReceipt, recover } = optionsOperation(projectRoot, store, operationId, broadcast);
+  const fingerprint = callFingerprint("present_options", args);
+  const conflict = () => standaloneOperationConflict("options input");
   const existing = lock(() => {
     const saved = readJson(receiptPath);
     if (saved === undefined) {

@@ -11,6 +11,7 @@ import {
   acceptOutlineActive,
   acceptOutlineMessage,
   acceptPinsStatus,
+  acceptPinsStatusReport,
   askAnchor,
   buildChangesMessage,
   isReadyMessage,
@@ -169,5 +170,16 @@ describe("outline / asks messages (#714 gaps 4+5)", () => {
 
   it("askAnchor builds the element anchor a click on the ask would post", () => {
     expect(askAnchor(asks.asks[0] as any)).toEqual({ kind: "element", locator: "#decide-ttl", quote: "Decide: a 60s TTL?" });
+  });
+});
+
+describe("pin-list key on frame reports (#714 gap 5)", () => {
+  it("passes a well-formed key through on pins-status and asks; drops or rejects a malformed one", () => {
+    expect(acceptPinsStatusReport({ source: frame, data: { dp: "pins-status", found: [true], key: "abc:1" } }, frame)).toEqual({ found: [true], key: "abc:1" });
+    expect(acceptPinsStatusReport({ source: frame, data: { dp: "pins-status", found: [true], key: "<b>" } }, frame)).toEqual({ found: [true] });
+    expect(acceptPinsStatus({ source: frame, data: { dp: "pins-status", found: [false], key: "abc:1" } }, frame)).toEqual([false]);
+    const asks = { dp: "asks", asks: [], pinAsks: [] };
+    expect(acceptAsksMessage({ source: frame, data: { ...asks, key: "abc:1" } }, frame)).toEqual({ ...asks, key: "abc:1" });
+    expect(acceptAsksMessage({ source: frame, data: { ...asks, key: "x".repeat(65) } }, frame)).toBeNull();
   });
 });

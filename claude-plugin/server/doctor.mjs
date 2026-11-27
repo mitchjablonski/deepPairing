@@ -15610,7 +15610,8 @@ var ArtifactStatusSchema = external_exports.enum([
 ]);
 var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
-  at: external_exports.string().datetime()
+  at: external_exports.string().datetime(),
+  feedbackCommentId: external_exports.string().min(1).optional()
 });
 var SecretWarningSchema = external_exports.object({
   /** The pattern prefix that matched, e.g. "AKIA", "sk-", "PEM". */
@@ -15909,6 +15910,8 @@ var CommentSchema = external_exports.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  /** Server-stamped only for the note owned by a page verdict history entry. */
+  verdictFeedback: external_exports.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: external_exports.string().nullable().optional(),
   /**
@@ -16403,6 +16406,61 @@ var PageRuleOutBodySchema = external_exports.object({
   htmlAnchor: HtmlAnchorSchema,
   reason: external_exports.string().max(PAGE_RULE_OUT_REASON_MAX).refine((s) => s.trim().length > 0, { message: "Say why you're ruling this out" })
 });
+
+// ../shared/dist/schemas/page-asks.js
+var PAGE_ASK_BREAK_TAGS = [
+  "br",
+  "hr",
+  "p",
+  "div",
+  "li",
+  "ul",
+  "ol",
+  "menu",
+  "dl",
+  "dt",
+  "dd",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "table",
+  "caption",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "td",
+  "th",
+  "section",
+  "article",
+  "aside",
+  "nav",
+  "main",
+  "header",
+  "footer",
+  "address",
+  "blockquote",
+  "pre",
+  "listing",
+  "figure",
+  "figcaption",
+  "details",
+  "summary",
+  "dialog",
+  "fieldset",
+  "legend",
+  "form",
+  "hgroup",
+  "search",
+  "select",
+  "option",
+  "optgroup",
+  "center"
+];
+var BREAK_TAG_SET = new Set(PAGE_ASK_BREAK_TAGS);
 
 // ../shared/dist/schemas/annotation.js
 var SessionAnnotationSchema = external_exports.object({

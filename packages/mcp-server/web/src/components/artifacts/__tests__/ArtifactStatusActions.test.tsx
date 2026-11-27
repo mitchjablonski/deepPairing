@@ -423,6 +423,40 @@ describe("ArtifactStatusActions — draft interactions", () => {
     expect(statusCall[1].body).toContain('"status":"revised"');
   });
 
+  it.each(["revised", "rejected"] as const)("sends a page %s reason only through the status request", async (status) => {
+    render(<ArtifactStatusActions artifact={artifact({ type: "page" })} />);
+    const reason = "Explain what changed";
+    await userEvent.type(screen.getByRole("textbox"), reason);
+    if (status === "rejected") {
+      await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+      await userEvent.click(screen.getByRole("button", { name: "Reject & remember" }));
+    } else {
+      await userEvent.click(screen.getByRole("button", { name: "Request changes" }));
+    }
+
+    await waitFor(() => {
+      const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/status") || String(url).includes("/api/comments"));
+      expect(calls).toHaveLength(1);
+      expect(String(calls[0]![0])).toContain("/api/artifacts/art_x/status");
+      expect(JSON.parse(String(calls[0]![1]?.body))).toMatchObject({ status, feedback: reason });
+    });
+  });
+
+  it("keeps the page reason available after the status request is refused", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: "parent_superseded", message: "Review the newer page version.",
+    }), { status: 409, headers: { "Content-Type": "application/json" } })));
+    render(<ArtifactStatusActions artifact={artifact({ type: "page" })} />);
+    const reason = "Please include this detail";
+    await userEvent.type(screen.getByRole("textbox"), reason);
+    const action = screen.getByRole("button", { name: "Request changes" });
+    await userEvent.click(action);
+    await waitFor(() => expect(action).toBeEnabled());
+    expect(screen.getByRole("textbox")).toHaveValue(reason);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/status"))).toHaveLength(1);
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/api/comments"))).toBe(false);
+  });
+
   it("reject is two-step: names the pattern (pre-filled from the agent's concept), then sends it as the ledger key", async () => {
     render(<ArtifactStatusActions artifact={artifact({ content: { concept: { name: "agent concept" } } })} />);
     await userEvent.type(screen.getByRole("textbox"), "breaks testability");
