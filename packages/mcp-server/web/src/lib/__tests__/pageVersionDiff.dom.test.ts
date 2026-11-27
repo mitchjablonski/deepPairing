@@ -319,7 +319,7 @@ describe("#727 — a heading's level change is one quiet change, not a remove + 
     ]);
     expect(d.removed).toEqual([]);
     expect(d.moved).toBe(0);
-    expect(lineFor(V1, v2)).toBe("Changed: Costs");
+    expect(lineFor(V1, v2)).toBe("Changed: Costs (h2\u2192h3)");
     expect(computePageVersionDiff(V1, v2)!.marks).toEqual([{ kind: "changed", tag: "h3", text: "Costs", occurrence: 0 }]);
   });
 
@@ -332,7 +332,7 @@ describe("#727 — a heading's level change is one quiet change, not a remove + 
     ]);
     expect(d.removed).toEqual([]);
     expect(summarizePageDiff(d).changedSections).toEqual(["Storage"]);
-    expect(lineFor(V1, v2)).toBe("Changed: Storage");
+    expect(lineFor(V1, v2)).toBe("Changed: Storage (h2\u2192h4)");
   });
 
   it("several level changes (a section demoted under its neighbour) don't cascade", () => {
@@ -344,7 +344,7 @@ describe("#727 — a heading's level change is one quiet change, not a remove + 
     ]);
     expect(d.removed).toEqual([]);
     expect(d.moved).toBe(0);
-    expect(lineFor(V1, v2)).toBe("Changed: Costs, Rollout");
+    expect(lineFor(V1, v2)).toBe("Changed: Costs (h2\u2192h3), Rollout (h2\u2192h3)");
   });
 
   it("a reworded heading is still a plain change (not a level change)", () => {
@@ -352,5 +352,37 @@ describe("#727 — a heading's level change is one quiet change, not a remove + 
     expect(d.changes.map((c) => [c.kind, c.block.text, c.previous?.text, c.levelChanged])).toEqual([
       ["changed", "Budget", "Costs", undefined],
     ]);
+  });
+
+  it("pairs only inside the gap between aligned blocks: the demoted Overview is Y's, X's is the one removed", () => {
+    const a = "<h2>X</h2><h3>Overview</h3><p>x1</p><h2>Y</h2><h3>Overview</h3><p>y1</p>";
+    const b = "<h2>X</h2><p>x1</p><h2>Y</h2><h4>Overview</h4><p>y1</p>";
+    const d = diffOf(a, b);
+    expect(d.removed.map((r) => [r.tag, r.text, r.sectionPath])).toEqual([["h3", "Overview", "X \u203a Overview"]]);
+    const level = d.changes.find((c) => c.levelChanged)!;
+    expect([level.block.tag, level.previous?.sectionPath]).toEqual(["h4", "Y \u203a Overview"]);
+    // y1 never reads as moved; x1 really did lose its section.
+    expect(d.changes.filter((c) => c.kind === "moved").map((c) => c.block.text)).toEqual(["x1"]);
+    expect(lineFor(a, b)).not.toMatch(/y1/);
+  });
+
+  it("an unrelated same-text heading elsewhere is a remove + add, not a level change", () => {
+    const a = "<h2>A</h2><p>a</p><h2>Notes</h2><p>old note</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+    const b = "<h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p><h3>Notes</h3><p>brand new</p>";
+    const d = diffOf(a, b);
+    expect(d.changes.some((c) => c.levelChanged)).toBe(false);
+    expect(lineFor(a, b)).toBe("Added: Notes; Removed: section Notes (1 paragraph)");
+  });
+
+  it("a section moved with its body AND re-levelled: one level change, and the heading's own move is counted", () => {
+    const a = "<h2>A</h2><p>a</p><h2>Notes</h2><p>n1</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+    const moved = "<h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p><h2>Notes</h2><p>n1</p>";
+    expect(diffOf(a, moved).moved).toBe(2); // the control: a plain move counts heading + body
+    const b = moved.replace("<h2>Notes</h2>", "<h3>Notes</h3>");
+    const d = diffOf(a, b);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.levelChanged])).toEqual([["changed", "Notes", true]]);
+    expect(d.removed).toEqual([]);
+    expect(d.moved).toBe(2);
+    expect(lineFor(a, b)).toBe("Changed: Notes (h2\u2192h3); 2 blocks moved");
   });
 });

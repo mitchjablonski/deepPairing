@@ -547,27 +547,6 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
   const removed: PageBlock[] = [];
   const headingMap = new Map<number, number>();
 
-  // #727 — a heading whose text is unchanged but whose level changed (h2 →
-  // h3) is the same section: one quiet "changed" on the heading, never a
-  // remove + add, and its section keeps its identity so the blocks under it
-  // don't read as moved.
-  const oldHeadings = new Map<string, number[]>();
-  for (let i = 0; i < a.length; i++) {
-    if (oldDone[i] || !oldBlocks[i]!.heading) continue;
-    const l = oldHeadings.get(oldBlocks[i]!.text);
-    if (l) l.push(i); else oldHeadings.set(oldBlocks[i]!.text, [i]);
-  }
-  for (let j = 0; j < b.length; j++) {
-    if (newDone[j] || !newBlocks[j]!.heading) continue;
-    const l = oldHeadings.get(newBlocks[j]!.text);
-    if (!l || !l.length) continue;
-    const i = l.shift()!;
-    oldDone[i] = 1;
-    newDone[j] = 1;
-    headingMap.set(i, j);
-    changeAt.set(j, { kind: "changed", block: newBlocks[j]!, previous: oldBlocks[i]!, levelChanged: true });
-  }
-
   // Pair the rest inside each gap between aligned pairs.
   const bounds: Array<[number, number]> = [[-1, -1], ...aligned, [a.length, b.length]];
   for (let g = 0; g + 1 < bounds.length; g++) {
@@ -584,6 +563,26 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
       changeAt.set(j, { kind: "changed", block: newBlocks[j]!, previous: oldBlocks[i]! });
       if (oldBlocks[i]!.heading && newBlocks[j]!.heading) headingMap.set(i, j);
     };
+    // 0. #727 — a heading with the same text but another level (h2 → h3) in
+    // this gap is the same section: one quiet "changed" on the heading, never
+    // a remove + add, and the section keeps its identity so the blocks under
+    // it don't read as moved. Only within the gap, in order: a same-text
+    // heading elsewhere on the page is a different section.
+    const headingsByText = new Map<string, number[]>();
+    for (const i of olds) {
+      if (!oldBlocks[i]!.heading) continue;
+      const q = headingsByText.get(oldBlocks[i]!.text);
+      if (q) q.push(i); else headingsByText.set(oldBlocks[i]!.text, [i]);
+    }
+    for (const j of news) {
+      if (!newBlocks[j]!.heading) continue;
+      const q = headingsByText.get(newBlocks[j]!.text);
+      const i = q?.shift();
+      if (i === undefined) continue;
+      paired.add(i);
+      changeAt.set(j, { kind: "changed", block: newBlocks[j]!, previous: oldBlocks[i]!, levelChanged: true });
+      headingMap.set(i, j);
+    }
     // 1. Same tag under the same heading.
     const bySection = new Map<string, number[]>();
     for (const i of olds) {
@@ -594,6 +593,7 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
     }
     const unpairedNew: number[] = [];
     for (const j of news) {
+      if (changeAt.has(j)) continue;
       const nb = newBlocks[j]!;
       const q = bySection.get(`${nb.tag}\u0001${nb.heading ? "" : nb.section}`);
       let hit: number | undefined;
@@ -612,13 +612,46 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
     for (const i of olds) if (!paired.has(i)) removed.push(oldBlocks[i]!);
   }
 
+  // #727 — a section that moved AND changed its heading's level: its old
+  // heading (removed) and new one (added) share their text, and the section's
+  // own body went with it (a same-text block from under the old heading now
+  // sits under the new one). That is the same section, moved: one quiet
+  // level change plus a counted move, never a remove + add. Without its body
+  // following, a same-text heading elsewhere is a different section.
+  const removedHeading = new Set(removed.filter((r) => r.heading).map((r) => r.sectionId));
+  let movedHeadings = 0;
+  if (removedHeading.size) {
+    const usedOld = new Set<number>();
+    const followed = [...same]
+      .filter(([i, j]) => {
+        const o = oldBlocks[i]!, nb = newBlocks[j]!;
+        if (o.heading || nb.heading || o.sectionId < 0 || nb.sectionId < 0 || !removedHeading.has(o.sectionId)) return false;
+        const added = changeAt.get(nb.sectionId);
+        return added?.kind === "added" && added.block.heading && added.block.text === oldBlocks[o.sectionId]!.text;
+      })
+      .sort((x, y) => x[1] - y[1]);
+    for (const [i, j] of followed) {
+      const oi = oldBlocks[i]!.sectionId, nj = newBlocks[j]!.sectionId;
+      if (usedOld.has(oi) || changeAt.get(nj)?.kind !== "added") continue;
+      usedOld.add(oi);
+      headingMap.set(oi, nj);
+      changeAt.set(nj, { kind: "changed", block: newBlocks[nj]!, previous: oldBlocks[oi]!, levelChanged: true });
+      movedHeadings++;
+    }
+    if (usedOld.size) {
+      const keep = removed.filter((r) => !(r.heading && usedOld.has(r.sectionId)));
+      removed.length = 0;
+      removed.push(...keep);
+    }
+  }
+
   // Map sections by identity, then classify every same-text pair.
   for (const [i, j] of same) if (oldBlocks[i]!.heading && newBlocks[j]!.heading) headingMap.set(i, j);
   const sameSection = (o: PageBlock, nb: PageBlock): boolean => {
     if (o.sectionId < 0 || nb.sectionId < 0) return o.sectionId < 0 && nb.sectionId < 0;
     return headingMap.get(o.sectionId) === nb.sectionId;
   };
-  let moved = 0;
+  let moved = movedHeadings;
   for (const [i, j] of same) {
     const o = oldBlocks[i]!, nb = newBlocks[j]!;
     if (nb.heading) { if (movedPairs.has(j)) moved++; continue; }
@@ -772,6 +805,8 @@ export type PageDiffState = "identical" | "markup-only" | "outside-blocks" | "ch
 export interface PageDiffSummary {
   state: PageDiffState;
   changedSections: string[];
+  /** #727 — sections whose heading only changed level: name → "h2→h3". */
+  headingLevels?: Record<string, string>;
   addedSections: string[];
   removedSections: RemovedSection[];
   removed: RemovedGroup[];
@@ -788,6 +823,10 @@ export function summarizePageDiff(diff: PageBlockDiff & Partial<Pick<PageVersion
   const addedSections: string[] = [];
   const changedSections: string[] = [];
   const movedAcross: MovedAcross[] = [];
+  const headingLevels: Record<string, string> = {};
+  for (const c of diff.changes) {
+    if (c.levelChanged && c.previous) headingLevels[c.block.section] = `${c.previous.tag}\u2192${c.block.tag}`;
+  }
   for (const c of diff.changes) {
     if (c.kind === "added" && c.block.heading && !addedSections.includes(c.block.section)) addedSections.push(c.block.section);
   }
@@ -841,7 +880,7 @@ export function summarizePageDiff(diff: PageBlockDiff & Partial<Pick<PageVersion
       : diff.textChangedOutsideBlocks
         ? "outside-blocks"
         : "markup-only";
-  return { state, changedSections, addedSections, removedSections, removed, movedAcross, movedCount: diff.moved, changeCount: diff.changes.length };
+  return { state, changedSections, ...(Object.keys(headingLevels).length ? { headingLevels } : {}), addedSections, removedSections, removed, movedAcross, movedCount: diff.moved, changeCount: diff.changes.length };
 }
 
 export function sectionLabel(section: string): string {
@@ -868,7 +907,11 @@ export const STATE_COPY: Record<Exclude<PageDiffState, "changes">, string> = {
 export function formatPageDiffSummary(s: PageDiffSummary): string {
   if (s.state !== "changes") return STATE_COPY[s.state];
   const parts: string[] = [];
-  if (s.changedSections.length) parts.push(`Changed: ${list(s.changedSections)}`);
+  if (s.changedSections.length) {
+    const levels = s.headingLevels ?? {};
+    const names = s.changedSections.map((n) => (Object.hasOwn(levels, n) ? `${sectionLabel(n)} (${levels[n]})` : n));
+    parts.push(`Changed: ${list(names)}`);
+  }
   if (s.addedSections.length) parts.push(`Added: ${list(s.addedSections)}`);
   if (s.movedAcross.length) {
     const shown = s.movedAcross.slice(0, 3).map((m) => `“${clipQuote(m.text)}” from ${sectionLabel(m.from)} to ${sectionLabel(m.to)}`);
