@@ -1879,4 +1879,39 @@ describe("annotator main — keyboard comment mode and touch (#714 gap 9)", () =
       vi.useRealTimers();
     }
   });
+
+  it("#725 P3-1 — a handled key whose keyup never arrives doesn't eat that key later in a page field", () => {
+    mode({ kbd: true });
+    // Enter opens the composer in the companion: its keyup lands there, not here.
+    key("Enter", { code: "Enter" });
+    mode({ kbd: false });
+    document.body.insertAdjacentHTML("beforeend", "<textarea id=\"ta\"></textarea>");
+    const ta = document.getElementById("ta")!;
+    const kp = new KeyboardEvent("keypress", { key: "Enter", code: "Enter", bubbles: true, cancelable: true });
+    ta.dispatchEvent(kp);
+    expect(kp.defaultPrevented).toBe(false);
+    const ku = new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true, cancelable: true });
+    ta.dispatchEvent(ku);
+    expect(ku.defaultPrevented).toBe(false);
+  });
+
+  it("#725 P3-1 — a stuck entry clears on blur and on another key's keydown", () => {
+    mode({ kbd: true });
+    key("ArrowDown", { code: "ArrowDown" });
+    window.dispatchEvent(new Event("blur"));
+    const up1 = new KeyboardEvent("keyup", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(up1);
+    expect(up1.defaultPrevented).toBe(false);
+    // ? then Shift released first: the keyup reads "/" but has the same code.
+    mode({ kbd: false });
+    key("?", { code: "Slash", shiftKey: true });
+    const slashUp = new KeyboardEvent("keyup", { key: "/", code: "Slash", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(slashUp);
+    expect(slashUp.defaultPrevented).toBe(true);
+    key("]", { code: "BracketRight" });
+    key("x", { code: "KeyX" });
+    const up2 = new KeyboardEvent("keyup", { key: "]", code: "BracketRight", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(up2);
+    expect(up2.defaultPrevented).toBe(false);
+  });
 });

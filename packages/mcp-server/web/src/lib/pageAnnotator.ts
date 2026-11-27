@@ -1041,6 +1041,7 @@ function onOut(e) { if (!e.relatedTarget && hoverPin !== null) setHoverPin(null,
 function onKey(e) {
   // #725 — the keyup/keypress of a key we handled is ours too, so the page's
   // listeners never see half a keystroke.
+  if (e.type === "keydown") forgetOtherKeys(e);
   if (e.type !== "keydown" && swallowedKey(e)) return;
   if (e.type === "keypress") return;
   if (e.type === "keydown" && onKbdKey(e)) return;
@@ -1158,16 +1159,28 @@ function kbdComment() {
  *  next / previous comment in the review queue, Escape (leave the expanded
  *  view). The parent decides what each may do. */
 var FRAME_KEYS = { c: "toggle-kbd", "?": "help", "]": "next", "[": "prev", Escape: "escape" };
-/** Keys whose keydown we handled, until their keyup. */
+/** Keys whose keydown we handled, until their keyup — by physical key
+ *  (e.code), so "?" released after Shift (keyup "/") still matches. The
+ *  keyup may never come here (Enter opens the composer, ] / [ focus a queue
+ *  row): an entry is dropped on the next keydown of any other key, when the
+ *  frame loses or gains focus, and never applies in a page field (we never
+ *  handle keys there). */
 var swallowed = {};
+function keyId(e) { return String(e.code || e.key || ""); }
 function stopKey(e) {
   e.preventDefault();
   if (e.stopImmediatePropagation) e.stopImmediatePropagation(); else e.stopPropagation();
 }
+function forgetOtherKeys(e) {
+  var id = keyId(e);
+  for (var k in swallowed) if (Object.prototype.hasOwnProperty.call(swallowed, k) && k !== id) delete swallowed[k];
+}
+function forgetKeys() { swallowed = {}; }
 function swallowedKey(e) {
-  var k = String(e.key);
-  if (!Object.prototype.hasOwnProperty.call(swallowed, k)) return false;
-  if (e.type === "keyup") delete swallowed[k];
+  var id = keyId(e);
+  if (!Object.prototype.hasOwnProperty.call(swallowed, id)) return false;
+  if (e.type === "keyup") delete swallowed[id];
+  if (editable(targetEl(e))) { delete swallowed[id]; return false; }
   stopKey(e);
   return true;
 }
@@ -1197,7 +1210,7 @@ function onKbdKey(e) {
     else if (k === "Escape") { setKbd(false); post({ dp: "kbd-off" }); }
     else handled = false;
     if (handled) {
-      swallowed[String(k)] = true;
+      swallowed[keyId(e)] = true;
       stopKey(e);
       return true;
     }
@@ -1205,7 +1218,7 @@ function onKbdKey(e) {
   var fk = frameKey(k);
   if (scripts || e.repeat || !Object.prototype.hasOwnProperty.call(FRAME_KEYS, fk)) return false;
   e.preventDefault();
-  swallowed[String(k)] = true;
+  swallowed[keyId(e)] = true;
   post({ dp: "key", key: FRAME_KEYS[fk] });
   return true;
 }
@@ -1979,6 +1992,8 @@ document.addEventListener("selectionchange", onSelectionChange);
 window.addEventListener("keydown", onKey, true);
 window.addEventListener("keyup", onKey, true);
 window.addEventListener("keypress", onKey, true);
+window.addEventListener("blur", forgetKeys);
+window.addEventListener("focus", forgetKeys);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
 window.addEventListener("scroll", onScroll, true);
@@ -2000,6 +2015,8 @@ return function uninstall() {
   window.removeEventListener("keydown", onKey, true);
   window.removeEventListener("keyup", onKey, true);
   window.removeEventListener("keypress", onKey, true);
+  window.removeEventListener("blur", forgetKeys);
+  window.removeEventListener("focus", forgetKeys);
   if (selBtn && selBtn.parentNode) selBtn.parentNode.removeChild(selBtn);
   window.removeEventListener("message", onMessage);
   window.removeEventListener("resize", onResize);
