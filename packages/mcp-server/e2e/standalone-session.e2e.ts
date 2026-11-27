@@ -284,7 +284,8 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     const question = "Where is the recovery procedure documented?";
     await composer.getByLabel("Comment on the selected spot").fill(question);
     await composer.getByRole("button", { name: "Ask", exact: true }).click();
-    await expect(composer.getByText(question, { exact: true })).toBeVisible();
+    // The posted thread message, not the draft textarea that still holds the text while send settles.
+    await expect(composer.getByText(question, { exact: true }).and(page.locator(":not(textarea)"))).toBeVisible();
 
     const rejectedText = "Keep a local replay file.";
     const rejectedReason = "A replay file can unexpectedly fill the disk.";
