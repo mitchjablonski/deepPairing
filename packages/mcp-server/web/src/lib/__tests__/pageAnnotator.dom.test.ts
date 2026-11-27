@@ -438,10 +438,88 @@ describe("annotator main — event wiring", () => {
     expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
   });
 
-  it("the badge sits fully outside the anchored element's top-left corner", () => {
-    window.dispatchEvent(pinsMsg());
-    expect(badges()[0]!.style.getPropertyValue("left")).toBe("-20px");
-    expect(badges()[0]!.style.getPropertyValue("top")).toBe("-20px");
+  /** Real-ish geometry: every page element has `anchor`'s box; a badge's box
+   *  follows its pin's and its own left/top (so placement is measurable);
+   *  `under(x, y)` is what the page has at a point. */
+  function geometry(anchor: { left: number; top: number; width: number; height: number }, under: (x: number, y: number) => Element) {
+    (document as any).elementsFromPoint = (x: number, y: number) => [under(x, y)];
+    const box = (left: number, top: number, width: number, height: number) =>
+      ({ x: left, y: top, left, top, width, height, right: left + width, bottom: top + height, toJSON: () => ({}) }) as DOMRect;
+    return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.localName === "dp-annotator-badge") {
+        const pin = this.parentElement as HTMLElement;
+        const px = (el: HTMLElement, k: string) => parseFloat(el.style.getPropertyValue(k)) || 0;
+        return box(px(pin, "left") + px(this, "left"), px(pin, "top") + px(this, "top"), 18, 18);
+      }
+      return box(anchor.left, anchor.top, anchor.width, anchor.height);
+    });
+  }
+  const badgeBox = () => badges()[0]!.getBoundingClientRect();
+  const onePin = () => window.dispatchEvent(new MessageEvent("message", {
+    data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }], states: ["open"], ids: ["c_a"] },
+    source: window,
+  }));
+
+  it("the badge sits fully outside the anchored element's top-left corner when that is on screen", () => {
+    const rect = geometry({ left: 100, top: 100, width: 300, height: 40 }, () => document.body);
+    try {
+      window.dispatchEvent(pinsMsg());
+      expect(badges()[0]!.style.getPropertyValue("left")).toBe("-20px");
+      expect(badges()[0]!.style.getPropertyValue("top")).toBe("-20px");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it.each([
+    ["a full-bleed anchor at x=0", { left: 0, top: 100, width: 1024, height: 40 }],
+    ["an anchor at the common 8px margin", { left: 8, top: 100, width: 200, height: 40 }],
+    ["an anchor flush with the right edge", { left: 824, top: 100, width: 200, height: 40 }],
+    ["an anchor at the document's top edge", { left: 0, top: 0, width: 1024, height: 40 }],
+  ])("the badge stays fully on screen (and live over plain text) for %s", (_label, anchor) => {
+    const rect = geometry(anchor, () => document.body);
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("an edge badge skips a spot over a native control for one clear of it", () => {
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"field\">");
+    const field = document.getElementById("field")!;
+    // A control just right of the anchor: the outside-right spot is taken.
+    const rect = geometry({ left: 8, top: 100, width: 200, height: 40 }, (x) => (x >= 200 ? field : document.body));
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThan(200);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("when every on-screen spot covers a native control, the badge stays visible but inert", () => {
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"field\">");
+    const field = document.getElementById("field")!;
+    const rect = geometry({ left: 0, top: 100, width: 300, height: 40 }, () => field);
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+      badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    } finally {
+      rect.mockRestore();
+    }
   });
 
   it("without hit-testing (no elementsFromPoint) every badge stays inert: what lies under it is unknown", () => {

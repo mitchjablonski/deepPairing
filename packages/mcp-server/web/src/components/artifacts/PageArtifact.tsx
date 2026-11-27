@@ -245,7 +245,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   }, []);
   const frameOwnsFocusRef = useRef(frameOwnsFocus);
   frameOwnsFocusRef.current = frameOwnsFocus;
-  const [found, setFound] = useState<boolean[] | null>(null);
+  // The frame's last found report, bound to the artifact and pin list it was
+  // computed from: positional flags are used only while both still match, so
+  // a delayed report after a delete / insert / reorder (or for another page)
+  // can't mark the wrong comment Orphaned. Unmatched = not yet checked.
+  const [foundReport, setFoundReport] = useState<{ forId: string; key: string; found: boolean[] } | null>(null);
+  const found = foundReport && foundReport.forId === artifact.id && foundReport.key === pinsKey ? foundReport.found : null;
   const [running, setRunning] = useState(false);
   // #714 gaps 7+8 — the review queue and the composer beside its anchor.
   const queue = useMemo(
@@ -420,7 +425,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       }
       const status = acceptPinsStatusReport(event, frame);
       if (status) {
-        setFound(status.found);
+        setFoundReport({ forId: artifactIdRef.current, key: status.key ?? "", found: status.found });
         if (!runningRef.current) setAskPinStatus({ forId: artifactIdRef.current, key: status.key ?? "", found: status.found });
         return;
       }
@@ -517,7 +522,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   }, [sendChanges]);
   // A remounted frame (Run) reports fresh pin status after its "ready".
   useEffect(() => {
-    setFound(null);
+    setFoundReport(null);
     setChangesFound(null);
     setHover(null);
   }, [running]);

@@ -162,6 +162,14 @@ function fromFrame(source: unknown, data: unknown, opts: { frameFocused?: boolea
   else withActiveElement(frame(), dispatch);
 }
 
+/** A frame's pins-status report for the pin list the companion last sent it
+ *  (reports echo that list's key; a stale or keyless one is ignored). */
+function pinsStatus(win: { postMessage: ReturnType<typeof vi.fn> }, found: boolean[]) {
+  const last = () => win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "pins").at(-1) as any;
+  if (!last()) fromFrame(win, { dp: "ready" });
+  fromFrame(win, { dp: "pins-status", found, key: last().key });
+}
+
 const cellAnchor = {
   kind: "cell",
   locator: "table > tbody > tr:nth-of-type(2) > td:nth-of-type(2)",
@@ -320,7 +328,7 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
       { dp: "pins", anchors: [{ kind: "text", locator: "p", quote: "a sentence from v1" }], states: ["open"], ids: ["cmt_old"], key: expect.any(String) },
       "*",
     );
-    fromFrame(win, { dp: "pins-status", found: [false] });
+    pinsStatus(win, [false]);
     expect(screen.getByTestId("page-anchor-missing")).toHaveTextContent(/not found in this version/i);
     expect(within(screen.getByTestId("page-annotations")).getByText(/a sentence from v1/)).toBeInTheDocument();
 
@@ -559,7 +567,7 @@ describe("PageArtifact — file watch (#680 slice 3)", () => {
     expect(within(screen.getByTestId("page-annotations")).getByText(/this sentence is wrong/)).toBeInTheDocument();
     // The frame's live re-find wins once it reports.
     const win = fakeFrameWindow();
-    fromFrame(win, { dp: "pins-status", found: [true] });
+    pinsStatus(win, [true]);
     expect(screen.queryByTestId("page-anchor-missing")).not.toBeInTheDocument();
   });
 
@@ -1024,7 +1032,7 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     for (const c of comments) useArtifactStore.getState().addComment(c);
     render(<PageArtifact artifact={pageArtifact} />);
     const win = fakeFrameWindow();
-    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    pinsStatus(win, [true, true, true, true, false]);
     // A report for a different pin list (4 pins, not 5) is not counted.
     fromFrame(win, { ...OUTLINE, pins: [2, 2, 0, 1] });
     expect(screen.queryAllByTestId("page-outline-comments")).toHaveLength(0);
@@ -1394,7 +1402,7 @@ describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)",
     seed();
     render(<PageArtifact artifact={pageArtifact} />);
     const win = fakeFrameWindow();
-    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    pinsStatus(win, [true, true, true, true, false]);
     const filters = screen.getByTestId("page-queue-filters");
     expect(within(filters).getByTestId("page-queue-filter-open")).toHaveTextContent("Open 2");
     expect(within(filters).getByTestId("page-queue-filter-addressed")).toHaveTextContent("Addressed 2");
@@ -1431,8 +1439,8 @@ describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)",
     expect(JSON.stringify(pins)).not.toContain("comment on");
     // A found report doesn't re-send the pins (no feedback loop).
     const before = win.postMessage.mock.calls.filter((c) => (c[0] as any)?.dp === "pins").length;
-    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
-    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    pinsStatus(win, [true, true, true, true, false]);
+    pinsStatus(win, [true, true, true, true, false]);
     expect(win.postMessage.mock.calls.filter((c) => (c[0] as any)?.dp === "pins").length).toBe(before);
   });
 
@@ -1492,11 +1500,43 @@ describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)",
     expect(screen.queryByTestId("page-pin-preview")).not.toBeInTheDocument();
   });
 
+  it("ignores a pins-status report for a stale or unkeyed pin list (no positional misattribution)", () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "ready" });
+    const lastPins = () => win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "pins").at(-1) as any;
+    const oldKey = lastPins().key as string;
+    const filters = () => screen.getByTestId("page-queue-filters");
+    const count = (f: string) => within(filters()).queryByTestId(`page-queue-filter-${f}`)?.textContent ?? "";
+    // c_open is deleted while the frame's report for the 5-pin list is in flight.
+    act(() => {
+      useArtifactStore.setState((st) => ({
+        comments: { ...st.comments, [pageArtifact.id]: st.comments[pageArtifact.id]!.filter((c) => c.id !== "c_open") },
+      }));
+    });
+    // That report (c_open missing at index 0) lands now: index 0 is c_seen in
+    // the current list, which must NOT turn Orphaned.
+    fromFrame(win, { dp: "pins-status", found: [false, true, true, true, true], key: oldKey });
+    expect(count("open")).toBe("Open 2");
+    expect(count("orphaned")).not.toContain("Orphaned 1");
+    // A keyless report is unbound too.
+    fromFrame(win, { dp: "pins-status", found: [false, true, true, true] });
+    expect(count("open")).toBe("Open 2");
+    expect(count("orphaned")).not.toContain("Orphaned 1");
+    // The report for the current list is used.
+    const newKey = lastPins().key as string;
+    expect(newKey).not.toBe(oldKey);
+    fromFrame(win, { dp: "pins-status", found: [true, true, true, false], key: newKey });
+    expect(count("open")).toBe("Open 1");
+    expect(count("orphaned")).toBe("Orphaned 1");
+  });
+
   it("outline badges count only comments still open in the queue", () => {
     seed();
     render(<PageArtifact artifact={pageArtifact} />);
     const win = fakeFrameWindow();
-    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    pinsStatus(win, [true, true, true, true, false]);
     fromFrame(win, {
       dp: "outline",
       headings: [{ level: 1, text: "Only section", locator: "h1" }],
