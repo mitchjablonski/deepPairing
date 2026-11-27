@@ -595,6 +595,14 @@ export interface ArtifactState {
    */
   markQuestionResolved: (commentId: string) => Promise<void>;
 
+  /**
+   * #714 — withdraw the human's own resolve (the inverse of
+   * markQuestionResolved, which also resolves a plain page comment from the
+   * review queue). Optimistically sets humanResolvedAt to null, then POSTs
+   * mark-unresolved; on failure restores exactly the stamp it cleared.
+   */
+  reopenComment: (commentId: string) => Promise<void>;
+
   reset: () => void;
 }
 
@@ -1538,6 +1546,46 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         return { comments: nextComments };
       });
       await toastApiError("Mark question resolved", err);
+      throw err;
+    }
+  },
+
+  reopenComment: async (commentId) => {
+    assertNotReplay("Reopening a comment");
+    // Same owner guard and routing pin as markQuestionResolved.
+    const generationAtSubmit = storeGeneration;
+    const existing = Object.values(get().comments).flat().find((c) => c.id === commentId);
+    const owner = existing?.sessionId || undefined;
+    const routeTo = owner ?? tabSessionAtCall();
+    if (isForeignSession(owner)) await guardForeignOwner("Reopening a comment", owner);
+    const prior = existing?.humanResolvedAt;
+    if (!prior) return;
+    // null (not a deleted key): the WS comment_updated merge keeps any key
+    // the update omits, so only an explicit null clears it everywhere.
+    if (storeGeneration === generationAtSubmit) set((state) => {
+      const nextComments: Record<string, Comment[]> = {};
+      for (const [key, list] of Object.entries(state.comments)) {
+        nextComments[key] = list.map((c) => (c.id === commentId ? { ...c, humanResolvedAt: null } : c));
+      }
+      return { comments: nextComments };
+    });
+    try {
+      await safeFetch(`${apiBase()}/api/comments/${commentId}/mark-unresolved`, {
+        method: "POST",
+        headers: sessionHeaders(routeTo),
+        body: JSON.stringify({}),
+      });
+    } catch (err) {
+      if (storeGeneration !== generationAtSubmit) throw err;
+      // Surgical rollback: only if nothing re-stamped it meanwhile.
+      set((state) => {
+        const nextComments: Record<string, Comment[]> = {};
+        for (const [key, list] of Object.entries(state.comments)) {
+          nextComments[key] = list.map((c) => (c.id === commentId && c.humanResolvedAt == null ? { ...c, humanResolvedAt: prior } : c));
+        }
+        return { comments: nextComments };
+      });
+      await toastApiError("Reopen comment", err);
       throw err;
     }
   },

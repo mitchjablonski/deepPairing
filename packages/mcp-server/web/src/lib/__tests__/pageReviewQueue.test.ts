@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from "vitest";
 import type { Comment } from "@deeppairing/shared";
-import { buildQueue, deriveCommentState, pinState, queueCounts, stateLabel, threadReplies } from "../pageReviewQueue";
+import { buildQueue, deriveCommentState, pinState, queueCounts, resolveAction, stateLabel, threadReplies } from "../pageReviewQueue";
 
 const at = (n: number) => new Date(Date.UTC(2026, 10, 20, 10, n)).toISOString();
 const c = (id: string, n: number, extra: Partial<Comment> = {}): Comment => ({
@@ -122,5 +122,36 @@ describe("threadReplies and buildQueue", () => {
       ["d", 2, "orphaned", 0, true],
     ]);
     expect(queueCounts(q)).toEqual({ open: 1, addressed: 1, orphaned: 1 });
+  });
+});
+
+describe("resolveAction (#714 resolve from the queue)", () => {
+  const base = {
+    id: "c1", sessionId: "s", target: { artifactId: "a" }, parentCommentId: null, author: "human",
+    content: "x", acknowledged: false, createdAt: "2026-01-01T00:00:00.000Z",
+  } as unknown as Comment;
+  const entryFor = (c: Comment, replies: Comment[] = []) => buildQueue([c], [c, ...replies], () => false)[0]!;
+
+  it("offers Resolve on an open plain comment and on one the agent addressed", () => {
+    expect(resolveAction(entryFor(base))).toMatchObject({ kind: "resolve", label: "Resolve" });
+    const answered = { ...base, answeredByCommentId: "r1" } as Comment;
+    expect(resolveAction(entryFor(answered))).toMatchObject({ kind: "resolve" });
+  });
+
+  it("offers Reopen on your resolve of an open comment, Undo resolve when the agent had answered", () => {
+    const resolved = { ...base, humanResolvedAt: "2026-01-02T00:00:00.000Z" } as Comment;
+    const e = entryFor(resolved);
+    expect(e.state).toEqual({ kind: "addressed", via: "resolved" });
+    expect(e.withoutResolve).toMatchObject({ kind: "open" });
+    expect(resolveAction(e)).toMatchObject({ kind: "reopen", label: "Reopen" });
+    const reply = { ...base, id: "r1", author: "agent", parentCommentId: "c1", createdAt: "2026-01-01T12:00:00.000Z" } as Comment;
+    expect(resolveAction(entryFor(resolved, [reply]))).toMatchObject({ kind: "reopen", label: "Undo resolve" });
+  });
+
+  it("a cleared resolve (null) reads open again; Asks and replies get no action", () => {
+    const cleared = { ...base, humanResolvedAt: null } as Comment;
+    expect(entryFor(cleared).state).toMatchObject({ kind: "open" });
+    expect(resolveAction(entryFor({ ...base, intent: "question" } as Comment))).toBeNull();
+    expect(resolveAction(entryFor({ ...base, author: "agent" } as Comment))).toBeNull();
   });
 });

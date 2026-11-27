@@ -340,3 +340,70 @@ function mergeKeys(list: ReadonlyArray<{ key: string; count: number }>): Array<{
   }
   return out;
 }
+
+// --- #714 gap 9: keyboard commenting ---------------------------------------------
+
+/** Bounds the annotator applies (BLOCKS_MAX, KBD_TEXT, KBD_PINS); re-checked here. */
+export const PAGE_KBD_LIMITS = { blocks: 2000, text: 120, pins: 20 } as const;
+/** The kinds the annotator names a block by (core.blockKind). */
+export const PAGE_BLOCK_KINDS = [
+  "decision", "question", "diagram node", "heading", "paragraph", "list item", "quote", "code",
+  "image", "caption", "cell", "link", "control", "block",
+] as const;
+
+export const PageKbdCursorSchema = z
+  .object({
+    dp: z.literal("kbd-cursor"),
+    /** -1 = the page has no commentable block. */
+    index: z.number().int().min(-1).max(PAGE_KBD_LIMITS.blocks - 1),
+    total: z.number().int().min(0).max(PAGE_KBD_LIMITS.blocks),
+    kind: z.enum(PAGE_BLOCK_KINDS),
+    text: z.string().max(PAGE_KBD_LIMITS.text),
+    /** The pins (indexes into the list the parent sent) on this block. */
+    pins: z.array(z.number().int().min(0).max(MAX_PINS - 1)).max(PAGE_KBD_LIMITS.pins),
+  })
+  .strict()
+  .refine((m) => m.index < m.total, { message: "index out of range" });
+export type PageKbdCursor = Omit<z.infer<typeof PageKbdCursorSchema>, "dp">;
+
+/** A valid `{dp:"kbd-cursor"}` from this frame → the report; else null.
+ *  Display-only (announced in a live region); after Run agent script could
+ *  forge one, so the caller ignores it then. */
+export function acceptKbdCursor(event: FrameMessage, frame: Window | null | undefined): PageKbdCursor | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "kbd-cursor") return null;
+  const parsed = PageKbdCursorSchema.safeParse(d);
+  if (!parsed.success) return null;
+  const { dp: _dp, ...rest } = parsed.data;
+  return rest;
+}
+
+/** `{dp:"kbd-off"}` from this frame: the reviewer left keyboard comment mode
+ *  from inside the page (Escape, or Tab past either end). It can only turn
+ *  the mode OFF — the safe direction — so it is honoured after Run too. */
+export function isKbdOffMessage(event: FrameMessage, frame: Window | null | undefined): boolean {
+  const d = fromFrame(event, frame);
+  return !!d && d.dp === "kbd-off" && Object.keys(d).length === 1;
+}
+
+/** The single-key shortcuts the annotator forwards (before Run only). */
+export const PageFrameKeySchema = z.object({ dp: z.literal("key"), key: z.enum(["toggle-kbd", "help", "next", "prev", "escape"]) }).strict();
+export type PageFrameKey = z.infer<typeof PageFrameKeySchema>["key"];
+
+/** A valid `{dp:"key", key}` from this frame → the key; else null. The parent
+ *  honours it only before Run and only while the frame owns focus. */
+export function acceptFrameKey(event: FrameMessage, frame: Window | null | undefined): PageFrameKey | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "key") return null;
+  const parsed = PageFrameKeySchema.safeParse(d);
+  return parsed.success ? parsed.data.key : null;
+}
+
+/** The `{dp:"mode"}` message: pointing, whether the page's scripts run,
+ *  keyboard comment mode (only meaningful while pointing) and whether the
+ *  page renders dark (the annotator's cursor colours). */
+export function buildModeMessage(m: { annotate: boolean; scripts: boolean; kbd: boolean; dark: boolean }): {
+  dp: "mode"; annotate: boolean; scripts: boolean; kbd: boolean; dark: boolean;
+} {
+  return { dp: "mode", annotate: m.annotate, scripts: m.scripts, kbd: m.kbd && m.annotate, dark: m.dark };
+}

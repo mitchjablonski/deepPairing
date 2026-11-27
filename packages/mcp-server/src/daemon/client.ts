@@ -733,7 +733,7 @@ export class DaemonClient implements IStore {
     return this.get(`/stance-exceptions?fingerprint=${encodeURIComponent(callFingerprint)}`);
   }
 
-  async markCommentHumanResolved(commentId: string, resolvedAt?: string): Promise<void> {
+  async markCommentHumanResolved(commentId: string, resolvedAt?: string | null): Promise<void> {
     await this.post(`/comments/${commentId}/mark-resolved`, { resolvedAt });
   }
 

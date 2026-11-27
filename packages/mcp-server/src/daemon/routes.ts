@@ -1350,8 +1350,13 @@ export function createDaemonRoutes(
     // client always sends an object (`{resolvedAt}`), so no empty-body affordance.
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
-    const { resolvedAt } = parsed.body as { resolvedAt?: string };
-    r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
+    const { resolvedAt } = parsed.body as { resolvedAt?: unknown };
+    // #714 — null withdraws the resolve; anything but a string/null/absent is
+    // treated as absent (stamp now), as before.
+    r.store.markCommentHumanResolved(
+      c.req.param("commentId"),
+      resolvedAt === null ? null : typeof resolvedAt === "string" ? resolvedAt : undefined,
+    );
     return c.json({ status: "resolved" });
   });
 

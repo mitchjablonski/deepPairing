@@ -1,5 +1,6 @@
 import { useModal } from "../hooks/useModal";
 import { CHANGESET_KEYMAP } from "../lib/changesetKeymap";
+import { PAGE_REVIEW_SHORTCUTS } from "./artifacts/PageShortcutHelp";
 
 const shortcuts = [
   { keys: "⌘K", description: "Command palette" },
@@ -30,7 +31,7 @@ export function KeyboardShortcutHelp({ onClose }: { onClose: () => void }) {
       <div
         {...dialogProps}
         aria-label="Keyboard shortcuts"
-        className="bg-surface-elevated border border-border-default rounded-xl shadow-2xl p-6 max-w-sm w-full"
+        className="bg-surface-elevated border border-border-default rounded-xl shadow-2xl p-6 max-w-sm w-full max-h-[85vh] overflow-y-auto mx-4"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-text-primary">Keyboard Shortcuts</h2>
@@ -45,6 +46,21 @@ export function KeyboardShortcutHelp({ onClose }: { onClose: () => void }) {
               </kbd>
             </div>
           ))}
+        </div>
+
+        {/* #714 gap 9 — page review keys (live while a page is selected). */}
+        <div className="mt-4 pt-3 border-t border-border-subtle">
+          <h3 className="text-2xs font-semibold uppercase tracking-wide text-text-muted mb-2">Page review</h3>
+          <div className="space-y-2">
+            {PAGE_REVIEW_SHORTCUTS.map((s) => (
+              <div key={s.keys} className="flex items-center justify-between gap-3">
+                <span className="text-xs text-text-secondary">{s.description}</span>
+                <kbd className="shrink-0 px-2 py-0.5 bg-surface-primary border border-border-default rounded text-2xs font-mono text-text-muted">
+                  {s.keys}
+                </kbd>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* #175 — changeset review keys (live only while a changeset is focused). */}

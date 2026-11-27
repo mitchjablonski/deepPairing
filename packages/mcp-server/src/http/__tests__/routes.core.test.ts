@@ -107,6 +107,36 @@ describe("HTTP Routes", () => {
     expect(events.some((e) => e.type === "comment_updated")).toBe(false);
   });
 
+  it("#714 — POST /api/comments/:id/mark-unresolved withdraws the resolve (null), broadcasts it, and fails loudly for an unknown comment", async () => {
+    const events: any[] = [];
+    const local = withHash(createHttpRoutes(store, tmpDir, (event) => events.push(event)), tmpDir);
+    store.addComment({ id: "c1", artifactId: "art_1", content: "Tighten this", author: "human" });
+    store.markCommentHumanResolved("c1", "2026-01-02T00:00:00.000Z");
+    const res = await local.request(`/api/comments/c1/mark-unresolved`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("reopened");
+    expect(body.comment.humanResolvedAt).toBeNull();
+    expect(store.getComment("c1")?.humanResolvedAt).toBeNull();
+    expect(store.getComment("c1")?.acknowledged).toBe(false);
+    // An explicit null in the broadcast clears the field in every tab (the
+    // client merges updates over what it has).
+    const updated = events.find((e) => e.type === "comment_updated");
+    expect(updated.comment.humanResolvedAt).toBeNull();
+
+    const missing = await local.request(`/api/comments/nope/mark-unresolved`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(missing.status).toBe(404);
+    expect((await missing.json()).code).toBe("comment_not_in_session");
+  });
+
   it("POST /api/artifacts/:id/status rejects invalid status", async () => {
     const res = await app.request("/api/artifacts/art_1/status", {
       method: "POST",

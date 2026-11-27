@@ -9,16 +9,19 @@ function pageMetadata({ id, version, status }: Artifact) {
   return { id, version, status };
 }
 
-type PageFeedbackNote = Pick<Comment, "id" | "content" | "intent" | "parentCommentId" | "followUp" | "ruleOut">;
+type PageFeedbackNote = Pick<Comment, "id" | "content" | "intent" | "parentCommentId" | "followUp" | "ruleOut" | "humanResolvedAt">;
 type PageFeedbackComment = PageFeedbackNote & { htmlAnchor: HtmlAnchor };
 
 function noteFeedback(comment: Comment): PageFeedbackNote {
-  const { id, content, intent, parentCommentId, followUp, ruleOut } = comment;
+  const { id, content, intent, parentCommentId, followUp, ruleOut, humanResolvedAt } = comment;
   return {
     id, content, parentCommentId,
     ...(intent !== undefined && { intent }),
     ...(followUp !== undefined && { followUp }),
     ...(ruleOut !== undefined && { ruleOut }),
+    // #714 — the human resolved it themselves (page review queue); present
+    // only while resolved, so other entries are unchanged.
+    ...(humanResolvedAt ? { humanResolvedAt } : {}),
   };
 }
 

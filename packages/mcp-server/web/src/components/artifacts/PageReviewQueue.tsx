@@ -4,6 +4,7 @@ import { htmlAnchorKindLabel } from "../../lib/htmlAnchorDisplay";
 import {
   QUEUE_FILTERS,
   QUEUE_FILTER_LABEL,
+  resolveAction,
   stateFilter,
   stateLabel,
   type PageCommentState,
@@ -103,6 +104,12 @@ export interface PageReviewQueueProps {
   liveStances: Set<string>;
   /** "rail" = in the side review rail; "below" = under the frame. */
   variant: "rail" | "below";
+  /** #714 gap 9 — step to the next / previous comment in the visible list
+   *  (also the ] and [ keys). Omitted → no step buttons. */
+  onStep?: (dir: 1 | -1) => void;
+  /** #714 — the reviewer's own Resolve / Reopen on a plain comment (omitted
+   *  on a read-only page → no buttons). */
+  onResolve?: (commentId: string, resolve: boolean) => void;
 }
 
 export function PageReviewQueue({
@@ -117,6 +124,8 @@ export function PageReviewQueue({
   fromVersion,
   liveStances,
   variant,
+  onStep,
+  onResolve,
 }: PageReviewQueueProps) {
   const listRef = useRef<HTMLOListElement>(null);
   const idBase = useId();
@@ -148,7 +157,7 @@ export function PageReviewQueue({
                 type="button"
                 onClick={() => onFilter(f)}
                 aria-pressed={filter === f}
-                className={`px-1.5 py-0.5 rounded border text-2xs ${
+                className={`px-1.5 py-0.5 rounded border text-2xs pointer-coarse:min-h-11 ${
                   filter === f
                     ? "border-accent-blue bg-accent-blue-dim/40 text-text-primary"
                     : "border-border-default text-text-secondary hover:bg-surface-elevated"
@@ -160,6 +169,32 @@ export function PageReviewQueue({
             );
           })}
         </div>
+        {onStep && visible.length > 0 && (
+          <div className="flex gap-1 ml-auto" role="group" aria-label="Step through comments">
+            <button
+              type="button"
+              onClick={() => onStep(-1)}
+              aria-label="Previous comment"
+              aria-keyshortcuts="["
+              title="Previous comment ( [ )"
+              className="px-1.5 py-0.5 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-elevated pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+              data-testid="page-queue-prev"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              onClick={() => onStep(1)}
+              aria-label="Next comment"
+              aria-keyshortcuts="]"
+              title="Next comment ( ] )"
+              className="px-1.5 py-0.5 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-elevated pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+              data-testid="page-queue-next"
+            >
+              ›
+            </button>
+          </div>
+        )}
       </div>
       {visible.length === 0 ? (
         <p className="text-2xs text-text-muted italic" data-testid="page-queue-empty">
@@ -171,13 +206,15 @@ export function PageReviewQueue({
         </p>
       ) : (
         <ol className="space-y-1.5" ref={listRef}>
-          {visible.map(({ comment: c, index: i, state, replies, missing }) => {
+          {visible.map((entry) => {
+            const { comment: c, index: i, state, replies, missing } = entry;
             const anchor = c.target.htmlAnchor as HtmlAnchor;
             const chip = stateLabel(state);
             const highlighted = c.id === highlightId;
             const from = fromVersion(c);
+            const action = onResolve ? resolveAction(entry) : null;
             return (
-              <li key={c.id}>
+              <li key={c.id} className="flex gap-1 items-stretch">
                 <span className="sr-only" id={`${idBase}-state-${i}`}>
                   {chip.title}
                 </span>
@@ -188,7 +225,7 @@ export function PageReviewQueue({
                   // The visible content is the accessible name (number, state,
                   // replies, spot, comment); the state's meaning is a description.
                   aria-describedby={`${idBase}-state-${i}`}
-                  className={`w-full text-left flex gap-2 p-2 rounded border hover:bg-surface-elevated focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue ${
+                  className={`flex-1 min-w-0 text-left flex gap-2 p-2 rounded border hover:bg-surface-elevated focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue ${
                     highlighted ? "border-accent-blue ring-1 ring-accent-blue bg-accent-blue-dim/20" : "border-border-default"
                   } ${state.kind === "addressed" ? "opacity-75" : ""}`}
                   data-testid="page-annotation"
@@ -229,9 +266,21 @@ export function PageReviewQueue({
                         Its spot is no longer on this version of the page.
                       </span>
                     )}
-                    <span className="block text-xs text-text-primary line-clamp-3">{c.content}</span>
+                    <span className="block text-xs text-text-primary line-clamp-3 break-words">{c.content}</span>
                   </span>
                 </button>
+                {action && (
+                  <button
+                    type="button"
+                    onClick={() => onResolve!(c.id, action.kind === "resolve")}
+                    title={action.title}
+                    aria-label={`${action.label} comment ${i + 1}`}
+                    className="shrink-0 self-start px-2 py-1 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-elevated focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+                    data-testid={action.kind === "resolve" ? "page-annotation-resolve" : "page-annotation-reopen"}
+                  >
+                    {action.label}
+                  </button>
+                )}
               </li>
             );
           })}

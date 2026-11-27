@@ -1962,10 +1962,11 @@ export class FileStore implements IStore {
     }
   }
 
-  markCommentHumanResolved(commentId: string, resolvedAt?: string): void {
+  markCommentHumanResolved(commentId: string, resolvedAt?: string | null): void {
     const comment = this.comments.find((c) => c.id === commentId);
     if (comment) {
-      comment.humanResolvedAt = resolvedAt ?? new Date().toISOString();
+      // #714 — null withdraws the resolve (Reopen); undefined stamps now.
+      comment.humanResolvedAt = resolvedAt === null ? null : resolvedAt ?? new Date().toISOString();
       this.scheduleFlush();
     }
   }

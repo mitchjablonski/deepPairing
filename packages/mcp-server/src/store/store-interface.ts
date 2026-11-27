@@ -528,8 +528,10 @@ export interface IStore {
    * `humanResolvedAt`; no-op if the comment isn't found. Does NOT touch the
    * agent's `acknowledged` queue — this is a human-side "I'm done waiting"
    * signal so the "waiting on human" indicator stops counting it.
+   * #714 — `null` withdraws the human's resolve (Reopen from the page review
+   * queue): the field is set to null, so a broadcast clears it everywhere.
    */
-  markCommentHumanResolved(commentId: string, resolvedAt?: string): MaybePromise<void>;
+  markCommentHumanResolved(commentId: string, resolvedAt?: string | null): MaybePromise<void>;
   getComment(commentId: string): MaybePromise<Comment | undefined>;
   /**
    * #172 — patch a comment's `suggestion` state machine. Applies `update` over

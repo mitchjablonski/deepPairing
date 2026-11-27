@@ -163,6 +163,9 @@ export interface QueueEntry {
   /** Its spot is not on this version (true for every orphaned entry; can also
    *  be true for an addressed one, whose fix removed the text). */
   missing: boolean;
+  /** #714 — the state the thread would have without your resolve (set only
+   *  when you resolved it): what "Reopen" returns it to. */
+  withoutResolve?: PageCommentState;
 }
 
 export function buildQueue(
@@ -174,7 +177,12 @@ export function buildQueue(
   return anchored.map((comment, index) => {
     const replies = threadReplies(comment, all);
     const missing = isMissing(comment, index);
-    return { comment, index, replies: replies.length, missing, state: deriveCommentState(comment, replies, missing, opts) };
+    const state = deriveCommentState(comment, replies, missing, opts);
+    const entry: QueueEntry = { comment, index, replies: replies.length, missing, state };
+    if (comment.humanResolvedAt) {
+      entry.withoutResolve = deriveCommentState({ ...comment, humanResolvedAt: null }, replies, missing, opts);
+    }
+    return entry;
   });
 }
 
@@ -182,4 +190,47 @@ export function queueCounts(entries: readonly QueueEntry[]): Record<QueueFilter,
   const counts: Record<QueueFilter, number> = { open: 0, addressed: 0, orphaned: 0 };
   for (const e of entries) counts[stateFilter(e.state)]++;
   return counts;
+}
+
+/**
+ * #714 — the reviewer's own resolve action on a queue row, over the existing
+ * comment resolution (`humanResolvedAt`, the same stamp "Mark resolved" sets
+ * on a question). No new lifecycle: resolving is your latest act, so the row
+ * reads "Resolved by you"; reopening withdraws that stamp, so the row reads
+ * whatever the thread said before it (open, or the agent's answer).
+ *
+ *  - resolve: any row that isn't currently resolved by you — open, reopened,
+ *    orphaned, or addressed by the agent (confirming it's done);
+ *  - reopen: a row resolved by you. Labelled "Reopen" when that brings it
+ *    back to open, "Undo resolve" when the agent had already answered or
+ *    addressed it (replying in its thread is how you reopen that).
+ * Plain comments only: an Ask is a question the agent owes an answer to,
+ * resolved through its own "Mark resolved".
+ */
+export type ResolveAction =
+  | { kind: "resolve"; label: "Resolve"; title: string }
+  | { kind: "reopen"; label: "Reopen" | "Undo resolve"; title: string };
+
+export function resolveAction(entry: QueueEntry): ResolveAction | null {
+  const c = entry.comment;
+  if (c.author !== "human" || c.parentCommentId || c.intent === "question") return null;
+  if (entry.state.kind === "addressed" && entry.state.via === "resolved") {
+    const back = entry.withoutResolve;
+    if (back && back.kind === "addressed") {
+      return {
+        kind: "reopen",
+        label: "Undo resolve",
+        title: `Withdraw your resolve; it goes back to "${stateLabel(back).text}". Reply in its thread to reopen it.`,
+      };
+    }
+    return { kind: "reopen", label: "Reopen", title: "Withdraw your resolve; the comment is open again for the agent." };
+  }
+  return {
+    kind: "resolve",
+    label: "Resolve",
+    title:
+      entry.state.kind === "addressed"
+        ? "Mark it done yourself: you've checked the agent's answer or revision."
+        : "Mark it done yourself: it no longer needs the agent. The agent sees it as resolved by you.",
+  };
 }

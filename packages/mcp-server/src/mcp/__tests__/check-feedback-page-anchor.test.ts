@@ -168,3 +168,21 @@ describe("check_feedback — page anchor section context (#714 gap 10)", () => {
     expect(sc.comments.find((x: any) => x.id === "c_n").htmlAnchor.section).toBeUndefined();
   });
 });
+
+describe("check_feedback — a page comment the human resolved themselves (#714)", () => {
+  it("says RESOLVED BY THE HUMAN in prose and carries humanResolvedAt; an unresolved one is unchanged", async () => {
+    const id = await presentPage();
+    const anchor = { kind: "element" as const, locator: "h1", quote: "Cache invalidation", version: 1 };
+    await store.addComment({ id: "cmt_done", artifactId: id, content: "rename this heading", author: "human", target: { artifactId: id, htmlAnchor: anchor } });
+    await store.addComment({ id: "cmt_open", artifactId: id, content: "add a TL;DR", author: "human", target: { artifactId: id, htmlAnchor: anchor } });
+    store.markCommentHumanResolved("cmt_done", "2026-11-26T10:00:00.000Z");
+    const res = await callTool("check_feedback");
+    const sc = res.structuredContent as any;
+    expect(sc.comments.find((x: any) => x.id === "cmt_done").humanResolvedAt).toBe("2026-11-26T10:00:00.000Z");
+    expect(sc.comments.find((x: any) => x.id === "cmt_open").humanResolvedAt).toBeUndefined();
+    const line = (res.text as string).split("\n").find((l) => l.includes("rename this heading"))!;
+    expect(line).toContain("RESOLVED BY THE HUMAN");
+    const openLine = (res.text as string).split("\n").find((l) => l.includes("add a TL;DR"))!;
+    expect(openLine).not.toContain("RESOLVED");
+  });
+});

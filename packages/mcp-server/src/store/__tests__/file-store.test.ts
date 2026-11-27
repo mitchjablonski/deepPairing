@@ -285,6 +285,16 @@ describe("FileStore", () => {
     expect(Number.isNaN(Date.parse(resolved as string))).toBe(false);
   });
 
+  it("#714 — markCommentHumanResolved(id, null) withdraws the resolve and persists the null", () => {
+    const store = createStore("human-resolved-reopen");
+    store.addComment({ id: "c1", artifactId: "art_1", content: "Tighten this", author: "human" });
+    store.markCommentHumanResolved("c1", "2026-05-31T12:00:00.000Z");
+    store.markCommentHumanResolved("c1", null);
+    expect(store.getComment("c1")?.humanResolvedAt).toBeNull();
+    store.forceFlush();
+    expect(createStore("human-resolved-reopen").getComment("c1")?.humanResolvedAt).toBeNull();
+  });
+
   it("pending plan-reviews / decisions exclude CLOSED artifacts (F1 orphan guard)", () => {
     const store = createStore("orphan_guard");
     store.createArtifact({ id: "p1", type: "plan", title: "Plan", content: { steps: [], estimatedChanges: 0 } });

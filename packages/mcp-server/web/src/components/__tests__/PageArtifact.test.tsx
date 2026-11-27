@@ -19,6 +19,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { useLedgerStore } from "../../stores/ledger";
 import { useConnectionGraceStore } from "../../lib/connectionGrace";
+import { usePreferencesStore } from "../../stores/preferences";
 
 // The full verb row only renders once the reader reaches the artifact's end.
 function stubIO(isIntersecting: boolean) {
@@ -336,7 +337,7 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
     const win = fakeFrameWindow();
     await userEvent.click(screen.getByRole("button", { name: /pointing: on/i }));
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: true }, "*");
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: true, kbd: false, dark: false }, "*");
     fromFrame(win, { dp: "anchor", anchor: cellAnchor });
     expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /pointing: off/i }));
@@ -397,7 +398,7 @@ describe("PageArtifact — pointing toggle and shortcut (#714)", () => {
     expect(screen.getByRole("button", { name: /run page scripts/i })).toBeInTheDocument();
     const win = fakeFrameWindow();
     await userEvent.click(screen.getByRole("button", { name: /pointing: on/i }));
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: false }, "*");
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: false, kbd: false, dark: false }, "*");
     fromFrame(win, { dp: "anchor", anchor: cellAnchor });
     expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
   });
@@ -410,7 +411,7 @@ describe("PageArtifact — pointing toggle and shortcut (#714)", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, cancelable: true }));
     });
     expect(screen.getByRole("button", { name: /pointing: off/i })).toHaveAttribute("aria-pressed", "false");
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: false }, "*");
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "mode", annotate: false, scripts: false, kbd: false, dark: false }, "*");
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", metaKey: true, cancelable: true }));
     });
@@ -1749,5 +1750,192 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
     const body = String((posts[0]![1] as RequestInit).body);
     expect(JSON.parse(body).error).toBe("v1 scripts-off | script Error=1");
     expect(body).not.toMatch(/hunter2|IGNORE/);
+  });
+});
+
+// --- #714 gaps 9+13 and resolve from the queue ------------------------------
+
+describe("PageArtifact — keyboard, touch, polish and resolve (#714 gaps 9+13)", () => {
+  const select = () => useArtifactStore.setState({ selectedArtifactId: pageArtifact.id });
+  const human = (id: string, extra: Partial<Comment> = {}): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id, htmlAnchor: { kind: "element", locator: "h1", quote: "Cache invalidation" } as any },
+    parentCommentId: null,
+    author: "human",
+    content: `note ${id}`,
+    acknowledged: false,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, Number(id.replace(/\D/g, "")) || 0)).toISOString(),
+    ...extra,
+  });
+  const lastMode = (win: { postMessage: ReturnType<typeof vi.fn> }) =>
+    win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "mode").at(-1);
+  const live = () => screen.getByTestId("page-live-region").textContent ?? "";
+
+  it("the Comment mode toggle sends kbd:true (pointing on) and announces how to use it", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    const toggle = screen.getByTestId("page-kbd-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(lastMode(win)).toMatchObject({ annotate: true, kbd: true });
+    expect(live()).toMatch(/Comment mode on/);
+    // Pointing off also ends comment mode.
+    await userEvent.click(screen.getByRole("button", { name: /pointing: on/i }));
+    expect(lastMode(win)).toMatchObject({ annotate: false, kbd: false });
+  });
+
+  it("C in the companion toggles comment mode while the page is selected, never while typing", () => {
+    select();
+    render(<PageArtifact artifact={pageArtifact} />);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true })); });
+    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "true");
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    act(() => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true })); });
+    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "true");
+    input.remove();
+  });
+
+  it("announces the frame's keyboard cursor before Run; ignores a malformed or post-Run report", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    let win = fakeFrameWindow();
+    fromFrame(win, { dp: "kbd-cursor", index: 2, total: 9, kind: "cell", text: "Up to 60s", pins: [0] });
+    expect(live()).toBe("Cell, 3 of 9: Up to 60s. Has comment 1.");
+    fromFrame(win, { dp: "kbd-cursor", index: 9, total: 9, kind: "cell", text: "x", pins: [] });
+    fromFrame(win, { dp: "kbd-cursor", index: 0, total: 9, kind: "<b>", text: "x", pins: [] });
+    fromFrame(win, { dp: "kbd-cursor", index: 0, total: 9, kind: "cell", text: "x", pins: [], extra: 1 });
+    expect(live()).toBe("Cell, 3 of 9: Up to 60s. Has comment 1.");
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    win = fakeFrameWindow();
+    fromFrame(win, { dp: "kbd-cursor", index: 0, total: 1, kind: "link", text: "forged", pins: [] });
+    expect(live()).not.toMatch(/forged/);
+  });
+
+  it("kbd-off from the frame turns the mode off, even after Run; a forged toggle after Run is ignored", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "key", key: "toggle-kbd" });
+    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(screen.getByTestId("page-kbd-toggle"));
+    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "true");
+    fromFrame(win, { dp: "kbd-off" });
+    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("frame keys before Run: toggle-kbd and help act only while the frame owns focus and only from this frame", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame({ postMessage() {} }, { dp: "key", key: "help" });
+    expect(screen.queryByTestId("page-shortcuts-popover")).not.toBeInTheDocument();
+    fromFrame(win, { dp: "key", key: "help" }, { frameFocused: false });
+    expect(screen.queryByTestId("page-shortcuts-popover")).not.toBeInTheDocument();
+    fromFrame(win, { dp: "key", key: "help" });
+    expect(screen.getByTestId("page-shortcuts-popover")).toBeInTheDocument();
+    fromFrame(win, { dp: "key", key: "toggle-kbd" });
+    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("the Shortcuts popover lists the page keys and closes on Escape, returning focus", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const toggle = screen.getByTestId("page-shortcuts-toggle");
+    await userEvent.click(toggle);
+    const pop = screen.getByRole("dialog", { name: /page review keyboard shortcuts/i });
+    expect(within(pop).getByText(/comment on the block/i)).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByTestId("page-shortcuts-popover")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("Expand fills the window without remounting the frame; Escape collapses", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const before = frame();
+    await userEvent.click(screen.getByTestId("page-expand-toggle"));
+    const area = screen.getByTestId("page-review-area");
+    expect(area).toHaveAttribute("data-expanded", "true");
+    expect(area.className).toMatch(/fixed inset-0/);
+    expect(frame()).toBe(before);
+    await userEvent.keyboard("{Escape}");
+    expect(area).toHaveAttribute("data-expanded", "false");
+    expect(frame()).toBe(before);
+  });
+
+  it("a page keeps its authored light canvas in dark mode unless it opts into dark", () => {
+    const { unmount } = render(<PageArtifact artifact={pageArtifact} />);
+    expect(frame()!.className).toMatch(/bg-white/);
+    expect(frame()!.className).toMatch(/\[color-scheme:light\]/);
+    unmount();
+    const darkPage: Artifact = {
+      ...pageArtifact,
+      id: "art_page_dark",
+      content: { title: "Dark", html: "<meta name=\"color-scheme\" content=\"light dark\"><p>Hi</p>" },
+    };
+    const prev = usePreferencesStore.getState().theme;
+    usePreferencesStore.setState({ theme: "dark" });
+    try {
+      const r = render(<PageArtifact artifact={darkPage} />);
+      expect(frame()!.className).toMatch(/\[color-scheme:dark\]/);
+      expect(screen.getByTestId("page-theme-note")).toHaveTextContent(/supports dark mode/);
+      r.unmount();
+      // The same page in the light theme renders light.
+      usePreferencesStore.setState({ theme: "light" });
+      render(<PageArtifact artifact={darkPage} />);
+      expect(frame()!.className).toMatch(/\[color-scheme:light\]/);
+      expect(screen.queryByTestId("page-theme-note")).not.toBeInTheDocument();
+    } finally {
+      usePreferencesStore.setState({ theme: prev });
+    }
+  });
+
+  it("] and [ step through the visible comments: highlight, focus the row, scroll the pin, announce", () => {
+    select();
+    useArtifactStore.getState().addComment(human("cmt_1"));
+    useArtifactStore.getState().addComment(human("cmt_2"));
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true })); });
+    const rows = screen.getAllByTestId("page-annotation");
+    expect(rows[0]).toHaveAttribute("aria-current", "true");
+    expect(win.postMessage).toHaveBeenCalledWith(expect.objectContaining({ dp: "focus", index: 0 }), "*");
+    expect(live()).toMatch(/^Comment 1, 1 of 2: Open\./);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true })); });
+    expect(screen.getAllByTestId("page-annotation")[1]).toHaveAttribute("aria-current", "true");
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", bubbles: true })); });
+    expect(screen.getAllByTestId("page-annotation")[0]).toHaveAttribute("aria-current", "true");
+  });
+
+  it("Resolve on a plain comment posts mark-resolved and the row reads Resolved by you; Reopen posts mark-unresolved", async () => {
+    useArtifactStore.getState().addComment(human("cmt_1"));
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByTestId("page-annotation-resolve"));
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith("/api/comments/cmt_1/mark-resolved"))).toBe(true);
+    // The row moved to Addressed (filter "Open" was automatic; nothing is open now → All).
+    expect(screen.getByText("Resolved by you")).toBeInTheDocument();
+    const reopen = screen.getByTestId("page-annotation-reopen");
+    expect(reopen).toHaveTextContent("Reopen");
+    await userEvent.click(reopen);
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith("/api/comments/cmt_1/mark-unresolved"))).toBe(true);
+    expect(screen.getAllByTestId("page-annotation-state")[0]).toHaveTextContent("Open");
+    expect(live()).toMatch(/Comment 1 reopened/);
+  });
+
+  it("no Resolve on an Ask, and none on a read-only page", () => {
+    useArtifactStore.getState().addComment(human("cmt_1", { intent: "question" }));
+    const { unmount } = render(<PageArtifact artifact={pageArtifact} />);
+    expect(screen.queryByTestId("page-annotation-resolve")).not.toBeInTheDocument();
+    unmount();
+    useArtifactStore.getState().addComment(human("cmt_2"));
+    const closed: Artifact = { ...pageArtifact, status: "approved" as Artifact["status"] };
+    render(<PageArtifact artifact={{ ...closed, status: "retracted" as Artifact["status"] }} />);
+    expect(screen.queryByTestId("page-annotation-resolve")).not.toBeInTheDocument();
+  });
+
+  it("announces a comment you just posted", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    act(() => { useArtifactStore.getState().addComment(human("cmt_5")); });
+    expect(live()).toBe("Comment 1 posted.");
   });
 });

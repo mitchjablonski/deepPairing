@@ -670,6 +670,29 @@ export function createHttpRoutes(
     return c.json({ status: "resolved", commentId, comment: comment ?? null });
   });
 
+  // #714 — withdraw the human's own resolve (Reopen on the page review
+  // queue): the exact inverse of mark-resolved, over the same field. Sets
+  // humanResolvedAt to null; never touches `acknowledged` or artifact status.
+  app.post("/api/comments/:commentId/mark-unresolved", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const commentId = c.req.param("commentId");
+    if (!(await store.getComment(commentId))) {
+      return c.json(
+        { error: "comment_not_in_session", code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
+    await store.markCommentHumanResolved(commentId, null);
+    const comment = await store.getComment(commentId);
+    if (comment) {
+      broadcast({ type: "comment_updated", comment }, sid);
+    }
+    return c.json({ status: "reopened", commentId, comment: comment ?? null });
+  });
+
   // #172 — the human resolves a COUNTERED suggestion from the companion UI.
   // "take_counter" accepts the agent's counter (state → applied, no version
   // yet — the agent applies its counter and stamps the version on its next
