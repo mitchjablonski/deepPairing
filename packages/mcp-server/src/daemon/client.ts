@@ -16,6 +16,7 @@ import type {
   AddStanceParams,
   AddStanceResult,
   RenderFailureRecord,
+  CommentResolutionSnapshot,
 } from "../store/store-interface.js";
 import { projectHashOf, BASE_PORT } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
@@ -659,8 +660,8 @@ export class DaemonClient implements IStore {
     return data.comments;
   }
 
-  async acknowledgeComments(ids: string[]): Promise<void> {
-    await this.post("/comments/acknowledge", { ids });
+  async acknowledgeComments(ids: string[], delivered?: CommentResolutionSnapshot[]): Promise<void> {
+    await this.post("/comments/acknowledge", { ids, delivered });
   }
 
   async getComment(commentId: string): Promise<Comment | undefined> {
@@ -733,8 +734,9 @@ export class DaemonClient implements IStore {
     return this.get(`/stance-exceptions?fingerprint=${encodeURIComponent(callFingerprint)}`);
   }
 
-  async markCommentHumanResolved(commentId: string, resolvedAt?: string): Promise<void> {
-    await this.post(`/comments/${commentId}/mark-resolved`, { resolvedAt });
+  async markCommentHumanResolved(commentId: string, resolvedAt?: string | null): Promise<boolean> {
+    const result = await this.post<{ changed?: boolean; status: string }>(`/comments/${commentId}/mark-resolved`, { resolvedAt });
+    return result.changed ?? (resolvedAt !== null && result.status === "resolved");
   }
 
   // --- Decisions ---

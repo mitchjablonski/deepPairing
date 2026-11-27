@@ -6117,13 +6117,13 @@ function time(args) {
   return new RegExp(`^${timeSource(args)}$`);
 }
 function datetime(args) {
-  const time3 = timeSource({ precision: args.precision });
+  const time4 = timeSource({ precision: args.precision });
   const opts = ["Z"];
   if (args.local)
     opts.push("");
   if (args.offset)
     opts.push(`([+-](?:[01]\\d|2[0-3]):[0-5]\\d)`);
-  const timeRegex = `${time3}(?:${opts.join("|")})`;
+  const timeRegex = `${time4}(?:${opts.join("|")})`;
   return new RegExp(`^${dateSource}T(?:${timeRegex})$`);
 }
 var string = (params) => {
@@ -20331,6 +20331,8 @@ var CommentSchema = external_exports.object({
    * human-driven; does not touch the agent's `acknowledged` queue.
    */
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  /** Changes on each explicit Resolve/Reopen so stale delivery cannot drain a newer reopen. */
+  humanResolutionToken: external_exports.string().uuid().optional(),
   /**
    * #160 — secret-scanner matches found in this comment's body at create
    * time. A comment with a secret is HUMAN-authored (the risk is a key
@@ -21616,6 +21618,59 @@ var PageRuleOutBodySchema = external_exports.object({
 });
 
 // ../shared/dist/schemas/page-asks.js
+var PAGE_ASK_LIMITS = { max: 50, text: 200, id: 200 };
+var PAGE_SANITIZE_DROP_TAGS = [
+  "script",
+  "noscript",
+  "template",
+  "iframe",
+  "frame",
+  "frameset",
+  "object",
+  "embed",
+  "applet",
+  "portal",
+  "base"
+];
+function cssEscapeIdent(value) {
+  const s = String(value);
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charAt(i);
+    const code = s.charCodeAt(i);
+    if (code === 0) {
+      out += "\uFFFD";
+      continue;
+    }
+    if (code >= 1 && code <= 31 || code === 127 || i === 0 && code >= 48 && code <= 57 || i === 1 && code >= 48 && code <= 57 && s.charCodeAt(0) === 45) {
+      out += "\\" + code.toString(16) + " ";
+      continue;
+    }
+    if (i === 0 && s.length === 1 && code === 45) {
+      out += "\\-";
+      continue;
+    }
+    if (code >= 128 || code === 45 || code === 95 || code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122) {
+      out += ch;
+      continue;
+    }
+    out += "\\" + ch;
+  }
+  return out;
+}
+function atOrInside(locator, base) {
+  return locator === base || locator.startsWith(base + " > ");
+}
+function anchorTargetsAsk(ask, anchor) {
+  if (ask.locator && atOrInside(anchor.locator, ask.locator))
+    return true;
+  if (ask.id && atOrInside(anchor.locator, "#" + cssEscapeIdent(ask.id)))
+    return true;
+  for (const c of ask.childIds ?? [])
+    if (atOrInside(anchor.locator, "#" + cssEscapeIdent(c)))
+      return true;
+  return false;
+}
 var PAGE_ASK_BREAK_TAGS = [
   "br",
   "hr",
@@ -21669,6 +21724,97 @@ var PAGE_ASK_BREAK_TAGS = [
   "center"
 ];
 var BREAK_TAG_SET = new Set(PAGE_ASK_BREAK_TAGS);
+function isAskBreakTag(tag) {
+  return BREAK_TAG_SET.has(tag);
+}
+function foldAskChars(s) {
+  return s.normalize("NFKC").replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'").replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
+}
+var AskTextHasher = class {
+  h1 = 3735928559;
+  h2 = 1103547991;
+  chars = 0;
+  /** A whitespace run was seen after some text and not emitted yet. */
+  pendingSpace = false;
+  emit(ch) {
+    this.h1 = Math.imul(this.h1 ^ ch, 2654435761);
+    this.h2 = Math.imul(this.h2 ^ ch, 1597334677);
+    this.chars++;
+  }
+  push(chunk) {
+    const s = foldAskChars(chunk);
+    for (let i = 0; i < s.length; i++) {
+      const ch = s.charCodeAt(i);
+      if (/\s/.test(s[i])) {
+        if (this.chars > 0)
+          this.pendingSpace = true;
+        continue;
+      }
+      if (this.pendingSpace) {
+        this.emit(32);
+        this.pendingSpace = false;
+      }
+      this.emit(ch);
+    }
+  }
+  /** A `<br>` or a block boundary: one separator, under the same collapse
+   *  and trim rules as whitespace (never doubled, never leading/trailing). */
+  separate() {
+    if (this.chars > 0)
+      this.pendingSpace = true;
+  }
+  /** The hash, or undefined when no text was pushed. */
+  digest() {
+    if (this.chars === 0)
+      return void 0;
+    let h1 = this.h1;
+    let h2 = this.h2;
+    h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507);
+    h1 ^= Math.imul(h2 ^ h2 >>> 13, 3266489909);
+    h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507);
+    h2 ^= Math.imul(h1 ^ h1 >>> 13, 3266489909);
+    const n = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+    return `${n.toString(36)}:${this.chars.toString(36)}`;
+  }
+};
+function askTextHash(text) {
+  const h = new AskTextHasher();
+  h.push(text);
+  return h.digest();
+}
+function askTextsContinue(prev, cur) {
+  return !!prev.fullHash && prev.fullHash === cur.fullHash;
+}
+function findEarlierAsk(cur, earlier) {
+  if (cur.id)
+    return earlier.find((o) => o.id === cur.id);
+  if (cur.locator)
+    return earlier.find((o) => !o.id && o.locator === cur.locator);
+  return void 0;
+}
+function isEarlierVersionComment(c, current) {
+  if (!current)
+    return false;
+  if (c.target.artifactId && c.target.artifactId !== current.artifactId)
+    return true;
+  const v2 = c.target.htmlAnchor?.version;
+  return typeof v2 === "number" && v2 < current.version;
+}
+function commentAnswersAsk(ask, c, current, opts = {}) {
+  if (c.author !== "human" || c.parentCommentId || c.humanResolvedAt)
+    return false;
+  const a = c.target.htmlAnchor;
+  if (!a || typeof a.locator !== "string" || typeof a.quote !== "string")
+    return false;
+  if (!isEarlierVersionComment(c, current))
+    return opts.insideByFrame === true || anchorTargetsAsk(ask, a);
+  const versionId = c.target.artifactId;
+  if (!versionId || versionId === current?.artifactId || !opts.earlierAsks)
+    return false;
+  const list2 = opts.earlierAsks(versionId);
+  const prev = list2 ? findEarlierAsk(ask, list2) : void 0;
+  return !!prev && askTextsContinue(prev, ask) && anchorTargetsAsk(prev, a);
+}
 
 // ../shared/dist/schemas/annotation.js
 var SessionAnnotationSchema = external_exports.object({
@@ -26495,6 +26641,9 @@ var ERROR_CODES = {
   decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #725 — mark-resolved on a plain comment that answers one of a page's
+   *  asks (resolving it would reopen the ask). */
+  comment_answers_page_ask: "comment_answers_page_ask",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
   suggestion_not_countered: "suggestion_not_countered",
   /** #172 — agent tried to counter a suggestion the human INSISTED on (their
@@ -30015,8 +30164,12 @@ var RetirementCommentFields = external_exports.object({
   acknowledged: external_exports.boolean(),
   answeredByCommentId: external_exports.string().nullable().optional(),
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  humanResolutionToken: external_exports.string().uuid().optional(),
   suggestion: external_exports.object({ state: external_exports.enum(["pending", "countered", "applied", "insisted"]) }).passthrough().optional()
 }).passthrough();
+var DeliveryCommentFields = RetirementCommentFields.extend({
+  humanResolvedAt: external_exports.string().nullable().optional()
+});
 var MIRROR_QUEUE_MAX = 200;
 var MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
@@ -30319,8 +30472,8 @@ var FileStore = class _FileStore {
   retirementFeedbackBlocked = false;
   /** An uncertain attempt must announce its truth once a retry confirms persistence. */
   unannouncedRetirements = /* @__PURE__ */ new Map();
-  validateRetirementComments(raw2) {
-    if (!Array.isArray(raw2) || raw2.some((c) => !RetirementCommentFields.safeParse(c).success) || new Set(raw2.map((c) => c.id)).size !== raw2.length || raw2.some((c) => c.sessionId !== this.sessionId)) {
+  validateRetirementComments(raw2, fields = RetirementCommentFields) {
+    if (!Array.isArray(raw2) || raw2.some((c) => !fields.safeParse(c).success) || new Set(raw2.map((c) => c.id)).size !== raw2.length || raw2.some((c) => c.sessionId !== this.sessionId)) {
       throw Object.assign(new Error("Retirement feedback remains unreadable; original comments were not overwritten."), { code: "ERETIREMENTFEEDBACKUNKNOWN" });
     }
     return raw2;
@@ -31053,13 +31206,38 @@ var FileStore = class _FileStore {
     return this.comments;
   }
   getUnacknowledgedComments() {
-    return this.comments.filter((c) => !c.acknowledged);
+    return this.comments.filter((c) => !c.acknowledged).map((c) => ({ ...c }));
   }
-  acknowledgeComments(ids) {
+  acknowledgeComments(ids, delivered) {
+    if (delivered !== void 0) {
+      const selected = new Set(ids);
+      const snapshots = new Map(delivered.map((snapshot) => [snapshot.id, snapshot]));
+      this.updateDurableComments((comments) => {
+        for (const comment of comments) {
+          const snapshot = snapshots.get(comment.id);
+          if (snapshot && selected.has(comment.id) && snapshot.resolvedAt === comment.humanResolvedAt && snapshot.token === comment.humanResolutionToken) {
+            comment.acknowledged = true;
+          }
+        }
+      });
+      return;
+    }
     for (const c of this.comments) {
       if (ids.includes(c.id)) c.acknowledged = true;
     }
     this.scheduleFlush();
+  }
+  /** Run guarded settlement against the latest comment state under the same lock
+   * as other writers, and expose the update only after its atomic disk write. */
+  updateDurableComments(update) {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    return withSessionFlushLock(path17.join(this.sessionDir(), ".flush.lock"), () => {
+      const { merged, filePath, diskBytes } = this.readDurableComments(true, DeliveryCommentFields);
+      const comments = merged.map((comment) => ({ ...comment }));
+      const result = update(comments);
+      this.writeDurableComments(comments, filePath, diskBytes, { clearRetirementBlock: false });
+      return result;
+    });
   }
   /** Caller holds the session flush lock. Validate raw input before merging. */
   readDurablePageRevisionFeedback(parentId, proof, allowBuffered) {
@@ -31067,6 +31245,14 @@ var FileStore = class _FileStore {
     if (!Array.isArray(artifacts) || artifacts.some((a) => !ArtifactSchema.safeParse(a).success)) {
       throw new Error("Unreadable page revision artifact history.");
     }
+    const { disk, local, baseline, merged, filePath, diskBytes } = this.readDurableComments(allowBuffered);
+    const observed = new Set([...baseline, ...disk].map((c) => c.id));
+    const comparable = allowBuffered ? [...disk, ...local.filter((c) => !observed.has(c.id))] : disk;
+    const current = provePageRevisionFeedback(artifacts, comparable, this.sessionId, parentId, proof.commentIds, merged);
+    if (current?.digest !== proof.digest) throw new PageRevisionFeedbackConflictError("Page revision feedback no longer matches its receipt.");
+    return { artifacts, merged, filePath, diskBytes };
+  }
+  readDurableComments(allowBuffered, fields = RetirementCommentFields) {
     const file2 = "comments.json";
     const filePath = path17.join(this.sessionDir(), file2);
     let diskBytes;
@@ -31077,7 +31263,7 @@ var FileStore = class _FileStore {
     }
     const validate = (read) => {
       try {
-        return this.validateRetirementComments(read());
+        return this.validateRetirementComments(read(), fields);
       } catch (error51) {
         this.retirementFeedbackBlocked = true;
         throw error51;
@@ -31086,12 +31272,8 @@ var FileStore = class _FileStore {
     const disk = validate(() => JSON.parse(diskBytes ?? "[]"));
     const local = validate(() => this.comments);
     const baseline = JSON.parse(this.recordBaselines[file2] ?? "[]");
-    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id));
-    const observed = new Set([...baseline, ...disk].map((c) => c.id));
-    const comparable = allowBuffered ? [...disk, ...local.filter((c) => !observed.has(c.id))] : disk;
-    const current = provePageRevisionFeedback(artifacts, comparable, this.sessionId, parentId, proof.commentIds, merged);
-    if (current?.digest !== proof.digest) throw new PageRevisionFeedbackConflictError("Page revision feedback no longer matches its receipt.");
-    return { artifacts, merged, filePath, diskBytes };
+    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id), fields);
+    return { disk, local, baseline, merged, filePath, diskBytes };
   }
   /** Validate the bound selection under the same lock used by disk writers. */
   preparePageRevisionFeedback(parentId, proof, create) {
@@ -31102,18 +31284,18 @@ var FileStore = class _FileStore {
       if (!parent || artifacts.some((artifact) => artifact.parentId === parentId)) {
         throw new PageRevisionFeedbackConflictError("Page revision predecessor already has a durable successor.");
       }
-      this.writePageRevisionComments(merged, filePath, diskBytes);
+      this.writeDurableComments(merged, filePath, diskBytes);
       return create(parent);
     });
   }
-  writePageRevisionComments(comments, filePath, diskBytes) {
+  writeDurableComments(comments, filePath, diskBytes, { clearRetirementBlock = true } = {}) {
     const bytes2 = JSON.stringify(comments, null, 2);
     if (bytes2 !== diskBytes) writeStringAtomic(filePath, bytes2);
     this.comments = comments;
     this.recordBaselines["comments.json"] = JSON.stringify(comments);
     this.observedRecordFiles.add("comments.json");
     delete this.backedUpCorruption[filePath];
-    this.retirementFeedbackBlocked = false;
+    if (clearRetirementBlock) this.retirementFeedbackBlocked = false;
   }
   /** Keep the warm read unchanged until the exact acknowledgement is durable. */
   acknowledgePageRevisionFeedback(parentId, proof, verifyRevision) {
@@ -31131,7 +31313,7 @@ var FileStore = class _FileStore {
         const stamp = advances ? { addressedIn } : {};
         return comment.acknowledged && !("addressedIn" in stamp) ? comment : { ...comment, acknowledged: true, ...stamp };
       });
-      this.writePageRevisionComments(updated, filePath, diskBytes);
+      this.writeDurableComments(updated, filePath, diskBytes);
       return updated.filter((comment) => selected.has(comment.id));
     });
   }
@@ -31482,11 +31664,20 @@ var FileStore = class _FileStore {
     }
   }
   markCommentHumanResolved(commentId, resolvedAt) {
-    const comment = this.comments.find((c) => c.id === commentId);
-    if (comment) {
-      comment.humanResolvedAt = resolvedAt ?? (/* @__PURE__ */ new Date()).toISOString();
-      this.scheduleFlush();
-    }
+    let requeued = false;
+    const changed = this.updateDurableComments((comments) => {
+      const comment = comments.find((c) => c.id === commentId);
+      if (!comment || resolvedAt === null && (!comment.humanResolvedAt || !Number.isFinite(Date.parse(comment.humanResolvedAt)))) return false;
+      comment.humanResolvedAt = resolvedAt === null ? null : resolvedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+      comment.humanResolutionToken = crypto4.randomUUID();
+      if (resolvedAt === null && comment.acknowledged) {
+        comment.acknowledged = false;
+        requeued = true;
+      }
+      return true;
+    });
+    if (requeued) this.notifyFeedbackWaiters();
+    return changed;
   }
   // --- Decisions ---
   // C6c review — the interface narrowed options to DecisionOption[] but this
@@ -32597,21 +32788,28 @@ var FileStore = class _FileStore {
   }
   // --- Feedback notification (for long-poll) ---
   feedbackWaiters = [];
+  reviewEndWaiters = /* @__PURE__ */ new Set();
   /** Register a waiter until feedback arrives, the budget expires, or the caller leaves. */
-  waitForFeedback(timeoutMs = 3e4, signal) {
+  waitForFeedback(timeoutMs = 3e4, signal, wakeOn) {
     if (signal?.aborted) return Promise.resolve();
     return new Promise((resolve) => {
       const finish = () => {
         clearTimeout(timer);
         signal?.removeEventListener("abort", finish);
+        this.reviewEndWaiters.delete(finish);
         const index = this.feedbackWaiters.indexOf(finish);
         if (index !== -1) this.feedbackWaiters.splice(index, 1);
         resolve();
       };
       const timer = setTimeout(finish, timeoutMs);
       this.feedbackWaiters.push(finish);
+      if (wakeOn === "review_end") this.reviewEndWaiters.add(finish);
       signal?.addEventListener("abort", finish, { once: true });
     });
+  }
+  /** Exact decision readers recheck under the resolve lock after this wake. */
+  notifyStandaloneReviewEnded() {
+    for (const finish of this.reviewEndWaiters) finish();
   }
   /** Notify all waiters that feedback has arrived */
   notifyFeedbackWaiters() {
@@ -36462,50 +36660,6 @@ async function maybeUpdateTaskStatus(_server, _artifactId, _store) {
   void taskHandleForArtifact;
 }
 
-// src/http/origin-policy.ts
-function corsAllowedOrigin(origin) {
-  if (origin.startsWith("vscode-webview://")) return origin;
-  return void 0;
-}
-function isLoopbackHostname(hostname3) {
-  return hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "[::1]" || hostname3 === "::1";
-}
-function isAllowedWsOrigin(origin, hostHeader) {
-  if (!origin) return true;
-  if (origin.startsWith("vscode-webview://")) return true;
-  if (!hostHeader) return false;
-  try {
-    const o = new URL(origin);
-    return o.host === hostHeader && isLoopbackHostname(o.hostname);
-  } catch {
-    return false;
-  }
-}
-
-// src/http/route-helpers.ts
-var NO_SESSION_RESPONSE = {
-  error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
-  code: ERROR_CODES.no_active_session
-};
-async function readJsonValue(c) {
-  const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
-  let raw2;
-  try {
-    raw2 = await c.req.text();
-  } catch {
-    return invalid();
-  }
-  if (raw2.trim() === "") return invalid();
-  try {
-    return { ok: true, value: JSON.parse(raw2) };
-  } catch {
-    return invalid();
-  }
-}
-function getSessionId(c) {
-  return c.req.header("X-Session-Id") ?? void 0;
-}
-
 // src/mcp/page-text.ts
 var DROP_ELEMENTS = ["script", "style", "template", "title"];
 var TEXT_ELEMENTS = ["textarea", "xmp"];
@@ -36673,6 +36827,577 @@ function extractPageTextBlocks(html) {
     if (blocks.length >= PAGE_TEXT_MAX_BLOCKS) break;
   }
   return blocks;
+}
+
+// src/mcp/page-anchor-relocate.ts
+var LATIN1_NAMES = "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml".split(" ");
+var NAMED = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  sbquo: "\u201A",
+  ldquo: "\u201C",
+  rdquo: "\u201D",
+  bdquo: "\u201E",
+  bull: "\u2022",
+  prime: "\u2032",
+  Prime: "\u2033",
+  trade: "\u2122",
+  euro: "\u20AC",
+  larr: "\u2190",
+  uarr: "\u2191",
+  rarr: "\u2192",
+  darr: "\u2193",
+  harr: "\u2194",
+  lArr: "\u21D0",
+  rArr: "\u21D2",
+  hArr: "\u21D4",
+  minus: "\u2212",
+  le: "\u2264",
+  ge: "\u2265",
+  ne: "\u2260",
+  asymp: "\u2248",
+  infin: "\u221E",
+  ensp: "\u2002",
+  emsp: "\u2003",
+  thinsp: "\u2009",
+  zwnj: "\u200C",
+  zwj: "\u200D",
+  OElig: "\u0152",
+  oelig: "\u0153",
+  Scaron: "\u0160",
+  scaron: "\u0161",
+  Yuml: "\u0178",
+  fnof: "\u0192",
+  circ: "\u02C6",
+  tilde: "\u02DC",
+  dagger: "\u2020",
+  Dagger: "\u2021",
+  permil: "\u2030",
+  lsaquo: "\u2039",
+  rsaquo: "\u203A",
+  check: "\u2713",
+  hearts: "\u2665",
+  star: "\u2606"
+};
+LATIN1_NAMES.forEach((n, i) => {
+  NAMED[n] = String.fromCharCode(160 + i);
+});
+function decodeHtmlEntities(s) {
+  let unknownEntity = false;
+  const text = s.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{1,31});?/g, (m, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return "\uFFFD";
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return "\uFFFD";
+      }
+    }
+    const hit = NAMED[body] ?? NAMED[body.toLowerCase()];
+    if (hit !== void 0) return hit;
+    if (m.endsWith(";")) unknownEntity = true;
+    return m;
+  });
+  return { text, unknownEntity };
+}
+function core(s) {
+  return s.normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, "");
+}
+function norm(s) {
+  return s.replace(/\s+/g, " ").trim();
+}
+function pageHaystack(html) {
+  const blocks = extractPageTextBlocks(html);
+  const decoded = decodeHtmlEntities(html);
+  const text = decodeHtmlEntities(blocks.join(" "));
+  return {
+    text: core(text.text),
+    raw: core(decoded.text),
+    html: decoded.text,
+    unknownEntity: decoded.unknownEntity || text.unknownEntity,
+    truncated: blocks.length >= PAGE_TEXT_MAX_BLOCKS
+  };
+}
+function present(hay, s) {
+  const c = core(s);
+  if (!c) return null;
+  return hay.text.includes(c) || hay.raw.includes(c);
+}
+function relocateHtmlAnchor(anchor, hay) {
+  const checks = [];
+  const quote = norm(anchor.quote ?? "");
+  checks.push(present(hay, anchor.kind === "text" ? quote : quote.slice(0, 60)));
+  if (anchor.kind === "cell" && anchor.table) {
+    if (anchor.table.row) checks.push(present(hay, anchor.table.row));
+    if (anchor.table.col) checks.push(present(hay, anchor.table.col));
+  }
+  if (anchor.kind === "link" && anchor.href) checks.push(hay.html.includes(anchor.href));
+  if (anchor.kind === "diagram-node" && anchor.nodeId) {
+    if (hay.html.includes(anchor.nodeId)) return "carried";
+  }
+  const known = checks.filter((c) => c !== null);
+  if (known.length === 0) return "unknown";
+  if (known.every(Boolean)) return "carried";
+  if (hay.truncated || hay.unknownEntity) return "unknown";
+  return "orphaned";
+}
+function relocatePageComments(html, comments) {
+  const hay = pageHaystack(html);
+  const out = { carried: [], orphaned: [], orphanedOverflow: 0, unknown: [] };
+  const roots = comments.filter((c) => c.author === "human" && !c.parentCommentId && c.target.htmlAnchor).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const c of roots) {
+    const a = c.target.htmlAnchor;
+    const v2 = relocateHtmlAnchor(a, hay);
+    if (v2 === "carried") out.carried.push(c.id);
+    else if (v2 === "unknown") out.unknown.push(c.id);
+    else if (out.orphaned.length >= PAGE_FILE_WATCH_LIMITS.orphans) out.orphanedOverflow++;
+    else {
+      out.orphaned.push({
+        commentId: c.id,
+        kind: a.kind,
+        quote: a.quote.slice(0, PAGE_FILE_WATCH_LIMITS.quote),
+        locator: a.locator.slice(0, PAGE_FILE_WATCH_LIMITS.locator),
+        ...a.version != null ? { version: a.version } : {}
+      });
+    }
+  }
+  return out;
+}
+
+// src/mcp/page-asks.ts
+var decode3 = (s) => decodeHtmlEntities(s).text;
+var IMPLICIT_CLOSES = /* @__PURE__ */ (() => {
+  const li = { siblings: /* @__PURE__ */ new Set(["li"]), scope: ["ul", "ol", "menu"] };
+  const dd = { siblings: /* @__PURE__ */ new Set(["dt", "dd"]), scope: ["dl"] };
+  const cell = { siblings: /* @__PURE__ */ new Set(["td", "th", "tr", "tbody", "thead", "tfoot"]), scope: ["table", "tr"] };
+  const section = { siblings: /* @__PURE__ */ new Set(["tbody", "thead", "tfoot"]), scope: ["table"] };
+  return {
+    li,
+    dt: dd,
+    dd,
+    option: { siblings: /* @__PURE__ */ new Set(["option", "optgroup"]), scope: ["select", "datalist", "optgroup"] },
+    optgroup: { siblings: /* @__PURE__ */ new Set(["optgroup"]), scope: ["select"] },
+    td: cell,
+    th: cell,
+    tr: { siblings: /* @__PURE__ */ new Set(["tr", "tbody", "thead", "tfoot"]), scope: ["table", "thead", "tbody", "tfoot"] },
+    thead: section,
+    tbody: section,
+    tfoot: section
+  };
+})();
+var IMPLICIT_TRIGGERS = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.siblings]));
+var TABLE_SCOPED = ["tr", "td", "th", "thead", "tbody", "tfoot"];
+var IMPLICIT_SCOPES = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.scope]));
+var CONTAINER_DROPS = PAGE_SANITIZE_DROP_TAGS.filter(
+  (t) => !DROP_ELEMENTS.includes(t) && t !== "base" && t !== "embed"
+);
+var CHILD_IDS_MAX = 50;
+var LEADING_NEWLINE_TAGS = /* @__PURE__ */ new Set(["pre", "listing", "textarea"]);
+function dropLeadingNewline(body, tag) {
+  if (!LEADING_NEWLINE_TAGS.has(tag)) return body;
+  if (body.startsWith("\r\n")) return body.slice(2);
+  return body[0] === "\n" || body[0] === "\r" ? body.slice(1) : body;
+}
+var VOID_TAGS = /* @__PURE__ */ new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "source",
+  "track",
+  "wbr"
+]);
+var P_CLOSERS = /* @__PURE__ */ new Set([
+  "li",
+  "dd",
+  "dt",
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "details",
+  "div",
+  "dl",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "table",
+  "ul"
+]);
+var RAW_BUDGET = PAGE_ASK_LIMITS.text * 5;
+function isSpace(c) {
+  return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
+}
+function tagAttributes(tag) {
+  const out = /* @__PURE__ */ new Map();
+  const n = tag.length;
+  let i = 1;
+  while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== ">" && tag[i] !== "/") i++;
+  while (i < n) {
+    while (i < n && (isSpace(tag.charCodeAt(i)) || tag[i] === "/")) i++;
+    if (i >= n || tag[i] === ">") break;
+    const nameStart = i;
+    while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== "=" && tag[i] !== ">" && tag[i] !== "/") i++;
+    const name = tag.slice(nameStart, i).toLowerCase();
+    while (i < n && isSpace(tag.charCodeAt(i))) i++;
+    let value = "";
+    if (tag[i] === "=") {
+      i++;
+      while (i < n && isSpace(tag.charCodeAt(i))) i++;
+      const q = tag[i];
+      if (q === '"' || q === "'") {
+        const end = tag.indexOf(q, i + 1);
+        const stop = end === -1 ? n : end;
+        value = tag.slice(i + 1, stop);
+        i = stop + 1;
+      } else {
+        const vStart = i;
+        while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== ">") i++;
+        value = tag.slice(vStart, i);
+      }
+    }
+    if (name && !out.has(name)) out.set(name, value);
+  }
+  return out;
+}
+function extractPageAsks(html) {
+  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  if (lower.indexOf("data-dp-decision") === -1 && lower.indexOf("data-dp-question") === -1) return [];
+  const n = html.length;
+  const lastAt = /* @__PURE__ */ new Map();
+  const memoIndexOf = (hay, needle, from) => {
+    const prev = lastAt.get(needle);
+    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
+    const at = hay.indexOf(needle, from);
+    lastAt.set(needle, at);
+    return at;
+  };
+  const tagEnd = (lt) => {
+    let at = lt + 1;
+    while (at < n) {
+      const c = html.charCodeAt(at);
+      if (c === 62) return at;
+      if ((c === 34 || c === 39) && /[\s=]/.test(html[at - 1])) {
+        const end = memoIndexOf(html, html[at], at + 1);
+        if (end === -1) return memoIndexOf(html, ">", at + 1);
+        at = end + 1;
+        continue;
+      }
+      at++;
+    }
+    return -1;
+  };
+  const out = [];
+  const openCount = /* @__PURE__ */ new Map();
+  const stacks = /* @__PURE__ */ new Map();
+  let hungry = [];
+  const openOrder = [];
+  const innermost = () => {
+    while (openOrder.length > 0 && openOrder[openOrder.length - 1].closed) openOrder.pop();
+    return openOrder[openOrder.length - 1];
+  };
+  const finish = (c) => {
+    if (c.done) return;
+    c.done = true;
+    const full = decode3(c.raw).replace(/\s+/g, " ").trim() || c.fallback;
+    c.ask.text = full.length > PAGE_ASK_LIMITS.text ? full.slice(0, PAGE_ASK_LIMITS.text) : full;
+  };
+  let hashing = [];
+  const seal = (c) => {
+    if (c.ask.fullHash !== void 0) return;
+    c.ask.fullHash = c.hasher.digest() ?? (c.fallback ? askTextHash(c.fallback) : void 0) ?? "";
+    if (!c.ask.fullHash) delete c.ask.fullHash;
+  };
+  const feed = (s, source = s) => {
+    if (!s && !source) return;
+    if (hashing.length > 0 && source) {
+      const text = decode3(source);
+      let closed = false;
+      for (const c of hashing) {
+        if (c.closed) closed = true;
+        else c.hasher.push(text);
+      }
+      if (closed) hashing = hashing.filter((c) => !c.closed);
+    }
+    if (hungry.length === 0 || !s) return;
+    let full = false;
+    for (const c of hungry) {
+      if (c.done) {
+        full = true;
+        continue;
+      }
+      c.raw += s.slice(0, RAW_BUDGET - c.raw.length);
+      if (c.raw.length >= RAW_BUDGET) {
+        finish(c);
+        full = true;
+      }
+    }
+    if (full) hungry = hungry.filter((c) => !c.done);
+  };
+  const closeTag = (name) => {
+    const count2 = Math.max(0, (openCount.get(name) ?? 0) - 1);
+    openCount.set(name, count2);
+    const stack = stacks.get(name);
+    while (stack && stack.length > 0 && stack[stack.length - 1].level > count2) {
+      const c = stack.pop();
+      c.closed = true;
+      finish(c);
+      seal(c);
+    }
+  };
+  const scopeDepth = (tag) => {
+    let d = 0;
+    for (const t of IMPLICIT_CLOSES[tag].scope) d += openCount.get(t) ?? 0;
+    return d;
+  };
+  const implicitClose = (c) => {
+    c.closed = true;
+    finish(c);
+    seal(c);
+    const stack = stacks.get(c.tag);
+    const at = stack ? stack.indexOf(c) : -1;
+    if (at !== -1) stack.splice(at, 1);
+  };
+  const implicitOnOpen = (name) => {
+    if (!IMPLICIT_TRIGGERS.has(name)) return;
+    for (const c of openOrder) {
+      if (c.closed || c.scope === void 0) continue;
+      if (IMPLICIT_CLOSES[c.tag].siblings.has(name) && scopeDepth(c.tag) === c.scope) implicitClose(c);
+    }
+  };
+  const implicitOnClose = (name) => {
+    if (!IMPLICIT_SCOPES.has(name)) return;
+    for (const c of openOrder) {
+      if (c.closed || c.scope === void 0) continue;
+      if (IMPLICIT_CLOSES[c.tag].scope.includes(name) && scopeDepth(c.tag) < c.scope) implicitClose(c);
+    }
+  };
+  const tableSnapshots = [];
+  let i = 0;
+  while (i < n) {
+    if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0 && hashing.every((c2) => c2.closed)) break;
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      feed(html.slice(i));
+      break;
+    }
+    feed(html.slice(i, lt));
+    if (lower.startsWith("<!--", lt)) {
+      if (lower.startsWith("<!-->", lt)) {
+        i = lt + 5;
+        continue;
+      }
+      if (lower.startsWith("<!--->", lt)) {
+        i = lt + 6;
+        continue;
+      }
+      const a = memoIndexOf(html, "-->", lt + 4);
+      const b = memoIndexOf(html, "--!>", lt + 4);
+      const end = a === -1 ? b === -1 ? -1 : b + 4 : b === -1 || a < b ? a + 3 : b + 4;
+      i = end === -1 ? n : end;
+      continue;
+    }
+    const gt = tagEnd(lt);
+    if (gt === -1) {
+      feed(html.slice(lt), "");
+      break;
+    }
+    if (opensElement(lower, lt, "plaintext")) {
+      feed(" " + html.slice(gt + 1), html.slice(gt + 1));
+      break;
+    }
+    const hidden = CONTAINER_DROPS.find((t) => opensElement(lower, lt, t));
+    if (hidden) {
+      const close = memoIndexOf(lower, `</${hidden}`, gt + 1);
+      if (close === -1) break;
+      const closeEnd = html.indexOf(">", close);
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const drop = DROP_ELEMENTS.find((t) => opensElement(lower, lt, t));
+    const literal2 = drop ? void 0 : TEXT_ELEMENTS.find((t) => opensElement(lower, lt, t));
+    const raw2 = drop ?? literal2;
+    if (raw2) {
+      const close = memoIndexOf(lower, `</${raw2}`, gt + 1);
+      if (close === -1) {
+        i = gt + 1;
+        continue;
+      }
+      if (literal2) {
+        const body = dropLeadingNewline(html.slice(gt + 1, close), literal2);
+        feed(" " + body + " ", body);
+      }
+      const closeEnd = html.indexOf(">", close);
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const m = /^<(\/?)\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
+    i = gt + 1;
+    if (!m) continue;
+    if (!m[1] && LEADING_NEWLINE_TAGS.has(m[2])) {
+      if (html.startsWith("\r\n", i)) i += 2;
+      else if (html[i] === "\n" || html[i] === "\r") i += 1;
+    }
+    const name = m[2];
+    if (BLOCK_TAGS.has(name)) feed(" ", "");
+    if (hashing.length > 0 && isAskBreakTag(name)) {
+      for (const c2 of hashing) if (!c2.closed) c2.hasher.separate();
+    }
+    if (m[1]) {
+      closeTag(name);
+      if (name === "table") {
+        const snap = tableSnapshots.pop();
+        if (snap) TABLE_SCOPED.forEach((t, k) => openCount.set(t, snap[k]));
+      }
+      implicitOnClose(name);
+      continue;
+    }
+    implicitOnOpen(name);
+    if (name === "table") tableSnapshots.push(TABLE_SCOPED.map((t) => openCount.get(t) ?? 0));
+    if (P_CLOSERS.has(name) && (openCount.get("p") ?? 0) > 0) {
+      openCount.set("p", 1);
+      closeTag("p");
+    }
+    const tagLower = lower.slice(lt, gt + 1);
+    const isAsk = tagLower.includes("data-dp-decision") || tagLower.includes("data-dp-question");
+    const isVoid = VOID_TAGS.has(name);
+    if (!isVoid) openCount.set(name, (openCount.get(name) ?? 0) + 1);
+    const inner = isAsk || tagLower.indexOf("id") === -1 ? void 0 : innermost();
+    if (inner) {
+      const childId = decode3(tagAttributes(html.slice(lt, gt + 1)).get("id") ?? "");
+      if (childId && childId.length <= PAGE_ASK_LIMITS.id && !/\s/.test(childId)) {
+        const ids = inner.ask.childIds ??= [];
+        if (ids.length < CHILD_IDS_MAX) ids.push(childId);
+      }
+    }
+    if (!isAsk || out.length >= PAGE_ASK_LIMITS.max) continue;
+    const attrs = tagAttributes(html.slice(lt, gt + 1));
+    const decision = attrs.has("data-dp-decision");
+    if (!decision && !attrs.has("data-dp-question")) continue;
+    const ask = { kind: decision ? "decision" : "question", text: "" };
+    const id = decode3(attrs.get("id") ?? "");
+    if (id && id.length <= PAGE_ASK_LIMITS.id && !/\s/.test(id)) ask.id = id;
+    out.push(ask);
+    const fallback = decode3(attrs.get("alt") || attrs.get("aria-label") || attrs.get("title") || attrs.get("value") || "").replace(/\s+/g, " ").trim();
+    const c = {
+      ask,
+      tag: name,
+      level: openCount.get(name) ?? 0,
+      raw: "",
+      fallback,
+      done: false,
+      closed: false,
+      hasher: new AskTextHasher()
+    };
+    if (IMPLICIT_CLOSES[name]) c.scope = scopeDepth(name);
+    if (isVoid) {
+      c.closed = true;
+      finish(c);
+      seal(c);
+      continue;
+    }
+    hashing.push(c);
+    openOrder.push(c);
+    const stack = stacks.get(name) ?? [];
+    stack.push(c);
+    stacks.set(name, stack);
+    hungry.push(c);
+  }
+  for (const stack of stacks.values()) for (const c of stack) {
+    finish(c);
+    seal(c);
+  }
+  for (const c of hashing) seal(c);
+  return out;
+}
+var scanCache = /* @__PURE__ */ new Map();
+var SCAN_CACHE_MAX = 50;
+function pageAsksFor(artifactId, html) {
+  const hit = scanCache.get(artifactId);
+  if (hit) {
+    scanCache.delete(artifactId);
+    scanCache.set(artifactId, hit);
+    return hit;
+  }
+  const asks = extractPageAsks(html);
+  scanCache.set(artifactId, asks);
+  if (scanCache.size > SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value);
+  return asks;
+}
+
+// src/http/origin-policy.ts
+function corsAllowedOrigin(origin) {
+  if (origin.startsWith("vscode-webview://")) return origin;
+  return void 0;
+}
+function isLoopbackHostname(hostname3) {
+  return hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "[::1]" || hostname3 === "::1";
+}
+function isAllowedWsOrigin(origin, hostHeader) {
+  if (!origin) return true;
+  if (origin.startsWith("vscode-webview://")) return true;
+  if (!hostHeader) return false;
+  try {
+    const o = new URL(origin);
+    return o.host === hostHeader && isLoopbackHostname(o.hostname);
+  } catch {
+    return false;
+  }
+}
+
+// src/http/route-helpers.ts
+var NO_SESSION_RESPONSE = {
+  error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
+  code: ERROR_CODES.no_active_session
+};
+async function readJsonValue(c) {
+  const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
+  let raw2;
+  try {
+    raw2 = await c.req.text();
+  } catch {
+    return invalid();
+  }
+  if (raw2.trim() === "") return invalid();
+  try {
+    return { ok: true, value: JSON.parse(raw2) };
+  } catch {
+    return invalid();
+  }
+}
+function getSessionId(c) {
+  return c.req.header("X-Session-Id") ?? void 0;
 }
 
 // src/mcp/artifact-preflight.ts
@@ -37545,6 +38270,53 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const commentId = c.req.param("commentId");
+    const existing = await store.getComment(commentId);
+    if (!existing) {
+      return c.json(
+        {
+          error: "comment_not_in_session",
+          code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (existing.intent !== "question" && existing.target.htmlAnchor && existing.target.artifactId) {
+      const art = (await store.getArtifacts()).find((a) => a.id === existing.target.artifactId);
+      if (art?.type === "page") {
+        let answers = false;
+        try {
+          const asks = pageAsksFor(art.id, coercePageContent(art.content).html).filter((q) => q.id);
+          const current = { artifactId: art.id, version: art.version };
+          answers = asks.some((q) => commentAnswersAsk(q, existing, current));
+        } catch {
+          answers = false;
+        }
+        if (answers) {
+          return c.json(
+            {
+              error: "comment_answers_page_ask",
+              code: ERROR_CODES.comment_answers_page_ask,
+              message: "This comment answers one of the page's asks; resolving it would reopen the ask."
+            },
+            409
+          );
+        }
+      }
+    }
+    const resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
+    await store.markCommentHumanResolved(commentId, resolvedAt);
+    const comment = await store.getComment(commentId);
+    if (comment) {
+      broadcast({ type: "comment_updated", comment }, sid);
+    }
+    return c.json({ status: "resolved", commentId, comment: comment ?? null });
+  });
+  app.post("/api/comments/:commentId/mark-unresolved", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const commentId = c.req.param("commentId");
     if (!await store.getComment(commentId)) {
       return c.json(
         {
@@ -37555,13 +38327,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         404
       );
     }
-    const resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
-    await store.markCommentHumanResolved(commentId, resolvedAt);
+    const reopened = await store.markCommentHumanResolved(commentId, null);
     const comment = await store.getComment(commentId);
-    if (comment) {
+    if (reopened && comment) {
       broadcast({ type: "comment_updated", comment }, sid);
     }
-    return c.json({ status: "resolved", commentId, comment: comment ?? null });
+    return c.json({ status: reopened ? "reopened" : "unchanged", commentId, comment: comment ?? null });
   });
   app.post("/api/comments/:commentId/suggestion", async (c) => {
     const sid = getSessionId(c);
@@ -38648,6 +39419,47 @@ import path24 from "node:path";
 
 // src/mcp/tool-helpers.ts
 import { createHash as createHash5 } from "node:crypto";
+
+// src/store/comment-resolution.ts
+function time3(value) {
+  if (!value) return void 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : void 0;
+}
+function effectiveHumanResolution(comments, artifacts) {
+  const revisionTimes = new Map(artifacts.map((artifact) => [artifact.id, artifact.createdAt]));
+  const replies = /* @__PURE__ */ new Map();
+  for (const comment of comments) {
+    if (!comment.parentCommentId) continue;
+    const children = replies.get(comment.parentCommentId);
+    if (children) children.push(comment);
+    else replies.set(comment.parentCommentId, [comment]);
+  }
+  return (comment) => {
+    const stamp = comment.humanResolvedAt;
+    if (!stamp) return stamp;
+    const resolvedAt = time3(stamp);
+    const rootAt = time3(comment.createdAt) ?? 0;
+    if (resolvedAt === void 0 || rootAt > resolvedAt) return void 0;
+    const addressed = comment.addressedIn;
+    if (addressed && Number.isInteger(addressed.version) && addressed.version > 0) {
+      const revisionAt = time3(addressed.at) ?? time3(revisionTimes.get(addressed.artifactId)) ?? rootAt;
+      if (revisionAt >= resolvedAt) return void 0;
+    }
+    const seen = /* @__PURE__ */ new Set([comment.id]);
+    const pending = [...replies.get(comment.id) ?? []];
+    while (pending.length) {
+      const reply = pending.pop();
+      if (seen.has(reply.id) || reply.sessionId !== comment.sessionId) continue;
+      seen.add(reply.id);
+      const replyAt = time3(reply.createdAt) ?? rootAt;
+      if (replyAt > resolvedAt || reply.author === "agent" && replyAt === resolvedAt) return void 0;
+      for (const nested of replies.get(reply.id) ?? []) pending.push(nested);
+    }
+    if (comment.answeredByCommentId && !seen.has(comment.answeredByCommentId) && rootAt >= resolvedAt) return void 0;
+    return stamp;
+  };
+}
 
 // src/mcp/advisory-recall.ts
 function tokenSetKey(s) {
@@ -40270,7 +41082,7 @@ var RESOURCE_ATTRS = {
   // SVG <use> pointing at another document
 };
 var HEADINGS = /* @__PURE__ */ new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
-function isSpace(c) {
+function isSpace2(c) {
   return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
 }
 function isAlpha(c) {
@@ -40278,7 +41090,7 @@ function isAlpha(c) {
 }
 function externalAt(lower, at) {
   let i = at;
-  while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
+  while (i < lower.length && isSpace2(lower.charCodeAt(i))) i++;
   return lower.startsWith("http://", i) || lower.startsWith("https://", i) || lower.startsWith("//", i);
 }
 function isExternal(value) {
@@ -40302,10 +41114,10 @@ function srcsetUrls(value) {
   const n = value.length;
   let i = 0;
   while (i < n) {
-    while (i < n && (isSpace(value.charCodeAt(i)) || value[i] === ",")) i++;
+    while (i < n && (isSpace2(value.charCodeAt(i)) || value[i] === ",")) i++;
     if (i >= n) break;
     const start = i;
-    while (i < n && !isSpace(value.charCodeAt(i))) i++;
+    while (i < n && !isSpace2(value.charCodeAt(i))) i++;
     let url2 = value.slice(start, i);
     if (url2.endsWith(",")) {
       url2 = url2.replace(/,+$/, "");
@@ -40338,7 +41150,7 @@ function consumeEscape(css, i) {
     while (j < css.length && j - hexStart < 6 && isHexDigit(css.charCodeAt(j))) j++;
     const cp = parseInt(css.slice(hexStart, j), 16);
     if (css.charCodeAt(j) === 13 && css.charCodeAt(j + 1) === 10) j += 2;
-    else if (isSpace(css.charCodeAt(j))) j++;
+    else if (isSpace2(css.charCodeAt(j))) j++;
     const ok = cp > 0 && cp <= 1114111 && !(cp >= 55296 && cp <= 57343);
     return [ok ? String.fromCodePoint(cp) : "\uFFFD", j];
   }
@@ -40402,8 +41214,8 @@ function scanCss(css, onToken) {
       const [value, j] = consumeString(css, i);
       onToken({ kind: "string", value });
       i = j;
-    } else if (isSpace(c)) {
-      while (i < n && isSpace(css.charCodeAt(i))) i++;
+    } else if (isSpace2(c)) {
+      while (i < n && isSpace2(css.charCodeAt(i))) i++;
       onToken({ kind: "space" });
     } else if (c === 64 || c === 35) {
       const [name, j] = consumeName(css, i + 1);
@@ -40414,7 +41226,7 @@ function scanCss(css, onToken) {
       const name = rawName.toLowerCase();
       if (name === "url" && css.charCodeAt(j) === 40) {
         let k = j + 1;
-        while (k < n && isSpace(css.charCodeAt(k))) k++;
+        while (k < n && isSpace2(css.charCodeAt(k))) k++;
         const q = css.charCodeAt(k);
         if (q === 34 || q === 39) {
           const [value, m] = consumeString(css, k);
@@ -40467,23 +41279,23 @@ function externalCssRefs(css) {
 function readStartTag(html, lower, at) {
   const n = html.length;
   let i = at;
-  while (i < n && !isSpace(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">") i++;
+  while (i < n && !isSpace2(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">") i++;
   const name = lower.slice(at, i);
   const attrs = /* @__PURE__ */ Object.create(null);
   while (i < n) {
-    while (i < n && (isSpace(lower.charCodeAt(i)) || lower[i] === "/")) i++;
+    while (i < n && (isSpace2(lower.charCodeAt(i)) || lower[i] === "/")) i++;
     if (i >= n) break;
     if (lower[i] === ">") return { name, attrs, end: i + 1 };
     const nameStart = i;
     i++;
-    while (i < n && !isSpace(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">" && lower[i] !== "=") i++;
+    while (i < n && !isSpace2(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">" && lower[i] !== "=") i++;
     const attr = lower.slice(nameStart, i);
     let j = i;
-    while (j < n && isSpace(lower.charCodeAt(j))) j++;
+    while (j < n && isSpace2(lower.charCodeAt(j))) j++;
     let value = "";
     if (lower[j] === "=") {
       j++;
-      while (j < n && isSpace(lower.charCodeAt(j))) j++;
+      while (j < n && isSpace2(lower.charCodeAt(j))) j++;
       const q = html[j];
       if (q === '"' || q === "'") {
         const close = html.indexOf(q, j + 1);
@@ -40491,7 +41303,7 @@ function readStartTag(html, lower, at) {
         j = close === -1 ? n : close + 1;
       } else {
         const start = j;
-        while (j < n && !isSpace(lower.charCodeAt(j)) && lower[j] !== ">") j++;
+        while (j < n && !isSpace2(lower.charCodeAt(j)) && lower[j] !== ">") j++;
         value = html.slice(start, j);
       }
       i = j;
@@ -42496,7 +43308,7 @@ var MAX_RESPONSE_BYTES = 64 * 1024;
 function pageMetadata({ id, version: version2, status }) {
   return { id, version: version2, status };
 }
-function noteFeedback(comment) {
+function noteFeedback(comment, humanResolvedAt) {
   const { id, content, intent, parentCommentId, followUp, ruleOut } = comment;
   return {
     id,
@@ -42504,7 +43316,10 @@ function noteFeedback(comment) {
     parentCommentId,
     ...intent !== void 0 && { intent },
     ...followUp !== void 0 && { followUp },
-    ...ruleOut !== void 0 && { ruleOut }
+    ...ruleOut !== void 0 && { ruleOut },
+    // #714 — the human resolved it themselves (page review queue); present
+    // only while resolved, so other entries are unchanged.
+    ...humanResolvedAt ? { humanResolvedAt } : {}
   };
 }
 function bytes(value) {
@@ -42543,6 +43358,7 @@ function readPageFeedback(store, artifactId) {
     }
   }
   const pending = store.getCommentsForArtifact(artifactId).filter((comment) => comment.sessionId === sessionId && comment.author === "human" && !comment.acknowledged && comment.id !== reasonComment?.id);
+  const effectiveResolution = effectiveHumanResolution(store.getComments(), artifacts);
   pending.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
   const anchoredCount = pending.filter((comment) => comment.target.htmlAnchor).length;
   const result = {
@@ -42568,7 +43384,7 @@ function readPageFeedback(store, artifactId) {
     if (items === MAX_COMMENTS) break;
     if (comment.content.length > MAX_RESPONSE_BYTES - responseBytes) continue;
     const anchor = comment.target.htmlAnchor;
-    const feedback = noteFeedback(comment);
+    const feedback = noteFeedback(comment, effectiveResolution(comment));
     const lane = anchor ? result.comments : result.notes;
     const item = anchor ? { ...feedback, htmlAnchor: anchor } : feedback;
     const added = bytes(item) + (lane.length ? 1 : 0);
@@ -43063,7 +43879,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           if (signal.aborted) return null;
           const decision = store.getDecision(decisionId);
           const artifacts = decision ? store.getArtifacts() : [];
-          const artifact = decision && artifacts.find((a) => a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
+          const artifact = decision && artifacts.find((a) => a.sessionId === sessionId && a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
           if (!decision || !artifact) return null;
           let waitStatus;
           if (waitMs !== void 0) {
@@ -43072,12 +43888,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
               waitStatus = "resolved";
             } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
               waitStatus = "closed";
+            } else if (standaloneCloseout?.state(sessionId).state === "ended") {
+              waitStatus = "session_ended";
             } else if (remaining > 0) {
               if (!idleRefreshed) {
                 refreshCompanionLink();
                 idleRefreshed = true;
               }
-              return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+              return { wake: store.waitForFeedback(Math.ceil(remaining), signal, "review_end") };
             } else {
               waitStatus = "timed_out";
             }
@@ -43441,8 +44259,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!body || typeof body !== "object") {
       return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
     }
-    const { ids } = body;
-    r.store.acknowledgeComments(Array.isArray(ids) ? ids : []);
+    const { ids, delivered } = body;
+    const snapshots = external_exports.array(external_exports.object({
+      id: external_exports.string(),
+      resolvedAt: external_exports.string().nullable().optional(),
+      token: external_exports.string().uuid().optional()
+    })).optional().safeParse(delivered);
+    if (!snapshots.success) {
+      return c.json({ error: "Invalid delivered comment resolution state", code: ERROR_CODES.validation_error }, 400);
+    }
+    r.store.acknowledgeComments(Array.isArray(ids) ? ids : [], snapshots.data);
     return c.json({ status: "acknowledged" });
   });
   app.get("/api/internal/sessions/:sessionId/artifacts/:artifactId/comments", (c) => {
@@ -43564,9 +44390,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!r.ok) return r.response;
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
-    const { resolvedAt } = parsed.body;
-    r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
-    return c.json({ status: "resolved" });
+    const stamp = external_exports.string().datetime().nullable().optional().safeParse(parsed.body.resolvedAt);
+    if (!stamp.success) {
+      return c.json({ error: "Expected resolvedAt to be an ISO timestamp or null", code: ERROR_CODES.validation_error }, 400);
+    }
+    const resolvedAt = stamp.data;
+    const changed = r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
+    return c.json({ status: resolvedAt === null ? changed ? "reopened" : "unchanged" : "resolved", changed });
   });
   app.post("/api/internal/sessions/:sessionId/decisions", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44305,150 +45135,6 @@ import fs31 from "node:fs";
 import path35 from "node:path";
 import crypto6 from "node:crypto";
 
-// src/mcp/page-anchor-relocate.ts
-var LATIN1_NAMES = "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml".split(" ");
-var NAMED = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  mdash: "\u2014",
-  ndash: "\u2013",
-  hellip: "\u2026",
-  lsquo: "\u2018",
-  rsquo: "\u2019",
-  sbquo: "\u201A",
-  ldquo: "\u201C",
-  rdquo: "\u201D",
-  bdquo: "\u201E",
-  bull: "\u2022",
-  prime: "\u2032",
-  Prime: "\u2033",
-  trade: "\u2122",
-  euro: "\u20AC",
-  larr: "\u2190",
-  uarr: "\u2191",
-  rarr: "\u2192",
-  darr: "\u2193",
-  harr: "\u2194",
-  lArr: "\u21D0",
-  rArr: "\u21D2",
-  hArr: "\u21D4",
-  minus: "\u2212",
-  le: "\u2264",
-  ge: "\u2265",
-  ne: "\u2260",
-  asymp: "\u2248",
-  infin: "\u221E",
-  ensp: "\u2002",
-  emsp: "\u2003",
-  thinsp: "\u2009",
-  zwnj: "\u200C",
-  zwj: "\u200D",
-  OElig: "\u0152",
-  oelig: "\u0153",
-  Scaron: "\u0160",
-  scaron: "\u0161",
-  Yuml: "\u0178",
-  fnof: "\u0192",
-  circ: "\u02C6",
-  tilde: "\u02DC",
-  dagger: "\u2020",
-  Dagger: "\u2021",
-  permil: "\u2030",
-  lsaquo: "\u2039",
-  rsaquo: "\u203A",
-  check: "\u2713",
-  hearts: "\u2665",
-  star: "\u2606"
-};
-LATIN1_NAMES.forEach((n, i) => {
-  NAMED[n] = String.fromCharCode(160 + i);
-});
-function decodeHtmlEntities(s) {
-  let unknownEntity = false;
-  const text = s.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{1,31});?/g, (m, body) => {
-    if (body[0] === "#") {
-      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return "\uFFFD";
-      try {
-        return String.fromCodePoint(code);
-      } catch {
-        return "\uFFFD";
-      }
-    }
-    const hit = NAMED[body] ?? NAMED[body.toLowerCase()];
-    if (hit !== void 0) return hit;
-    if (m.endsWith(";")) unknownEntity = true;
-    return m;
-  });
-  return { text, unknownEntity };
-}
-function core(s) {
-  return s.normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, "");
-}
-function norm(s) {
-  return s.replace(/\s+/g, " ").trim();
-}
-function pageHaystack(html) {
-  const blocks = extractPageTextBlocks(html);
-  const decoded = decodeHtmlEntities(html);
-  const text = decodeHtmlEntities(blocks.join(" "));
-  return {
-    text: core(text.text),
-    raw: core(decoded.text),
-    html: decoded.text,
-    unknownEntity: decoded.unknownEntity || text.unknownEntity,
-    truncated: blocks.length >= PAGE_TEXT_MAX_BLOCKS
-  };
-}
-function present(hay, s) {
-  const c = core(s);
-  if (!c) return null;
-  return hay.text.includes(c) || hay.raw.includes(c);
-}
-function relocateHtmlAnchor(anchor, hay) {
-  const checks = [];
-  const quote = norm(anchor.quote ?? "");
-  checks.push(present(hay, anchor.kind === "text" ? quote : quote.slice(0, 60)));
-  if (anchor.kind === "cell" && anchor.table) {
-    if (anchor.table.row) checks.push(present(hay, anchor.table.row));
-    if (anchor.table.col) checks.push(present(hay, anchor.table.col));
-  }
-  if (anchor.kind === "link" && anchor.href) checks.push(hay.html.includes(anchor.href));
-  if (anchor.kind === "diagram-node" && anchor.nodeId) {
-    if (hay.html.includes(anchor.nodeId)) return "carried";
-  }
-  const known = checks.filter((c) => c !== null);
-  if (known.length === 0) return "unknown";
-  if (known.every(Boolean)) return "carried";
-  if (hay.truncated || hay.unknownEntity) return "unknown";
-  return "orphaned";
-}
-function relocatePageComments(html, comments) {
-  const hay = pageHaystack(html);
-  const out = { carried: [], orphaned: [], orphanedOverflow: 0, unknown: [] };
-  const roots = comments.filter((c) => c.author === "human" && !c.parentCommentId && c.target.htmlAnchor).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  for (const c of roots) {
-    const a = c.target.htmlAnchor;
-    const v2 = relocateHtmlAnchor(a, hay);
-    if (v2 === "carried") out.carried.push(c.id);
-    else if (v2 === "unknown") out.unknown.push(c.id);
-    else if (out.orphaned.length >= PAGE_FILE_WATCH_LIMITS.orphans) out.orphanedOverflow++;
-    else {
-      out.orphaned.push({
-        commentId: c.id,
-        kind: a.kind,
-        quote: a.quote.slice(0, PAGE_FILE_WATCH_LIMITS.quote),
-        locator: a.locator.slice(0, PAGE_FILE_WATCH_LIMITS.locator),
-        ...a.version != null ? { version: a.version } : {}
-      });
-    }
-  }
-  return out;
-}
-
 // src/page-watch-timing.ts
 var PAGE_WATCH_QUIET_MS = 2e3;
 var PAGE_WATCH_MIN_INTERVAL_MS = 1e4;
@@ -44950,7 +45636,10 @@ function createDaemon(deps) {
     projectRoot2,
     (sessionId) => sessions.get(sessionId),
     void 0,
-    (sessionId) => pageWatcher.stopSession(sessionId),
+    (sessionId) => {
+      pageWatcher.stopSession(sessionId);
+      sessions.get(sessionId)?.notifyStandaloneReviewEnded();
+    },
     (sessionId) => pageWatcher.drainQueuedSaves(sessionId)
   );
   const demoRuns = /* @__PURE__ */ new Map();

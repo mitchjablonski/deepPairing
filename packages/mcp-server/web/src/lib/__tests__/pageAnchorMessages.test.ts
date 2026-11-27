@@ -19,6 +19,10 @@ import {
   buildChangesMessage,
   isReadyMessage,
   isTogglePointingMessage,
+  acceptKbdCursor,
+  isKbdOffMessage,
+  acceptFrameKey,
+  buildModeMessage,
 } from "../pageAnchorMessages";
 
 const frame = { name: "page-frame" } as unknown as Window;
@@ -220,5 +224,34 @@ describe("pin-list key on frame reports (#714 gap 5)", () => {
     const asks = { dp: "asks", asks: [], pinAsks: [] };
     expect(acceptAsksMessage({ source: frame, data: { ...asks, key: "abc:1" } }, frame)).toEqual({ ...asks, key: "abc:1" });
     expect(acceptAsksMessage({ source: frame, data: { ...asks, key: "x".repeat(65) } }, frame)).toBeNull();
+  });
+});
+
+describe("keyboard comment mode messages (#714 gap 9)", () => {
+  it("acceptKbdCursor: strict, bounded, from this frame only", () => {
+    const ok = { dp: "kbd-cursor", index: 0, total: 3, kind: "heading", text: "Plan", pins: [1] };
+    expect(acceptKbdCursor({ source: frame, data: ok }, frame)).toEqual({ index: 0, total: 3, kind: "heading", text: "Plan", pins: [1] });
+    expect(acceptKbdCursor({ source: otherFrame, data: ok }, frame)).toBeNull();
+    expect(acceptKbdCursor({ source: frame, data: { ...ok, index: 3 } }, frame)).toBeNull();
+    expect(acceptKbdCursor({ source: frame, data: { ...ok, kind: "script" } }, frame)).toBeNull();
+    expect(acceptKbdCursor({ source: frame, data: { ...ok, text: "x".repeat(121) } }, frame)).toBeNull();
+    expect(acceptKbdCursor({ source: frame, data: { ...ok, pins: Array.from({ length: 21 }, (_, i) => i) } }, frame)).toBeNull();
+    expect(acceptKbdCursor({ source: frame, data: { ...ok, extra: true } }, frame)).toBeNull();
+    expect(acceptKbdCursor({ source: frame, data: { ...ok, index: -1, total: 0 } }, frame)).toEqual({ index: -1, total: 0, kind: "heading", text: "Plan", pins: [1] });
+  });
+
+  it("isKbdOffMessage and acceptFrameKey accept only their exact shapes from this frame", () => {
+    expect(isKbdOffMessage({ source: frame, data: { dp: "kbd-off" } }, frame)).toBe(true);
+    expect(isKbdOffMessage({ source: otherFrame, data: { dp: "kbd-off" } }, frame)).toBe(false);
+    expect(isKbdOffMessage({ source: frame, data: { dp: "kbd-off", on: true } }, frame)).toBe(false);
+    for (const key of ["toggle-kbd", "help", "next", "prev", "escape"]) {
+      expect(acceptFrameKey({ source: frame, data: { dp: "key", key } }, frame)).toBe(key);
+    }
+    expect(acceptFrameKey({ source: frame, data: { dp: "key", key: "approve" } }, frame)).toBeNull();
+    expect(acceptFrameKey({ source: frame, data: { dp: "key", key: "help", x: 1 } }, frame)).toBeNull();
+    expect(acceptFrameKey({ source: otherFrame, data: { dp: "key", key: "help" } }, frame)).toBeNull();
+    expect(buildModeMessage({ annotate: false, scripts: false, kbd: true, dark: true })).toEqual({
+      dp: "mode", annotate: false, scripts: false, kbd: false, dark: true,
+    });
   });
 });

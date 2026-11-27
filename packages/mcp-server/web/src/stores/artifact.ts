@@ -595,6 +595,14 @@ export interface ArtifactState {
    */
   markQuestionResolved: (commentId: string) => Promise<void>;
 
+  /**
+   * #714 — withdraw the human's own resolve (the inverse of
+   * markQuestionResolved, which also resolves a plain page comment from the
+   * review queue). Optimistically sets humanResolvedAt to null, then POSTs
+   * mark-unresolved; on failure restores exactly the stamp it cleared.
+   */
+  reopenComment: (commentId: string) => Promise<void>;
+
   reset: () => void;
 }
 
@@ -1538,6 +1546,49 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         return { comments: nextComments };
       });
       await toastApiError("Mark question resolved", err);
+      throw err;
+    }
+  },
+
+  reopenComment: async (commentId) => {
+    assertNotReplay("Reopening a comment");
+    // Same owner guard and routing pin as markQuestionResolved.
+    const generationAtSubmit = storeGeneration;
+    const existing = Object.values(get().comments).flat().find((c) => c.id === commentId);
+    const owner = existing?.sessionId || undefined;
+    const routeTo = owner ?? tabSessionAtCall();
+    if (isForeignSession(owner)) await guardForeignOwner("Reopening a comment", owner);
+    if (!existing?.humanResolvedAt) return;
+    const key = existing.target.artifactId;
+    // null (not a deleted key): the WS comment_updated merge keeps any key
+    // the update omits, so only an explicit null clears it everywhere.
+    const optimistic: Comment = { ...existing, humanResolvedAt: null, acknowledged: false };
+    // An upsert from the socket replaces the comment object, even if it has
+    // the same stamp and acknowledgement. Leave that newer update intact.
+    const replaceIfCurrent = (current: Comment, next: Comment) => {
+      if (storeGeneration !== generationAtSubmit) return;
+      set((state) => {
+        const list = state.comments[key];
+        if (!list?.includes(current)) return state;
+        return { comments: { ...state.comments, [key]: list.map((c) => c === current ? next : c) } };
+      });
+    };
+    replaceIfCurrent(existing, optimistic);
+    try {
+      const res = await safeFetch(`${apiBase()}/api/comments/${commentId}/mark-unresolved`, {
+        method: "POST",
+        headers: sessionHeaders(routeTo),
+        body: JSON.stringify({}),
+      });
+      const result = await res.json().catch(() => null) as { comment?: Comment } | null;
+      const comment = result?.comment;
+      if (comment?.id === commentId && comment.sessionId === existing.sessionId && comment.target?.artifactId === key) {
+        replaceIfCurrent(optimistic, comment);
+      }
+    } catch (err) {
+      if (storeGeneration !== generationAtSubmit) throw err;
+      replaceIfCurrent(optimistic, existing);
+      await toastApiError("Reopen comment", err);
       throw err;
     }
   },
