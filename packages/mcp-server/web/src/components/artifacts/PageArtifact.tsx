@@ -903,9 +903,14 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // The current version is parsed too whenever asks have comments: its
   // full-text hashes (continuity) and child ids (a comment on a child with its
   // own id, also after Run when the frame's reports are frozen).
-  const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && anchored.length > 0);
+  const { get: parsedAsks, pending: parsePendingRaw } = usePageAskVersions(askVersions, asks.length > 0 && anchored.length > 0);
+  // #727 — the last ask completion the frame settled for this page version.
+  // Once there is one, a pin-list change (comment added/removed) keeps showing
+  // it until the frame reports for the new list, instead of flickering
+  // through "checking…".
+  const askSettledRef = useRef<{ forId: string; asksKey: string; answered: boolean[] } | null>(null);
   // #725 — also which comments answer an ask (no Resolve/Reopen on those).
-  const { answered: askAnswered, answerIds: askAnswerIds } = useMemo(() => {
+  const { answered: askAnswered, answerIds: askAnswerIds, checking: askChecking } = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
     // The pre-Run reports, only when they describe this page's current pins.
     const scoped = <T extends { forId: string; key: string }>(r: T | null) =>
@@ -944,8 +949,27 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         return commentAnswersAsk(ref, c, current, { insideByFrame });
       }
     });
-    return { answered, answerIds };
-  }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
+    // #727 — not settled yet, so an unanswered ask reads "checking…" rather
+    // than a definitive "Open": a version these comments need is still being
+    // parsed, or (before Run) the frame hasn't reported for the pin list on
+    // screen. After Run the reports are frozen, so the frame isn't awaited.
+    const parsePending = asks.length > 0 && anchored.length > 0 && parsePendingRaw;
+    const hasCurrentComment = anchored.some((c) => !isEarlierVersionComment(c, current));
+    const framePending = !running && hasCurrentComment && (!askPins || !preRunFound);
+    const asksKey = asks.map((a) => `${a.kind}\u0001${a.locator}`).join("\u0000");
+    const last = askSettledRef.current;
+    if (!framePending) {
+      askSettledRef.current = { forId: artifact.id, asksKey, answered };
+      return { answered, answerIds, checking: parsePending };
+    }
+    // Settled before for this version: keep that state while the new list's
+    // report is in flight (an answer seen either way shows).
+    if (last && last.forId === artifact.id) {
+      const kept = last.asksKey === asksKey ? answered.map((v, k) => v || last.answered[k] === true) : answered;
+      return { answered: kept, answerIds, checking: parsePending };
+    }
+    return { answered, answerIds, checking: true };
+  }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks, parsePendingRaw, running]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
     if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });
@@ -1295,7 +1319,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         </div>
       )}
       <PageRenderIssues diagnostics={diagnostics} />
-      <PageAsksStrip asks={asks} answered={askAnswered} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
+      <PageAsksStrip asks={asks} answered={askAnswered} checking={askChecking} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
       {/* #714 gap 4 — the outline: a sticky rail beside the frame when the
           panel is wide, a collapsible disclosure above it when narrow.
           #714 gaps 7+8 — ONE review column (composer + queue), always the same
