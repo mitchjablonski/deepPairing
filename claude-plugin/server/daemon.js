@@ -20281,6 +20281,14 @@ var PAGE_RULE_OUT_KEY_MAX = 120;
 var CommentRuleOutSchema = external_exports.object({
   description: external_exports.string().min(1).max(PAGE_RULE_OUT_KEY_MAX)
 });
+var CommentAddressedInSchema = external_exports.object({
+  artifactId: external_exports.string().min(1).max(256),
+  version: external_exports.number().int().positive(),
+  /** When that revision was made (its createdAt), so a later human reply can
+   *  reopen the comment. Optional: older stamps fall back to the revision's
+   *  own artifact record. */
+  at: external_exports.string().datetime().optional()
+});
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -20302,6 +20310,8 @@ var CommentSchema = external_exports.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  // #714 gap 7 — the page revision that addressed this comment (see above).
+  addressedIn: CommentAddressedInSchema.optional(),
   /** Server-stamped only for the note owned by a page verdict history entry. */
   verdictFeedback: external_exports.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
@@ -31038,9 +31048,14 @@ var FileStore = class _FileStore {
       const { artifacts, merged, filePath, diskBytes } = this.readDurablePageRevisionFeedback(parentId, proof, false);
       verifyRevision(artifacts);
       const selected = new Set(proof.commentIds);
-      const updated = merged.map(
-        (comment) => selected.has(comment.id) && !comment.acknowledged ? { ...comment, acknowledged: true } : comment
-      );
+      const successor = artifacts.find((artifact) => artifact.parentId === parentId);
+      const addressedIn = successor ? { artifactId: successor.id, version: successor.version, ...successor.createdAt ? { at: successor.createdAt } : {} } : void 0;
+      const updated = merged.map((comment) => {
+        if (!selected.has(comment.id)) return comment;
+        const advances = addressedIn && (!comment.addressedIn || addressedIn.version > comment.addressedIn.version);
+        const stamp = advances ? { addressedIn } : {};
+        return comment.acknowledged && !("addressedIn" in stamp) ? comment : { ...comment, acknowledged: true, ...stamp };
+      });
       this.writePageRevisionComments(updated, filePath, diskBytes);
       return updated.filter((comment) => selected.has(comment.id));
     });
@@ -38256,6 +38271,29 @@ var MIME_TYPES = {
   woff2: "font/woff2",
   png: "image/png"
 };
+var HASHED_ASSET = /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
+var MERMAID_RENDERER_DOC = "/mermaid-renderer.html";
+function mermaidRendererCsp(host) {
+  const own2 = host && /^[A-Za-z0-9.\-[\]:]+$/.test(host) ? ` http://${host}` : "";
+  return [
+    "default-src 'none'",
+    `script-src 'self'${own2}`,
+    "style-src 'unsafe-inline'",
+    "img-src 'none'",
+    "font-src 'none'",
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "worker-src 'none'",
+    "object-src 'none'",
+    "media-src 'none'",
+    "manifest-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'"
+    // No frame-ancestors: the companion itself may be embedded (the VS Code
+    // webview), and this document holds nothing worth framing protection.
+  ].join("; ");
+}
 function mountStaticUi(app, opts) {
   const { webDistPath, authToken, projectHash, log: log2 } = opts;
   if (!fs23.existsSync(webDistPath)) return;
@@ -38288,13 +38326,28 @@ function mountStaticUi(app, opts) {
     if (!resolvedPath.startsWith(resolvedBase + path22.sep) && resolvedPath !== resolvedBase) {
       return c.notFound();
     }
+    if (filePath === MERMAID_RENDERER_DOC) {
+      if (!fs23.existsSync(fullPath)) return c.notFound();
+      return new Response(fs23.readFileSync(fullPath), {
+        headers: {
+          "Content-Type": "text/html",
+          "Cache-Control": "no-cache",
+          "Content-Security-Policy": mermaidRendererCsp(c.req.header("host")),
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer"
+        }
+      });
+    }
     if (fs23.existsSync(fullPath)) {
       const ext = path22.extname(filePath).slice(1);
       if (ext === "html") return serveInjectedIndex(fullPath);
       const content = fs23.readFileSync(fullPath);
-      return new Response(content, {
-        headers: { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" }
-      });
+      const headers = { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" };
+      if (ext === "js" && filePath.startsWith("/assets/")) headers["Access-Control-Allow-Origin"] = "*";
+      if (filePath.startsWith("/assets/") && HASHED_ASSET.test(filePath)) {
+        headers["Cache-Control"] = "public, max-age=31536000, immutable";
+      }
+      return new Response(content, { headers });
     }
     const indexPath = path22.join(webDistPath, "index.html");
     if (fs23.existsSync(indexPath)) {
@@ -40075,46 +40128,149 @@ function externalSrcsetCount(value) {
   }
   return count2;
 }
-function stripCssComments(css) {
-  let out = "";
-  let i = 0;
-  while (i < css.length) {
-    const open = css.indexOf("/*", i);
-    if (open === -1) {
-      out += css.slice(i);
-      break;
-    }
-    out += css.slice(i, open) + " ";
-    const close = css.indexOf("*/", open + 2);
-    if (close === -1) break;
-    i = close + 2;
-  }
-  return out;
+function isCssNewline(c) {
+  return c === 10 || c === 13 || c === 12;
 }
-function externalCssRefs(rawCss) {
-  const lower = stripCssComments(rawCss).toLowerCase();
+function isHexDigit(c) {
+  return c >= 48 && c <= 57 || c >= 97 && c <= 102 || c >= 65 && c <= 70;
+}
+function isNameChar(c) {
+  return isAlpha(c) || c >= 48 && c <= 57 || c === 95 || c === 45 || c >= 128;
+}
+function isEscapeAt(css, i) {
+  return css.charCodeAt(i) === 92 && i + 1 < css.length && !isCssNewline(css.charCodeAt(i + 1));
+}
+function consumeEscape(css, i) {
+  let j = i + 1;
+  if (isHexDigit(css.charCodeAt(j))) {
+    const hexStart = j;
+    while (j < css.length && j - hexStart < 6 && isHexDigit(css.charCodeAt(j))) j++;
+    const cp = parseInt(css.slice(hexStart, j), 16);
+    if (css.charCodeAt(j) === 13 && css.charCodeAt(j + 1) === 10) j += 2;
+    else if (isSpace(css.charCodeAt(j))) j++;
+    const ok = cp > 0 && cp <= 1114111 && !(cp >= 55296 && cp <= 57343);
+    return [ok ? String.fromCodePoint(cp) : "\uFFFD", j];
+  }
+  return [css[j] ?? "", j + 1];
+}
+function consumeName(css, i) {
+  let name = "";
+  while (i < css.length) {
+    const c = css.charCodeAt(i);
+    if (isNameChar(c)) {
+      name += css[i];
+      i++;
+    } else if (isEscapeAt(css, i)) {
+      const [d, j] = consumeEscape(css, i);
+      name += d;
+      i = j;
+    } else break;
+  }
+  return [name, i];
+}
+function consumeString(css, i) {
+  const quote = css.charCodeAt(i);
+  let value = "";
+  i++;
+  while (i < css.length) {
+    const d = css.charCodeAt(i);
+    if (d === quote) return [value, i + 1];
+    if (isCssNewline(d)) return [value, i];
+    if (d === 92) {
+      if (i + 1 >= css.length) return [value, i + 1];
+      const e = css.charCodeAt(i + 1);
+      if (e === 13 && css.charCodeAt(i + 2) === 10) {
+        i += 3;
+        continue;
+      }
+      if (isCssNewline(e)) {
+        i += 2;
+        continue;
+      }
+      const [dec, j] = consumeEscape(css, i);
+      value += dec;
+      i = j;
+      continue;
+    }
+    value += css[i];
+    i++;
+  }
+  return [value, i];
+}
+function scanCss(css, onToken) {
+  const n = css.length;
+  let i = 0;
+  while (i < n) {
+    const c = css.charCodeAt(i);
+    if (c === 47 && css.charCodeAt(i + 1) === 42) {
+      const close = css.indexOf("*/", i + 2);
+      const end = close === -1 ? n : close + 2;
+      onToken({ kind: "comment", start: i, end });
+      i = end;
+    } else if (c === 34 || c === 39) {
+      const [value, j] = consumeString(css, i);
+      onToken({ kind: "string", value });
+      i = j;
+    } else if (isSpace(c)) {
+      while (i < n && isSpace(css.charCodeAt(i))) i++;
+      onToken({ kind: "space" });
+    } else if (c === 64 || c === 35) {
+      const [name, j] = consumeName(css, i + 1);
+      onToken(name ? { kind: c === 64 ? "at" : "hash", name: name.toLowerCase() } : { kind: "other" });
+      i = name ? j : i + 1;
+    } else if (isNameChar(c) || isEscapeAt(css, i)) {
+      const [rawName, j] = consumeName(css, i);
+      const name = rawName.toLowerCase();
+      if (name === "url" && css.charCodeAt(j) === 40) {
+        let k = j + 1;
+        while (k < n && isSpace(css.charCodeAt(k))) k++;
+        const q = css.charCodeAt(k);
+        if (q === 34 || q === 39) {
+          const [value, m] = consumeString(css, k);
+          onToken({ kind: "url", value });
+          i = m;
+        } else {
+          let value = "";
+          while (k < n && css.charCodeAt(k) !== 41) {
+            if (isEscapeAt(css, k)) {
+              const [d, m] = consumeEscape(css, k);
+              value += d;
+              k = m;
+            } else {
+              value += css[k];
+              k++;
+            }
+          }
+          onToken({ kind: "url", value: value.trim() });
+          i = Math.min(k + 1, n);
+        }
+      } else {
+        onToken({ kind: "ident", name });
+        i = j;
+      }
+    } else if (c === 92) {
+      i += 2;
+    } else {
+      onToken({ kind: "other" });
+      i++;
+    }
+  }
+}
+function externalCssRefs(css) {
   const counts = { url: 0, import: 0 };
-  const target = (from) => {
-    let i = from;
-    while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
-    if (lower[i] === '"' || lower[i] === "'") i++;
-    return i;
-  };
-  let at = lower.indexOf("@import");
-  while (at !== -1) {
-    let i = target(at + 7);
-    if (lower.startsWith("url(", i)) i = target(i + 4);
-    if (externalAt(lower, i)) counts.import++;
-    at = lower.indexOf("@import", at + 7);
-  }
-  at = lower.indexOf("url(");
-  while (at !== -1) {
-    let k = at - 1;
-    while (k >= 0 && isSpace(lower.charCodeAt(k))) k--;
-    const isImportTarget = k >= 6 && lower.startsWith("@import", k - 6);
-    if (!isImportTarget && externalAt(lower, target(at + 4))) counts.url++;
-    at = lower.indexOf("url(", at + 4);
-  }
+  let afterImport = false;
+  scanCss(css, (t) => {
+    if (t.kind === "space" || t.kind === "comment") return;
+    if (afterImport) {
+      afterImport = false;
+      if (t.kind === "string" || t.kind === "url") {
+        if (isExternal(t.value)) counts.import++;
+        return;
+      }
+    }
+    if (t.kind === "at" && t.name === "import") afterImport = true;
+    else if (t.kind === "url" && isExternal(t.value)) counts.url++;
+  });
   return counts;
 }
 function readStartTag(html, lower, at) {

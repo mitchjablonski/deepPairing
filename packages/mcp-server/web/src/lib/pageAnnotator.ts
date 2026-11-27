@@ -27,7 +27,13 @@
  * numbered outline pin, then reports which were found (`{dp:"pins-status",
  * found}`) so the parent can say "not found in this version". Pins are built
  * ONLY with DOM APIs and `textContent` — nothing the parent sends is ever parsed
- * as HTML. `{dp:"focus", index}` scrolls to a pin; `{dp:"mode", annotate}`
+ * as HTML. #714 gap 7: the pins message also carries `states` (open |
+ * addressed: the pin's colour) and `ids` (the comment id per pin). A pin's
+ * BADGE is a small click target, only while pointing is on and the page's
+ * scripts aren't running (so it never takes a click the page would handle):
+ * a click posts `{dp:"pin-click", id}` and hovering posts `{dp:"pin-hover",
+ * id, x, y}` / `{dp:"pin-hover", id:null}`. The parent renders the preview
+ * text; the frame never receives comment text. `{dp:"focus", index}` scrolls to a pin; `{dp:"mode", annotate}`
  * switches between annotating clicks and letting them through to the page (after
  * Run). Messages are accepted only from `parent`.
  *
@@ -678,6 +684,13 @@ export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
 var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0, pinEls = [];
+// #714 gap 7 — per pin: its colour state and the comment id a click on its
+// badge reports back (validated here; nothing else from the parent is used).
+var pinStates = [], pinIds = [], hoverPin = null;
+var PIN_COLORS = { open: "#f59e0b", addressed: "#9ca3af" };
+/** Badge element → comment id, by reference: an authored element named like
+ *  our badge can never pose as a pin (ownership is never read from markup). */
+var badgeIds = typeof WeakMap === "function" ? new WeakMap() : null;
 /** #714 gap 5 — the parent's tag for the pin list it sent, echoed on every
  *  report computed from that list (pins-status, asks), so the parent never
  *  attributes a report to a list that changed while it was in flight. */
@@ -844,7 +857,15 @@ function paintHover(t, alt, interact) {
   important(hoverBox, { display: "block" });
   place(hoverBox, (pass || t).getBoundingClientRect());
 }
-function onMove(e) { paintHover(targetEl(e), !!e.altKey, !!(e.ctrlKey || e.metaKey)); }
+function onMove(e) {
+  setModHeld(!!(e.ctrlKey || e.metaKey));
+  var t = targetEl(e);
+  var pid = badgesLive() && badgeOk && badgeOk.get(t) === true ? pinIdOf(t) : null;
+  setHoverPin(pid, pid !== null ? t : null);
+  paintHover(t, !!e.altKey, !!(e.ctrlKey || e.metaKey));
+}
+/** The pointer left the frame: drop any pin preview. */
+function onOut(e) { if (!e.relatedTarget && hoverPin !== null) setHoverPin(null, null); }
 function onKey(e) {
   if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I")) {
     // The companion's pointing shortcut, forwarded: while the reviewer is in
@@ -856,6 +877,7 @@ function onKey(e) {
     post({ dp: "toggle-pointing" });
     return;
   }
+  if (e.key === "Control" || e.key === "Meta") setModHeld(!!(e.ctrlKey || e.metaKey) && e.type === "keydown");
   if ((e.key === "Alt" || e.key === "Control" || e.key === "Meta") && lastHover && lastHover.isConnected) {
     paintHover(lastHover, !!e.altKey, !!(e.ctrlKey || e.metaKey));
   }
@@ -868,10 +890,115 @@ function samePins(a, b) {
 /** Re-resolve every anchor against the CURRENT document and redraw. Nothing
  *  about a target (element or rectangle) is cached between draws, so a pin
  *  follows its content after the page changes. */
+/** #714 gap 7 — a pin's badge is a click target only while a click there
+ *  would have POINTED anyway (pointing on, page scripts not running): it never
+ *  takes a click the page itself would have handled. The layer and the pin's
+ *  outline stay pointer-events:none. */
+var modHeld = false;
+function badgesLive() { return annotate && !scripts && !modHeld; }
+/** Per badge: may it ever take clicks? False when what lies under it is a
+ *  control that keeps its own click (passTarget: summary, label text, form
+ *  fields, #hash links, buttons after Run), so a badge never sits as a lid on
+ *  a native page action. Set at draw time, by reference. */
+var badgeOk = typeof WeakMap === "function" ? new WeakMap() : null;
+/** The page element under a frame-viewport point, skipping our own nodes. */
+function pageElAt(x, y) {
+  if (typeof document.elementsFromPoint !== "function") return null;
+  var list = [];
+  try { list = document.elementsFromPoint(x, y) || []; } catch (e) { list = []; }
+  for (var i = 0; i < list.length; i++) if (!own(list[i]) && list[i] !== layer) return list[i];
+  return null;
+}
+function nativeUnder(el) {
+  if (!el || el.nodeType !== 1) return false;
+  return !!passTarget(el) || editable(el);
+}
+/** Would this badge cover a native control? Hit-tests the page under the
+ *  badge's centre and corners. A badge off screen is never live until a redraw finds it on
+ *  screen (scrolling redraws). */
+function badgeCoversNative(badge) {
+  // No hit-testing (old engines, test DOMs): we can't know what lies under
+  // the offset badge, so it stays inert (conservative).
+  if (typeof document.elementsFromPoint !== "function") return true;
+  var r = badge.getBoundingClientRect();
+  var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+  if (!r.width || r.right < 0 || r.bottom < 0 || (vw && r.left > vw) || (vh && r.top > vh)) return true;
+  var pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 1, r.top + 1], [r.right - 1, r.top + 1], [r.left + 1, r.bottom - 1], [r.right - 1, r.bottom - 1]];
+  for (var i = 0; i < pts.length; i++) if (nativeUnder(pageElAt(pts[i][0], pts[i][1]))) return true;
+  return false;
+}
+/** Badge spots, in the pin box's coordinates (the box is the anchor +2px on
+ *  every side): outside top-left (preferred: never on the element itself),
+ *  outside top-right, then inside the anchor's top-left / top-right corners. */
+function badgeSpots(r, bw) {
+  var w = r.width + 4;
+  return [[-20, -20], [w + 2, -20], [4, 4], [w - 4 - bw, 4]];
+}
+/** Place the badge on the first spot that is fully inside the viewport
+ *  horizontally (and not above the document's top) AND clear of native
+ *  controls; else the first spot that is on screen (it stays inert); else
+ *  clamp it to the viewport edge. Returns badgeCoversNative() for the spot
+ *  chosen, so a badge over a control is never live. */
+function placeBadge(badge, r) {
+  var bw = Math.max(18, badge.offsetWidth || 0);
+  var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var sy = window.scrollY || window.pageYOffset || 0;
+  var spots = badgeSpots(r, bw), fallback = null;
+  function fits(s) {
+    var x = r.left - 2 + s[0], y = r.top - 2 + s[1];
+    return x >= 0 && (!vw || x + bw <= vw) && y + sy >= 0;
+  }
+  function put(s) { important(badge, { left: s[0] + "px", top: s[1] + "px" }); }
+  for (var i = 0; i < spots.length; i++) {
+    if (!fits(spots[i])) continue;
+    put(spots[i]);
+    if (!badgeCoversNative(badge)) return false;
+    if (!fallback) fallback = spots[i];
+  }
+  if (!fallback) {
+    // Nothing fits (e.g. an anchor scrolled partly out horizontally): clamp
+    // the outside-top-left spot into the viewport and the document.
+    var x = Math.min(Math.max(r.left - 22, 0), vw ? Math.max(vw - bw, 0) : Infinity);
+    var y = Math.max(r.top - 22, -sy);
+    fallback = [x - (r.left - 2), y - (r.top - 2)];
+  }
+  put(fallback);
+  return badgeCoversNative(badge);
+}
+function setModHeld(v) {
+  if (v === modHeld) return;
+  modHeld = v;
+  syncBadges();
+}
+function pinIdOf(t) {
+  if (!badgeIds || !t || t.nodeType !== 1) return null;
+  var id = badgeIds.get(t);
+  return typeof id === "string" ? id : null;
+}
+function syncBadges() {
+  var live = badgesLive();
+  var bs = layer ? layer.querySelectorAll("dp-annotator-badge") : [];
+  for (var i = 0; i < bs.length; i++) {
+    if (pinIdOf(bs[i]) === null) continue;
+    var on = live && !!badgeOk && badgeOk.get(bs[i]) === true;
+    important(bs[i], { "pointer-events": on ? "auto" : "none", cursor: on ? "pointer" : "default" });
+  }
+  if (!live) setHoverPin(null, null);
+}
+/** Tell the parent which pin the pointer is over (it renders the preview
+ *  from its own data; the frame never holds comment text). */
+function setHoverPin(id, el) {
+  if (id === hoverPin) return;
+  hoverPin = id;
+  if (id === null || !el) { post({ dp: "pin-hover", id: null }); return; }
+  var r = el.getBoundingClientRect();
+  post({ dp: "pin-hover", id: id, x: r.left, y: r.bottom });
+}
 function drawPins() {
   var l = ensureLayer();
   var olds = l.querySelectorAll("dp-annotator-pin");
   for (var i = 0; i < olds.length; i++) olds[i].remove();
+  var hoverStill = false;
   var found = [];
   pinEls = [];
   for (var j = 0; j < current.length; j++) {
@@ -882,21 +1009,39 @@ function drawPins() {
     if (!hit) continue;
     var r = rectOf(hit);
     if (!r) continue;
+    var state = pinStates[j] === "addressed" ? "addressed" : "open";
+    var color = PIN_COLORS[state];
     var pin = mk("dp-annotator-pin");
     pin.setAttribute("data-dp-pin", String(j));
-    important(pin, { position: "absolute", display: "block", "box-sizing": "border-box", outline: "2px solid #f59e0b",
+    pin.setAttribute("data-dp-pin-state", state);
+    important(pin, { position: "absolute", display: "block", "box-sizing": "border-box", outline: pinOutline(state),
       background: "transparent", "pointer-events": "none", margin: "0", padding: "0" });
     place(pin, r);
     var badge = mk("dp-annotator-badge");
     badge.textContent = String(j + 1);
-    important(badge, { position: "absolute", left: "-10px", top: "-10px", display: "block", "box-sizing": "border-box",
-      "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: "#f59e0b",
-      color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center" });
+    var id = pinIds[j];
+    if (id && badgeIds) badgeIds.set(badge, id);
+    // Preferably fully OUTSIDE the anchored element's top-left corner (the
+    // pin box is the element +2px; the 18px badge ends 2px before it), so it
+    // never sits on the element's own interactive area; placeBadge() moves it
+    // to a viewport-visible spot clear of native controls when that's off-screen.
+    important(badge, { position: "absolute", left: "-20px", top: "-20px", display: "block", "box-sizing": "border-box",
+      "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: color,
+      color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center",
+      "pointer-events": "none", cursor: "default" });
     pin.appendChild(badge);
     l.appendChild(pin);
+    var ok = !!id && !!badgeIds && !!badgeOk && !placeBadge(badge, r);
+    if (badgeOk) badgeOk.set(badge, ok);
+    var live = ok && badgesLive();
+    if (live) important(badge, { "pointer-events": "auto", cursor: "pointer" });
+    if (id && id === hoverPin && live) hoverStill = true;
   }
+  // A preview whose pin is gone (or no longer clickable) is withdrawn.
+  if (hoverPin !== null && !hoverStill) setHoverPin(null, null);
   return found;
 }
+function pinOutline(state) { return state === "addressed" ? "1px dashed " + PIN_COLORS.addressed : "2px solid " + PIN_COLORS.open; }
 var CHANGE_COLORS = { added: "#16a34a", changed: "#8b5cf6", moved: "#2563eb", hinted: "#0891b2" };
 var CHANGE_GLYPHS = { added: "+", changed: "~", moved: "\u2195", hinted: "*" };
 var CHANGE_KINDS = { added: 1, changed: 1, moved: 1, hinted: 1 };
@@ -1000,18 +1145,40 @@ function schedule() {
   if ((!current.length && !(showChanges && changes.length)) || pending) return;
   pending = setTimeout(function () { reconcile(false); }, 120);
 }
-function focusPin(index) {
-  if (typeof index !== "number" || index < 0 || index >= current.length) return;
-  var i = Math.floor(index);
+/** #714 gap 8 — put an element near the BOTTOM of THIS frame's viewport
+ *  (~24px above its bottom edge), next to the composer docked under the
+ *  frame. window.scrollTo moves only the frame's own document, never the
+ *  companion. An element taller than the viewport keeps its top in view. */
+function scrollNearBottom(el) {
+  if (!el || !el.getBoundingClientRect) return;
+  var r = el.getBoundingClientRect();
+  var vh = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
+  var sx = window.scrollX || window.pageXOffset || 0, sy = window.scrollY || window.pageYOffset || 0;
+  var y = r.bottom + sy - (vh - 24);
+  if (r.height > vh - 48) y = r.top + sy - 24;
+  try { window.scrollTo(sx, Math.max(0, y)); } catch (e) { /* ignore */ }
+}
+/** {dp:"focus", index[, block]} scrolls to a pin; {dp:"focus", anchor,
+ *  block} (a spot that has no pin yet: the composer just opened on it)
+ *  re-finds the anchor and scrolls to it. block "end" = near the bottom edge. */
+function focusPin(index, anchorArg, block) {
+  var i = typeof index === "number" && index >= 0 && index < current.length ? Math.floor(index) : -1;
+  var a = i >= 0 ? current[i] : anchorArg && typeof anchorArg === "object" ? anchorArg : null;
+  if (!a) return;
   // Re-resolve now: the page may have changed since the pins were drawn.
   var hit = null;
-  try { hit = core.findAnchor(current[i]); } catch (e) { hit = null; }
-  if (hit && hit.el && hit.el.scrollIntoView) hit.el.scrollIntoView({ block: "center", behavior: "smooth" });
+  try { hit = core.findAnchor(a); } catch (e) { hit = null; }
+  if (hit && hit.el) {
+    if (block === "end") scrollNearBottom(hit.el);
+    else if (hit.el.scrollIntoView) hit.el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  if (i < 0) { schedule(); return; }
   reconcile(false);
   var pin = layer ? layer.querySelector("dp-annotator-pin[data-dp-pin=\"" + i + "\"]") : null;
   if (pin) {
+    var st = pinStates[i] === "addressed" ? "addressed" : "open";
     important(pin, { outline: "3px solid #ef4444" });
-    setTimeout(function () { important(pin, { outline: "2px solid #f59e0b" }); }, 1600);
+    setTimeout(function () { important(pin, { outline: pinOutline(st) }); }, 1600);
   }
 }
 
@@ -1173,11 +1340,18 @@ function onMessage(e) {
   if (!d || typeof d !== "object") return;
   if (d.dp === "pins") {
     current = Array.isArray(d.anchors) ? d.anchors.slice(0, 500) : [];
+    var sts = Array.isArray(d.states) ? d.states : [], ids = Array.isArray(d.ids) ? d.ids : [];
+    pinStates = []; pinIds = [];
+    for (var pi = 0; pi < current.length; pi++) {
+      pinStates.push(sts[pi] === "addressed" ? "addressed" : "open");
+      var pid = ids[pi];
+      pinIds.push(typeof pid === "string" && pid.length > 0 && pid.length <= 128 ? pid : null);
+    }
     pinsKey = typeof d.key === "string" && /^[0-9a-z:]{1,64}$/.test(d.key) ? d.key : null;
     reconcile(true);
     scheduleOutline();
   } else if (d.dp === "focus") {
-    focusPin(d.index);
+    focusPin(d.index, d.anchor, d.block);
   } else if (d.dp === "changes") {
     var list = Array.isArray(d.marks) ? d.marks.slice(0, 300) : [];
     changes = [];
@@ -1197,6 +1371,7 @@ function onMessage(e) {
     annotate = d.annotate !== false;
     scripts = d.scripts === true;
     if (!annotate) hideHover();
+    syncBadges();
   }
 }
 function onMouseDown() { suppressClick = false; }
@@ -1222,6 +1397,20 @@ function onMouseUp(e) {
 function onClick(e) {
   var t = targetEl(e);
   if (!t) return;
+  // #714 gap 7 — a click on a pin's badge (one of OUR nodes, matched by
+  // reference) tells the parent which comment it is. Display-only: the parent
+  // scrolls to and highlights that comment; nothing is posted or changed.
+  var pinId = pinIdOf(t);
+  // Cmd/Ctrl held means "let this click through": a badge never turns it
+  // into a pin click (badges also go inert while the key is down).
+  if (pinId !== null && (e.ctrlKey || e.metaKey)) return;
+  if (pinId !== null) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (suppressClick) { suppressClick = false; return; }
+    if (badgesLive() && badgeOk && badgeOk.get(t) === true) post({ dp: "pin-click", id: pinId });
+    return;
+  }
   var link = closestLink(t);
   // The navigation guard runs before anything else, our own nodes included:
   // no link is ever allowed to navigate the frame.
@@ -1294,6 +1483,7 @@ window.addEventListener("auxclick", onAuxClick, true);
 window.addEventListener("mousedown", onMouseDown, true);
 window.addEventListener("mouseup", onMouseUp, true);
 window.addEventListener("mousemove", onMove, true);
+window.addEventListener("mouseout", onOut, true);
 window.addEventListener("keydown", onKey, true);
 window.addEventListener("keyup", onKey, true);
 window.addEventListener("message", onMessage);
@@ -1307,6 +1497,7 @@ return function uninstall() {
   window.removeEventListener("mousedown", onMouseDown, true);
   window.removeEventListener("mouseup", onMouseUp, true);
   window.removeEventListener("mousemove", onMove, true);
+  window.removeEventListener("mouseout", onOut, true);
   window.removeEventListener("keydown", onKey, true);
   window.removeEventListener("keyup", onKey, true);
   window.removeEventListener("message", onMessage);

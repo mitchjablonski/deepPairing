@@ -102,52 +102,185 @@ function externalSrcsetCount(value: string): number {
   return count;
 }
 
-/** CSS with every comment blanked out, by one forward indexOf walk. */
-function stripCssComments(css: string): string {
-  let out = "";
-  let i = 0;
-  while (i < css.length) {
-    const open = css.indexOf("/*", i);
-    if (open === -1) { out += css.slice(i); break; }
-    out += css.slice(i, open) + " ";
-    const close = css.indexOf("*/", open + 2);
-    if (close === -1) break; // an unterminated comment runs to the end
-    i = close + 2;
+/** CSS Syntax newline: LF, CR or FF (CRLF is a CR then an LF). */
+function isCssNewline(c: number): boolean {
+  return c === 10 || c === 13 || c === 12;
+}
+
+function isHexDigit(c: number): boolean {
+  return (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+}
+
+/** CSS name code point: letter, digit, `_`, `-` or non-ASCII. */
+function isNameChar(c: number): boolean {
+  return isAlpha(c) || (c >= 48 && c <= 57) || c === 95 || c === 45 || c >= 0x80;
+}
+
+/** `\` at `i` starts a valid CSS escape (not `\` + newline, not at the end). */
+function isEscapeAt(css: string, i: number): boolean {
+  return css.charCodeAt(i) === 0x5c && i + 1 < css.length && !isCssNewline(css.charCodeAt(i + 1));
+}
+
+/** Consume the escape at `i` (its `\` included); returns [decoded, next index]. */
+function consumeEscape(css: string, i: number): [string, number] {
+  let j = i + 1;
+  if (isHexDigit(css.charCodeAt(j))) {
+    const hexStart = j;
+    while (j < css.length && j - hexStart < 6 && isHexDigit(css.charCodeAt(j))) j++;
+    const cp = parseInt(css.slice(hexStart, j), 16);
+    if (css.charCodeAt(j) === 13 && css.charCodeAt(j + 1) === 10) j += 2;
+    else if (isSpace(css.charCodeAt(j))) j++;
+    const ok = cp > 0 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff);
+    return [ok ? String.fromCodePoint(cp) : "�", j];
   }
-  return out;
+  return [css[j] ?? "", j + 1];
+}
+
+/** Consume a run of name code points / escapes from `i`; returns [name, next]. */
+function consumeName(css: string, i: number): [string, number] {
+  let name = "";
+  while (i < css.length) {
+    const c = css.charCodeAt(i);
+    if (isNameChar(c)) { name += css[i]; i++; }
+    else if (isEscapeAt(css, i)) { const [d, j] = consumeEscape(css, i); name += d; i = j; }
+    else break;
+  }
+  return [name, i];
 }
 
 /**
- * Count external url(...) and @import targets in CSS text, by kind. Comments
- * are skipped. `@import url(...)` counts once, as an @import. Each walk is a
- * strictly forward indexOf, so linear in the CSS length.
+ * The tokens the lint cares about, from ONE forward CSS tokenizer (a subset
+ * of CSS Syntax 3): comments, strings (ended by their quote, any CSS newline
+ * as a bad-string, or the end of input; `\` + newline continues them), whole
+ * ident / at-keyword / hash name runs (so `myurl(`, `--url(`, `#url(` are not
+ * `url(`), and `url(` function tokens with their argument (quoted or not).
+ * Every other code point is `other`. Linear: each character is visited once.
  */
-export function externalCssRefs(rawCss: string): { url: number; import: number } {
-  const lower = stripCssComments(rawCss).toLowerCase();
+type CssToken =
+  | { kind: "comment"; start: number; end: number }
+  | { kind: "string"; value: string }
+  | { kind: "url"; value: string }
+  | { kind: "at"; name: string }
+  | { kind: "ident" | "hash"; name: string }
+  | { kind: "space" }
+  | { kind: "other" };
+
+function consumeString(css: string, i: number): [string, number] {
+  const quote = css.charCodeAt(i);
+  let value = "";
+  i++;
+  while (i < css.length) {
+    const d = css.charCodeAt(i);
+    if (d === quote) return [value, i + 1];
+    if (isCssNewline(d)) return [value, i]; // bad-string: the newline is not consumed
+    if (d === 0x5c) {
+      if (i + 1 >= css.length) return [value, i + 1];
+      const e = css.charCodeAt(i + 1);
+      if (e === 13 && css.charCodeAt(i + 2) === 10) { i += 3; continue; } // escaped CRLF
+      if (isCssNewline(e)) { i += 2; continue; } // escaped newline continues the string
+      const [dec, j] = consumeEscape(css, i);
+      value += dec;
+      i = j;
+      continue;
+    }
+    value += css[i];
+    i++;
+  }
+  return [value, i];
+}
+
+function scanCss(css: string, onToken: (t: CssToken) => void): void {
+  const n = css.length;
+  let i = 0;
+  while (i < n) {
+    const c = css.charCodeAt(i);
+    if (c === 0x2f && css.charCodeAt(i + 1) === 0x2a) {
+      const close = css.indexOf("*/", i + 2);
+      const end = close === -1 ? n : close + 2; // an unterminated comment runs to the end
+      onToken({ kind: "comment", start: i, end });
+      i = end;
+    } else if (c === 0x22 || c === 0x27) {
+      const [value, j] = consumeString(css, i);
+      onToken({ kind: "string", value });
+      i = j;
+    } else if (isSpace(c)) {
+      while (i < n && isSpace(css.charCodeAt(i))) i++;
+      onToken({ kind: "space" });
+    } else if (c === 0x40 /* @ */ || c === 0x23 /* # */) {
+      const [name, j] = consumeName(css, i + 1);
+      onToken(name ? { kind: c === 0x40 ? "at" : "hash", name: name.toLowerCase() } : { kind: "other" });
+      i = name ? j : i + 1;
+    } else if (isNameChar(c) || isEscapeAt(css, i)) {
+      const [rawName, j] = consumeName(css, i);
+      const name = rawName.toLowerCase();
+      if (name === "url" && css.charCodeAt(j) === 0x28 /* ( */) {
+        let k = j + 1;
+        while (k < n && isSpace(css.charCodeAt(k))) k++;
+        const q = css.charCodeAt(k);
+        if (q === 0x22 || q === 0x27) {
+          // url( "..." ): a function whose argument is the string token.
+          const [value, m] = consumeString(css, k);
+          onToken({ kind: "url", value });
+          i = m;
+        } else {
+          // An unquoted url token runs to its `)` (escapes honoured).
+          let value = "";
+          while (k < n && css.charCodeAt(k) !== 0x29) {
+            if (isEscapeAt(css, k)) { const [d, m] = consumeEscape(css, k); value += d; k = m; }
+            else { value += css[k]; k++; }
+          }
+          onToken({ kind: "url", value: value.trim() });
+          i = Math.min(k + 1, n);
+        }
+      } else {
+        onToken({ kind: "ident", name });
+        i = j;
+      }
+    } else if (c === 0x5c /* \ */) {
+      i += 2; // `\` + newline (an invalid escape) is a delim; never opens anything
+    } else {
+      onToken({ kind: "other" });
+      i++;
+    }
+  }
+}
+
+/**
+ * CSS with every comment blanked out (one space each), from the same
+ * tokenizer as the reference count: a `/*` inside a quoted string or a url()
+ * is literal text, so `content:"/*"` cannot hide the rest of the stylesheet.
+ */
+export function stripCssComments(css: string): string {
+  let out = "";
+  let from = 0;
+  scanCss(css, (t) => {
+    if (t.kind !== "comment") return;
+    out += css.slice(from, t.start) + " ";
+    from = t.end;
+  });
+  return out + css.slice(from);
+}
+
+/**
+ * Count external url(...) and @import targets in CSS text, by kind, from the
+ * tokenizer: comments and quoted text that is not a url()/@import argument
+ * never count. `@import url(...)` counts once, as an @import.
+ */
+export function externalCssRefs(css: string): { url: number; import: number } {
   const counts = { url: 0, import: 0 };
-  /** Index of the URL after optional spaces and one optional quote. */
-  const target = (from: number): number => {
-    let i = from;
-    while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
-    if (lower[i] === "\"" || lower[i] === "'") i++;
-    return i;
-  };
-  let at = lower.indexOf("@import");
-  while (at !== -1) {
-    let i = target(at + 7);
-    if (lower.startsWith("url(", i)) i = target(i + 4);
-    if (externalAt(lower, i)) counts.import++;
-    at = lower.indexOf("@import", at + 7);
-  }
-  at = lower.indexOf("url(");
-  while (at !== -1) {
-    // Skip a url() that is the target of an @import (already counted).
-    let k = at - 1;
-    while (k >= 0 && isSpace(lower.charCodeAt(k))) k--;
-    const isImportTarget = k >= 6 && lower.startsWith("@import", k - 6);
-    if (!isImportTarget && externalAt(lower, target(at + 4))) counts.url++;
-    at = lower.indexOf("url(", at + 4);
-  }
+  let afterImport = false;
+  scanCss(css, (t) => {
+    if (t.kind === "space" || t.kind === "comment") return;
+    if (afterImport) {
+      afterImport = false;
+      if (t.kind === "string" || t.kind === "url") {
+        if (isExternal(t.value)) counts.import++;
+        return;
+      }
+    }
+    if (t.kind === "at" && t.name === "import") afterImport = true;
+    else if (t.kind === "url" && isExternal(t.value)) counts.url++;
+  });
   return counts;
 }
 

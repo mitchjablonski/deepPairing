@@ -15889,6 +15889,14 @@ var PAGE_RULE_OUT_KEY_MAX = 120;
 var CommentRuleOutSchema = external_exports.object({
   description: external_exports.string().min(1).max(PAGE_RULE_OUT_KEY_MAX)
 });
+var CommentAddressedInSchema = external_exports.object({
+  artifactId: external_exports.string().min(1).max(256),
+  version: external_exports.number().int().positive(),
+  /** When that revision was made (its createdAt), so a later human reply can
+   *  reopen the comment. Optional: older stamps fall back to the revision's
+   *  own artifact record. */
+  at: external_exports.string().datetime().optional()
+});
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -15910,6 +15918,8 @@ var CommentSchema = external_exports.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  // #714 gap 7 — the page revision that addressed this comment (see above).
+  addressedIn: CommentAddressedInSchema.optional(),
   /** Server-stamped only for the note owned by a page verdict history entry. */
   verdictFeedback: external_exports.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
