@@ -8,28 +8,68 @@
  * full script installs window listeners with no uninstall handle).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { annotatorScript } from "../pageAnnotator";
+import { annotatorScript, ANNOTATOR_CORE_SOURCE, ANNOTATOR_MAIN_SOURCE } from "../pageAnnotator";
 import { acceptDiagnosticsReport } from "../pageAnchorMessages";
 
 const DOC = "0123456789abcdef0123456789abcdef";
 const posted: any[] = [];
 let realPost: typeof window.postMessage;
 
+// happy-dom has no Event.isTrusted. Test-level shim: an event is trusted only
+// when the test plays the BROWSER (browserDispatch); anything else, like a
+// page's own dispatchEvent, is isTrusted === false, as in a real browser.
+const trusted = new WeakSet<Event>();
+function browserDispatch(target: EventTarget, ev: Event) {
+  trusted.add(ev);
+  target.dispatchEvent(ev);
+}
+function scriptErrorEvent(name: string) {
+  return new ErrorEvent("error", { message: `${name}: boom`, error: { name } });
+}
+function cspEvent(directive: string) {
+  const ev = new Event("securitypolicyviolation") as Event & { effectiveDirective?: string };
+  ev.effectiveDirective = directive;
+  return ev;
+}
+const settle = () => new Promise((r) => setTimeout(r, 400));
+const lastDiag = () => posted.filter((m) => m?.dp === "diagnostics").at(-1);
+
+// The annotator's own listeners, recorded as it boots, so a test can play the
+// browser invoking them directly (with no happy-dom dispatch in between).
+const listeners: Record<string, EventListener[]> = {};
+function record(target: EventTarget) {
+  const add = target.addEventListener;
+  target.addEventListener = function (this: EventTarget, type: string, fn: any, opts?: any) {
+    (listeners[type] ??= []).push(fn as EventListener);
+    return add.call(this, type, fn, opts);
+  } as typeof target.addEventListener;
+  return () => { target.addEventListener = add; };
+}
+
 beforeAll(() => {
-  // `parent` is this window in jsdom: record what the annotator posts.
+  Object.defineProperty(Event.prototype, "isTrusted", {
+    configurable: true,
+    get(this: Event) { return trusted.has(this); },
+  });
+  // `parent` is this window here: record what the annotator posts (index
+  // assignment, so a test's Array.prototype patch can't disturb the recorder).
   realPost = window.postMessage;
   window.postMessage = ((msg: unknown) => {
-    posted.push(msg);
+    posted[posted.length] = msg;
   }) as typeof window.postMessage;
   const s = document.createElement("script");
   s.setAttribute("data-probe", "annotator");
   s.textContent = annotatorScript(DOC);
+  const unW = record(window), unD = record(document);
   document.head.appendChild(s);
+  unW();
+  unD();
   // A "page script" that runs after the annotator, as agent script does after Run.
   if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
 });
 afterAll(() => {
   window.postMessage = realPost;
+  delete (Event.prototype as { isTrusted?: unknown }).isTrusted;
 });
 
 describe("annotator scrubs its document id before page script can run (#727)", () => {
@@ -70,8 +110,8 @@ describe("annotator scrubs its document id before page script can run (#727)", (
       value: function (this: { doc?: unknown }) { seen.push(String(this?.doc ?? "")); return this; },
     });
     try {
-      window.dispatchEvent(new ErrorEvent("error", { message: "TypeError: boom", error: { name: "TypeError" } }));
-      await new Promise((r) => setTimeout(r, 400));
+      browserDispatch(window, scriptErrorEvent("TypeError"));
+      await settle();
     } finally {
       JSON.stringify = realStringify;
       delete proto.toJSON;
@@ -80,6 +120,60 @@ describe("annotator scrubs its document id before page script can run (#727)", (
     expect(diag.length).toBeGreaterThan(0);
     expect(diag.at(-1).doc).toBe(DOC);
     expect(seen.join(",")).not.toContain(DOC);
+  });
+
+  it("ignores synthetic (page-dispatched) error, rejection and CSP events", async () => {
+    const before = lastDiag();
+    window.dispatchEvent(scriptErrorEvent("RangeError"));
+    const rej = new Event("unhandledrejection") as Event & { reason?: unknown };
+    rej.reason = new Error("forged");
+    window.dispatchEvent(rej);
+    document.dispatchEvent(cspEvent("img-src"));
+    await settle();
+    expect(lastDiag()).toEqual(before);
+    expect(JSON.stringify(posted)).not.toMatch(/RangeError|forged|img-src/);
+  });
+
+  it("a patched Array.prototype (sort/slice/push/indexOf, index setter, species) can't change the posted keys", async () => {
+    const AP = Array.prototype as any;
+    const saved = { sort: AP.sort, slice: AP.slice, push: AP.push, indexOf: AP.indexOf, constructor: AP.constructor };
+    // Genuine baseline first: two CSP blocks, out of allowlist order.
+    browserDispatch(document, cspEvent("connect-src"));
+    browserDispatch(document, cspEvent("img-src"));
+    await settle();
+    expect(lastDiag().blocked).toEqual([{ key: "img-src", count: 1 }, { key: "connect-src", count: 1 }]);
+    const evil = function (this: unknown[]) { return [{ key: "frame-ancestors", count: 9999 }]; };
+    let setterHits = 0;
+    const onError = listeners.error?.[0] as EventListener, onCsp = listeners.securitypolicyviolation?.[0] as EventListener;
+    expect(typeof onError).toBe("function");
+    expect(typeof onCsp).toBe("function");
+    try {
+      AP.sort = evil;
+      AP.slice = evil;
+      AP.push = function () { return 0; };
+      AP.indexOf = function () { return 0; };
+      AP.constructor = { [Symbol.species]: function () { return [{ key: "forged", count: 1 }]; } };
+      Object.defineProperty(AP, "0", { configurable: true, set() { setterHits++; }, get() { return { key: "forged", count: 1 }; } });
+      // The browser invokes the annotator's listeners with trusted events;
+      // the handlers, the report, the dedupe and the ranking all run patched.
+      onCsp({ isTrusted: true, effectiveDirective: "img-src" } as unknown as Event);
+      onError({ isTrusted: true, message: "RangeError: deep", error: { name: "RangeError" } } as unknown as Event);
+      await settle();
+    } finally {
+      delete AP[0];
+      Object.assign(AP, saved);
+    }
+    const d = lastDiag();
+    expect(d.doc).toBe(DOC);
+    expect(d.blocked).toEqual([{ key: "img-src", count: 2 }, { key: "connect-src", count: 1 }]);
+    expect(d.scriptErrors.classes).toEqual([{ key: "TypeError", count: 1 }, { key: "RangeError", count: 1 }]);
+    expect(d.scriptErrors.samples).toEqual(["TypeError: boom", "RangeError: deep"]);
+    expect(setterHits).toBe(0);
+  });
+
+  it('both shipped sources start with "use strict" (no fn.arguments / CallSite walk to the id closure)', () => {
+    expect(ANNOTATOR_CORE_SOURCE.trimStart().startsWith('"use strict";')).toBe(true);
+    expect(ANNOTATOR_MAIN_SOURCE.trimStart().startsWith('"use strict";')).toBe(true);
   });
 
   it("a forged diagnostics message without the id is rejected by the parent's parser or doc check", () => {
