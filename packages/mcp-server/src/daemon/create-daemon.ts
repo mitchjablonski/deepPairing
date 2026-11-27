@@ -74,6 +74,7 @@ import { isSessionReviewConflictError } from "../store/session-records.js";
 // lifecycle.ts broke the plugin bundle's module initialisation order).
 import { probeDaemonIdentity } from "./lifecycle.js";
 import { PageWatcher, type PageWatchDeps } from "./page-watch.js";
+import { StandaloneCloseout } from "./standalone-closeout.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 
 /**
@@ -215,6 +216,8 @@ export interface Daemon {
   dispose: () => void;
   /** #680 slice 3 — the page file watch (exposed for tests and diagnostics). */
   pageWatcher: PageWatcher;
+  /** Internal coordinator. There is no End route yet. */
+  standaloneCloseout: StandaloneCloseout;
 }
 
 export function createDaemon(deps: CreateDaemonDeps): Daemon {
@@ -261,6 +264,8 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // + the client count; `sessions.size` is monotonic and never reaches 0, which
   // is why the daemon used to leak a process per project forever.
   const activeSessions = new Set<string>();
+  const standaloneCloseout = new StandaloneCloseout(projectRoot, (sessionId) => sessions.get(sessionId),
+    undefined, (sessionId) => pageWatcher.stopSession(sessionId));
   const demoRuns = new Map<string, () => void>();
   // #470 — active allowances live ONLY here (O1). A restart ends every grant:
   // each registrationId embeds this instanceId.
@@ -283,9 +288,13 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     getStore: (sessionId) => sessions.get(sessionId),
     broadcast: (sessionId, event) => broadcast(sessionId, event),
     // #679 — a standalone (CLI) review has no wrapper lease; its pages are
-    // watched while the daemon holds the session, like a live wrapper's.
-    isSessionLive: (sessionId) => activeSessions.has(sessionId) ||
-      (isStandaloneSessionForProject(sessionId, projectRoot) && sessions.has(sessionId)),
+    // watched while the daemon holds the session and its review has not ended.
+    isSessionLive: (sessionId) => isStandaloneSessionForProject(sessionId, projectRoot)
+      ? sessions.has(sessionId) && standaloneCloseout.state(sessionId).state !== "ended"
+      : activeSessions.has(sessionId),
+    admitWatchedWrite: (sessionId) => isStandaloneSessionForProject(sessionId, projectRoot)
+      ? standaloneCloseout.admitWatchedWrite(sessionId)
+      : undefined,
     log,
     ...(pageWatchOverrides ?? {}),
   });
@@ -552,6 +561,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       // it is still live without the wrapper (a loaded standalone review).
       else pageWatcher.sync(sessionId);
     },
+    standaloneCloseout,
   );
   app.route("/", daemonRoutes);
 
@@ -1629,5 +1639,6 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     cleanup,
     dispose,
     pageWatcher,
+    standaloneCloseout,
   };
 }

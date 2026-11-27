@@ -25,6 +25,7 @@ import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
 import { presentStandalonePage } from "./standalone-page.js";
 import { reviseStandalonePage } from "./standalone-revise-page.js";
+import type { StandaloneCloseout } from "./standalone-closeout.js";
 import { pageRevisionFeedbackIdsSchema } from "../store/page-revision-feedback.js";
 import { readPageFeedback } from "./page-feedback.js";
 import { decisionFeedback, MAX_DECISION_WAIT_MS, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
@@ -442,6 +443,7 @@ export function createDaemonRoutes(
    * session is no longer live), so the page file watch starts or stops with it.
    */
   onSessionLifecycle?: (sessionId: string, event: "registered" | "unregistered") => void,
+  standaloneCloseout?: StandaloneCloseout,
 ) {
   // U0.6 — same diagnostic seam as routes.ts. Wrapper-side mutations log
   // here; we want both UI clicks and agent-driven status updates in one log.
@@ -486,14 +488,7 @@ export function createDaemonRoutes(
   // can't light the indicator.
   const lastActivityBroadcastAt = new Map<string, number>();
   const AGENT_ACTIVITY_THROTTLE_MS = 5_000;
-  app.use("/api/internal/sessions/*", async (c, next) => {
-    await next();
-    // Standalone links and reads do not signal wrapper activity.
-    if (c.res.status >= 400 || (c.req.method === "POST" &&
-      /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback)$/.test(c.req.path))) return;
-    const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
-    const sid = m?.[1];
-    if (!sid) return;
+  function noteActivity(sid: string): void {
     const now = Date.now();
     // Per-session-split — stamp lastActivity on EVERY successful internal
     // request (not throttled) so the companion's default-view selector always
@@ -503,6 +498,15 @@ export function createDaemonRoutes(
     if (now - (lastActivityBroadcastAt.get(sid) ?? 0) < AGENT_ACTIVITY_THROTTLE_MS) return;
     lastActivityBroadcastAt.set(sid, now);
     broadcast(sid, { type: "agent_activity", at: new Date(now).toISOString() });
+  }
+  app.use("/api/internal/sessions/*", async (c, next) => {
+    await next();
+    // Standalone links and reads are silent. Standalone writers signal only
+    // while they hold admission, before End could commit.
+    if (c.res.status >= 400 || (c.req.method === "POST" &&
+      /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback|present-options|present-page|revise-page)$/.test(c.req.path))) return;
+    const sid = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/)?.[1];
+    if (sid) noteActivity(sid);
   });
 
   /**
@@ -550,6 +554,22 @@ export function createDaemonRoutes(
     const projectRoot = daemonProjectRoot;
     function reviewDir(sessionId: string): string {
       return path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+    }
+    async function withStandaloneWrite(c: Context, sessionId: string, run: () => Promise<Response>): Promise<Response> {
+      const release = standaloneCloseout?.admitWrite(sessionId);
+      if (standaloneCloseout && !release) {
+        if (standaloneCloseout.state(sessionId).state === "ended") {
+          return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+        }
+        return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+      }
+      try {
+        const response = await run();
+        if (response.status < 400) noteActivity(sessionId);
+        return response;
+      } finally {
+        release?.();
+      }
     }
     function requireWarmStandaloneStore(c: Context, expectedProjectRoot: string, sessionId: string, command: string): StoreLookup {
       if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
@@ -603,11 +623,13 @@ export function createDaemonRoutes(
       if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
         return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
       }
-      const store = sessions.get(sessionId) ?? installSession(sessionId, {});
-      const port = refreshCompanionLink();
-      const result = await presentStandaloneOptions(daemonProjectRoot, store, parsed.data.operationId, parsed.data.args, port,
-        (event) => broadcast(sessionId, event));
-      return c.json(result);
+      return withStandaloneWrite(c, sessionId, async () => {
+        const store = sessions.get(sessionId) ?? installSession(sessionId, {});
+        const port = refreshCompanionLink();
+        const result = await presentStandaloneOptions(daemonProjectRoot, store, parsed.data.operationId, parsed.data.args, port,
+          (event) => broadcast(sessionId, event));
+        return c.json(result);
+      });
     });
     app.post("/api/internal/sessions/:sessionId/present-page", async (c) => {
       const parsed = await parseJsonBody(c, PresentStandalonePageBody);
@@ -631,15 +653,15 @@ export function createDaemonRoutes(
         }
         html = bytes.toString("utf8");
       }
-      const store = sessions.get(sessionId) ?? installSession(sessionId, {});
-      const port = refreshCompanionLink();
-      // Re-arm the file watch for this review's live file-backed pages even
-      // when the call below only replays (no artifact event fires then), e.g.
-      // a same-ID retry straight after a daemon restart, without a resume.
-      try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks the present */ }
-      const result = await presentStandalonePage(daemonProjectRoot, store, parsed.data.operationId,
-        { ...rest, ...(html !== undefined ? { html } : {}) }, port, (event) => broadcast(sessionId, event));
-      return c.json(result);
+      return withStandaloneWrite(c, sessionId, async () => {
+        const store = sessions.get(sessionId) ?? installSession(sessionId, {});
+        const port = refreshCompanionLink();
+        // A replay emits no artifact event, so resync the watch on cold retries.
+        try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks the present */ }
+        const result = await presentStandalonePage(daemonProjectRoot, store, parsed.data.operationId,
+          { ...rest, ...(html !== undefined ? { html } : {}) }, port, (event) => broadcast(sessionId, event));
+        return c.json(result);
+      });
     });
     app.post("/api/internal/sessions/:sessionId/revise-page", async (c) => {
       const parsed = await parseJsonBody(c, ReviseStandalonePageBody);
@@ -661,9 +683,11 @@ export function createDaemonRoutes(
       if (Buffer.from(html, "utf8").toString("base64") !== htmlBase64) {
         return c.json({ error: "The page must be valid UTF-8 HTML encoded as canonical base64." }, 400);
       }
-      const result = await reviseStandalonePage(projectRoot, lookup.store, operationId, { artifactId, html, reason, ackCommentIds },
-        (event) => broadcast(sessionId, event));
-      return c.json(result);
+      return withStandaloneWrite(c, sessionId, async () => {
+        const result = await reviseStandalonePage(projectRoot, lookup.store, operationId, { artifactId, html, reason, ackCommentIds },
+          (event) => broadcast(sessionId, event));
+        return c.json(result);
+      });
     });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
       const signal = c.req.raw.signal;

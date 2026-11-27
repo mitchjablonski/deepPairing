@@ -83,7 +83,12 @@ describe("standalone End review core", () => {
         rename(from, to);
       });
       try {
-        await expect(coordinator.end(f.sessionId)).rejects.toThrow("Closeout marker interrupted");
+        const ending = coordinator.end(f.sessionId);
+        const waitingSave = coordinator.admitWatchedWrite(f.sessionId);
+        await expect(ending).rejects.toThrow("Closeout marker interrupted");
+        const releaseSave = await waitingSave;
+        expect(releaseSave).toBeTypeOf("function");
+        releaseSave?.();
         expect(coordinator.state(f.sessionId)).toEqual({ state: "open" });
         expect(fs.existsSync(f.marker)).toBe(false);
       } finally {

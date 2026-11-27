@@ -150,7 +150,7 @@ function reconcileReceipts(projectRoot: string, dir: string, store: FileStore, c
 }
 
 /** Internal coordinator. Only the daemon's verified exact session lookup should
- * supply stores. Public routes and watcher eligibility join this in slice 2. */
+ * supply stores. The daemon does not expose End until all writers are covered. */
 export class StandaloneCloseout {
   private readonly entries = new Map<string, Entry>();
 
@@ -158,6 +158,7 @@ export class StandaloneCloseout {
     private readonly projectRoot: string,
     private readonly getStore: (sessionId: string) => FileStore | undefined,
     private readonly timeoutMs = 5_000,
+    private readonly onEnded?: (sessionId: string) => void,
   ) {}
 
   private directory(sessionId: string): string {
@@ -202,6 +203,16 @@ export class StandaloneCloseout {
     };
   }
 
+  /** A save arriving during a failed closeout still needs its turn. Waiting
+   * for the attempt here does not itself count as an admitted writer. */
+  async admitWatchedWrite(sessionId: string): Promise<(() => void) | undefined> {
+    for (;;) {
+      const closing = this.entries.get(sessionId)?.close;
+      if (!closing) return this.admitWrite(sessionId);
+      try { await closing; } catch { /* retry admission after a failed close */ }
+    }
+  }
+
   private entry(sessionId: string): Entry {
     const current = this.entries.get(sessionId);
     if (current) return current;
@@ -240,7 +251,7 @@ export class StandaloneCloseout {
       checkDeadline();
       // The session is drained. Take the existing flush lock only for this
       // final synchronous check/write, never across an await.
-      return withSessionFlushLock(path.join(dir, ".flush.lock"), () => {
+      const committed = withSessionFlushLock(path.join(dir, ".flush.lock"), () => {
         const existing = this.readMarker(dir, sessionId);
         if (existing) return existing;
         checkDeadline();
@@ -248,6 +259,8 @@ export class StandaloneCloseout {
         writeJsonAtomic(path.join(dir, "review-ended.json"), committed, 2, { mode: 0o600 });
         return committed;
       });
+      this.onEnded?.(sessionId);
+      return committed;
     }).finally(() => {
       entry.close = undefined;
       entry.drained = undefined;

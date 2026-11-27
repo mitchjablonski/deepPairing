@@ -66,8 +66,10 @@ export interface PageWatchDeps {
   projectRoot: string;
   getStore: (sessionId: string) => FileStore | undefined;
   broadcast: (sessionId: string, event: unknown) => void;
-  /** A session is watched only while its wrapper is registered. */
+  /** Whether a wrapper or standalone review can own a watch. */
   isSessionLive?: (sessionId: string) => boolean;
+  /** Standalone saves acquire a permit before any effects. */
+  admitWatchedWrite?: (sessionId: string) => Promise<(() => void) | undefined> | undefined;
   log?: (msg: string) => void;
   /** Directory watcher. Default fs.watch; tests pass a fake they can fire. */
   watch?: (dir: string, listener: (event: string, filename: string | Buffer | null) => void) => PageDirWatcher;
@@ -339,6 +341,18 @@ export class PageWatcher {
   }
 
   private async process(entry: Entry): Promise<void> {
+    const admission = this.deps.admitWatchedWrite?.(entry.sessionId);
+    const release = admission ? await admission : undefined;
+    if (admission && !release) return;
+    try {
+      if (entry.stopped || this.disposed) return;
+      await this.processAdmitted(entry);
+    } finally {
+      release?.();
+    }
+  }
+
+  private async processAdmitted(entry: Entry): Promise<void> {
     const store = this.deps.getStore(entry.sessionId);
     if (!store) return;
     // Codex review — the snapshot this read is about. A save that lands while
@@ -434,7 +448,7 @@ export class PageWatcher {
       return;
     }
 
-    this.record(store, entry, cur, content, pre.trace);
+    await this.record(store, entry, cur, content, pre.trace);
   }
 
   /** Has the file moved on from the snapshot this read saw? Decided by the
@@ -475,7 +489,7 @@ export class PageWatcher {
     if (updated) this.deps.broadcast(entry.sessionId, { type: "artifact_content_updated", artifact: updated });
   }
 
-  private record(store: FileStore, entry: Entry, cur: Artifact, content: Record<string, unknown>, trace: Parameters<typeof persistPreflightTrace>[4]): void {
+  private async record(store: FileStore, entry: Entry, cur: Artifact, content: Record<string, unknown>, trace: Parameters<typeof persistPreflightTrace>[4]): Promise<void> {
     if (entry.stopped || this.disposed) return;
     const newId = `art_${nanoid(10)}`;
     let created: Artifact;
@@ -536,13 +550,17 @@ export class PageWatcher {
     this.log(`recorded ${newId} (v${cur.version + 1}) from ${entry.sourcePath}; ${rel.orphaned.length + rel.orphanedOverflow} comment(s) orphaned`);
 
     const bc = (event: unknown) => this.deps.broadcast(entry.sessionId, event);
-    void persistPreflightTrace(store, bc, created, "page_watch", trace).catch(() => undefined);
-    const fresh = store.getArtifacts().find((a) => a.id === newId) ?? created;
-    bc({ type: "artifact_created", artifact: fresh });
-    bc({ type: "artifact_updated", artifactId: cur.id, status: "superseded" });
-    const secrets = fresh.secretWarnings ?? [];
-    if (secrets.length > 0) {
-      bc({ type: "secret_warning", artifactId: newId, patterns: secrets.map((m) => m.pattern), labels: secrets.map((m) => m.label) });
+    const traceRecorded = persistPreflightTrace(store, bc, created, "page_watch", trace).catch(() => undefined);
+    try {
+      const fresh = store.getArtifacts().find((a) => a.id === newId) ?? created;
+      bc({ type: "artifact_created", artifact: fresh });
+      bc({ type: "artifact_updated", artifactId: cur.id, status: "superseded" });
+      const secrets = fresh.secretWarnings ?? [];
+      if (secrets.length > 0) {
+        bc({ type: "secret_warning", artifactId: newId, patterns: secrets.map((m) => m.pattern), labels: secrets.map((m) => m.label) });
+      }
+    } finally {
+      await traceRecorded;
     }
   }
 }
