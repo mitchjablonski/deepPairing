@@ -521,17 +521,6 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     setChangesFound(null);
     setHover(null);
   }, [running]);
-  // The document the frame shows now: the id minted for its current srcdoc
-  // (a new srcdoc or a new iframe element, as at Run, means a new id). On a
-  // change the old document's report (banner, pending post) is dropped and
-  // its late messages no longer match. Checked after every commit, against
-  // what the frame really shows, never inferred from artifact fields.
-  useLayoutEffect(() => {
-    const doc = iframeRef.current?.getAttribute("data-dp-doc") ?? null;
-    if (doc === frameDocRef.current) return;
-    frameDocRef.current = doc;
-    setDiagState(null);
-  });
   // #714 gap 12 — tell the agent (check_feedback) on the render-failure lane,
   // under the page's reserved visual id, once the report settles: a trailing
   // delay, bounded from the first observation (recurring errors can't starve
@@ -542,6 +531,19 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   useEffect(() => () => {
     if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
     pendingReportRef.current = null;
+  }, []);
+  // The document the frame shows now: PrototypeFrame reports the id minted
+  // for its current srcdoc whenever it changes (a new srcdoc or iframe, as at
+  // Run, a Mermaid prepare landing or a theme flip, even without a render
+  // here), from the commit that sets that srcdoc, so before the document can
+  // post. The old document's report (banner, pending post) is dropped and its
+  // late messages no longer match.
+  const onDocChange = useCallback((doc: string | null) => {
+    if (doc === frameDocRef.current) return;
+    frameDocRef.current = doc;
+    if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
+    pendingReportRef.current = null;
+    setDiagState(null);
   }, []);
   useEffect(() => {
     const drop = () => {
@@ -1046,6 +1048,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
               annotation={PAGE_ANNOTATION}
               iframeRef={iframeRef}
               onRunningChange={onRunningChange}
+              onDocChange={onDocChange}
             />
             {hoverEntry && (
               <div

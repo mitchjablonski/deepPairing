@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Ref } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { resolveTheme, usePreferencesStore } from "../stores/preferences";
 
 /**
@@ -144,6 +144,12 @@ export interface PrototypeFrameProps {
   iframeRef?: Ref<HTMLIFrameElement>;
   /** Told when the human chooses Run (the frame remounts). */
   onRunningChange?: (running: boolean) => void;
+  /** #714 gap 12 — told the document id of the srcdoc now displayed (null
+   *  when none) whenever it changes, including changes made here without a
+   *  parent render (a Mermaid prepare landing, a theme flip, a new page while
+   *  running). Called from a layout effect in the commit that sets the new
+   *  srcdoc, so before that document can post anything. */
+  onDocChange?: (doc: string | null) => void;
 }
 
 export function PrototypeFrame({
@@ -156,6 +162,7 @@ export function PrototypeFrame({
   annotation,
   iframeRef,
   onRunningChange,
+  onDocChange,
 }: PrototypeFrameProps) {
   const [running, setRunning] = useState(false);
   const [showSource, setShowSource] = useState(false);
@@ -242,6 +249,12 @@ export function PrototypeFrame({
     return { doc, src: wrapHtml(frameHtml, { headScript: doc && annotation.scriptFor ? annotation.scriptFor(doc) : annotation.script }) };
   }, [frameHtml, running, annotating, annotation]);
   const runDoc = runFrame.src;
+  const shownDoc = (running ? runFrame.doc : staticFrame.doc) ?? null;
+  const onDocChangeRef = useRef(onDocChange);
+  onDocChangeRef.current = onDocChange;
+  useLayoutEffect(() => {
+    onDocChangeRef.current?.(shownDoc);
+  }, [shownDoc]);
 
   if (!html.trim()) {
     return <div className="text-2xs text-text-muted">No {noun} HTML provided.</div>;

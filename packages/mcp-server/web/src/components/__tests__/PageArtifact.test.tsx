@@ -9,7 +9,7 @@
  * composer pre-targeted; submitting stores the comment with its htmlAnchor.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { PAGE_RULE_OUT_MESSAGES } from "@deeppairing/shared";
@@ -19,6 +19,8 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { useLedgerStore } from "../../stores/ledger";
 import { useConnectionGraceStore } from "../../lib/connectionGrace";
+import { usePreferencesStore } from "../../stores/preferences";
+import { PAGE_MERMAID_PREPARE } from "../../lib/pageMermaid";
 
 // The full verb row only renders once the reader reaches the artifact's end.
 function stubIO(isIntersecting: boolean) {
@@ -1896,6 +1898,61 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("REVIEW: a document the frame swaps in on its own (Mermaid prepare, theme flip)", () => {
+    const MERMAID_HTML = '<h1>Flow</h1><pre class="mermaid">flowchart LR\n  A[A]</pre>';
+    const mermaidArt = (id: string) =>
+      ({ ...pageArtifact, id, content: { ...(pageArtifact.content as Record<string, unknown>), html: MERMAID_HTML } }) as Artifact;
+    afterEach(() => {
+      // Unmount first: a theme reset with the page still mounted would start a
+      // real Mermaid render once the spy is restored.
+      cleanup();
+      act(() => usePreferencesStore.getState().setTheme("light"));
+      vi.mocked(PAGE_MERMAID_PREPARE.run).mockRestore?.();
+    });
+
+    it("(a) the first frame lands after the async prepare: a one-off error is accepted, shown and reported", async () => {
+      let open!: () => void;
+      const gate = new Promise<void>((r) => { open = r; });
+      vi.spyOn(PAGE_MERMAID_PREPARE, "run").mockImplementation(async (h: string) => { await gate; return h; });
+      const art = mermaidArt("art_page_prep");
+      useArtifactStore.getState().addArtifact(art);
+      render(<PageArtifact artifact={art} />);
+      // The prepare is in flight: no frame document yet.
+      expect(frame()).toBeNull();
+      await act(async () => { open(); await gate; });
+      expect(frame()?.getAttribute("data-dp-doc")).toMatch(/^[0-9a-f]{32}$/);
+      const win = liveFrame();
+      fromFrame(win, DIAG);
+      expect(screen.getByTestId("page-render-issues")).toBeInTheDocument();
+      await new Promise((r) => setTimeout(r, 1700));
+      expect(renderFailurePosts().filter(([, init]) => String((init as RequestInit).body).includes("art_page_prep"))).toHaveLength(1);
+    });
+
+    it("(b) a pre-Run theme flip swaps the document: the old banner goes, the new document's report is accepted", async () => {
+      act(() => usePreferencesStore.getState().setTheme("light"));
+      vi.spyOn(PAGE_MERMAID_PREPARE, "run").mockImplementation(async (h: string, theme: string) => `${h}<!-- ${theme} -->`);
+      const art = mermaidArt("art_page_theme");
+      useArtifactStore.getState().addArtifact(art);
+      render(<PageArtifact artifact={art} />);
+      await act(async () => {});
+      const firstDoc = frame()!.getAttribute("data-dp-doc");
+      expect(firstDoc).toMatch(/^[0-9a-f]{32}$/);
+      const win = liveFrame();
+      fromFrame(win, DIAG);
+      expect(screen.getByTestId("page-render-issues")).toBeInTheDocument();
+      await act(async () => { usePreferencesStore.getState().setTheme("dark"); });
+      await act(async () => {});
+      expect(frame()!.getAttribute("data-dp-doc")).not.toBe(firstDoc);
+      expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+      // The old document's late report stays out; the new one's is accepted.
+      fromFrame(win, { ...DIAG, doc: firstDoc });
+      expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+      fromFrame(win, { dp: "ready", doc: frame()!.getAttribute("data-dp-doc") });
+      fromFrame(win, DIAG);
+      expect(screen.getByTestId("page-render-issues")).toBeInTheDocument();
+    });
   });
 
   it("REVIEW: count-only snapshots recurring faster than the settle delay still report within the max wait, with the latest count", () => {
