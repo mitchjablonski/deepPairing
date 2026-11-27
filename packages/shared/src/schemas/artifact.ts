@@ -180,6 +180,7 @@ export function isNeverApprovedStatus(status: ArtifactStatus | string | undefine
 export const ArtifactStatusHistoryEntrySchema = z.object({
   status: ArtifactStatusSchema,
   at: z.string().datetime(),
+  feedbackCommentId: z.string().min(1).optional(),
 });
 export type ArtifactStatusHistoryEntry = z.infer<typeof ArtifactStatusHistoryEntrySchema>;
 

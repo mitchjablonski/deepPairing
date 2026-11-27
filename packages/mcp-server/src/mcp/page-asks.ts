@@ -27,6 +27,7 @@ import {
   PAGE_SANITIZE_DROP_TAGS,
   AskTextHasher,
   askTextHash,
+  isAskBreakTag,
   isPageAskAnswered,
   type EarlierAsksLookup,
   type PageAskKind,
@@ -88,6 +89,14 @@ const CONTAINER_DROPS = PAGE_SANITIZE_DROP_TAGS.filter(
   (t) => !(DROP_ELEMENTS as readonly string[]).includes(t) && t !== "base" && t !== "embed",
 );
 const CHILD_IDS_MAX = 50;
+/** Elements whose first newline right after the opening tag is dropped by
+ *  the HTML parser. */
+const LEADING_NEWLINE_TAGS = new Set(["pre", "listing", "textarea"]);
+function dropLeadingNewline(body: string, tag: string): string {
+  if (!LEADING_NEWLINE_TAGS.has(tag)) return body;
+  if (body.startsWith("\r\n")) return body.slice(2);
+  return body[0] === "\n" || body[0] === "\r" ? body.slice(1) : body;
+}
 
 const VOID_TAGS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
@@ -216,10 +225,13 @@ export function extractPageAsks(html: string): PageAskScan[] {
     c.ask.fullHash = c.hasher.digest() ?? (c.fallback ? askTextHash(c.fallback) : undefined) ?? "";
     if (!c.ask.fullHash) delete c.ask.fullHash;
   };
-  const feed = (s: string) => {
-    if (!s) return;
-    if (hashing.length > 0 && /\S/.test(s)) {
-      const text = decode(s);
+  /** `s` goes to the display text; `source` (default `s`) — only text that is
+   *  really in the page, never a separator this scanner adds for a block tag —
+   *  goes to the full-text hash, so it matches the companion's text nodes. */
+  const feed = (s: string, source: string = s) => {
+    if (!s && !source) return;
+    if (hashing.length > 0 && source) {
+      const text = decode(source);
       let closed = false;
       for (const c of hashing) {
         if (c.closed) closed = true;
@@ -227,7 +239,7 @@ export function extractPageAsks(html: string): PageAskScan[] {
       }
       if (closed) hashing = hashing.filter((c) => !c.closed);
     }
-    if (hungry.length === 0) return;
+    if (hungry.length === 0 || !s) return;
     let full = false;
     for (const c of hungry) {
       if (c.done) { full = true; continue; }
@@ -284,7 +296,9 @@ export function extractPageAsks(html: string): PageAskScan[] {
 
   let i = 0;
   while (i < n) {
-    if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0) break;
+    // At the cap, stop only once every accepted ask is complete: closed, so
+    // its full-text hash and child ids are final (not just its display text).
+    if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0 && hashing.every((c) => c.closed)) break;
     const lt = html.indexOf("<", i);
     if (lt === -1) { feed(html.slice(i)); break; }
     feed(html.slice(i, lt));
@@ -298,8 +312,8 @@ export function extractPageAsks(html: string): PageAskScan[] {
       continue;
     }
     const gt = tagEnd(lt);
-    if (gt === -1) { feed(html.slice(lt)); break; }
-    if (opensElement(lower, lt, "plaintext")) { feed(" " + html.slice(gt + 1)); break; }
+    if (gt === -1) { feed(html.slice(lt), ""); break; }
+    if (opensElement(lower, lt, "plaintext")) { feed(" " + html.slice(gt + 1), html.slice(gt + 1)); break; }
     const hidden = CONTAINER_DROPS.find((t) => opensElement(lower, lt, t));
     // HTML ignores "/>" on these (they aren't void): content follows either way.
     if (hidden) {
@@ -315,7 +329,10 @@ export function extractPageAsks(html: string): PageAskScan[] {
     if (raw) {
       const close = memoIndexOf(lower, `</${raw}`, gt + 1);
       if (close === -1) { i = gt + 1; continue; }
-      if (literal) feed(" " + html.slice(gt + 1, close) + " ");
+      if (literal) {
+        const body = dropLeadingNewline(html.slice(gt + 1, close), literal);
+        feed(" " + body + " ", body);
+      }
       const closeEnd = html.indexOf(">", close);
       i = closeEnd === -1 ? n : closeEnd + 1;
       continue;
@@ -323,8 +340,17 @@ export function extractPageAsks(html: string): PageAskScan[] {
     const m = /^<(\/?)\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
     i = gt + 1;
     if (!m) continue;
+    // A browser drops the newline right after <pre> / <listing> (and
+    // <textarea>, above), so the frame's text never has it.
+    if (!m[1] && LEADING_NEWLINE_TAGS.has(m[2]!)) {
+      if (html.startsWith("\r\n", i)) i += 2;
+      else if (html[i] === "\n" || html[i] === "\r") i += 1;
+    }
     const name = m[2]!;
-    if (BLOCK_TAGS.has(name)) feed(" ");
+    if (BLOCK_TAGS.has(name)) feed(" ", "");
+    // A <br> or a block boundary (open or close) separates words in every
+    // open ask's full text — the same tag list the companion's DOM walk uses.
+    if (hashing.length > 0 && isAskBreakTag(name)) for (const c of hashing) if (!c.closed) c.hasher.separate();
     if (m[1]) {
       closeTag(name);
       if (name === "table") {

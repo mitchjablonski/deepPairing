@@ -38,13 +38,27 @@ export function acceptAnchorMessage(event: FrameMessage, frame: Window | null | 
 /** The most pins a status report may describe (the annotator caps at 500). */
 const MAX_PINS = 500;
 
-/** A valid `{dp:"pins-status", found:boolean[]}` from this frame → `found`; else null. */
-export function acceptPinsStatus(event: FrameMessage, frame: Window | null | undefined): boolean[] | null {
+/** #714 gap 5 — the tag the parent puts on a pin list (`{dp:"pins", anchors,
+ *  key}`) and the frame echoes on reports computed from it. */
+export const PinsKeySchema = z.string().regex(/^[0-9a-z:]{1,64}$/);
+
+/** A valid `{dp:"pins-status", found:boolean[], key?}` from this frame → the
+ *  report (key only when it is well-formed); else null. */
+export function acceptPinsStatusReport(
+  event: FrameMessage,
+  frame: Window | null | undefined,
+): { found: boolean[]; key?: string } | null {
   const d = fromFrame(event, frame);
   if (!d || d.dp !== "pins-status") return null;
   const found = d.found;
   if (!Array.isArray(found) || found.length > MAX_PINS || !found.every((f) => typeof f === "boolean")) return null;
-  return found as boolean[];
+  const key = PinsKeySchema.safeParse(d.key);
+  return key.success ? { found: found as boolean[], key: key.data } : { found: found as boolean[] };
+}
+
+/** A valid `{dp:"pins-status", found:boolean[]}` from this frame → `found`; else null. */
+export function acceptPinsStatus(event: FrameMessage, frame: Window | null | undefined): boolean[] | null {
+  return acceptPinsStatusReport(event, frame)?.found ?? null;
 }
 
 /** `{dp:"ready"}` from this frame: the annotator is listening, send pins. */
@@ -173,6 +187,8 @@ export const PageAsksMessageSchema = z
     /** Per pin (same order as the pins the parent sent): the innermost ask
      *  its element sits in, -1 for none. */
     pinAsks: z.array(z.number().int().min(-1).max(PAGE_ASK_LIMITS.max - 1)).max(500),
+    /** The pin list's key, echoed from the `pins` message `pinAsks` describes. */
+    key: PinsKeySchema.optional(),
   })
   .strict()
   .superRefine((m, ctx) => {
@@ -213,7 +229,8 @@ export function buildPinsMessage(
   anchors: readonly HtmlAnchor[],
   states: readonly PinStateValue[],
   ids: readonly string[],
-): { dp: "pins"; anchors: HtmlAnchor[]; states: PinStateValue[]; ids: string[] } {
+  key?: string,
+): { dp: "pins"; anchors: HtmlAnchor[]; states: PinStateValue[]; ids: string[]; key?: string } {
   const n = Math.min(anchors.length, MAX_PINS);
   const outStates: PinStateValue[] = [];
   const outIds: string[] = [];
@@ -224,7 +241,9 @@ export function buildPinsMessage(
     // pin no hit target (nothing to report back).
     outIds.push(typeof id === "string" && PinIdSchema.safeParse(id).success ? id : "");
   }
-  return { dp: "pins", anchors: anchors.slice(0, n), states: outStates, ids: outIds };
+  // #714 gap 5 — the list's key, only when well-formed (the frame re-checks it).
+  const okKey = key !== undefined && PinsKeySchema.safeParse(key).success ? { key } : {};
+  return { dp: "pins", anchors: anchors.slice(0, n), states: outStates, ids: outIds, ...okKey };
 }
 
 /** A valid `{dp:"pin-click", id}` from this frame → the id; else null. The

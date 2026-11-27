@@ -14,6 +14,7 @@ import { findPageSuccessor } from "./page-successor.js";
 import {
   operationDigest, readJsonFile, readSessionRecord, receiptDigestSchema,
   standaloneOperationConflict, standaloneOperationKey,
+  type StandaloneCloseoutSnapshot,
 } from "./standalone-receipts.js";
 
 const receiptSchema = z.object({
@@ -36,28 +37,23 @@ function childDigest(child: { version?: unknown; parentId?: unknown; content?: u
   return operationDigest([child.version, child.parentId, child.content, child.agentReasoning]);
 }
 
-export async function reviseStandalonePage(
+function revisionOperation(
   projectRoot: string,
   store: FileStore,
   operationId: string,
-  input: { artifactId: string; html: string; reason: string; ackCommentIds?: string[] },
   broadcast: BroadcastFn,
-): Promise<ToolResult> {
+) {
   const sessionId = store.getSessionId();
-  const { artifactId: parentId, reason, html } = input;
   const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
   const receiptPath = path.join(dir, `revise-page-${operationId}.json`);
-  const ackCommentIds = [...(input.ackCommentIds ?? [])].sort();
-  const fingerprint = operationDigest({ artifactId: parentId, reason, html, ...(ackCommentIds.length ? { ackCommentIds } : {}) });
   const key = standaloneOperationKey(projectRoot, sessionId, "revise_page", operationId);
   const artifactId = `art_${key}`;
   const commentId = `cmt_${key}`;
-  const note = revisionNote(artifactId, reason);
   const save = (receipt: Receipt) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 0o600 });
   const lock = <T>(run: () => T) => withFileLock(path.join(dir, ".standalone-revise-page.lock"), run);
   const read = () => receiptSchema.parse(readJsonFile(receiptPath));
 
-  function target() {
+  function target(parentId: string) {
     const artifacts = store.getArtifacts();
     const parent = artifacts.find((a) => a.id === parentId && a.type === "page" && a.sessionId === sessionId);
     if (!parent) return refused(`No page ${parentId} exists in this standalone session.`, ERROR_CODES.artifact_not_in_session);
@@ -81,34 +77,36 @@ export async function reviseStandalonePage(
     return { status: parent.status, historyLength: parent.statusHistory?.length ?? 0, metadata: { title, summary, concept } };
   }
 
-  function requireChild(child: Record<string, unknown> | Artifact, receipt: Receipt): void {
+  function requireChild(child: Record<string, unknown> | Artifact, receipt: Receipt, parentId: string): void {
     if (child.type !== "page" || child.sessionId !== sessionId || child.parentId !== parentId ||
       !receipt.childDigest || childDigest(child) !== receipt.childDigest) {
       throw new Error("Standalone revision child does not match its receipt.");
     }
   }
 
-  function requireNote(comment: Record<string, unknown>): void {
-    const target = comment.target as { artifactId?: unknown } | undefined;
-    if (comment.author !== "agent" || comment.sessionId !== sessionId || target?.artifactId !== parentId ||
-      comment.content !== note) {
-      throw new Error("Standalone revision note does not match its receipt.");
+  function recover(receipt: Receipt, replayed: boolean, input: { parentId: string; reason: string; ackCommentIds: string[] },
+    snapshot?: StandaloneCloseoutSnapshot): ToolResult | null {
+    const { parentId, reason, ackCommentIds } = input;
+    const note = revisionNote(artifactId, reason);
+    function requireNote(comment: Record<string, unknown>): void {
+      const target = comment.target as { artifactId?: unknown } | undefined;
+      if (comment.author !== "agent" || comment.sessionId !== sessionId || target?.artifactId !== parentId ||
+        comment.content !== note) {
+        throw new Error("Standalone revision note does not match its receipt.");
+      }
     }
-  }
-
-  function recover(receipt: Receipt, replayed: boolean): ToolResult | null {
-    const artifacts = store.getArtifacts();
-    const child = artifacts.find((a) => a.id === artifactId);
-    const diskChild = readSessionRecord(dir, "artifacts.json", "id", artifactId);
-    const diskNote = readSessionRecord(dir, "comments.json", "id", commentId);
-    const bufferedNote = store.getComment(commentId);
+    const record = snapshot?.record ?? ((file: string, key: string, id: string) => readSessionRecord(dir, file, key, id));
+    const child = snapshot ? snapshot.artifact(artifactId) : store.getArtifacts().find((a) => a.id === artifactId);
+    const diskChild = record("artifacts.json", "id", artifactId);
+    const diskNote = record("comments.json", "id", commentId);
+    const bufferedNote = snapshot ? snapshot.comment(commentId) : store.getComment(commentId);
     if (!child) {
       if (receipt.committed || diskChild || diskNote || bufferedNote) {
         throw new Error("Standalone revision has inconsistent durable records.");
       }
       return null;
     }
-    requireChild(child, receipt);
+    requireChild(child, receipt, parentId);
     const { feedback } = receipt;
     if (JSON.stringify(feedback?.commentIds ?? []) !== JSON.stringify(ackCommentIds)) {
       throw new Error("Standalone revision is missing its exact feedback selection.");
@@ -117,29 +115,32 @@ export async function reviseStandalonePage(
     if (trace?.decision !== "admitted" || trace.artifactId !== artifactId || trace.toolName !== "revise_artifact") {
       throw new Error("Standalone revision is missing its admitted preflight trace.");
     }
-    const diskTrace = store.getPreflightTrace(artifactId);
+    const diskTrace = snapshot ? snapshot.trace(artifactId) : store.getPreflightTrace(artifactId);
     if (diskTrace && operationDigest(diskTrace) !== operationDigest(trace)) {
       throw new Error("Standalone revision preflight trace does not match its receipt.");
     }
-    if (diskChild) requireChild(diskChild, receipt);
+    if (diskChild) requireChild(diskChild, receipt, parentId);
     if (diskNote) requireNote(diskNote);
     if (bufferedNote) requireNote({ ...bufferedNote });
 
-    const parent = artifacts.find((a) => a.id === parentId && a.sessionId === sessionId && a.type === "page");
-    if (!parent || parent.version + 1 !== child.version || artifacts.some((a) => a.parentId === parentId && a.id !== artifactId)) {
+    const parent = snapshot ? snapshot.artifact(parentId) : store.getArtifacts().find((a) => a.id === parentId);
+    const hasOtherChild = snapshot ? snapshot.hasOtherChild(parentId, artifactId) :
+      store.getArtifacts().some((a) => a.parentId === parentId && a.id !== artifactId);
+    if (!parent || parent.sessionId !== sessionId || parent.type !== "page" || parent.version + 1 !== child.version || hasOtherChild) {
       throw new Error("Standalone revision has inconsistent page lineage.");
     }
     const requireDurableVersion = (durableParent: Record<string, unknown> | Artifact | undefined,
-      durableChild: Record<string, unknown> | Artifact | undefined) => {
+      durableChild: Record<string, unknown> | Artifact | undefined, requireSuperseded = !receipt.committed) => {
       if (durableChild?.id !== artifactId || durableParent?.sessionId !== sessionId || durableParent.type !== "page" ||
-        durableParent.version !== child.version - 1 || (!receipt.committed && durableParent.status !== "superseded")) {
+        durableParent.version !== child.version - 1 || (requireSuperseded && durableParent.status !== "superseded")) {
         throw new Error("Standalone revision is missing its durable page version.");
       }
-      requireChild(durableChild, receipt);
+      requireChild(durableChild, receipt, parentId);
     };
-    const checkVersion = () => requireDurableVersion(
-      readSessionRecord(dir, "artifacts.json", "id", parentId),
-      readSessionRecord(dir, "artifacts.json", "parentId", parentId),
+    const checkVersion = (requireSuperseded?: boolean) => requireDurableVersion(
+      record("artifacts.json", "id", parentId),
+      record("artifacts.json", "parentId", parentId),
+      requireSuperseded,
     );
     const flush = () => feedback ? store.forceFlush({ parentId, proof: feedback }) : store.forceFlush();
     if (!receipt.committed) {
@@ -153,8 +154,13 @@ export async function reviseStandalonePage(
         if (statusChanged || verdictChanged) {
           throw new Error("Standalone revision cannot recover after the predecessor's review state changed.");
         }
-        store.updateArtifactStatus(parentId, "superseded", "agent_supersede");
       }
+      if (snapshot) {
+        checkVersion(false);
+        if (feedback) snapshot.verifyFeedback(parentId, feedback);
+        return { content: [] };
+      }
+      if (parent.status !== "superseded") store.updateArtifactStatus(parentId, "superseded", "agent_supersede");
       // The comments file can flush even when artifact persistence fails.
       // Stage the revision note only after verifying both durable versions.
       flush();
@@ -186,6 +192,7 @@ export async function reviseStandalonePage(
       checkVersion();
       if (!diskNote) throw new Error("Standalone revision is missing its durable note.");
       if (!diskTrace) throw new Error("Standalone revision is missing its durable preflight trace.");
+      if (snapshot) return { content: [] };
     }
 
     const latest = findPageSuccessor(child, store.getArtifacts());
@@ -201,6 +208,73 @@ export async function reviseStandalonePage(
     };
   }
 
+  function reconcile(snapshot?: StandaloneCloseoutSnapshot): boolean {
+    const receipt = read();
+    const record = snapshot?.record ?? ((file: string, key: string, id: string) => readSessionRecord(dir, file, key, id));
+    const child = record("artifacts.json", "id", artifactId);
+    if (!child) {
+      const buffered = snapshot ? snapshot.artifact(artifactId) : store.getArtifacts().find((row) => row.id === artifactId);
+      const note = snapshot ? snapshot.comment(commentId) : store.getComment(commentId);
+      const trace = snapshot ? snapshot.trace(artifactId) : store.getPreflightTrace(artifactId);
+      if (receipt.committed || buffered || note || record("comments.json", "id", commentId) || trace) {
+        throw new Error("Standalone revision has effects without a durable successor.");
+      }
+      return false;
+    }
+    if (typeof child.parentId !== "string" || typeof child.agentReasoning !== "string" || !child.agentReasoning.trim()) {
+      throw new Error("Standalone revision is missing its durable parent or revision reason.");
+    }
+    requireChild(child, receipt, child.parentId);
+    const content = PageContentSchema.parse(child.content);
+    const ackCommentIds = receipt.feedback?.commentIds ?? [];
+    const fingerprint = operationDigest({
+      artifactId: child.parentId, reason: child.agentReasoning, html: content.html,
+      ...(ackCommentIds.length ? { ackCommentIds } : {}),
+    });
+    if (receipt.fingerprint !== fingerprint) throw new Error("Standalone revision child does not match its request fingerprint.");
+    if (!receipt.committed) {
+      const parent = record("artifacts.json", "id", child.parentId);
+      const expectedHistory = receipt.parentHistoryLength;
+      const observedHistory = Array.isArray(parent?.statusHistory) ? parent.statusHistory.length : 0;
+      const expectedStatus = receipt.parentStatus;
+      if (!parent || parent.type !== "page" || parent.sessionId !== sessionId ||
+        (parent.status !== "superseded" && (
+          (expectedStatus === undefined ? parent.status !== "draft" && parent.status !== "reviewing" : parent.status !== expectedStatus) ||
+          (expectedHistory !== undefined && expectedHistory !== observedHistory)
+        ))) {
+        throw new Error("Standalone revision cannot recover after the durable predecessor's review state changed.");
+      }
+    }
+    recover(receipt, true, { parentId: child.parentId, reason: child.agentReasoning, ackCommentIds }, snapshot);
+    return !receipt.committed;
+  }
+
+  return { artifactId, receiptPath, save, lock, read, target, recover, reconcile };
+}
+
+/** Settle a verified revision from its durable child and prepared receipt. */
+export function planStandalonePageRevisionRecovery(projectRoot: string, store: FileStore, operationId: string,
+  broadcast: BroadcastFn, snapshot: StandaloneCloseoutSnapshot): (() => void) | undefined {
+  const operation = revisionOperation(projectRoot, store, operationId, broadcast);
+  if (!operation.reconcile(snapshot)) return;
+  return () => { operation.lock(operation.reconcile); };
+}
+
+export async function reviseStandalonePage(
+  projectRoot: string,
+  store: FileStore,
+  operationId: string,
+  input: { artifactId: string; html: string; reason: string; ackCommentIds?: string[] },
+  broadcast: BroadcastFn,
+): Promise<ToolResult> {
+  const sessionId = store.getSessionId();
+  const { artifactId: parentId, reason, html } = input;
+  const ackCommentIds = [...(input.ackCommentIds ?? [])].sort();
+  const fingerprint = operationDigest({ artifactId: parentId, reason, html, ...(ackCommentIds.length ? { ackCommentIds } : {}) });
+  const { artifactId, receiptPath, save, lock, read, target: findTarget, recover: recoverOperation } =
+    revisionOperation(projectRoot, store, operationId, broadcast);
+  const target = () => findTarget(parentId);
+  const recover = (receipt: Receipt, replayed: boolean) => recoverOperation(receipt, replayed, { parentId, reason, ackCommentIds });
   const existing = lock(() => {
     const saved = readJsonFile(receiptPath);
     if (saved !== undefined) {

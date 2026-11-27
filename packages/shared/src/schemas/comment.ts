@@ -282,6 +282,8 @@ export const CommentSchema = z.object({
   ruleOut: CommentRuleOutSchema.optional(),
   // #714 gap 7 — the page revision that addressed this comment (see above).
   addressedIn: CommentAddressedInSchema.optional(),
+  /** Server-stamped only for the note owned by a page verdict history entry. */
+  verdictFeedback: z.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: z.string().nullable().optional(),
   /**

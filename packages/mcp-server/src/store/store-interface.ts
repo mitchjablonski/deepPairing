@@ -436,6 +436,7 @@ export interface IStore {
     artifactId: string,
     status: ArtifactStatus,
     reason?: StatusTransitionReason,
+    options?: { feedbackCommentId?: string },
   ): MaybePromise<void>;
 
   /**

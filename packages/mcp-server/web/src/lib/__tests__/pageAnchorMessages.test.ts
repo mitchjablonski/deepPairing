@@ -14,6 +14,7 @@ import {
   acceptOutlineActive,
   acceptOutlineMessage,
   acceptPinsStatus,
+  acceptPinsStatusReport,
   askAnchor,
   buildChangesMessage,
   isReadyMessage,
@@ -187,6 +188,9 @@ describe("#714 gap 7 — pins down, pin clicks and hovers up", () => {
     });
     // Missing entries are filled, never shifted.
     expect(buildPinsMessage([el, el], [], ["c1"])).toEqual({ dp: "pins", anchors: [el, el], states: ["open", "open"], ids: ["c1", ""] });
+    // #714 gap 5 — the list's key rides along when well-formed, and is dropped otherwise.
+    expect(buildPinsMessage([el], ["open"], ["c1"], "abc:1")).toEqual({ dp: "pins", anchors: [el], states: ["open"], ids: ["c1"], key: "abc:1" });
+    expect(buildPinsMessage([el], ["open"], ["c1"], "<b>")).not.toHaveProperty("key");
   });
 
   it("acceptPinClick takes a bounded id string, from this frame only", () => {
@@ -205,5 +209,16 @@ describe("#714 gap 7 — pins down, pin clicks and hovers up", () => {
     expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: "c1", x: 1e9, y: 6 } }, frame)).toBeUndefined();
     expect(acceptPinHover({ source: frame, data: { dp: "pin-hover", id: "c1" } }, frame)).toBeUndefined();
     expect(acceptPinHover({ source: otherFrame, data: { dp: "pin-hover", id: null } }, frame)).toBeUndefined();
+  });
+});
+
+describe("pin-list key on frame reports (#714 gap 5)", () => {
+  it("passes a well-formed key through on pins-status and asks; drops or rejects a malformed one", () => {
+    expect(acceptPinsStatusReport({ source: frame, data: { dp: "pins-status", found: [true], key: "abc:1" } }, frame)).toEqual({ found: [true], key: "abc:1" });
+    expect(acceptPinsStatusReport({ source: frame, data: { dp: "pins-status", found: [true], key: "<b>" } }, frame)).toEqual({ found: [true] });
+    expect(acceptPinsStatus({ source: frame, data: { dp: "pins-status", found: [false], key: "abc:1" } }, frame)).toEqual([false]);
+    const asks = { dp: "asks", asks: [], pinAsks: [] };
+    expect(acceptAsksMessage({ source: frame, data: { ...asks, key: "abc:1" } }, frame)).toEqual({ ...asks, key: "abc:1" });
+    expect(acceptAsksMessage({ source: frame, data: { ...asks, key: "x".repeat(65) } }, frame)).toBeNull();
   });
 });
