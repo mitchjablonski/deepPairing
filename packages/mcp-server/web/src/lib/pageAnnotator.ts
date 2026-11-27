@@ -784,6 +784,11 @@ var PIN_COLORS = { open: "#f59e0b", addressed: "#9ca3af" };
 /** Badge element → comment id, by reference: an authored element named like
  *  our badge can never pose as a pin (ownership is never read from markup). */
 var badgeIds = typeof WeakMap === "function" ? new WeakMap() : null;
+/** #714 gap 5 — the parent's tag for the pin list it sent, echoed on every
+ *  report computed from that list (pins-status, asks), so the parent never
+ *  attributes a report to a list that changed while it was in flight. */
+var pinsKey = null;
+function withKey(msg) { if (pinsKey !== null) msg.key = pinsKey; return msg; }
 // #714 gap 2 — version-change marks (validated locators) and their toggle.
 var changes = [], showChanges = false, lastChangesFound = null;
 /** Our own nodes, by reference: an authored element can carry the marker
@@ -1183,7 +1188,7 @@ function reconcile(force, forceChanges) {
   var found = drawPins();
   if (force || !samePins(lastFound, found)) {
     lastFound = found;
-    post({ dp: "pins-status", found: found });
+    post(withKey({ dp: "pins-status", found: found }));
   }
   if (forceChanges || !samePins(lastChangesFound, cf)) {
     lastChangesFound = cf;
@@ -1276,7 +1281,7 @@ function reportOutline() {
     }
     pinAsks.push(hitAsk);
   }
-  var amsg = { dp: "asks", asks: asks, pinAsks: pinAsks };
+  var amsg = withKey({ dp: "asks", asks: asks, pinAsks: pinAsks });
   var ajson = JSON.stringify(amsg);
   if (ajson !== lastAsksJson) { lastAsksJson = ajson; post(amsg); }
   reportActive();
@@ -1396,6 +1401,7 @@ function onMessage(e) {
       var pid = ids[pi];
       pinIds.push(typeof pid === "string" && pid.length > 0 && pid.length <= 128 ? pid : null);
     }
+    pinsKey = typeof d.key === "string" && /^[0-9a-z:]{1,64}$/.test(d.key) ? d.key : null;
     reconcile(true);
     scheduleOutline();
   } else if (d.dp === "focus") {

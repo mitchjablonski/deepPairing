@@ -17,6 +17,7 @@ import {
   receiptDigestSchema,
   standaloneOperationConflict,
   standaloneOperationKey,
+  type StandaloneCloseoutSnapshot,
 } from "./standalone-receipts.js";
 
 const receiptSchema = z.object({
@@ -56,43 +57,19 @@ function inputRefusal(message: string): ToolResult {
   };
 }
 
-/**
- * #679/#680 — present an HTML page from the standalone CLI through the SAME
- * presentPage() handler MCP uses (validation, project-contained file read,
- * rejection gate on the page's visible text, secret scan). Only the id and the
- * write are owned here, so a request-ID retry replays instead of duplicating.
- *
- * The route validates the project, standalone session, operation id and body
- * size (including the decoded inline page cap) before entering here.
- */
-export async function presentStandalonePage(
+function pageOperation(
   projectRoot: string,
   store: FileStore,
   operationId: string,
-  input: StandalonePageArgs,
-  port: number,
-  broadcast: BroadcastFn,
-): Promise<ToolResult> {
-  if (input.path !== undefined && !isClientRelativePath(input.path)) {
-    return inputRefusal("`path` must be relative to the project root; absolute paths are not accepted from the CLI.");
-  }
-  const args: Record<string, unknown> = {};
-  for (const key of ["title", "summary", "concept", "html", "path"] as const) {
-    if (input[key] !== undefined) args[key] = input[key];
-  }
-
+) {
   const sessionId = store.getSessionId();
   const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
   const receiptPath = path.join(dir, `present-page-${operationId}.json`);
-  // A file-backed page is bound to its path, not to the bytes it held: the
-  // watcher may record later saves, and a retry of the same call must still
-  // replay the artifact it created.
-  const fingerprint = callFingerprint("present_page", args);
   const artifactId = `art_${standaloneOperationKey(projectRoot, sessionId, "present_page", operationId)}`;
 
   const save = (receipt: Receipt) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 0o600 });
   const lock = <T>(run: () => T) => withFileLock(path.join(dir, ".standalone-page.lock"), run);
-  const conflict = () => standaloneOperationConflict("page input");
+  const readReceipt = () => receiptSchema.parse(readJsonFile(receiptPath));
   const reply = (disk: Record<string, unknown>): ToolResult => {
     const saved = PageContentSchema.safeParse(disk.content);
     const sourcePath = saved.success ? saved.data.sourcePath : undefined;
@@ -118,8 +95,8 @@ export async function presentStandalonePage(
     };
   };
 
-  function recover(receipt: Receipt, verifyOnly = false): ToolResult | null {
-    const disk = readSessionRecord(dir, "artifacts.json", "id", artifactId);
+  function recover(receipt: Receipt, verifyOnly = false, durableOnly = false, snapshot?: StandaloneCloseoutSnapshot): ToolResult | null {
+    const disk = snapshot ? snapshot.record("artifacts.json", "id", artifactId) : readSessionRecord(dir, "artifacts.json", "id", artifactId);
     if (disk) {
       if (disk.sessionId !== sessionId || disk.type !== "page") {
         throw new Error("Standalone page operation has a conflicting durable artifact.");
@@ -128,13 +105,15 @@ export async function presentStandalonePage(
         if (!receipt.contentDigest || contentDigest(disk.content) !== receipt.contentDigest) {
           throw new Error("Durable standalone page does not match its prepared receipt.");
         }
-        save({ ...receipt, committed: true });
+        if (!snapshot) save({ ...receipt, committed: true });
       }
+      if (snapshot) return { content: [] };
       return reply(disk);
     }
     if (receipt.committed || verifyOnly) throw new Error("Standalone page operation is missing its durable artifact.");
-    const buffered = store.getArtifacts().find((row) => row.id === artifactId);
+    const buffered = snapshot ? snapshot.artifact(artifactId) : store.getArtifacts().find((row) => row.id === artifactId);
     if (!buffered) return null; // Nothing was written. Only a fresh, gated present may create it.
+    if (durableOnly) throw new Error("Standalone page has buffered effects without a durable artifact.");
     if (buffered.sessionId !== sessionId || buffered.type !== "page" ||
         !receipt.contentDigest || contentDigest(buffered.content) !== receipt.contentDigest) {
       throw new Error("Standalone page artifact does not match its receipt.");
@@ -143,6 +122,39 @@ export async function presentStandalonePage(
     return recover(receipt, true);
   }
 
+  return { artifactId, receiptPath, save, lock, readReceipt, recover };
+}
+
+/** Settle an existing receipt without loading source HTML or admitting a proposal. */
+export function planStandalonePageRecovery(projectRoot: string, store: FileStore, operationId: string,
+  snapshot: StandaloneCloseoutSnapshot): (() => void) | undefined {
+  const operation = pageOperation(projectRoot, store, operationId);
+  const receipt = operation.readReceipt();
+  const found = operation.recover(receipt, false, true, snapshot);
+  if (!found || receipt.committed) return;
+  return () => { operation.lock(() => operation.recover(operation.readReceipt(), false, true)); };
+}
+
+/** Authenticated routes validate the project, standalone session, operation id and body size. */
+export async function presentStandalonePage(
+  projectRoot: string,
+  store: FileStore,
+  operationId: string,
+  input: StandalonePageArgs,
+  port: number,
+  broadcast: BroadcastFn,
+): Promise<ToolResult> {
+  if (input.path !== undefined && !isClientRelativePath(input.path)) {
+    return inputRefusal("`path` must be relative to the project root; absolute paths are not accepted from the CLI.");
+  }
+  const args: Record<string, unknown> = {};
+  for (const key of ["title", "summary", "concept", "html", "path"] as const) {
+    if (input[key] !== undefined) args[key] = input[key];
+  }
+  // A file-backed receipt binds the path, even after its source bytes change.
+  const fingerprint = callFingerprint("present_page", args);
+  const { artifactId, receiptPath, save, lock, readReceipt, recover } = pageOperation(projectRoot, store, operationId);
+  const conflict = () => standaloneOperationConflict("page input");
   const existing = lock(() => {
     const saved = readJsonFile(receiptPath);
     if (saved === undefined) {
@@ -174,7 +186,7 @@ export async function presentStandalonePage(
     standalone: {
       artifactId,
       persist: (createInput) => lock(() => {
-        const receipt = receiptSchema.parse(readJsonFile(receiptPath));
+        const receipt = readReceipt();
         if (receipt.fingerprint !== fingerprint) return { replay: conflict() };
         const replay = recover(receipt);
         if (replay) return { replay };

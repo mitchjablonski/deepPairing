@@ -118,6 +118,13 @@ function pageOnlyHtmlAnchor<T extends Record<string, unknown> | undefined>(targe
   return rest as unknown as T;
 }
 
+export class ReservedVerdictFeedbackIdError extends Error {
+  constructor() {
+    super("This comment ID is reserved for page verdict feedback.");
+    this.name = "ReservedVerdictFeedbackIdError";
+  }
+}
+
 /**
  * #680 slice 3 (review P2-2) — a supersede-create (`requireUnsupersededParent`)
  * found its parent already replaced: closed, or already the parent of another
@@ -996,6 +1003,7 @@ export class FileStore implements IStore {
     artifactId: string,
     status: ArtifactStatus,
     reason: StatusTransitionReason = "unspecified",
+    options?: { feedbackCommentId?: string },
   ): void {
     // #338 (F1) — refuse on a frozen writer before the verdict flip, the
     // checkpoint revoke, the metrics sample, and the feedback-waiter release.
@@ -1036,15 +1044,21 @@ export class FileStore implements IStore {
       // Append to statusHistory so replay can reconstruct the trail faithfully.
       // Lazy-init so older sessions opt into the richer format on first
       // transition — old records keep working via the fallback in timeline.ts.
-      const history = (art as any).statusHistory ?? [];
+      const history = art.statusHistory ?? [];
       if (history.length === 0 && art.createdAt) {
         history.push({ status: "draft", at: art.createdAt });
       }
       // U7 — append `reason` so the audit trail records WHO/WHAT caused the
       // transition. A future timeline view shows these tags inline; the
       // daemon log already does, so silent transitions surface immediately.
-      history.push({ status, at: now, reason });
-      (art as any).statusHistory = history;
+      const feedbackCommentId = options?.feedbackCommentId;
+      const bindFeedback = art.type === "page" && feedbackCommentId && (
+        (status === "revised" && reason === "ui_revise_button") || (status === "rejected" && reason === "ui_reject_button")
+      ) && !this.comments.some((comment) => comment.id === feedbackCommentId) &&
+        this.verdictFeedbackReservations(feedbackCommentId).length === 0;
+      const event = { status, at: now, reason, ...(bindFeedback ? { feedbackCommentId } : {}) };
+      history.push(event);
+      art.statusHistory = history;
 
       // U7 — sentinel alarm. Comments must NEVER drive status. If a caller
       // ever tags a transition `comment_side_effect`, scream loudly so the
@@ -1278,6 +1292,12 @@ export class FileStore implements IStore {
     return `rect:${round(r.x)},${round(r.y)},${round(r.w)},${round(r.h)}`;
   }
 
+  private verdictFeedbackReservations(commentId: string): Artifact[] {
+    return this.artifacts.flatMap((artifact) => artifact.type === "page"
+      ? (artifact.statusHistory ?? []).filter((entry) => entry.feedbackCommentId === commentId).map(() => artifact)
+      : []);
+  }
+
   addComment(params: {
     id: string;
     artifactId: string;
@@ -1294,10 +1314,22 @@ export class FileStore implements IStore {
     const now = Date.now();
     const parentKey = params.parentCommentId ?? "";
     const newTargetKey = FileStore.targetKey(params.target);
+    const targetArtifact = params.artifactId && params.artifactId !== "__session__"
+      ? this.artifacts.find((a) => a.id === params.artifactId) : undefined;
+    const reservations = this.verdictFeedbackReservations(params.id);
+    const owner = reservations[0];
+    const linkedVerdictFeedback = reservations.length === 1 && owner?.id === targetArtifact?.id &&
+      owner?.sessionId === this.sessionId && params.verdictFeedback === true && params.author === "human" &&
+      (params.intent === undefined || params.intent === "comment") && !params.parentCommentId &&
+      !params.target?.htmlAnchor && !params.suggestion && !params.ruleOut &&
+      !this.comments.some((comment) => comment.id === params.id);
+    if (reservations.length && !linkedVerdictFeedback) throw new ReservedVerdictFeedbackIdError();
     const dupe = this.comments.find((c) => {
       if (c.author !== params.author) return false;
       if (c.target.artifactId !== params.artifactId) return false;
       if (c.content !== params.content) return false;
+      // Only the server-allocated verdict note can satisfy its history link.
+      if (linkedVerdictFeedback || c.verdictFeedback) return false;
       if ((c.parentCommentId ?? "") !== parentKey) return false;
       // F3 — only a dupe if it targets the SAME anchor (line/finding/step/etc).
       if (FileStore.targetKey(c.target as Record<string, unknown>) !== newTargetKey) return false;
@@ -1341,10 +1373,6 @@ export class FileStore implements IStore {
     // handler posts it), which is a review verdict, not a late follow-up. That
     // flag is server-only (the status handler sets it; the public comment route
     // never forwards it and the internal daemon route strips it).
-    const targetArtifact =
-      params.artifactId && params.artifactId !== "__session__"
-        ? this.artifacts.find((a) => a.id === params.artifactId)
-        : undefined;
     const isFollowUp =
       params.author === "human" &&
       !params.verdictFeedback &&
@@ -1397,6 +1425,7 @@ export class FileStore implements IStore {
       // #680 slice 4 — the rule-out marker, server-set; dropped when malformed or
       // when the comment isn't a human comment on a page.
       ...(ruleOut ? { ruleOut } : {}),
+      ...(linkedVerdictFeedback ? { verdictFeedback: true as const } : {}),
       // #187 — spread so a normal draft-review comment is byte-identical on disk.
       ...(isFollowUp ? { followUp: true } : {}),
       answeredByCommentId: null,

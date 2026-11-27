@@ -693,9 +693,11 @@ export function ArtifactStatusActions({
     setApproveConfirm(false);
     dispatch({ type: "submitStart" });
     try {
-      // Submit comment alongside the action if the user typed one
       const trimmedComment = comment.trim();
-      if (trimmedComment) {
+      // The page status route owns this reason and binds its comment to the
+      // verdict. A separate Respond would duplicate the same submission.
+      const statusOwnsReason = artifact.type === "page" && action !== "approved";
+      if (trimmedComment && !statusOwnsReason) {
         const sessionAtComment = useConnectionStore.getState().sessionId;
         await submitComment(artifact.id, trimmedComment);
         // #407 review — the tab SWITCHED sessions while the comment was in the

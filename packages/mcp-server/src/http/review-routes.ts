@@ -729,8 +729,11 @@ export function createReviewRoutes({
       if (!had) retractOnConflict = rejection.description;
     }
 
+    const feedbackCommentId = feedback && target.type === "page" && (status === "revised" || status === "rejected")
+      ? `cmt_${nanoid(10)}` : undefined;
     try {
-      await store.updateArtifactStatus(artifactId, status, reason);
+      if (feedbackCommentId) await store.updateArtifactStatus(artifactId, status, reason, { feedbackCommentId });
+      else await store.updateArtifactStatus(artifactId, status, reason);
     } catch (err) {
       if (target.type === "page" && err instanceof ParentSupersededError && err.successorId) {
         return stalePageResponse(err.successorId, err.successorVersion);
@@ -751,7 +754,7 @@ export function createReviewRoutes({
     // the verdict without silently discarding the user's words.
     if (feedback) {
       const comment = await store.addComment({
-        id: `cmt_${nanoid(10)}`,
+        id: feedbackCommentId ?? `cmt_${nanoid(10)}`,
         artifactId,
         content: feedback,
         author: "human",

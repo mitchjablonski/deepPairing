@@ -25,7 +25,7 @@ import {
   type PageDiagnostics,
   acceptOutlineActive,
   acceptOutlineMessage,
-  acceptPinsStatus,
+  acceptPinsStatusReport,
   askAnchor,
   buildChangesMessage,
   isReadyMessage,
@@ -55,7 +55,7 @@ import { PageRuleOutControl } from "./PageRuleOutControl";
 import { PageRenderIssues } from "./PageRenderIssues";
 import { diagnosticsAgentSummary, diagnosticsWakeKey, hasDiagnostics } from "../../lib/pageDiagnostics";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
-import { commentAnswersAsk, pageRuleOutKey } from "@deeppairing/shared";
+import { askTextHash, commentAnswersAsk, isEarlierVersionComment, pageRuleOutKey } from "@deeppairing/shared";
 
 /** #714 gap 7 — the review rail sits beside the frame once the panel is at
  *  least this wide (with the outline rail on the left, the frame keeps ~600px). */
@@ -192,6 +192,13 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const { rows: rememberedRows, remember } = useRememberedRejections(owner);
   const liveStances = useMemo(() => new Set(rememberedRows.map((r) => r.description)), [rememberedRows]);
   const anchored = useMemo(() => anchoredPageComments(comments), [comments]);
+  /** Identifies the anchored-comment list (the pin order the frame reports in). */
+  const anchoredKey = useMemo(() => anchored.map((c) => c.id).join("\u0000"), [anchored]);
+  /** The pin list's tag, sent with `pins` and echoed by the frame on every
+   *  report computed from that list: a report is used for ask completion
+   *  only when its key matches the list on screen, so a delete + add while a
+   *  report is in flight can't be misattributed. */
+  const pinsKey = useMemo(() => askTextHash(anchoredKey) ?? "0", [anchoredKey]);
   const anchors = useMemo(() => anchored.map((c) => c.target.htmlAnchor as HtmlAnchor), [anchored]);
   const pinIds = useMemo(() => anchored.map((c) => c.id), [anchored]);
   // #714 gap 7 — pin colours. Derived WITHOUT the frame's found report (an
@@ -280,12 +287,19 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const [outline, setOutline] = useState<PageOutlineMessage | null>(null);
   const [activeSection, setActiveSection] = useState(-1);
   const [asks, setAsks] = useState<PageAsk[]>([]);
-  const [pinAsks, setPinAsks] = useState<number[]>([]);
+  // Ask completion reads the frame's pre-Run reports only, each tagged with
+  // the page and the anchored-comment list it describes: `pinAsks` (which
+  // ask each pin sits in) and the pre-Run pin status. A live post-Run
+  // pins-status (agent script shares the frame then) never mixes in; the
+  // pin list itself keeps showing live status.
+  const [pinAsks, setPinAsks] = useState<{ forId: string; key: string; list: number[] } | null>(null);
+  const [askPinStatus, setAskPinStatus] = useState<{ forId: string; key: string; found: boolean[] } | null>(null);
   useEffect(() => {
     setOutline(null);
     setActiveSection(-1);
     setAsks([]);
-    setPinAsks([]);
+    setPinAsks(null);
+    setAskPinStatus(null);
   }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
   // #714 gap 12 — the frame's render diagnostics (script errors, assets that
@@ -318,11 +332,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     // (anchors the human already made on this page, never comment text).
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
-  // Anchors, colour states and comment ids, never comment text (the hover
+  // Anchors, colour states, comment ids and the list's key (#714 gap 5: echoed
+  // on every report computed from this list), never comment text (the hover
   // preview is rendered here, from the store).
   const sendPins = useCallback(
-    () => postToFrame(buildPinsMessage(anchors, pinStates, pinIds)),
-    [postToFrame, anchors, pinStates, pinIds],
+    () => postToFrame(buildPinsMessage(anchors, pinStates, pinIds, pinsKey)),
+    [postToFrame, anchors, pinStates, pinIds, pinsKey],
   );
   // #714 — pointing is the reviewer's choice before Run as well as after: a
   // page with no scripts never shows Run, and its own links, details and
@@ -384,9 +399,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         if (!readOnly && !runningRef.current && frameOwnsFocusRef.current(element)) setAnnotate((a) => !a);
         return;
       }
-      const status = acceptPinsStatus(event, frame);
+      const status = acceptPinsStatusReport(event, frame);
       if (status) {
-        setFound(status);
+        setFound(status.found);
+        if (!runningRef.current) setAskPinStatus({ forId: artifactIdRef.current, key: status.key ?? "", found: status.found });
         return;
       }
       // #714 gap 7 — a pin clicked in the frame: scroll to and highlight its
@@ -428,7 +444,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       if (reportedAsks) {
         if (!runningRef.current) {
           setAsks(reportedAsks.asks);
-          setPinAsks(reportedAsks.pinAsks);
+          setPinAsks({ forId: artifactIdRef.current, key: reportedAsks.key ?? "", list: reportedAsks.pinAsks });
         }
         return;
       }
@@ -620,25 +636,41 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     () => [artifact, ...lineage.map((l) => l.artifact).filter((a) => earlierVersionIds.has(a.id))],
     [artifact, lineage, earlierVersionIds],
   );
-  const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && earlierVersionIds.size > 0);
+  // The current version is parsed too whenever asks have comments: its
+  // full-text hashes (continuity) and child ids (a comment on a child with its
+  // own id, also after Run when the frame's reports are frozen).
+  const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && anchored.length > 0);
   const askAnswered = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
-    const pinsAligned = pinAsks.length === anchored.length;
+    // The pre-Run reports, only when they describe this page's current pins.
+    const scoped = <T extends { forId: string; key: string }>(r: T | null) =>
+      r && r.forId === artifact.id && r.key === pinsKey ? r : null;
+    const askPins = scoped(pinAsks)?.list ?? null;
+    const preRunFound = scoped(askPinStatus)?.found ?? null;
+    const pinsAligned = !!askPins && askPins.length === anchored.length;
     const currentParsed = parsedAsks(artifact.id);
     const earlierAsks = (versionId: string) => (versionId === artifact.id ? undefined : parsedAsks(versionId));
     return asks.map((ask, k) => {
       // Continuity compares the full-text hash from THIS version's parsed HTML.
-      const fullHash = ask.id ? currentParsed?.find((p) => p.id === ask.id)?.fullHash : undefined;
-      const ref = { ...ask, ...(fullHash ? { fullHash } : {}) };
+      const parsed = ask.id ? currentParsed?.find((p) => p.id === ask.id) : undefined;
+      const ref = {
+        ...ask,
+        ...(parsed?.fullHash ? { fullHash: parsed.fullHash } : {}),
+        ...(parsed?.childIds ? { childIds: parsed.childIds } : {}),
+      };
       return anchored.some((c, i) => {
-        if (found && found[i] === false) return false;
-        // Only meaningful for a current-version comment (the shared helper
-        // ignores it otherwise), and only for a pin the frame reported found.
-        const insideByFrame = pinsAligned && pinAsks[i] === k && found?.[i] === true;
-        return commentAnswersAsk(ref, c, current, { insideByFrame, earlierAsks });
+        // An earlier version's comment is judged only against its own source
+        // version (ask continuity); whether its pin relocates in the current
+        // view is irrelevant to it, as it is for check_feedback.
+        if (isEarlierVersionComment(c, current)) return commentAnswersAsk(ref, c, current, { earlierAsks });
+        // A current-version comment whose spot the (pre-Run) frame can't find
+        // doesn't count; one it found inside this ask does.
+        if (preRunFound && preRunFound[i] === false) return false;
+        const insideByFrame = pinsAligned && askPins![i] === k && preRunFound?.[i] === true;
+        return commentAnswersAsk(ref, c, current, { insideByFrame });
       });
     });
-  }, [asks, anchored, pinAsks, found, artifact.id, artifact.version, parsedAsks]);
+  }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
     if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });

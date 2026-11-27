@@ -18,6 +18,7 @@ import { STANDALONE_PAGE_MAX_BODY_BYTES } from "../../http/guards.js";
 import { projectHashOf } from "../../project-root.js";
 import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { createDaemon, type Daemon } from "../create-daemon.js";
+import { FileStore } from "../../store/file-store.js";
 import { reviseStandalonePage } from "../standalone-revise-page.js";
 import { provePageRevisionFeedback } from "../../store/page-revision-feedback.js";
 
@@ -71,14 +72,14 @@ function fixture() {
   const revise = (daemon: Daemon, operationId: string, artifactId: string, html: string,
     reason = "Clarify the procedure", ackCommentIds?: string[]) =>
     request(daemon, "revise-page", { operationId, artifactId, htmlBase64: b64(html), reason, ackCommentIds });
-  const verdict = (daemon: Daemon, artifactId: string, status: string) =>
+  const verdict = (daemon: Daemon, artifactId: string, status: string, feedback = "Stale feedback") =>
     daemon.app.request(`http://localhost/api/artifacts/${artifactId}/status`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json", "X-Project-Hash": projectHashOf(root), "X-Session-Id": sessionId,
         Authorization: "Bearer test-token",
       },
-      body: JSON.stringify({ status, feedback: "Stale feedback", concept: "Stale concept" }),
+      body: JSON.stringify({ status, feedback, concept: "Stale concept" }),
     });
   return {
     root, sessionId, watchers, start, request, open, present, revise, verdict,
@@ -91,6 +92,170 @@ function fixture() {
     },
   };
 }
+
+describe("standalone page verdict and notes", () => {
+  it("keeps equal-text notes distinct and restores the exact verdict reason after restart", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const artifactId = source.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const reason = "Clarify this ordering";
+      store.addComment({ id: "cmt_ordinary", artifactId, author: "human", content: reason });
+      expect((await f.verdict(daemon, artifactId, "revised", reason)).status).toBe(200);
+      const read = (active: Daemon) => f.request(active, "read-page-feedback", { artifactId });
+      const first = await (await read(daemon)).json();
+      expect(first).toMatchObject({
+        artifact: { id: artifactId, status: "revised" },
+        verdict: { status: "revised", at: expect.any(String), commentId: expect.any(String), reason },
+        notes: [{ id: "cmt_ordinary", content: reason }], comments: [], omittedNotes: 0, omittedComments: 0,
+      });
+      expect(first.verdict.commentId).not.toBe("cmt_ordinary");
+      expect(store.getComment(first.verdict.commentId)?.verdictFeedback).toBe(true);
+      expect(store.getUnacknowledgedComments()).toHaveLength(2);
+      store.dispose();
+      daemon.dispose();
+
+      const restarted = f.start();
+      expect((await f.request(restarted, "open-review", { mode: "resume" })).status).toBe(200);
+      expect(await (await read(restarted)).json()).toEqual(first);
+      expect(await (await read(restarted)).json()).toEqual(first);
+
+      // A later action with no owned pointer must not reuse an older reason.
+      const reloaded = restarted.sessions.get(f.sessionId)!;
+      const other = await (await f.present(restarted, randomUUID(), page("<p>Other page</p>"))).json();
+      reloaded.addComment({ id: "cmt_other_page", artifactId: other.structuredContent.artifactId, author: "human", content: "Other reason" });
+      for (const feedbackCommentId of ["cmt_missing", "cmt_other_page", undefined]) {
+        reloaded.updateArtifactStatus(artifactId, "revised", "ui_revise_button", { feedbackCommentId });
+        const unattributed = await (await read(restarted)).json();
+        expect(unattributed.verdict).toEqual({ status: "revised", at: expect.any(String) });
+        expect(unattributed.notes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "cmt_ordinary", content: reason })]));
+        expect(unattributed.notes).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "cmt_other_page" })]));
+      }
+      reloaded.updateArtifactStatus(artifactId, "approved", "unspecified");
+      expect(await (await read(restarted)).json()).not.toHaveProperty("verdict");
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("reserves an unfilled verdict ID after restart and leaves an unmarked legacy note unattributed", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const artifactId = source.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const staleWriter = new FileStore(f.root, f.sessionId);
+      const id = "cmt_dangling_verdict";
+      const ordinary = { id, artifactId, author: "human" as const, content: "Ordinary feedback" };
+      try {
+        store.updateArtifactStatus(artifactId, "revised", "ui_revise_button", { feedbackCommentId: id });
+        store.forceFlush();
+        store.dispose();
+        daemon.dispose();
+        const resumed = f.start();
+        expect((await f.request(resumed, "open-review", { mode: "resume" })).status).toBe(200);
+
+        const refused = await f.request(resumed, "comments", ordinary);
+        expect(refused.status).toBe(409);
+        expect(await refused.json()).toMatchObject({ code: "validation_error" });
+        const resumedStore = resumed.sessions.get(f.sessionId)!;
+        expect(resumedStore.getComment(id)).toBeUndefined();
+        const dangling = await (await f.request(resumed, "read-page-feedback", { artifactId })).json();
+        expect(dangling.verdict).toEqual({ status: "revised", at: expect.any(String) });
+
+        // The old store has no reservation in its view. Its ordinary note
+        // stays readable, without filling the newer store's verdict link.
+        expect(staleWriter.addComment(ordinary).verdictFeedback).toBeUndefined();
+        staleWriter.forceFlush();
+        resumedStore.dispose();
+        resumed.dispose();
+        const reloaded = f.start();
+        expect((await f.request(reloaded, "open-review", { mode: "resume" })).status).toBe(200);
+        const read = await (await f.request(reloaded, "read-page-feedback", { artifactId })).json();
+        expect(read.verdict).toEqual(dangling.verdict);
+        expect(read.notes).toMatchObject([{ id, content: ordinary.content }]);
+      } finally {
+        staleWriter.dispose();
+      }
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("keeps a conflicted verdict note unattributed after the daemon reloads", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const artifactId = source.structuredContent.artifactId as string;
+      const writer = new FileStore(f.root, f.sessionId);
+      try {
+        const changed = writer.getArtifacts().find((a) => a.id === artifactId)!;
+        changed.content = { ...changed.content, html: "<p>Changed elsewhere</p>" };
+        writer.renameArtifact(artifactId, changed.title);
+        writer.forceFlush();
+      } finally {
+        writer.dispose();
+      }
+      const reason = "This text belongs to the old draft.";
+      const verdict = await f.verdict(daemon, artifactId, "revised", reason);
+      expect(verdict.status).toBe(409);
+      expect(await verdict.json()).toMatchObject({ code: "session_review_conflict" });
+      daemon.sessions.get(f.sessionId)!.dispose();
+      daemon.dispose();
+      const restarted = f.start();
+      expect((await f.request(restarted, "open-review", { mode: "resume" })).status).toBe(200);
+      const result = await (await f.request(restarted, "read-page-feedback", { artifactId })).json();
+      expect(result).toMatchObject({ artifact: { status: "draft" }, notes: [{ content: reason }] });
+      expect(result).not.toHaveProperty("verdict");
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("bounds both lanes after the verdict and truncates a single oversized reason on a UTF-8 boundary", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const source = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const artifactId = source.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      for (let i = 0; i < 52; i++) {
+        store.addComment({
+          id: `cmt_${i}`, artifactId, author: "human", content: `Note ${i}`,
+          ...(i % 2 === 0 ? { target: anchored } : {}),
+        });
+      }
+      expect((await f.verdict(daemon, artifactId, "rejected", "Prefer a simpler approach.")).status).toBe(200);
+      const read = () => f.request(daemon, "read-page-feedback", { artifactId });
+      const bounded = await (await read()).json();
+      expect(bounded.verdict.reason).toBe("Prefer a simpler approach.");
+      expect(bounded.notes.length + bounded.comments.length).toBe(49);
+      expect(bounded.notes.length + bounded.omittedNotes).toBe(26);
+      expect(bounded.comments.length + bounded.omittedComments).toBe(26);
+      const oversized = '🙂"\\'.repeat(18_000);
+      store.updateArtifactStatus(artifactId, "rejected", "ui_reject_button", { feedbackCommentId: "cmt_oversized_reason" });
+      store.addComment({ id: "cmt_oversized_reason", artifactId, author: "human", content: oversized, verdictFeedback: true });
+      const raw = await (await read()).text();
+      const clipped = JSON.parse(raw);
+      expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(64 * 1024);
+      expect(clipped.verdict).toMatchObject({ commentId: "cmt_oversized_reason", reasonTruncated: true });
+      expect(oversized.startsWith(clipped.verdict.reason)).toBe(true);
+      expect(Buffer.from(clipped.verdict.reason, "utf8").toString("utf8")).toBe(clipped.verdict.reason);
+      expect(clipped.omittedComments).toBeGreaterThan(0);
+      expect(clipped.omittedNotes).toBeGreaterThan(0);
+    } finally {
+      f.dispose();
+    }
+  });
+});
 
 describe("authenticated standalone page revision", () => {
   it("acknowledges only selected ordinary comments from the exact direct lineage", async () => {
