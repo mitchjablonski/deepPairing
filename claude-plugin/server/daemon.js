@@ -32597,21 +32597,28 @@ var FileStore = class _FileStore {
   }
   // --- Feedback notification (for long-poll) ---
   feedbackWaiters = [];
+  reviewEndWaiters = /* @__PURE__ */ new Set();
   /** Register a waiter until feedback arrives, the budget expires, or the caller leaves. */
-  waitForFeedback(timeoutMs = 3e4, signal) {
+  waitForFeedback(timeoutMs = 3e4, signal, wakeOn) {
     if (signal?.aborted) return Promise.resolve();
     return new Promise((resolve) => {
       const finish = () => {
         clearTimeout(timer);
         signal?.removeEventListener("abort", finish);
+        this.reviewEndWaiters.delete(finish);
         const index = this.feedbackWaiters.indexOf(finish);
         if (index !== -1) this.feedbackWaiters.splice(index, 1);
         resolve();
       };
       const timer = setTimeout(finish, timeoutMs);
       this.feedbackWaiters.push(finish);
+      if (wakeOn === "review_end") this.reviewEndWaiters.add(finish);
       signal?.addEventListener("abort", finish, { once: true });
     });
+  }
+  /** Exact decision readers recheck under the resolve lock after this wake. */
+  notifyStandaloneReviewEnded() {
+    for (const finish of this.reviewEndWaiters) finish();
   }
   /** Notify all waiters that feedback has arrived */
   notifyFeedbackWaiters() {
@@ -43063,7 +43070,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           if (signal.aborted) return null;
           const decision = store.getDecision(decisionId);
           const artifacts = decision ? store.getArtifacts() : [];
-          const artifact = decision && artifacts.find((a) => a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
+          const artifact = decision && artifacts.find((a) => a.sessionId === sessionId && a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
           if (!decision || !artifact) return null;
           let waitStatus;
           if (waitMs !== void 0) {
@@ -43072,12 +43079,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
               waitStatus = "resolved";
             } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
               waitStatus = "closed";
+            } else if (standaloneCloseout?.state(sessionId).state === "ended") {
+              waitStatus = "session_ended";
             } else if (remaining > 0) {
               if (!idleRefreshed) {
                 refreshCompanionLink();
                 idleRefreshed = true;
               }
-              return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+              return { wake: store.waitForFeedback(Math.ceil(remaining), signal, "review_end") };
             } else {
               waitStatus = "timed_out";
             }
@@ -44950,7 +44959,10 @@ function createDaemon(deps) {
     projectRoot2,
     (sessionId) => sessions.get(sessionId),
     void 0,
-    (sessionId) => pageWatcher.stopSession(sessionId),
+    (sessionId) => {
+      pageWatcher.stopSession(sessionId);
+      sessions.get(sessionId)?.notifyStandaloneReviewEnded();
+    },
     (sessionId) => pageWatcher.drainQueuedSaves(sessionId)
   );
   const demoRuns = /* @__PURE__ */ new Map();
