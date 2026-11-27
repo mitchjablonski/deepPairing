@@ -13,6 +13,13 @@
  *    sanitizer drops it). Plain navigation links (<a href>) never warn. The
  *    warning names the tag and attribute, never the URL (it can carry
  *    credentials or signed parameters).
+ *  - relative_asset: a resource loaded by a RELATIVE path (`shot.png`,
+ *    `./img/a.svg`, `/logo.png`) on the same elements, or a stylesheet /
+ *    icon / preload <link>. Natural for a `--path` page, but the review frame
+ *    is a srcdoc document with no base URL and an `img-src data: blob:` CSP,
+ *    so nothing relative can load (#714 gap 12). Same-document `#id`
+ *    references (SVG <use href="#icon">) never warn. Names tag + attribute,
+ *    never the path.
  *  - no_headings: no <h1>-<h6> anywhere.
  *  - no_section_ids: a page over PAGE_LINT_LONG_PAGE_BYTES whose <section>s
  *    and headings carry no id at all.
@@ -30,6 +37,7 @@ export const PAGE_LINT_LONG_PAGE_BYTES = 16 * 1024;
  *  warning never refuses anything, so they live here as their own set. */
 export const PAGE_LINT_CODES = {
   external_asset: "external_asset",
+  relative_asset: "relative_asset",
   no_headings: "no_headings",
   no_section_ids: "no_section_ids",
 } as const;
@@ -38,7 +46,7 @@ export type PageLintCode = (typeof PAGE_LINT_CODES)[keyof typeof PAGE_LINT_CODES
 export interface PageLintWarning {
   code: PageLintCode;
   message: string;
-  /** external_asset: how many blocked references the page has. */
+  /** external_asset / relative_asset: how many such references the page has. */
   count?: number;
   /**
    * external_asset: where they are, grouped by tag and attribute (e.g.
@@ -92,14 +100,57 @@ function isExternal(value: string): boolean {
   return externalAt(value.toLowerCase(), 0);
 }
 
-/** How many srcset candidates ("url descriptor", comma-separated) are external. */
-function externalSrcsetCount(value: string): number {
-  let count = 0;
-  for (const candidate of value.split(",")) {
-    const url = candidate.trim().split(/\s/, 1)[0] ?? "";
-    if (url && isExternal(url)) count++;
+/**
+ * A relative URL: non-empty, not external, no scheme (data:, blob:, about:,
+ * javascript:, ...), and not a same-document `#fragment`. Linear, no regex
+ * over the whole value: only the run up to the first `:`, `/`, `?` or `#` is
+ * checked for a scheme.
+ */
+export function isRelativeUrl(value: string): boolean {
+  const v = value.trim();
+  if (!v || v.startsWith("#") || isExternal(v)) return false;
+  for (let i = 0; i < v.length; i++) {
+    const c = v[i];
+    if (c === ":") return i === 0; // "x:" is a scheme; a leading ":" is a path
+    if (c === "/" || c === "?" || c === "#") return true;
   }
-  return count;
+  return true;
+}
+
+/** How many srcset candidates are relative. */
+function relativeSrcsetCount(value: string): number {
+  return srcsetUrls(value).filter(isRelativeUrl).length;
+}
+
+/**
+ * The candidate URLs of a srcset, read as the HTML spec does: a URL runs to
+ * the next whitespace (trailing commas end the candidate), then descriptors
+ * run to the next comma. So a data: URI's own comma doesn't split it. One
+ * forward pass.
+ */
+function srcsetUrls(value: string): string[] {
+  const urls: string[] = [];
+  const n = value.length;
+  let i = 0;
+  while (i < n) {
+    while (i < n && (isSpace(value.charCodeAt(i)) || value[i] === ",")) i++;
+    if (i >= n) break;
+    const start = i;
+    while (i < n && !isSpace(value.charCodeAt(i))) i++;
+    let url = value.slice(start, i);
+    if (url.endsWith(",")) {
+      url = url.replace(/,+$/, "");
+    } else {
+      while (i < n && value[i] !== ",") i++; // descriptors
+    }
+    if (url) urls.push(url);
+  }
+  return urls;
+}
+
+/** How many srcset candidates are external. */
+function externalSrcsetCount(value: string): number {
+  return srcsetUrls(value).filter(isExternal).length;
 }
 
 /** CSS Syntax newline: LF, CR or FF (CRLF is a CR then an LF). */
@@ -361,6 +412,9 @@ export function lintPage(html: string): PageLintWarning[] {
     add(`CSS url() in ${where}`, refs.url);
     add(`CSS @import in ${where}`, refs.import);
   };
+  // Same shape for relative paths (#714 gap 12).
+  const relative = new Map<string, number>();
+  const addRelative = (source: string, count = 1) => { if (count > 0) relative.set(source, (relative.get(source) ?? 0) + count); };
   let headings = 0;
   let sectionIds = 0;
 
@@ -400,14 +454,18 @@ export function lintPage(html: string): PageLintWarning[] {
       for (const attr of resourceAttrs) {
         const value = tag.attrs[attr];
         if (value === undefined) continue;
-        if (attr === "srcset") add(`${tag.name} srcset`, externalSrcsetCount(value));
-        else if (isExternal(value)) add(`${tag.name} ${attr}`);
+        if (attr === "srcset") {
+          add(`${tag.name} srcset`, externalSrcsetCount(value));
+          addRelative(`${tag.name} srcset`, relativeSrcsetCount(value));
+        } else if (isExternal(value)) add(`${tag.name} ${attr}`);
+        else if (isRelativeUrl(value)) addRelative(`${tag.name} ${attr}`);
       }
     }
-    if (tag.name === "link" && tag.attrs.href !== undefined && isExternal(tag.attrs.href)) {
+    if (tag.name === "link" && tag.attrs.href !== undefined) {
       const rels = (tag.attrs.rel ?? "").toLowerCase().split(/\s+/);
       const kind = ["stylesheet", "modulepreload", "preload", "icon"].find((r) => rels.includes(r));
-      if (kind) add(`link href (${kind})`);
+      if (kind && isExternal(tag.attrs.href)) add(`link href (${kind})`);
+      else if (kind && isRelativeUrl(tag.attrs.href)) addRelative(`link href (${kind})`);
     }
     if (tag.attrs.style) addCss(tag.attrs.style, "a style attribute");
 
@@ -432,6 +490,19 @@ export function lintPage(html: string): PageLintWarning[] {
         `${total} external asset reference${total === 1 ? "" : "s"} will not load (the page has no network): ` +
         `${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. ` +
         "Inline images and fonts as data: URIs and styles and scripts as inline <style>/<script>; video, audio, iframes and objects won't load at all.",
+    });
+  }
+  if (relative.size > 0) {
+    const sources = [...relative].map(([source, count]) => ({ source, count }));
+    const total = sources.reduce((sum, s) => sum + s.count, 0);
+    warnings.push({
+      code: PAGE_LINT_CODES.relative_asset,
+      count: total,
+      sources,
+      message:
+        `${total} relative asset path${total === 1 ? "" : "s"} won't load in the review frame: ` +
+        `${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. ` +
+        "The page renders from a document with no base URL, so inline images and fonts as data: URIs and styles as inline <style>.",
     });
   }
   if (headings === 0) {

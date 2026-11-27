@@ -55,6 +55,7 @@ import { CommentBodySchema,
   FeatureOverrideBodySchema,
   PreferenceBodySchema,
   RenderFailureBodySchema,
+  PAGE_RENDER_ISSUES_VISUAL_ID,
   CreateRequestBodySchema,
   DecisionCloseOutBodySchema,
   formatZodIssues,
@@ -612,17 +613,30 @@ export function createHttpRoutes(
     // cross-session view): a report stored into the wrong session would render
     // nowhere useful and the owning agent's check_feedback would never see it.
     const arts = await store.getArtifacts();
-    if (!arts.some((a) => a.id === artifactId)) {
+    const art = arts.find((a) => a.id === artifactId);
+    if (!art) {
       return c.json(
         { error: "artifact_not_in_session", code: "artifact_not_in_session",
           message: "This artifact belongs to a different session than the one this tab is bound to." },
         404,
       );
     }
+    // #714 gap 12 — the reserved page-issues id belongs to `page` artifacts
+    // only (the schema already held its error to the closed grammar). The
+    // title is the page's own, from the store: a client-sent title is free
+    // text and is ignored under this id.
+    const pageIssues = visualId === PAGE_RENDER_ISSUES_VISUAL_ID;
+    if (pageIssues && art.type !== "page") {
+      return c.json(
+        { error: `visualId ${PAGE_RENDER_ISSUES_VISUAL_ID} is reserved for page artifacts`, code: ERROR_CODES.validation_error,
+          issues: [{ path: "visualId", message: "reserved for page artifacts" }] },
+        400,
+      );
+    }
     // A read-only / non-FileStore backing store can't persist these; treat that
     // as a benign no-op success (nothing to surface, nothing broken).
     if (!store.recordRenderFailure) return c.json({ status: "ignored", artifactId, visualId });
-    await store.recordRenderFailure({ artifactId, visualId, error, title });
+    await store.recordRenderFailure({ artifactId, visualId, error, title: pageIssues ? art.title || undefined : title });
     broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
     return c.json({ status: "recorded", artifactId, visualId });
   });

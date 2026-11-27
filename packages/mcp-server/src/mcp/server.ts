@@ -76,7 +76,7 @@ export const matchesGlob = _matchesGlob;
  *  (see describeHtmlAnchor in check-feedback-delivery.ts). */
 const HTML_ANCHOR_OUTPUT_SCHEMA = {
   type: "object" as const,
-  description: "Page artifacts — where on the page this comment points: kind (element|text|cell|diagram-node|link), CSS locator, quoted text (+ prefix/suffix), table header names for a cell, Mermaid nodeId, link href, and the page version it was made on. Find the spot in the HTML you authored.",
+  description: "Page artifacts — where on the page this comment points: kind (element|text|cell|diagram-node|link), CSS locator, quoted text (+ prefix/suffix), table header names for a cell, Mermaid nodeId, link href, the section it sits in (nearest heading + id), and the page version it was made on. Find the spot in the HTML you authored.",
   properties: {
     kind: { type: "string", enum: ["element", "text", "cell", "diagram-node", "link"] },
     locator: { type: "string" },
@@ -87,6 +87,11 @@ const HTML_ANCHOR_OUTPUT_SCHEMA = {
     nodeId: { type: "string" },
     href: { type: "string" },
     version: { type: "number" },
+    section: {
+      type: "object",
+      description: "Which part of the page the spot is in: the nearest preceding heading's text and the nearest ancestor (or that heading's) id.",
+      properties: { heading: { type: "string" }, id: { type: "string" } },
+    },
   },
 };
 

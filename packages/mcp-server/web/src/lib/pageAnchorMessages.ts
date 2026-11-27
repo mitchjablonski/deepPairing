@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, type HtmlAnchor } from "@deeppairing/shared";
+import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, pageDirective, pageErrorClass, pageRenderIssueKeyRank, pageResourceKey, type HtmlAnchor, type PageRenderIssueKind } from "@deeppairing/shared";
 import { LOCATOR_TEXT_MAX, MAX_CHANGE_MARKS } from "./pageVersionDiff";
 
 /**
@@ -66,6 +66,13 @@ export function isReadyMessage(event: FrameMessage, frame: Window | null | undef
   const d = fromFrame(event, frame);
   return !!d && d.dp === "ready";
 }
+
+/** #714 gap 12 — the per-document id PrototypeFrame mints for each srcdoc
+ *  and injects into that document's annotator, which puts it on its ready
+ *  and diagnostics messages. srcDoc updates can reuse the iframe's
+ *  WindowProxy, so the source check alone can't tell an old document's
+ *  queued messages from the new document's: the expected id can. */
+export const FrameDocSchema = z.string().regex(/^[0-9a-f]{16,64}$/);
 
 /** #714 — `{dp:"toggle-pointing"}` from this frame: the reviewer pressed the
  *  pointing shortcut while focus was inside the page. It can only flip the
@@ -273,4 +280,86 @@ export function acceptPinHover(
   const id = PinIdSchema.safeParse(d.id);
   const at = FramePointSchema.safeParse({ x: d.x, y: d.y });
   return id.success && at.success ? { id: id.data, at: at.data } : undefined;
+}
+
+// --- #714 gap 12: render diagnostics ---------------------------------------------
+
+/** Bounds the annotator applies (DIAG in pageAnnotator.ts); re-checked here. */
+export const PAGE_DIAGNOSTICS_LIMITS = { samples: 3, text: 120, keys: 8, max: 9999 } as const;
+
+const DiagCountSchema = z.number().int().min(0).max(PAGE_DIAGNOSTICS_LIMITS.max);
+const DiagSampleSchema = z.string().min(1).max(PAGE_DIAGNOSTICS_LIMITS.text);
+/** An error CLASS name: the only part of an error that may reach the agent.
+ *  Bounded, then mapped onto the shared allowlist (anything else is "Error"). */
+const ErrorClassSchema = z.string().min(1).max(64).transform((v) => pageErrorClass(v));
+const DiagMessagesSchema = z
+  .object({
+    count: DiagCountSchema,
+    samples: z.array(DiagSampleSchema).max(PAGE_DIAGNOSTICS_LIMITS.samples),
+    classes: z.array(z.object({ key: ErrorClassSchema, count: DiagCountSchema.min(1) }).strict()).max(PAGE_DIAGNOSTICS_LIMITS.keys),
+  })
+  .strict();
+/** A resource is named only by an allowlisted tag + attribute pair ("img
+ *  src"); anything else, even from a forged report, becomes "other resource". */
+const ResourceKeySchema = z.string().min(1).max(64).transform((v) => pageResourceKey(v));
+/** A CSP block is named only by a CSP3 directive ("img-src"); else "other". */
+const DirectiveKeySchema = z.string().min(1).max(64).transform((v) => pageDirective(v));
+
+export const PageDiagnosticsMessageSchema = z
+  .object({
+    dp: z.literal("diagnostics"),
+    doc: FrameDocSchema,
+    scriptErrors: DiagMessagesSchema,
+    rejections: DiagMessagesSchema,
+    resources: z.array(z.object({ key: ResourceKeySchema, count: DiagCountSchema.min(1) }).strict()).max(PAGE_DIAGNOSTICS_LIMITS.keys),
+    blocked: z.array(z.object({ key: DirectiveKeySchema, count: DiagCountSchema.min(1) }).strict()).max(PAGE_DIAGNOSTICS_LIMITS.keys),
+  })
+  .strict();
+export type PageDiagnosticsMessage = z.infer<typeof PageDiagnosticsMessageSchema>;
+export type PageDiagnostics = Omit<PageDiagnosticsMessage, "dp" | "doc">;
+
+/** A valid `{dp:"diagnostics"}` from this frame → the report; else null.
+ *  DISPLAY-ONLY, and the one frame report still accepted after Run (that is
+ *  when script errors happen): it can only ever render a passive banner (as
+ *  text) and a bounded note to the agent about its own page, built from the
+ *  closed page-issues grammar (never the samples). It never opens
+ *  the composer, changes a filter, focuses anything, or posts a comment. */
+export function acceptDiagnosticsMessage(event: FrameMessage, frame: Window | null | undefined): PageDiagnostics | null {
+  return acceptDiagnosticsReport(event, frame)?.diagnostics ?? null;
+}
+
+/** acceptDiagnosticsMessage plus the frame document the report came from:
+ *  the parent accepts it only while that document is the current one. */
+export function acceptDiagnosticsReport(
+  event: FrameMessage,
+  frame: Window | null | undefined,
+): { doc: string; diagnostics: PageDiagnostics } | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "diagnostics") return null;
+  const parsed = PageDiagnosticsMessageSchema.safeParse(d);
+  if (!parsed.success) return null;
+  const { dp: _dp, doc, ...rest } = parsed.data;
+  return { doc, diagnostics: canonicalDiagnostics(rest) };
+}
+
+function canonicalDiagnostics(rest: PageDiagnostics): PageDiagnostics {
+  // Keys mapped onto an allowlist can collide ("other resource"): merge them.
+  // Then canonical order (allowlist position, catch-all last), as the
+  // annotator and the shared grammar use, so the same keys read the same.
+  return {
+    scriptErrors: { ...rest.scriptErrors, classes: mergeKeys(rest.scriptErrors.classes, "script") },
+    rejections: { ...rest.rejections, classes: mergeKeys(rest.rejections.classes, "rejection") },
+    resources: mergeKeys(rest.resources, "resource"),
+    blocked: mergeKeys(rest.blocked, "blocked"),
+  };
+}
+
+function mergeKeys(list: ReadonlyArray<{ key: string; count: number }>, kind: PageRenderIssueKind): Array<{ key: string; count: number }> {
+  const out: Array<{ key: string; count: number }> = [];
+  for (const x of list) {
+    const same = out.find((o) => o.key === x.key);
+    if (same) same.count = Math.min(same.count + x.count, PAGE_DIAGNOSTICS_LIMITS.max);
+    else out.push({ key: x.key, count: x.count });
+  }
+  return out.sort((a, b) => pageRenderIssueKeyRank(kind, a.key) - pageRenderIssueKeyRank(kind, b.key));
 }

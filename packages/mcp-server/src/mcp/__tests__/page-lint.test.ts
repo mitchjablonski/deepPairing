@@ -2,7 +2,7 @@
  * #714 gap 6 — the present-time page lint. Pure function, real inputs.
  */
 import { describe, expect, it } from "vitest";
-import { lintPage, formatPageLintWarnings, stripCssComments, PAGE_LINT_LONG_PAGE_BYTES } from "../page-lint.js";
+import { lintPage, formatPageLintWarnings, isRelativeUrl, stripCssComments, PAGE_LINT_CODES, PAGE_LINT_LONG_PAGE_BYTES } from "../page-lint.js";
 import { PAGE_SKELETON_HTML } from "../../page-authoring.js";
 
 const codes = (html: string) => lintPage(html).map((w) => w.code);
@@ -17,7 +17,7 @@ describe("lintPage", () => {
     ['<script src="https://cdn.example.com/mermaid.js"></script>', "script src"],
     ["<img src='http://example.com/a.png'>", "img src"],
     ["<img src=//example.com/a.png>", "img src"],
-    ['<img srcset="a.png 1x, https://example.com/b.png 2x">', "img srcset"],
+    ['<img srcset="data:image/png;base64,AA 1x, https://example.com/b.png 2x">', "img srcset"],
     ['<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">', "link href (stylesheet)"],
     ['<LINK REL="Preload Stylesheet" HREF="//x.test/s.css">', "link href (stylesheet)"],
     ['<iframe src="https://example.com/embed"></iframe>', "iframe src"],
@@ -82,12 +82,13 @@ describe("lintPage", () => {
     expect(lintPage(clean('<noscript>x</noscript><img src="https://x.test/a.png">'))[0]!.sources).toEqual([{ source: "img src", count: 1 }]);
   });
 
-  it("does not warn on navigation links, relative or data: assets, or URLs inside text, comments and scripts", () => {
+  // (A relative asset gets its own relative_asset warning since #714 gap 12;
+  // see the describe block below.)
+  it("does not warn on navigation links, data: assets, or URLs inside text, comments and scripts", () => {
     expect(codes(clean([
       '<a href="https://example.com/docs">docs</a>',
       '<svg><a href="https://example.com">x</a></svg>',
       '<img src="data:image/png;base64,AAAA">',
-      '<img src="images/a.png">',
       '<link rel="canonical" href="https://example.com/">',
       "<p>See https://example.com/a.png and <code>&lt;script src=\"https://x\"&gt;</code></p>",
       '<!-- <script src="https://cdn.example.com/x.js"></script> -->',
@@ -232,3 +233,55 @@ describe("lintPage", () => {
     }
   });
 });
+
+describe("lintPage — relative_asset (#714 gap 12)", () => {
+  it.each([
+    ['<img src="shot.png">', "img src"],
+    ['<img src="./img/a.svg">', "img src"],
+    ['<img src="/logo.png">', "img src"],
+    ['<img src="../up.png?v=2">', "img src"],
+    ['<img srcset="a.png 1x, data:image/png;base64,AA 2x">', "img srcset"],
+    ['<picture><source srcset="wide.webp"></picture>', "source srcset"],
+    ['<video src="demo.mp4" ></video>', "video src"],
+    ['<video poster="poster.jpg"></video>', "video poster"],
+    ['<audio src="a.mp3"></audio>', "audio src"],
+    ['<link rel="stylesheet" href="styles.css">', "link href (stylesheet)"],
+    ['<svg><use href="sprites.svg#icon"/></svg>', "use href"],
+  ])("warns, classified by tag and attribute and never echoing the path: %s", (asset, source) => {
+    const warnings = lintPage(clean(asset));
+    expect(warnings.map((w) => w.code)).toEqual([PAGE_LINT_CODES.relative_asset]);
+    expect(warnings[0]!.code).toBe("relative_asset");
+    expect(warnings[0]!.sources).toEqual([{ source, count: 1 }]);
+    expect(warnings[0]!.message).toContain("won't load in the review frame");
+    expect(warnings[0]!.message).toContain("data: URIs");
+    for (const path of ["shot.png", "img/a.svg", "logo.png", "demo.mp4", "styles.css", "sprites.svg"]) {
+      expect(JSON.stringify(warnings)).not.toContain(path);
+    }
+  });
+
+  it("never warns on data:/blob: URIs, same-document fragments, empty values, plain links or non-asset rels", () => {
+    expect(
+      codes(
+        clean(
+          '<img src="data:image/png;base64,AA"><img src="blob:null/1"><svg><use href="#icon"/></svg><img src="">' +
+            '<a href="other.html">next</a><link rel="canonical" href="page.html">',
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("counts external and relative separately, external first, and both before no_headings", () => {
+    const warnings = lintPage('<p>x</p><img src="https://x.test/a.png"><img src="a.png"><img src="b.png">');
+    expect(warnings.map((w) => w.code)).toEqual(["external_asset", "relative_asset", "no_headings"]);
+    expect(warnings[1]!.count).toBe(2);
+    expect(formatPageLintWarnings(warnings)).toContain("2 relative asset paths won't load in the review frame: img src x2");
+  });
+
+  it("isRelativeUrl", () => {
+    for (const v of ["a.png", "./a", "/a", "../a", "a/b:c", "?q", " x.png "]) expect(isRelativeUrl(v), v).toBe(true);
+    for (const v of ["", "  ", "#frag", "data:x", "blob:x", "https://x", "//x", "mailto:a", "javascript:void(0)", "C:x"]) {
+      expect(isRelativeUrl(v), v).toBe(false);
+    }
+  });
+});
+

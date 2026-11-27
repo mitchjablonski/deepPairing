@@ -20144,7 +20144,11 @@ var HTML_ANCHOR_LIMITS = {
   affix: 32,
   header: 200,
   nodeId: 200,
-  href: 512
+  href: 512,
+  /** #714 gap 10 — the nearest preceding heading's text. */
+  sectionHeading: 120,
+  /** #714 gap 10 — the nearest ancestor (or section heading) id. */
+  sectionId: 200
 };
 var HtmlAnchorKindSchema = external_exports.enum(["element", "text", "cell", "diagram-node", "link"]);
 var HtmlAnchorSchema = external_exports.object({
@@ -20159,7 +20163,11 @@ var HtmlAnchorSchema = external_exports.object({
   }).optional(),
   nodeId: external_exports.string().max(HTML_ANCHOR_LIMITS.nodeId).optional(),
   href: external_exports.string().max(HTML_ANCHOR_LIMITS.href).optional(),
-  version: external_exports.number().int().positive().optional()
+  version: external_exports.number().int().positive().optional(),
+  section: external_exports.object({
+    heading: external_exports.string().max(HTML_ANCHOR_LIMITS.sectionHeading).optional(),
+    id: external_exports.string().max(HTML_ANCHOR_LIMITS.sectionId).optional()
+  }).optional()
 }).superRefine((a, ctx) => {
   if (a.kind === "text" && a.quote.trim().length === 0) {
     ctx.addIssue({ code: "custom", path: ["quote"], message: "a text anchor needs the selected text as its quote" });
@@ -21286,6 +21294,64 @@ var RequestSchema = external_exports.object({
   scope: RequestScopeSchema.optional()
 });
 
+// ../shared/dist/schemas/page-render-issues.js
+var PAGE_RENDER_ISSUES_VISUAL_ID = "dp-page-render-issues";
+var PAGE_ERROR_CLASSES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "AggregateError", "InternalError", "DOMException", "SecurityError", "NetworkError", "AbortError", "NotAllowedError", "NotFoundError", "NotSupportedError", "InvalidStateError", "QuotaExceededError", "TimeoutError", "DataCloneError"];
+var PAGE_ERROR_CLASS_SET = new Set(PAGE_ERROR_CLASSES);
+function isPageErrorClass(name) {
+  return typeof name === "string" && PAGE_ERROR_CLASS_SET.has(name);
+}
+var PAGE_RESOURCE_KEYS = ["img src", "img srcset", "source src", "source srcset", "video src", "video poster", "audio src", "track src", "script src", "link href", "iframe src", "frame src", "embed src", "object data", "input src", "image href", "use href"];
+var PAGE_RESOURCE_OTHER = "other resource";
+var PAGE_CSP_DIRECTIVES = ["default-src", "script-src", "script-src-elem", "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src", "connect-src", "media-src", "object-src", "frame-src", "child-src", "worker-src", "manifest-src", "base-uri", "form-action", "frame-ancestors", "navigate-to", "prefetch-src", "sandbox", "trusted-types", "require-trusted-types-for", "upgrade-insecure-requests", "report-uri", "report-to"];
+var PAGE_DIRECTIVE_OTHER = "other";
+var RESOURCE_SET = /* @__PURE__ */ new Set([...PAGE_RESOURCE_KEYS, PAGE_RESOURCE_OTHER]);
+var DIRECTIVE_SET = /* @__PURE__ */ new Set([...PAGE_CSP_DIRECTIVES, PAGE_DIRECTIVE_OTHER]);
+function isPageResourceKey(key2) {
+  return typeof key2 === "string" && RESOURCE_SET.has(key2);
+}
+function isPageDirective(key2) {
+  return typeof key2 === "string" && DIRECTIVE_SET.has(key2);
+}
+var PAGE_RENDER_ISSUES_LIMITS = { perKind: 8, maxCount: 9999, maxLength: 500 };
+function validKey(kind, key2) {
+  if (kind === "script" || kind === "rejection")
+    return isPageErrorClass(key2);
+  if (kind === "resource")
+    return isPageResourceKey(key2);
+  return isPageDirective(key2);
+}
+var HEAD_RE = /^v([1-9][0-9]{0,5}) (scripts-on|scripts-off) \| (.+)$/;
+var ITEM_RE = /^(script|rejection|resource|blocked) (.+)=([1-9][0-9]{0,3})$/;
+function parsePageRenderIssues(text) {
+  if (typeof text !== "string" || text.length > PAGE_RENDER_ISSUES_LIMITS.maxLength)
+    return null;
+  const head = HEAD_RE.exec(text);
+  if (!head)
+    return null;
+  const items = [];
+  const perKind = {};
+  for (const raw2 of head[3].split("; ")) {
+    const m = ITEM_RE.exec(raw2);
+    if (!m)
+      return null;
+    const kind = m[1];
+    const key2 = m[2];
+    if (!validKey(kind, key2))
+      return null;
+    if (items.some((i) => i.kind === kind && i.key === key2))
+      return null;
+    perKind[kind] = (perKind[kind] ?? 0) + 1;
+    if (perKind[kind] > PAGE_RENDER_ISSUES_LIMITS.perKind)
+      return null;
+    items.push({ kind, key: key2, count: Number(m[3]) });
+  }
+  return { version: Number(head[1]), running: head[2] === "scripts-on", items };
+}
+function pageRenderIssuesWakeKey(p) {
+  return p.items.map((i) => `${i.kind}:${i.key}`).sort().join("\n");
+}
+
 // ../shared/dist/schemas/request-bodies.js
 var CreateRequestBodySchema = external_exports.object({
   text: external_exports.string().min(1).max(2e3),
@@ -21413,6 +21479,10 @@ var RenderFailureBodySchema = external_exports.object({
   error: external_exports.string().min(1).max(500),
   /** The diagram's human title, when it has one. Optional + bounded. */
   title: external_exports.string().max(200).optional()
+}).superRefine((b, ctx) => {
+  if (b.visualId === PAGE_RENDER_ISSUES_VISUAL_ID && !parsePageRenderIssues(b.error)) {
+    ctx.addIssue({ code: "custom", path: ["error"], message: "page render issues must use the structured page-issues grammar (no free text)" });
+  }
 });
 var PromptBodySchema = external_exports.object({
   content: external_exports.string().min(1),
@@ -29853,6 +29923,7 @@ function validateSuggestionTransition(current, update) {
   }
   return { ok: true };
 }
+var PAGE_RENDER_ISSUES_WAKE_WINDOW_MS = 5 * 60 * 1e3;
 function isRejectedApproachOrigin(v2) {
   return v2 === "page_rule_out";
 }
@@ -31213,6 +31284,10 @@ var FileStore = class _FileStore {
    * decision, deliberately out of scope.
    */
   recordRenderFailure(params) {
+    if (params.visualId === PAGE_RENDER_ISSUES_VISUAL_ID) {
+      this.recordPageRenderIssues(params);
+      return;
+    }
     const safeError = scanForSecrets(params.error).length > 0 ? "[render error withheld \u2014 a secret-shaped value was detected in it]" : params.error;
     const safeTitle = params.title && scanForSecrets(params.title).length > 0 ? void 0 : params.title;
     const at = (/* @__PURE__ */ new Date()).toISOString();
@@ -31244,8 +31319,71 @@ var FileStore = class _FileStore {
     this.scheduleFlush();
     this.notifyFeedbackWaiters();
   }
+  /**
+   * #714 gap 12 — a page's render issues (reserved visual id). The error is
+   * the closed page-issues grammar (the route refuses anything else; a
+   * non-conforming text from any other writer is dropped here too). Arming is
+   * keyed on the SET of issue kinds/keys, never counts, and capped at one
+   * wake per page artifact per PAGE_RENDER_ISSUES_WAKE_WINDOW_MS:
+   *  - same key: the text (counts) is refreshed; no re-arm, no wake;
+   *  - new key, outside the window: re-armed and waiters woken now;
+   *  - new key, inside the window: re-armed at the window's end (hidden from
+   *    the unacknowledged list until then), with one deferred wake.
+   * A key change while the record is still pending only updates it.
+   */
+  recordPageRenderIssues(params) {
+    const parsed = parsePageRenderIssues(params.error);
+    if (!parsed || scanForSecrets(params.error).length > 0) return;
+    const wakeKey = pageRenderIssuesWakeKey(parsed);
+    const now = Date.now();
+    const at = new Date(now).toISOString();
+    const existing = this.renderFailures.find((r) => r.artifactId === params.artifactId && r.visualId === params.visualId);
+    if (!existing) {
+      this.renderFailures.push({
+        artifactId: params.artifactId,
+        visualId: params.visualId,
+        ...params.title ? { title: params.title } : {},
+        error: params.error,
+        at,
+        acknowledged: false,
+        wakeKey,
+        lastWakeAt: at
+      });
+      this.scheduleFlush();
+      this.notifyFeedbackWaiters();
+      return;
+    }
+    existing.error = params.error;
+    if (params.title) existing.title = params.title;
+    existing.at = at;
+    const pending = !existing.acknowledged;
+    if (existing.wakeKey === wakeKey || pending) {
+      existing.wakeKey = wakeKey;
+      this.scheduleFlush();
+      return;
+    }
+    existing.wakeKey = wakeKey;
+    existing.acknowledged = false;
+    const last = existing.lastWakeAt ? Date.parse(existing.lastWakeAt) : NaN;
+    const armAt = Number.isFinite(last) ? last + PAGE_RENDER_ISSUES_WAKE_WINDOW_MS : now;
+    if (armAt <= now) {
+      delete existing.armAt;
+      existing.lastWakeAt = at;
+      this.scheduleFlush();
+      this.notifyFeedbackWaiters();
+      return;
+    }
+    existing.armAt = new Date(armAt).toISOString();
+    existing.lastWakeAt = existing.armAt;
+    this.scheduleFlush();
+    const timer = setTimeout(() => {
+      if (!this.disposed) this.notifyFeedbackWaiters();
+    }, armAt - now);
+    timer.unref?.();
+  }
   getUnacknowledgedRenderFailures() {
-    return this.renderFailures.filter((r) => !r.acknowledged);
+    const now = Date.now();
+    return this.renderFailures.filter((r) => !r.acknowledged && !(r.armAt && Date.parse(r.armAt) > now));
   }
   acknowledgeRenderFailures(keys) {
     for (const r of this.renderFailures) {
@@ -37375,7 +37513,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { artifactId, visualId, error: error51, title } = parsed.data;
     const arts = await store.getArtifacts();
-    if (!arts.some((a) => a.id === artifactId)) {
+    const art = arts.find((a) => a.id === artifactId);
+    if (!art) {
       return c.json(
         {
           error: "artifact_not_in_session",
@@ -37385,8 +37524,19 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         404
       );
     }
+    const pageIssues = visualId === PAGE_RENDER_ISSUES_VISUAL_ID;
+    if (pageIssues && art.type !== "page") {
+      return c.json(
+        {
+          error: `visualId ${PAGE_RENDER_ISSUES_VISUAL_ID} is reserved for page artifacts`,
+          code: ERROR_CODES.validation_error,
+          issues: [{ path: "visualId", message: "reserved for page artifacts" }]
+        },
+        400
+      );
+    }
     if (!store.recordRenderFailure) return c.json({ status: "ignored", artifactId, visualId });
-    await store.recordRenderFailure({ artifactId, visualId, error: error51, title });
+    await store.recordRenderFailure({ artifactId, visualId, error: error51, title: pageIssues ? art.title || void 0 : title });
     broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
     return c.json({ status: "recorded", artifactId, visualId });
   });
@@ -40097,6 +40247,7 @@ import path25 from "node:path";
 var PAGE_LINT_LONG_PAGE_BYTES = 16 * 1024;
 var PAGE_LINT_CODES = {
   external_asset: "external_asset",
+  relative_asset: "relative_asset",
   no_headings: "no_headings",
   no_section_ids: "no_section_ids"
 };
@@ -40133,13 +40284,40 @@ function externalAt(lower, at) {
 function isExternal(value) {
   return externalAt(value.toLowerCase(), 0);
 }
-function externalSrcsetCount(value) {
-  let count2 = 0;
-  for (const candidate of value.split(",")) {
-    const url2 = candidate.trim().split(/\s/, 1)[0] ?? "";
-    if (url2 && isExternal(url2)) count2++;
+function isRelativeUrl(value) {
+  const v2 = value.trim();
+  if (!v2 || v2.startsWith("#") || isExternal(v2)) return false;
+  for (let i = 0; i < v2.length; i++) {
+    const c = v2[i];
+    if (c === ":") return i === 0;
+    if (c === "/" || c === "?" || c === "#") return true;
   }
-  return count2;
+  return true;
+}
+function relativeSrcsetCount(value) {
+  return srcsetUrls(value).filter(isRelativeUrl).length;
+}
+function srcsetUrls(value) {
+  const urls = [];
+  const n = value.length;
+  let i = 0;
+  while (i < n) {
+    while (i < n && (isSpace(value.charCodeAt(i)) || value[i] === ",")) i++;
+    if (i >= n) break;
+    const start = i;
+    while (i < n && !isSpace(value.charCodeAt(i))) i++;
+    let url2 = value.slice(start, i);
+    if (url2.endsWith(",")) {
+      url2 = url2.replace(/,+$/, "");
+    } else {
+      while (i < n && value[i] !== ",") i++;
+    }
+    if (url2) urls.push(url2);
+  }
+  return urls;
+}
+function externalSrcsetCount(value) {
+  return srcsetUrls(value).filter(isExternal).length;
 }
 function isCssNewline(c) {
   return c === 10 || c === 13 || c === 12;
@@ -40344,6 +40522,10 @@ function lintPage(html) {
     add(`CSS url() in ${where}`, refs.url);
     add(`CSS @import in ${where}`, refs.import);
   };
+  const relative = /* @__PURE__ */ new Map();
+  const addRelative = (source, count2 = 1) => {
+    if (count2 > 0) relative.set(source, (relative.get(source) ?? 0) + count2);
+  };
   let headings = 0;
   let sectionIds = 0;
   let i = 0;
@@ -40379,14 +40561,18 @@ function lintPage(html) {
       for (const attr of resourceAttrs) {
         const value = tag.attrs[attr];
         if (value === void 0) continue;
-        if (attr === "srcset") add(`${tag.name} srcset`, externalSrcsetCount(value));
-        else if (isExternal(value)) add(`${tag.name} ${attr}`);
+        if (attr === "srcset") {
+          add(`${tag.name} srcset`, externalSrcsetCount(value));
+          addRelative(`${tag.name} srcset`, relativeSrcsetCount(value));
+        } else if (isExternal(value)) add(`${tag.name} ${attr}`);
+        else if (isRelativeUrl(value)) addRelative(`${tag.name} ${attr}`);
       }
     }
-    if (tag.name === "link" && tag.attrs.href !== void 0 && isExternal(tag.attrs.href)) {
+    if (tag.name === "link" && tag.attrs.href !== void 0) {
       const rels = (tag.attrs.rel ?? "").toLowerCase().split(/\s+/);
       const kind = ["stylesheet", "modulepreload", "preload", "icon"].find((r) => rels.includes(r));
-      if (kind) add(`link href (${kind})`);
+      if (kind && isExternal(tag.attrs.href)) add(`link href (${kind})`);
+      else if (kind && isRelativeUrl(tag.attrs.href)) addRelative(`link href (${kind})`);
     }
     if (tag.attrs.style) addCss(tag.attrs.style, "a style attribute");
     if (SKIPPED_BODY.includes(tag.name)) {
@@ -40406,6 +40592,16 @@ function lintPage(html) {
       count: total,
       sources,
       message: `${total} external asset reference${total === 1 ? "" : "s"} will not load (the page has no network): ${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. Inline images and fonts as data: URIs and styles and scripts as inline <style>/<script>; video, audio, iframes and objects won't load at all.`
+    });
+  }
+  if (relative.size > 0) {
+    const sources = [...relative].map(([source, count2]) => ({ source, count: count2 }));
+    const total = sources.reduce((sum, s) => sum + s.count, 0);
+    warnings.push({
+      code: PAGE_LINT_CODES.relative_asset,
+      count: total,
+      sources,
+      message: `${total} relative asset path${total === 1 ? "" : "s"} won't load in the review frame: ${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. The page renders from a document with no base URL, so inline images and fonts as data: URIs and styles as inline <style>.`
     });
   }
   if (headings === 0) {

@@ -25,6 +25,9 @@ import {
 
 export function AnchorContext({ anchor }: { anchor: HtmlAnchor }) {
   const quote = anchor.quote.trim();
+  // #714 gap 10 — which part of the page the spot is in.
+  const heading = typeof anchor.section?.heading === "string" ? anchor.section.heading.trim() : "";
+  const sectionId = typeof anchor.section?.id === "string" ? anchor.section.id : "";
   return (
     <div className="space-y-0.5 text-2xs text-text-muted" data-testid="page-anchor-context">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -40,6 +43,13 @@ export function AnchorContext({ anchor }: { anchor: HtmlAnchor }) {
           {anchor.table.row && <>Row <span className="text-text-secondary">{anchor.table.row}</span></>}
           {anchor.table.row && anchor.table.col && " · "}
           {anchor.table.col && <>Column <span className="text-text-secondary">{anchor.table.col}</span></>}
+        </div>
+      )}
+      {(heading || sectionId) && (
+        <div className="break-words" data-testid="page-anchor-section">
+          In {heading && <span className="text-text-secondary">{heading}</span>}
+          {heading && sectionId && " "}
+          {sectionId && <code className="font-mono">#{sectionId}</code>}
         </div>
       )}
       {anchor.nodeId && <div>Node <code className="font-mono">{anchor.nodeId}</code></div>}

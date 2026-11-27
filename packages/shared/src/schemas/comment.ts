@@ -26,6 +26,10 @@ export const HTML_ANCHOR_LIMITS = {
   header: 200,
   nodeId: 200,
   href: 512,
+  /** #714 gap 10 — the nearest preceding heading's text. */
+  sectionHeading: 120,
+  /** #714 gap 10 — the nearest ancestor (or section heading) id. */
+  sectionId: 200,
 } as const;
 
 export const HtmlAnchorKindSchema = z.enum(["element", "text", "cell", "diagram-node", "link"]);
@@ -39,6 +43,14 @@ export type HtmlAnchorKind = z.infer<typeof HtmlAnchorKindSchema>;
  * when the locator no longer matches. `table` names a cell by its header TEXT
  * (not indices), `nodeId` names a Mermaid node, `href` is the link target (link
  * anchors only). `version` is the page version the anchor was made on.
+ *
+ * #714 gap 10 — `section` says which part of the page the spot is in:
+ * `heading` is the nearest preceding h1–h6 text (or the first heading inside
+ * a clicked container), `id` the nearest ancestor-or-self id, else that
+ * heading's own id. Element, cell, node and link anchors carry `prefix` /
+ * `suffix` too (the page text just outside the element), so a click on a
+ * generic container in a generated page can still be told apart. All optional:
+ * every anchor stored before this loads unchanged.
  */
 export const HtmlAnchorSchema = z
   .object({
@@ -56,6 +68,12 @@ export const HtmlAnchorSchema = z
     nodeId: z.string().max(HTML_ANCHOR_LIMITS.nodeId).optional(),
     href: z.string().max(HTML_ANCHOR_LIMITS.href).optional(),
     version: z.number().int().positive().optional(),
+    section: z
+      .object({
+        heading: z.string().max(HTML_ANCHOR_LIMITS.sectionHeading).optional(),
+        id: z.string().max(HTML_ANCHOR_LIMITS.sectionId).optional(),
+      })
+      .optional(),
   })
   .superRefine((a, ctx) => {
     if (a.kind === "text" && a.quote.trim().length === 0) {
