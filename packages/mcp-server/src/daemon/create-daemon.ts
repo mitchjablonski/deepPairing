@@ -635,6 +635,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       return out;
     },
     stanceExceptions,
+    standaloneCloseout,
   );
   app.route("/", publicRoutes);
 
