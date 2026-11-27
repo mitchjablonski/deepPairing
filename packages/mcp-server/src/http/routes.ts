@@ -49,6 +49,8 @@ import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
 import { corsAllowedOrigin } from "./origin-policy.js";
 import { createReviewRoutes } from "./review-routes.js";
 import { getSessionId, NO_SESSION_RESPONSE, readJsonValue } from "./route-helpers.js";
+import { isStandaloneSessionForProject } from "../standalone-session-id.js";
+import { StandaloneCloseoutError, type StandaloneCloseout } from "../daemon/standalone-closeout.js";
 import { CommentBodySchema,
   SuggestionResolveBodySchema,
   RenameBodySchema,
@@ -239,6 +241,7 @@ export function createHttpRoutes(
    * Absent in standalone/test fixtures: no allowance can exist there.
    */
   stanceExceptions?: StanceExceptionRegistry,
+  standaloneCloseout?: StandaloneCloseout,
 ) {
   const getStore: StoreGetter = typeof storeOrGetter === "function"
     ? storeOrGetter as StoreGetter
@@ -394,6 +397,9 @@ export function createHttpRoutes(
   }));
 
   app.onError((err, c) => {
+    if (err instanceof StandaloneCloseoutError) {
+      return c.json({ error: err.message, code: err.code }, 409);
+    }
     if (isFileLockError(err)) return c.json(lockBusyBody(err), 503);
     if (isSessionReviewConflictError(err)) {
       return c.json({
@@ -407,6 +413,26 @@ export function createHttpRoutes(
     }
     return c.json({ error: "Internal server error" }, 500);
   });
+
+  async function withReviewWrite(
+    c: Context, store: IStore, requestedSid: string | undefined, run: (sid: string | undefined) => Promise<Response>,
+  ): Promise<Response> {
+    if (!standaloneCloseout || !projectRoot) return run(requestedSid);
+    const sessionId = store.getSessionId();
+    if (!isStandaloneSessionForProject(sessionId, projectRoot)) return run(requestedSid);
+    const release = standaloneCloseout.admitWrite(sessionId);
+    if (!release) {
+      if (standaloneCloseout.state(sessionId).state === "ended") {
+        return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+      }
+      return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+    }
+    try {
+      return await run(sessionId);
+    } finally {
+      release();
+    }
+  }
 
   // U0.6 — small helper for mutation routes. If no session is active yet,
   // return 409 with a structured error instead of silently spawning a
@@ -439,19 +465,21 @@ export function createHttpRoutes(
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = CreateRequestBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    if (!store.addRequest) {
-      return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
-    }
-    // P2 — carry the optional source/scope through (absent on a plain composer
-    // POST, so the stored shape is unchanged for every pre-P2 client).
-    const request = await store.addRequest({
-      text: parsed.data.text,
-      intent: parsed.data.intent,
-      ...(parsed.data.source ? { source: parsed.data.source } : {}),
-      ...(parsed.data.scope ? { scope: parsed.data.scope } : {}),
+    return withReviewWrite(c, store, sid, async (sid) => {
+      if (!store.addRequest) {
+        return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
+      }
+      // P2 — carry the optional source/scope through (absent on a plain composer
+      // POST, so the stored shape is unchanged for every pre-P2 client).
+      const request = await store.addRequest({
+        text: parsed.data.text,
+        intent: parsed.data.intent,
+        ...(parsed.data.source ? { source: parsed.data.source } : {}),
+        ...(parsed.data.scope ? { scope: parsed.data.scope } : {}),
+      });
+      broadcast({ type: "request_added", request }, sid);
+      return c.json({ request });
     });
-    broadcast({ type: "request_added", request }, sid);
-    return c.json({ request });
   });
 
   // Submit a comment from the web UI
@@ -494,101 +522,103 @@ export function createHttpRoutes(
       }
     }
 
-    // #408 review — RECORD BEFORE COMMITTING THE COMMENT. The send-back's
-    // per-option rejections used to be written after addComment; a busy
-    // preferences lock (503 lock_busy) then left the comment saved but the
-    // rejections unwritten, and the UI's retry was deduped as a replay so they
-    // were never written. Recording first means a lock failure commits
-    // nothing (the retry is a clean first attempt), and recordRejectedApproach
-    // is idempotent on description so a replayed send-back adds no rows.
-    const sendBackLedgerEvents: Parameters<LedgerRejectionBroadcast>[0][] = [];
-    if ((target as { sectionId?: string } | undefined)?.sectionId === "decision_revision_requested") {
-      const arts = await store.getArtifacts();
-      const decision = arts.find((a) => a.id === artifactId && a.type === "decision");
-      const dContent = decision?.content as { context?: string; options?: DecisionOption[] } | null;
-      const options = Array.isArray(dContent?.options) ? dContent.options : [];
-      if (decision && options.length > 0) {
-        const reason = content.trim() || undefined;
-        const buffered: LedgerRejectionBroadcast = (event) => { sendBackLedgerEvents.push(event); };
-        for (const option of options) {
-          await recordRejectedOptionConcept(store, buffered, {
-            option,
-            reason,
-            sourceArtifactId: artifactId,
-          });
+    return withReviewWrite(c, store, sid, async (sid) => {
+      // #408 review — RECORD BEFORE COMMITTING THE COMMENT. The send-back's
+      // per-option rejections used to be written after addComment; a busy
+      // preferences lock (503 lock_busy) then left the comment saved but the
+      // rejections unwritten, and the UI's retry was deduped as a replay so they
+      // were never written. Recording first means a lock failure commits
+      // nothing (the retry is a clean first attempt), and recordRejectedApproach
+      // is idempotent on description so a replayed send-back adds no rows.
+      const sendBackLedgerEvents: Parameters<LedgerRejectionBroadcast>[0][] = [];
+      if ((target as { sectionId?: string } | undefined)?.sectionId === "decision_revision_requested") {
+        const arts = await store.getArtifacts();
+        const decision = arts.find((a) => a.id === artifactId && a.type === "decision");
+        const dContent = decision?.content as { context?: string; options?: DecisionOption[] } | null;
+        const options = Array.isArray(dContent?.options) ? dContent.options : [];
+        if (decision && options.length > 0) {
+          const reason = content.trim() || undefined;
+          const buffered: LedgerRejectionBroadcast = (event) => { sendBackLedgerEvents.push(event); };
+          for (const option of options) {
+            await recordRejectedOptionConcept(store, buffered, {
+              option,
+              reason,
+              sourceArtifactId: artifactId,
+            });
+          }
         }
       }
-    }
 
-    const newId = `cmt_${nanoid(10)}`;
-    const comment = await store.addComment({
-      id: newId,
-      artifactId,
-      content,
-      author: "human",
-      target,
-      intent,
-      parentCommentId: parentCommentId ?? null,
-      suggestion,
-    });
-
-    // U0.1 — when addComment dedupes, it returns the existing comment whose
-    // id != newId. Skip the broadcast in that case (the original comment
-    // already broadcast 5s ago) so the UI doesn't see redundant
-    // comment_added/feedback_received events for the same content.
-    const isNew = comment.id === newId;
-    if (isNew) {
-      broadcast({ type: "comment_added", comment }, sid);
-      // Q5: a synthetic "I see you" — the server acknowledges the human's
-      // comment immediately so the UI can show a pair-tempo pip. The agent
-      // won't SEE it until its next check_feedback poll (≤30s), but server-
-      // receipt is a useful signal on its own: the message left the human's
-      // hand, entered the pair session, and will be surfaced to the agent.
-      broadcast({
-        type: "feedback_received",
-        commentId: comment.id,
+      const newId = `cmt_${nanoid(10)}`;
+      const comment = await store.addComment({
+        id: newId,
         artifactId,
-        intent: intent ?? "comment",
-      }, sid);
-    } else {
-      // IV6 — was: ` content="${content.slice(0, 40)}"`. III7 added log
-      // rotation but rotation doesn't redact; 40 chars is enough for a
-      // leaked password prefix or an API-key fragment in the comment
-      // body. The diagnostic value (knowing WHICH dedupe fired) is
-      // preserved by the artifactId + reusedId — the content itself is
-      // unnecessary and the only user-content leak the rotated log
-      // was still writing.
-      log(`[comment] DEDUPED — sid=${sid ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} len=${content.length}`);
-    }
-    // #169 (Fix 2) — the "↻ None of these fit" send-back posts a
-    // question-intent comment tagged sectionId "decision_revision_requested".
-    // That gesture genuinely rejects each LISTED option (the human is asking
-    // for a different SET), so it's the explicit per-option rejection signal:
-    // arm the gate for each option (reason = the send-back text) so
-    // re-proposing one of THEM surfaces the rejection — while a follow-up
-    // present_options for the SAME question with NEW options sails through
-    // (per-option keys are `${context}: ${title}`; new titles don't collide).
-    // This is deliberately the per-option path; the whole-card
-    // status:"rejected" gesture records ONE framing entry instead (status
-    // route above). Recorded before the comment (idempotent on description);
-    // broadcast only for a genuinely NEW comment — never a dedupe replay.
-    // #408 review — the rejections themselves were recorded BEFORE the
-    // comment (above); only their ledger_write broadcasts wait for a genuinely
-    // new comment, so a dedupe replay stays silent.
-    if (isNew) {
-      for (const event of sendBackLedgerEvents) broadcast(event, sid);
-    }
-    // R1: Q3's horizon-check trigger fires as a question-intent comment
-    // with sectionId "horizon_check:request:<horizon>". The broadcast
-    // interceptor doesn't see sectionId (feedback_received is trimmed),
-    // so we count it inline here.
-    if (projectRoot) {
-      const sectionId = (target as { sectionId?: unknown } | undefined)?.sectionId;
-      if (typeof sectionId === "string" && sectionId.startsWith("horizon_check:request:")) {
-        try { recordMetricEvent(projectRoot, { kind: "horizon_check_requested" }); } catch {}
+        content,
+        author: "human",
+        target,
+        intent,
+        parentCommentId: parentCommentId ?? null,
+        suggestion,
+      });
+
+      // U0.1 — when addComment dedupes, it returns the existing comment whose
+      // id != newId. Skip the broadcast in that case (the original comment
+      // already broadcast 5s ago) so the UI doesn't see redundant
+      // comment_added/feedback_received events for the same content.
+      const isNew = comment.id === newId;
+      if (isNew) {
+        broadcast({ type: "comment_added", comment }, sid);
+        // Q5: a synthetic "I see you" — the server acknowledges the human's
+        // comment immediately so the UI can show a pair-tempo pip. The agent
+        // won't SEE it until its next check_feedback poll (≤30s), but server-
+        // receipt is a useful signal on its own: the message left the human's
+        // hand, entered the pair session, and will be surfaced to the agent.
+        broadcast({
+          type: "feedback_received",
+          commentId: comment.id,
+          artifactId,
+          intent: intent ?? "comment",
+        }, sid);
+      } else {
+        // IV6 — was: ` content="${content.slice(0, 40)}"`. III7 added log
+        // rotation but rotation doesn't redact; 40 chars is enough for a
+        // leaked password prefix or an API-key fragment in the comment
+        // body. The diagnostic value (knowing WHICH dedupe fired) is
+        // preserved by the artifactId + reusedId — the content itself is
+        // unnecessary and the only user-content leak the rotated log
+        // was still writing.
+        log(`[comment] DEDUPED — sid=${sid ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} len=${content.length}`);
       }
-    }
-    return c.json({ comment });
+      // #169 (Fix 2) — the "↻ None of these fit" send-back posts a
+      // question-intent comment tagged sectionId "decision_revision_requested".
+      // That gesture genuinely rejects each LISTED option (the human is asking
+      // for a different SET), so it's the explicit per-option rejection signal:
+      // arm the gate for each option (reason = the send-back text) so
+      // re-proposing one of THEM surfaces the rejection — while a follow-up
+      // present_options for the SAME question with NEW options sails through
+      // (per-option keys are `${context}: ${title}`; new titles don't collide).
+      // This is deliberately the per-option path; the whole-card
+      // status:"rejected" gesture records ONE framing entry instead (status
+      // route above). Recorded before the comment (idempotent on description);
+      // broadcast only for a genuinely NEW comment — never a dedupe replay.
+      // #408 review — the rejections themselves were recorded BEFORE the
+      // comment (above); only their ledger_write broadcasts wait for a genuinely
+      // new comment, so a dedupe replay stays silent.
+      if (isNew) {
+        for (const event of sendBackLedgerEvents) broadcast(event, sid);
+      }
+      // R1: Q3's horizon-check trigger fires as a question-intent comment
+      // with sectionId "horizon_check:request:<horizon>". The broadcast
+      // interceptor doesn't see sectionId (feedback_received is trimmed),
+      // so we count it inline here.
+      if (projectRoot) {
+        const sectionId = (target as { sectionId?: unknown } | undefined)?.sectionId;
+        if (typeof sectionId === "string" && sectionId.startsWith("horizon_check:request:")) {
+          try { recordMetricEvent(projectRoot, { kind: "horizon_check_requested" }); } catch {}
+        }
+      }
+      return c.json({ comment });
+    });
   });
 
   // #176 (Option A) — the BROWSER reports a Mermaid diagram that genuinely
