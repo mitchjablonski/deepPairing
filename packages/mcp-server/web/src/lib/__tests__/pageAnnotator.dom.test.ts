@@ -6,7 +6,7 @@
  * only and reported back, messages from anyone but the parent ignored).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { HtmlAnchorSchema } from "@deeppairing/shared";
+import { HtmlAnchorSchema, PAGE_CSP_DIRECTIVES, PAGE_ERROR_CLASSES, PAGE_RESOURCE_KEYS } from "@deeppairing/shared";
 import { ANNOTATOR_CORE_SOURCE, ANNOTATOR_MAIN_SOURCE, ANNOTATOR_SCRIPT } from "../pageAnnotator";
 import { clippedText as diffClippedText, TEXT_SKIP_SELECTOR } from "../pageVersionDiff";
 
@@ -317,6 +317,258 @@ describe("annotator main — event wiring", () => {
     expect(pins[0]!.textContent).toBe("1");
     // Nothing the parent sent was parsed as HTML.
     expect(document.querySelector("img")).toBeNull();
+  });
+
+  // --- #714 gap 7: pin colours, clickable badges, hover previews ----------
+  const pinsMsg = (extra: Record<string, unknown> = {}) =>
+    new MessageEvent("message", {
+      data: {
+        dp: "pins",
+        anchors: [
+          { kind: "element", locator: "#title", quote: "Cache invalidation" },
+          { kind: "element", locator: ".intro", quote: "You can pick one of three strategies for the session cache." },
+        ],
+        states: ["open", "addressed"],
+        ids: ["c_open", "c_done"],
+        ...extra,
+      },
+      source: window,
+    });
+  const badges = () => Array.from(document.querySelectorAll("dp-annotator-badge")) as HTMLElement[];
+  /** Real browsers hit-test: give the DOM an elementsFromPoint (plain page
+   *  text under every badge unless `under` says otherwise) and on-screen
+   *  boxes. Without it badges stay inert (the conservative fallback). */
+  function hitTesting(under: () => Element = () => document.body) {
+    (document as any).elementsFromPoint = () => [under()];
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 40, y: 40, left: 40, top: 40, right: 58, bottom: 58, width: 18, height: 18, toJSON: () => ({}),
+    } as DOMRect);
+  }
+  afterEach(() => {
+    delete (document as any).elementsFromPoint;
+  });
+
+  it("colours each pin by the state the parent sent: open amber, addressed greyed", () => {
+    window.dispatchEvent(pinsMsg());
+    const pins = Array.from(document.querySelectorAll("dp-annotator-pin")) as HTMLElement[];
+    expect(pins.map((p) => p.getAttribute("data-dp-pin-state"))).toEqual(["open", "addressed"]);
+    expect(pins[0]!.style.getPropertyValue("outline")).toContain("solid");
+    expect(pins[1]!.style.getPropertyValue("outline")).toContain("dashed");
+    expect(badges()[0]!.style.getPropertyValue("background")).not.toBe(badges()[1]!.style.getPropertyValue("background"));
+    // An unknown state reads as open; the layer and pin outlines never take clicks.
+    window.dispatchEvent(pinsMsg({ states: ["bogus", 7] }));
+    expect(Array.from(document.querySelectorAll("dp-annotator-pin")).map((p) => p.getAttribute("data-dp-pin-state"))).toEqual(["open", "open"]);
+    expect((document.querySelector("dp-annotator-layer") as HTMLElement).style.getPropertyValue("pointer-events")).toBe("none");
+    for (const p of document.querySelectorAll("dp-annotator-pin")) expect((p as HTMLElement).style.getPropertyValue("pointer-events")).toBe("none");
+  });
+
+  it("a click on a pin's badge posts {dp:'pin-click', id} and no anchor; the page under it is untouched", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    const pageClick = vi.fn();
+    document.body.addEventListener("click", pageClick);
+    const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+    badges()[1]!.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([{ dp: "pin-click", id: "c_done" }]);
+    expect(anchors()).toEqual([]);
+    expect(pageClick).not.toHaveBeenCalled();
+    document.body.removeEventListener("click", pageClick);
+  });
+
+  it("badges are hit targets only while pointing is on and page scripts aren't running", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["auto", "auto"]);
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: false, scripts: false }, source: window }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: true }, source: window }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    // Even a click that still lands on a badge (e.g. dispatched) posts nothing then.
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: false }, source: window }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["auto", "auto"]);
+  });
+
+  it("a pin without a valid id gets no hit target", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg({ ids: ["", "x".repeat(129)] }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+  });
+
+  it("an authored element named like our badge is never treated as a pin", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    const fake = document.createElement("dp-annotator-badge");
+    fake.setAttribute("data-dp-annotator", "");
+    fake.textContent = "1";
+    document.body.appendChild(fake);
+    fake.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+  });
+
+  it("hovering a badge posts {dp:'pin-hover', id, x, y}; moving off posts id:null (never comment text)", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    badges()[0]!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 3, clientY: 4 }));
+    const hovers = () => posted.filter((m) => m?.dp === "pin-hover");
+    expect(hovers()).toEqual([{ dp: "pin-hover", id: "c_open", x: 40, y: 58 }]);
+    // Moving within the same badge doesn't re-post.
+    badges()[0]!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(hovers()).toHaveLength(1);
+    document.getElementById("title")!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(hovers().pop()).toEqual({ dp: "pin-hover", id: null });
+  });
+
+  it("Cmd/Ctrl-click on a badge passes through (no pin click); holding the key makes badges inert", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Control", ctrlKey: true }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Control" }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["auto", "auto"]);
+    // A pointer move with the modifier held does the same.
+    document.getElementById("title")!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, metaKey: true }));
+    expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+  });
+
+  /** Real-ish geometry: every page element has `anchor`'s box; a badge's box
+   *  follows its pin's and its own left/top (so placement is measurable);
+   *  `under(x, y)` is what the page has at a point. */
+  function geometry(anchor: { left: number; top: number; width: number; height: number }, under: (x: number, y: number) => Element) {
+    (document as any).elementsFromPoint = (x: number, y: number) => [under(x, y)];
+    const box = (left: number, top: number, width: number, height: number) =>
+      ({ x: left, y: top, left, top, width, height, right: left + width, bottom: top + height, toJSON: () => ({}) }) as DOMRect;
+    return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.localName === "dp-annotator-badge") {
+        const pin = this.parentElement as HTMLElement;
+        const px = (el: HTMLElement, k: string) => parseFloat(el.style.getPropertyValue(k)) || 0;
+        return box(px(pin, "left") + px(this, "left"), px(pin, "top") + px(this, "top"), 18, 18);
+      }
+      return box(anchor.left, anchor.top, anchor.width, anchor.height);
+    });
+  }
+  const badgeBox = () => badges()[0]!.getBoundingClientRect();
+  const onePin = () => window.dispatchEvent(new MessageEvent("message", {
+    data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }], states: ["open"], ids: ["c_a"] },
+    source: window,
+  }));
+
+  it("the badge sits fully outside the anchored element's top-left corner when that is on screen", () => {
+    const rect = geometry({ left: 100, top: 100, width: 300, height: 40 }, () => document.body);
+    try {
+      window.dispatchEvent(pinsMsg());
+      expect(badges()[0]!.style.getPropertyValue("left")).toBe("-20px");
+      expect(badges()[0]!.style.getPropertyValue("top")).toBe("-20px");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it.each([
+    ["a full-bleed anchor at x=0", { left: 0, top: 100, width: 1024, height: 40 }],
+    ["an anchor at the common 8px margin", { left: 8, top: 100, width: 200, height: 40 }],
+    ["an anchor flush with the right edge", { left: 824, top: 100, width: 200, height: 40 }],
+    ["an anchor at the document's top edge", { left: 0, top: 0, width: 1024, height: 40 }],
+  ])("the badge stays fully on screen (and live over plain text) for %s", (_label, anchor) => {
+    const rect = geometry(anchor, () => document.body);
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("an edge badge skips a spot over a native control for one clear of it", () => {
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"field\">");
+    const field = document.getElementById("field")!;
+    // A control just right of the anchor: the outside-right spot is taken.
+    const rect = geometry({ left: 8, top: 100, width: 200, height: 40 }, (x) => (x >= 200 ? field : document.body));
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThan(200);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("when every on-screen spot covers a native control, the badge stays visible but inert", () => {
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"field\">");
+    const field = document.getElementById("field")!;
+    const rect = geometry({ left: 0, top: 100, width: 300, height: 40 }, () => field);
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+      badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("without hit-testing (no elementsFromPoint) every badge stays inert: what lies under it is unknown", () => {
+    window.dispatchEvent(pinsMsg());
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+  });
+
+  it("with hit-testing, a badge over a native control (here an input) stays inert; over plain text it is live", () => {
+    document.body.innerHTML = "<p id=\"a\">Alpha</p><input id=\"field\"><p id=\"b\">Beta</p>";
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 40, y: 40, left: 40, top: 40, right: 58, bottom: 58, width: 18, height: 18, toJSON: () => ({}),
+    } as DOMRect);
+    let under: Element = document.getElementById("field")!;
+    (document as any).elementsFromPoint = () => [under];
+    try {
+      const send = () => window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { dp: "pins", anchors: [{ kind: "element", locator: "#a", quote: "Alpha" }], states: ["open"], ids: ["c_a"] },
+          source: window,
+        }),
+      );
+      send();
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+      under = document.getElementById("b")!;
+      send();
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      delete (document as any).elementsFromPoint;
+      rect.mockRestore();
+    }
+  });
+
+  it("{dp:'focus', anchor, block:'end'} scrolls the frame itself so the spot sits ~24px above its bottom edge", () => {
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { dp: "focus", anchor: { kind: "element", locator: "#title", quote: "Cache invalidation" }, block: "end" },
+        source: window,
+      }),
+    );
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    // Bottom of the spot lands 24px above the frame's bottom edge.
+    const r = document.getElementById("title")!.getBoundingClientRect();
+    expect(scrollTo).toHaveBeenLastCalledWith(0, Math.max(0, r.bottom - (window.innerHeight - 24)));
+    // A bogus anchor does nothing.
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "focus", anchor: "nope", block: "end" }, source: window }));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
   it("re-resolves after the page changes: a removed target reports not found, without a new pins message", async () => {
@@ -1213,3 +1465,338 @@ describe("ask attributes: annotator selector vs shared constants (#714 gap 5)", 
     expect(core.ASK_SEL).toBe(`[${PAGE_DECISION_ATTR}], [${PAGE_QUESTION_ATTR}]`);
   });
 });
+
+// --- #714 gap 10: anchors carry section context ------------------------------
+
+describe("annotator core — section context and element affixes (#714 gap 10)", () => {
+  type CtxCore = Core & { sectionFor(el: Element): { heading?: string; id?: string } | null };
+  const ctxCore = () => makeCore() as CtxCore;
+
+  it("an element anchor carries prefix, suffix and its section (heading text + the heading's id)", () => {
+    const core = ctxCore();
+    const second = document.querySelectorAll("section p")[1]!;
+    const a = core.anchorForTarget(second)!;
+    expect(a).toMatchObject({ kind: "element", quote: "Second bold paragraph." });
+    // The page text just outside the element, as the annotator reads it
+    // (adjacent blocks with no whitespace between them run together, exactly
+    // as for a text anchor's context), up to 32 characters each side.
+    expect(a.prefix).toBe("e session cache.First paragraph.");
+    expect(String(a.suffix).startsWith("StrategyStaleness")).toBe(true);
+    expect(a.prefix.length).toBeLessThanOrEqual(32);
+    expect(a.suffix.length).toBeLessThanOrEqual(32);
+    expect(a.section).toEqual({ heading: "Cache invalidation", id: "title" });
+    expect(HtmlAnchorSchema.safeParse(a).success).toBe(true);
+  });
+
+  it("cell, node, link and text anchors carry section context too, and all still parse", () => {
+    const core = ctxCore();
+    const cell = core.anchorForTarget(document.querySelectorAll("tbody td")[1]!)!;
+    expect(cell).toMatchObject({ kind: "cell", table: { row: "TTL expiry", col: "Staleness" }, section: { heading: "Cache invalidation" } });
+    expect(cell.prefix).toMatch(/TTL expiry$/);
+    expect(cell.suffix).toMatch(/^Write-through purge/);
+    const node = core.anchorForTarget(document.querySelector("g.node text")!)!;
+    expect(node).toMatchObject({ kind: "diagram-node", nodeId: "AuthGate", section: { heading: "Cache invalidation" } });
+    const link = core.anchorForTarget(document.getElementById("rfc")!)!;
+    // The link's own id is its nearest ancestor-or-self id.
+    expect(link).toMatchObject({ kind: "link", section: { heading: "Cache invalidation", id: "rfc" } });
+    const intro = document.querySelector(".intro")!.firstChild!;
+    const r = document.createRange();
+    r.setStart(intro, 8);
+    r.setEnd(intro, 12);
+    const text = core.textAnchor(r)!;
+    expect(text.section).toEqual({ heading: "Cache invalidation", id: "title" });
+    for (const a of [cell, node, link, text]) expect(HtmlAnchorSchema.safeParse(a).success).toBe(true);
+  });
+
+  it("names the section by the nearest preceding heading; a page-wide wrapper id yields to the heading's own id", () => {
+    document.body.innerHTML =
+      '<main id="app"><h2 id="rollout">Rollout</h2><div><p id="p1x">Step one</p><p class="a">Plain</p></div>' +
+      '<h2>Risks</h2><p class="b">Step two</p>' +
+      '<section id="faq"><h3>FAQ</h3><p>Q?</p></section></main>';
+    const core = ctxCore();
+    expect(core.sectionFor(document.querySelector(".a")!)).toEqual({ heading: "Rollout", id: "rollout" });
+    // No heading id in the Risks section: the nearest ancestor id stands.
+    expect(core.sectionFor(document.querySelector(".b")!)).toEqual({ heading: "Risks", id: "app" });
+    // A clicked container is named by the first heading inside it and its own id.
+    expect(core.sectionFor(document.getElementById("faq")!)).toEqual({ heading: "FAQ", id: "faq" });
+    // An element with its own id is the most specific name.
+    expect(core.sectionFor(document.getElementById("p1x")!)).toEqual({ heading: "Rollout", id: "p1x" });
+  });
+
+  it("caps the heading at 120 characters, skips an over-long id, and returns null with no heading or id", () => {
+    const long = "H".repeat(300);
+    document.body.innerHTML = `<h4 id="${"x".repeat(201)}">${long}</h4><p class="t">text</p>`;
+    const core = ctxCore();
+    expect(core.sectionFor(document.querySelector(".t")!)).toEqual({ heading: "H".repeat(120) });
+    document.body.innerHTML = '<p class="t">No headings, no ids</p>';
+    expect(core.sectionFor(document.querySelector(".t")!)).toBeNull();
+    const a = core.anchorForTarget(document.querySelector(".t")!)!;
+    expect(a.section).toBeUndefined();
+  });
+
+  it("re-finds an id-less element by its saved prefix after the nth-of-type locator drifts", () => {
+    document.body.innerHTML = '<h2 id="a">Alpha</h2><p>Same text</p><h2 id="b">Beta</h2><p>Same text</p>';
+    const core = ctxCore();
+    const target = document.querySelectorAll("p")[1]!;
+    const a = core.anchorForTarget(target)!;
+    expect(a.locator).toBe("body > p:nth-of-type(2)");
+    expect(a.prefix).toBe("AlphaSame textBeta");
+    // A new first paragraph shifts nth-of-type: the old locator now hits the
+    // FIRST "Same text", but the saved context still names the right one.
+    document.body.insertAdjacentHTML("afterbegin", "<p>New intro</p>");
+    expect(document.querySelector(a.locator)).not.toBe(target);
+    expect(core.findAnchor(a)?.el).toBe(target);
+    // Without the new context (an anchor saved before gap 10) the drifted
+    // locator wins, exactly as before: existing scoring is unchanged.
+    const legacy = { kind: "element", locator: a.locator, quote: a.quote };
+    expect(core.findAnchor(legacy)?.el).toBe(document.querySelectorAll("p")[1]);
+  });
+
+  it("REVIEW: a tie goes to the locator's element only when its context matches too", () => {
+    document.body.innerHTML = '<h2 id="a">X</h2><div>Card</div><h2 id="b">X</h2><div>Card</div>';
+    const core = ctxCore();
+    const cards = document.querySelectorAll("div");
+    // Card A: locator +1, prefix "X" +2 = 3. Card B: prefix "X" +2, section b +1 = 3.
+    // Without a saved section the matching-context locator takes the tie.
+    expect(core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card" })?.el).toBe(cards[0]);
+  });
+
+  it("REVIEW: after a section reorder the stale locator loses the tie to the candidate in the saved section", () => {
+    // v1: the card was in section "a", first on the page. v2: the sections swapped
+    // places with the same heading text and the same surrounding text, so the old
+    // locator now points at section b's card. Both cards score 5 (locator+prefix+
+    // suffix vs prefix+suffix+section); the saved section must decide, not the locator.
+    document.body.innerHTML =
+      '<h2 id="b">X</h2><div>Card</div><p>end</p><h2 id="a">X</h2><div>Card</div><p>end</p>';
+    const core = ctxCore();
+    const cards = document.querySelectorAll("div");
+    const anchor = { kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "X", suffix: "end", section: { id: "a" } };
+    expect(core.findAnchor(anchor)?.el).toBe(cards[1]);
+    // The locator still wins when it IS in the saved section.
+    expect(core.findAnchor({ ...anchor, section: { id: "b" } })?.el).toBe(cards[0]);
+    // Two in-section candidates tied with a stale locator: not found, never a guess.
+    document.body.innerHTML =
+      '<h2 id="b">X</h2><div>Card</div><p>end</p><h2 id="a">X</h2><div>Card</div><p>end</p><h3>X</h3><section id="a"><div>Card</div></section><p>end</p>';
+    expect(core.findAnchor(anchor)).toBeNull();
+  });
+
+  it("REVIEW: a moved element is not found rather than pinned on the element now at its old locator", () => {
+    document.body.innerHTML = '<h2 id="s">S</h2><div>Card</div><h2 id="t">T</h2><p>P</p><div>Card</div>';
+    const core = ctxCore();
+    // The true element (second card) scores prefix "P" +2. The card now at the
+    // old locator scores locator +1 and section s +1 = 2, without matching context.
+    expect(core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "P", section: { id: "s" } })).toBeNull();
+  });
+
+  it("uses section.id to break a tie between equal text in different sections; without it a tie stays not found", () => {
+    document.body.innerHTML = '<h2 id="a">Alpha</h2><p>Same text</p><h2 id="b">Beta</h2><p>Same text</p>';
+    const core = ctxCore();
+    const base = { kind: "element", locator: "#gone", quote: "Same text" };
+    expect(core.findAnchor(base)).toBeNull();
+    expect(core.findAnchor({ ...base, section: { id: "b" } })?.el).toBe(document.querySelectorAll("p")[1]);
+    expect(core.findAnchor({ ...base, section: { id: "a" } })?.el).toBe(document.querySelectorAll("p")[0]);
+  });
+});
+
+// --- #714 gap 12: render diagnostics ------------------------------------------
+
+describe("annotator main — render diagnostics (#714 gap 12)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    posted = [];
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+  });
+  afterEach(() => {
+    uninstall();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const diagnostics = () => posted.filter((m) => m?.dp === "diagnostics");
+  const scriptError = (message: string) => window.dispatchEvent(new ErrorEvent("error", { message }));
+  const cspViolation = (directive: string) => {
+    const ev = new Event("securitypolicyviolation", { bubbles: true }) as Event & Record<string, unknown>;
+    Object.defineProperty(ev, "effectiveDirective", { value: directive });
+    document.dispatchEvent(ev);
+  };
+
+  it("REVIEW: ready and every diagnostics report carry this document's instance id, distinct per document", () => {
+    if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+    const ready = posted.find((m) => m?.dp === "ready");
+    expect(ready.doc).toMatch(/^[0-9a-f]{32}$/);
+    scriptError("TypeError: x");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics().at(-1).doc).toBe(ready.doc);
+    // Another document (a reload): another id.
+    posted.length = 0;
+    const second = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+    try {
+      if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+      const again = posted.find((m) => m?.dp === "ready");
+      expect(again.doc).toMatch(/^[0-9a-f]{32}$/);
+      expect(again.doc).not.toBe(ready.doc);
+    } finally {
+      second();
+    }
+  });
+
+  it("REVIEW: a one-off error before ready is held until ready, then sent as the full snapshot right after it", () => {
+    uninstall();
+    posted.length = 0;
+    Object.defineProperty(document, "readyState", { get: () => "loading", configurable: true });
+    try {
+      uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+      scriptError("TypeError: early");
+      vi.advanceTimersByTime(1000);
+      // Nothing is published before ready (the parent has nothing to bind it to).
+      expect(posted.filter((m) => m?.dp === "ready" || m?.dp === "diagnostics")).toEqual([]);
+      window.dispatchEvent(new Event("load"));
+      const seq = posted.filter((m) => m?.dp === "ready" || m?.dp === "diagnostics").map((m) => m.dp);
+      expect(seq).toEqual(["ready", "diagnostics"]);
+      expect(diagnostics()[0].scriptErrors.count).toBe(1);
+    } finally {
+      delete (document as any).readyState;
+    }
+  });
+
+  it("REVIEW: an injected document id is used on ready and diagnostics", () => {
+    uninstall();
+    posted.length = 0;
+    const doc = "00112233445566778899aabbccddeeff";
+    uninstall = new Function("document", "window", "parent", "core", "DP_DOC", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore(), doc) as () => void;
+    if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+    expect(posted.find((m) => m?.dp === "ready").doc).toBe(doc);
+    scriptError("TypeError: x");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics().at(-1).doc).toBe(doc);
+  });
+
+  it("posts nothing on a clean page", () => {
+    vi.advanceTimersByTime(1000);
+    expect(diagnostics()).toEqual([]);
+  });
+
+  it("counts script errors, rejections, failed resources (by tag + attribute) and CSP blocks (by directive), redacted", () => {
+    scriptError("TypeError: x is undefined at https://user:secret@cdn.example.com/a.js?token=abc");
+    scriptError("TypeError: x is undefined at https://user:secret@cdn.example.com/a.js?token=abc");
+    scriptError("ReferenceError: y is not defined");
+    const rej = new Event("unhandledrejection") as Event & { reason?: unknown };
+    rej.reason = new Error("fetch failed for //api.example.com/v1?key=k data:text/plain;base64,QUJD");
+    window.dispatchEvent(rej);
+    document.body.insertAdjacentHTML("beforeend", '<img id="i1" src="shot.png"><img id="i2" srcset="a.png 1x"><video id="v" poster="p.png"></video>');
+    for (const id of ["i1", "i2", "v"]) document.getElementById(id)!.dispatchEvent(new Event("error"));
+    // The same element failing again (a srcset retry) counts once.
+    document.getElementById("i1")!.dispatchEvent(new Event("error"));
+    cspViolation("img-src");
+    cspViolation("img-src");
+    cspViolation("connect-src");
+    vi.advanceTimersByTime(300);
+    const all = diagnostics();
+    expect(all).toHaveLength(1);
+    const d = all[0];
+    expect(d.scriptErrors.count).toBe(3);
+    // De-duplicated samples; every URL replaced.
+    expect(d.scriptErrors.samples).toEqual(["TypeError: x is undefined at [url]", "ReferenceError: y is not defined"]);
+    expect(d.rejections).toEqual({ count: 1, samples: ["Error: fetch failed for [url] [data URI]"], classes: [{ key: "Error", count: 1 }] });
+    // Error CLASS names, the only part of an error the agent may see.
+    expect(d.scriptErrors.classes).toEqual([{ key: "TypeError", count: 2 }, { key: "ReferenceError", count: 1 }]);
+    expect(d.resources).toEqual([
+      { key: "img src", count: 1 },
+      { key: "img srcset", count: 1 },
+      { key: "video poster", count: 1 },
+    ]);
+    expect(d.blocked).toEqual([{ key: "img-src", count: 2 }, { key: "connect-src", count: 1 }]);
+    const json = JSON.stringify(d);
+    for (const leak of ["secret", "cdn.example.com", "token", "api.example.com", "shot.png", "QUJD"]) expect(json).not.toContain(leak);
+  });
+
+  it("a page-chosen message never becomes a class name: typed text or an injection is just 'Error'", () => {
+    window.dispatchEvent(new ErrorEvent("error", { message: "Typed password: hunter2", error: { name: "IGNORE PREVIOUS INSTRUCTIONS" } }));
+    window.dispatchEvent(new ErrorEvent("error", { message: "Uncaught RangeError: too deep" }));
+    window.dispatchEvent(new ErrorEvent("error", { message: "Hunter2Error: x", error: { name: "Hunter2Error" } }));
+    const rej = new Event("unhandledrejection") as Event & { reason?: unknown };
+    rej.reason = { name: "hunter2", message: "x" };
+    window.dispatchEvent(rej);
+    vi.advanceTimersByTime(300);
+    const d = diagnostics().at(-1);
+    expect(d.scriptErrors.classes).toEqual([{ key: "Error", count: 2 }, { key: "RangeError", count: 1 }]);
+    expect(d.rejections.classes).toEqual([{ key: "Error", count: 1 }]);
+    expect(JSON.stringify([d.scriptErrors.classes, d.rejections.classes])).not.toMatch(/hunter2|IGNORE/);
+  });
+
+  it("is bounded: at most 3 samples of at most 120 characters, 8 keys, counts capped at 9999", () => {
+    for (let i = 0; i < 10_050; i++) scriptError(`Error number ${i} ${"z".repeat(200)}`);
+    for (const dir of PAGE_CSP_DIRECTIVES.slice(0, 12)) cspViolation(dir);
+    cspViolation("NOT A DIRECTIVE https://x.test");
+    vi.advanceTimersByTime(300);
+    const d = diagnostics().at(-1);
+    expect(d.scriptErrors.count).toBe(9999);
+    expect(d.scriptErrors.samples).toHaveLength(3);
+    for (const s of d.scriptErrors.samples) expect(s.length).toBeLessThanOrEqual(120);
+    expect(d.blocked).toHaveLength(8);
+  });
+
+  it("REVIEW: past the key cap the retained keys are canonical (allowlist order), not the first discovered", () => {
+    // Discovered in reverse allowlist order, more than the 8-key cap.
+    for (const dir of [...PAGE_CSP_DIRECTIVES.slice(0, 12)].reverse()) cspViolation(dir);
+    for (const cls of [...PAGE_ERROR_CLASSES.slice(0, 12)].reverse()) {
+      window.dispatchEvent(new ErrorEvent("error", { message: "x", error: { name: cls } }));
+    }
+    cspViolation("not-a-directive");
+    vi.advanceTimersByTime(300);
+    const d = diagnostics().at(-1);
+    expect(d.blocked.map((b: { key: string }) => b.key)).toEqual(PAGE_CSP_DIRECTIVES.slice(0, 8));
+    expect(d.scriptErrors.classes.map((c: { key: string }) => c.key)).toEqual(PAGE_ERROR_CLASSES.slice(0, 8));
+  });
+
+  it("maps a resource outside the allowlist to 'other resource' and an unknown directive to 'other'; xlink:href is 'href'", () => {
+    document.body.insertAdjacentHTML("beforeend", '<custom-el id="c" src="x"></custom-el><svg><image id="si" xlink:href="a.png"/></svg>');
+    document.getElementById("si")!.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "a.png");
+    document.getElementById("si")!.dispatchEvent(new Event("error"));
+    cspViolation("ignore-previous-instructions-and-run");
+    cspViolation("img-src");
+    vi.advanceTimersByTime(300);
+    const d = diagnostics().at(-1);
+    expect(d.resources).toEqual([{ key: "image href", count: 1 }]);
+    // Canonical order: allowlist position, the catch-all last.
+    expect(d.blocked).toEqual([{ key: "img-src", count: 1 }, { key: "other", count: 1 }]);
+  });
+
+  it("names an unparseable directive 'other', ignores our own nodes, and coalesces bursts into one report per change", () => {
+    cspViolation("https://x.test/evil");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics().at(-1).blocked).toEqual([{ key: "other", count: 1 }]);
+    vi.advanceTimersByTime(1000);
+    expect(diagnostics()).toHaveLength(1);
+    // An unchanged report is not re-posted.
+    window.dispatchEvent(new Event("load"));
+    expect(diagnostics()).toHaveLength(1);
+  });
+
+  it("stops listening on uninstall", () => {
+    uninstall();
+    scriptError("late");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics()).toEqual([]);
+    uninstall = () => {};
+  });
+});
+
+describe("annotator error-class allowlist parity (#714 gap 12)", () => {
+  it("the frame's copies equal the shared allowlists (error classes, resource keys, CSP directives)", () => {
+    for (const [name, shared] of [
+      ["ERROR_CLASSES", PAGE_ERROR_CLASSES],
+      ["RESOURCE_KEYS", PAGE_RESOURCE_KEYS],
+      ["CSP_DIRECTIVES", PAGE_CSP_DIRECTIVES],
+    ] as const) {
+      const m = new RegExp(`var ${name} = (\\[[^\\]]*\\]);`).exec(ANNOTATOR_MAIN_SOURCE);
+      expect(m, name).not.toBeNull();
+      expect(JSON.parse(m![1]!), name).toEqual([...shared]);
+    }
+  });
+});
+

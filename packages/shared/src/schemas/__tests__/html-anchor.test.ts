@@ -113,3 +113,44 @@ describe("sanitizeHtmlAnchor — the store choke point", () => {
     expect(sanitizeHtmlAnchor(undefined)).toBeUndefined();
   });
 });
+
+describe("HtmlAnchorSchema — section context (#714 gap 10)", () => {
+  it("an anchor stored before gap 10 (no section, no element affixes) parses unchanged", () => {
+    const legacy = { kind: "element", locator: "div:nth-of-type(3)", quote: "Rollout plan", version: 2 };
+    const r = HtmlAnchorSchema.safeParse(legacy);
+    expect(r.success && r.data).toEqual(legacy);
+  });
+
+  it("accepts section {heading, id} (each optional) and prefix/suffix on element, cell, node and link anchors", () => {
+    for (const section of [{ heading: "Rollout", id: "rollout" }, { heading: "Rollout" }, { id: "rollout" }, {}]) {
+      expect(HtmlAnchorSchema.safeParse({ kind: "element", locator: "#x", quote: "q", section }).success).toBe(true);
+    }
+    const affix = { prefix: "before it", suffix: "after it", section: { heading: "Risks", id: "risks" } };
+    for (const a of [
+      { kind: "element", locator: "#x", quote: "q" },
+      cell,
+      { kind: "diagram-node", locator: "#n", quote: "A", nodeId: "A" },
+      { kind: "link", locator: "#l", quote: "the RFC", href: "https://example.com" },
+    ]) {
+      const r = HtmlAnchorSchema.safeParse({ ...a, ...affix });
+      expect(r.success && r.data.section).toEqual({ heading: "Risks", id: "risks" });
+    }
+  });
+
+  it("caps the heading at 120 and the id at 200 characters, and drops unknown section keys", () => {
+    const base = { kind: "element", locator: "#x", quote: "q" };
+    expect(HTML_ANCHOR_LIMITS.sectionHeading).toBe(120);
+    expect(HTML_ANCHOR_LIMITS.sectionId).toBe(200);
+    expect(HtmlAnchorSchema.safeParse({ ...base, section: { heading: "h".repeat(120), id: "i".repeat(200) } }).success).toBe(true);
+    expect(HtmlAnchorSchema.safeParse({ ...base, section: { heading: "h".repeat(121) } }).success).toBe(false);
+    expect(HtmlAnchorSchema.safeParse({ ...base, section: { id: "i".repeat(201) } }).success).toBe(false);
+    expect(HtmlAnchorSchema.safeParse({ ...base, section: "Rollout" }).success).toBe(false);
+    const r = HtmlAnchorSchema.safeParse({ ...base, section: { heading: "R", html: "<b>" } });
+    expect(r.success && r.data.section).toEqual({ heading: "R" });
+  });
+
+  it("the store sanitiser keeps a valid section", () => {
+    const t = sanitizeHtmlAnchor({ artifactId: "a", htmlAnchor: { kind: "element", locator: "#x", quote: "q", section: { id: "rollout" } } });
+    expect((t as any).htmlAnchor.section).toEqual({ id: "rollout" });
+  });
+});

@@ -5,16 +5,16 @@ import type { Comment, HtmlAnchor } from "@deeppairing/shared";
  * entry chunk (CommentThread) can use them without pulling in Zod.
  */
 
-/** Same spot? Used to group comments on one anchor into one thread. */
+/** Same spot? Used to group comments on one anchor into one thread. A text
+ *  anchor's prefix/suffix say WHICH occurrence of the quote it is, so they
+ *  count; on element-grain anchors they are only context (#714 gap 10 added
+ *  them), so a click on an element already commented on before then still
+ *  joins that thread. `section` is context for every kind. */
 export function sameHtmlAnchor(a: HtmlAnchor | undefined, b: HtmlAnchor | undefined): boolean {
   if (!a || !b) return false;
-  return (
-    a.kind === b.kind &&
-    a.locator === b.locator &&
-    a.quote === b.quote &&
-    (a.prefix ?? "") === (b.prefix ?? "") &&
-    (a.suffix ?? "") === (b.suffix ?? "")
-  );
+  if (a.kind !== b.kind || a.locator !== b.locator || a.quote !== b.quote) return false;
+  if (a.kind !== "text") return true;
+  return (a.prefix ?? "") === (b.prefix ?? "") && (a.suffix ?? "") === (b.suffix ?? "");
 }
 
 const KIND_LABEL: Record<HtmlAnchor["kind"], string> = {

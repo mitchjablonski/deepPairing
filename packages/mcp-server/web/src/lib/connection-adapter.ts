@@ -406,6 +406,30 @@ export class WebSocketAdapter implements ConnectionAdapter {
   }
 }
 
+/** The page's own origin (`window.origin`; `location.origin` where a DOM
+ *  shim lacks it). */
+function ownOrigin(): string {
+  if (typeof window === "undefined") return "";
+  return window.origin || window.location?.origin || "";
+}
+
+/**
+ * #727 — may a window `message` be a VS Code host message? VS Code's webview
+ * shell relays host messages with `postMessage(msg, window.origin)` from a
+ * same-origin frame, so they carry the webview's own origin. Child frames the
+ * companion creates (the Mermaid renderer, page/prototype frames) are
+ * sandboxed without allow-same-origin (origin "null") and post to the parent
+ * too; nothing but the webview's own origin may pass, or a `dp:message` from
+ * one would inject a fake daemon event. (Not `event.source === window.parent`:
+ * VS Code's preload rewrites `window.parent`.)
+ */
+export function isVSCodeHostMessage(
+  event: { origin: string },
+  selfOrigin: string = ownOrigin(),
+): boolean {
+  return selfOrigin !== "" && selfOrigin !== "null" && event.origin === selfOrigin;
+}
+
 /**
  * VS Code webview adapter — communicates via postMessage with the extension host.
  * The extension host bridges to the real WebSocket.
@@ -425,7 +449,9 @@ export class VSCodeAdapter implements ConnectionAdapter {
     if (!this.vscode) return;
 
     window.addEventListener("message", (event) => {
+      if (!isVSCodeHostMessage(event)) return;
       const msg = event.data;
+      if (!msg || typeof msg !== "object") return;
       if (msg.type === "dp:connected") {
         this.connectHandler?.();
         // Forward the initial state

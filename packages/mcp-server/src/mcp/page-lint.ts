@@ -13,6 +13,13 @@
  *    sanitizer drops it). Plain navigation links (<a href>) never warn. The
  *    warning names the tag and attribute, never the URL (it can carry
  *    credentials or signed parameters).
+ *  - relative_asset: a resource loaded by a RELATIVE path (`shot.png`,
+ *    `./img/a.svg`, `/logo.png`) on the same elements, or a stylesheet /
+ *    icon / preload <link>. Natural for a `--path` page, but the review frame
+ *    is a srcdoc document with no base URL and an `img-src data: blob:` CSP,
+ *    so nothing relative can load (#714 gap 12). Same-document `#id`
+ *    references (SVG <use href="#icon">) never warn. Names tag + attribute,
+ *    never the path.
  *  - no_headings: no <h1>-<h6> anywhere.
  *  - no_section_ids: a page over PAGE_LINT_LONG_PAGE_BYTES whose <section>s
  *    and headings carry no id at all.
@@ -30,6 +37,7 @@ export const PAGE_LINT_LONG_PAGE_BYTES = 16 * 1024;
  *  warning never refuses anything, so they live here as their own set. */
 export const PAGE_LINT_CODES = {
   external_asset: "external_asset",
+  relative_asset: "relative_asset",
   no_headings: "no_headings",
   no_section_ids: "no_section_ids",
 } as const;
@@ -38,7 +46,7 @@ export type PageLintCode = (typeof PAGE_LINT_CODES)[keyof typeof PAGE_LINT_CODES
 export interface PageLintWarning {
   code: PageLintCode;
   message: string;
-  /** external_asset: how many blocked references the page has. */
+  /** external_asset / relative_asset: how many such references the page has. */
   count?: number;
   /**
    * external_asset: where they are, grouped by tag and attribute (e.g.
@@ -92,62 +100,238 @@ function isExternal(value: string): boolean {
   return externalAt(value.toLowerCase(), 0);
 }
 
-/** How many srcset candidates ("url descriptor", comma-separated) are external. */
-function externalSrcsetCount(value: string): number {
-  let count = 0;
-  for (const candidate of value.split(",")) {
-    const url = candidate.trim().split(/\s/, 1)[0] ?? "";
-    if (url && isExternal(url)) count++;
+/**
+ * A relative URL: non-empty, not external, no scheme (data:, blob:, about:,
+ * javascript:, ...), and not a same-document `#fragment`. Linear, no regex
+ * over the whole value: only the run up to the first `:`, `/`, `?` or `#` is
+ * checked for a scheme.
+ */
+export function isRelativeUrl(value: string): boolean {
+  const v = value.trim();
+  if (!v || v.startsWith("#") || isExternal(v)) return false;
+  for (let i = 0; i < v.length; i++) {
+    const c = v[i];
+    if (c === ":") return i === 0; // "x:" is a scheme; a leading ":" is a path
+    if (c === "/" || c === "?" || c === "#") return true;
   }
-  return count;
+  return true;
 }
 
-/** CSS with every comment blanked out, by one forward indexOf walk. */
-function stripCssComments(css: string): string {
-  let out = "";
-  let i = 0;
-  while (i < css.length) {
-    const open = css.indexOf("/*", i);
-    if (open === -1) { out += css.slice(i); break; }
-    out += css.slice(i, open) + " ";
-    const close = css.indexOf("*/", open + 2);
-    if (close === -1) break; // an unterminated comment runs to the end
-    i = close + 2;
-  }
-  return out;
+/** How many srcset candidates are relative. */
+function relativeSrcsetCount(value: string): number {
+  return srcsetUrls(value).filter(isRelativeUrl).length;
 }
 
 /**
- * Count external url(...) and @import targets in CSS text, by kind. Comments
- * are skipped. `@import url(...)` counts once, as an @import. Each walk is a
- * strictly forward indexOf, so linear in the CSS length.
+ * The candidate URLs of a srcset, read as the HTML spec does: a URL runs to
+ * the next whitespace (trailing commas end the candidate), then descriptors
+ * run to the next comma. So a data: URI's own comma doesn't split it. One
+ * forward pass.
  */
-export function externalCssRefs(rawCss: string): { url: number; import: number } {
-  const lower = stripCssComments(rawCss).toLowerCase();
+function srcsetUrls(value: string): string[] {
+  const urls: string[] = [];
+  const n = value.length;
+  let i = 0;
+  while (i < n) {
+    while (i < n && (isSpace(value.charCodeAt(i)) || value[i] === ",")) i++;
+    if (i >= n) break;
+    const start = i;
+    while (i < n && !isSpace(value.charCodeAt(i))) i++;
+    let url = value.slice(start, i);
+    if (url.endsWith(",")) {
+      url = url.replace(/,+$/, "");
+    } else {
+      while (i < n && value[i] !== ",") i++; // descriptors
+    }
+    if (url) urls.push(url);
+  }
+  return urls;
+}
+
+/** How many srcset candidates are external. */
+function externalSrcsetCount(value: string): number {
+  return srcsetUrls(value).filter(isExternal).length;
+}
+
+/** CSS Syntax newline: LF, CR or FF (CRLF is a CR then an LF). */
+function isCssNewline(c: number): boolean {
+  return c === 10 || c === 13 || c === 12;
+}
+
+function isHexDigit(c: number): boolean {
+  return (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+}
+
+/** CSS name code point: letter, digit, `_`, `-` or non-ASCII. */
+function isNameChar(c: number): boolean {
+  return isAlpha(c) || (c >= 48 && c <= 57) || c === 95 || c === 45 || c >= 0x80;
+}
+
+/** `\` at `i` starts a valid CSS escape (not `\` + newline, not at the end). */
+function isEscapeAt(css: string, i: number): boolean {
+  return css.charCodeAt(i) === 0x5c && i + 1 < css.length && !isCssNewline(css.charCodeAt(i + 1));
+}
+
+/** Consume the escape at `i` (its `\` included); returns [decoded, next index]. */
+function consumeEscape(css: string, i: number): [string, number] {
+  let j = i + 1;
+  if (isHexDigit(css.charCodeAt(j))) {
+    const hexStart = j;
+    while (j < css.length && j - hexStart < 6 && isHexDigit(css.charCodeAt(j))) j++;
+    const cp = parseInt(css.slice(hexStart, j), 16);
+    if (css.charCodeAt(j) === 13 && css.charCodeAt(j + 1) === 10) j += 2;
+    else if (isSpace(css.charCodeAt(j))) j++;
+    const ok = cp > 0 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff);
+    return [ok ? String.fromCodePoint(cp) : "�", j];
+  }
+  return [css[j] ?? "", j + 1];
+}
+
+/** Consume a run of name code points / escapes from `i`; returns [name, next]. */
+function consumeName(css: string, i: number): [string, number] {
+  let name = "";
+  while (i < css.length) {
+    const c = css.charCodeAt(i);
+    if (isNameChar(c)) { name += css[i]; i++; }
+    else if (isEscapeAt(css, i)) { const [d, j] = consumeEscape(css, i); name += d; i = j; }
+    else break;
+  }
+  return [name, i];
+}
+
+/**
+ * The tokens the lint cares about, from ONE forward CSS tokenizer (a subset
+ * of CSS Syntax 3): comments, strings (ended by their quote, any CSS newline
+ * as a bad-string, or the end of input; `\` + newline continues them), whole
+ * ident / at-keyword / hash name runs (so `myurl(`, `--url(`, `#url(` are not
+ * `url(`), and `url(` function tokens with their argument (quoted or not).
+ * Every other code point is `other`. Linear: each character is visited once.
+ */
+type CssToken =
+  | { kind: "comment"; start: number; end: number }
+  | { kind: "string"; value: string }
+  | { kind: "url"; value: string }
+  | { kind: "at"; name: string }
+  | { kind: "ident" | "hash"; name: string }
+  | { kind: "space" }
+  | { kind: "other" };
+
+function consumeString(css: string, i: number): [string, number] {
+  const quote = css.charCodeAt(i);
+  let value = "";
+  i++;
+  while (i < css.length) {
+    const d = css.charCodeAt(i);
+    if (d === quote) return [value, i + 1];
+    if (isCssNewline(d)) return [value, i]; // bad-string: the newline is not consumed
+    if (d === 0x5c) {
+      if (i + 1 >= css.length) return [value, i + 1];
+      const e = css.charCodeAt(i + 1);
+      if (e === 13 && css.charCodeAt(i + 2) === 10) { i += 3; continue; } // escaped CRLF
+      if (isCssNewline(e)) { i += 2; continue; } // escaped newline continues the string
+      const [dec, j] = consumeEscape(css, i);
+      value += dec;
+      i = j;
+      continue;
+    }
+    value += css[i];
+    i++;
+  }
+  return [value, i];
+}
+
+function scanCss(css: string, onToken: (t: CssToken) => void): void {
+  const n = css.length;
+  let i = 0;
+  while (i < n) {
+    const c = css.charCodeAt(i);
+    if (c === 0x2f && css.charCodeAt(i + 1) === 0x2a) {
+      const close = css.indexOf("*/", i + 2);
+      const end = close === -1 ? n : close + 2; // an unterminated comment runs to the end
+      onToken({ kind: "comment", start: i, end });
+      i = end;
+    } else if (c === 0x22 || c === 0x27) {
+      const [value, j] = consumeString(css, i);
+      onToken({ kind: "string", value });
+      i = j;
+    } else if (isSpace(c)) {
+      while (i < n && isSpace(css.charCodeAt(i))) i++;
+      onToken({ kind: "space" });
+    } else if (c === 0x40 /* @ */ || c === 0x23 /* # */) {
+      const [name, j] = consumeName(css, i + 1);
+      onToken(name ? { kind: c === 0x40 ? "at" : "hash", name: name.toLowerCase() } : { kind: "other" });
+      i = name ? j : i + 1;
+    } else if (isNameChar(c) || isEscapeAt(css, i)) {
+      const [rawName, j] = consumeName(css, i);
+      const name = rawName.toLowerCase();
+      if (name === "url" && css.charCodeAt(j) === 0x28 /* ( */) {
+        let k = j + 1;
+        while (k < n && isSpace(css.charCodeAt(k))) k++;
+        const q = css.charCodeAt(k);
+        if (q === 0x22 || q === 0x27) {
+          // url( "..." ): a function whose argument is the string token.
+          const [value, m] = consumeString(css, k);
+          onToken({ kind: "url", value });
+          i = m;
+        } else {
+          // An unquoted url token runs to its `)` (escapes honoured).
+          let value = "";
+          while (k < n && css.charCodeAt(k) !== 0x29) {
+            if (isEscapeAt(css, k)) { const [d, m] = consumeEscape(css, k); value += d; k = m; }
+            else { value += css[k]; k++; }
+          }
+          onToken({ kind: "url", value: value.trim() });
+          i = Math.min(k + 1, n);
+        }
+      } else {
+        onToken({ kind: "ident", name });
+        i = j;
+      }
+    } else if (c === 0x5c /* \ */) {
+      i += 2; // `\` + newline (an invalid escape) is a delim; never opens anything
+    } else {
+      onToken({ kind: "other" });
+      i++;
+    }
+  }
+}
+
+/**
+ * CSS with every comment blanked out (one space each), from the same
+ * tokenizer as the reference count: a `/*` inside a quoted string or a url()
+ * is literal text, so `content:"/*"` cannot hide the rest of the stylesheet.
+ */
+export function stripCssComments(css: string): string {
+  let out = "";
+  let from = 0;
+  scanCss(css, (t) => {
+    if (t.kind !== "comment") return;
+    out += css.slice(from, t.start) + " ";
+    from = t.end;
+  });
+  return out + css.slice(from);
+}
+
+/**
+ * Count external url(...) and @import targets in CSS text, by kind, from the
+ * tokenizer: comments and quoted text that is not a url()/@import argument
+ * never count. `@import url(...)` counts once, as an @import.
+ */
+export function externalCssRefs(css: string): { url: number; import: number } {
   const counts = { url: 0, import: 0 };
-  /** Index of the URL after optional spaces and one optional quote. */
-  const target = (from: number): number => {
-    let i = from;
-    while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
-    if (lower[i] === "\"" || lower[i] === "'") i++;
-    return i;
-  };
-  let at = lower.indexOf("@import");
-  while (at !== -1) {
-    let i = target(at + 7);
-    if (lower.startsWith("url(", i)) i = target(i + 4);
-    if (externalAt(lower, i)) counts.import++;
-    at = lower.indexOf("@import", at + 7);
-  }
-  at = lower.indexOf("url(");
-  while (at !== -1) {
-    // Skip a url() that is the target of an @import (already counted).
-    let k = at - 1;
-    while (k >= 0 && isSpace(lower.charCodeAt(k))) k--;
-    const isImportTarget = k >= 6 && lower.startsWith("@import", k - 6);
-    if (!isImportTarget && externalAt(lower, target(at + 4))) counts.url++;
-    at = lower.indexOf("url(", at + 4);
-  }
+  let afterImport = false;
+  scanCss(css, (t) => {
+    if (t.kind === "space" || t.kind === "comment") return;
+    if (afterImport) {
+      afterImport = false;
+      if (t.kind === "string" || t.kind === "url") {
+        if (isExternal(t.value)) counts.import++;
+        return;
+      }
+    }
+    if (t.kind === "at" && t.name === "import") afterImport = true;
+    else if (t.kind === "url" && isExternal(t.value)) counts.url++;
+  });
   return counts;
 }
 
@@ -228,6 +412,9 @@ export function lintPage(html: string): PageLintWarning[] {
     add(`CSS url() in ${where}`, refs.url);
     add(`CSS @import in ${where}`, refs.import);
   };
+  // Same shape for relative paths (#714 gap 12).
+  const relative = new Map<string, number>();
+  const addRelative = (source: string, count = 1) => { if (count > 0) relative.set(source, (relative.get(source) ?? 0) + count); };
   let headings = 0;
   let sectionIds = 0;
 
@@ -267,14 +454,18 @@ export function lintPage(html: string): PageLintWarning[] {
       for (const attr of resourceAttrs) {
         const value = tag.attrs[attr];
         if (value === undefined) continue;
-        if (attr === "srcset") add(`${tag.name} srcset`, externalSrcsetCount(value));
-        else if (isExternal(value)) add(`${tag.name} ${attr}`);
+        if (attr === "srcset") {
+          add(`${tag.name} srcset`, externalSrcsetCount(value));
+          addRelative(`${tag.name} srcset`, relativeSrcsetCount(value));
+        } else if (isExternal(value)) add(`${tag.name} ${attr}`);
+        else if (isRelativeUrl(value)) addRelative(`${tag.name} ${attr}`);
       }
     }
-    if (tag.name === "link" && tag.attrs.href !== undefined && isExternal(tag.attrs.href)) {
+    if (tag.name === "link" && tag.attrs.href !== undefined) {
       const rels = (tag.attrs.rel ?? "").toLowerCase().split(/\s+/);
       const kind = ["stylesheet", "modulepreload", "preload", "icon"].find((r) => rels.includes(r));
-      if (kind) add(`link href (${kind})`);
+      if (kind && isExternal(tag.attrs.href)) add(`link href (${kind})`);
+      else if (kind && isRelativeUrl(tag.attrs.href)) addRelative(`link href (${kind})`);
     }
     if (tag.attrs.style) addCss(tag.attrs.style, "a style attribute");
 
@@ -299,6 +490,19 @@ export function lintPage(html: string): PageLintWarning[] {
         `${total} external asset reference${total === 1 ? "" : "s"} will not load (the page has no network): ` +
         `${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. ` +
         "Inline images and fonts as data: URIs and styles and scripts as inline <style>/<script>; video, audio, iframes and objects won't load at all.",
+    });
+  }
+  if (relative.size > 0) {
+    const sources = [...relative].map(([source, count]) => ({ source, count }));
+    const total = sources.reduce((sum, s) => sum + s.count, 0);
+    warnings.push({
+      code: PAGE_LINT_CODES.relative_asset,
+      count: total,
+      sources,
+      message:
+        `${total} relative asset path${total === 1 ? "" : "s"} won't load in the review frame: ` +
+        `${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. ` +
+        "The page renders from a document with no base URL, so inline images and fonts as data: URIs and styles as inline <style>.",
     });
   }
   if (headings === 0) {

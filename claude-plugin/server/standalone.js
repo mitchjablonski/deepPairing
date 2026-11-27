@@ -22470,7 +22470,11 @@ var HTML_ANCHOR_LIMITS = {
   affix: 32,
   header: 200,
   nodeId: 200,
-  href: 512
+  href: 512,
+  /** #714 gap 10 — the nearest preceding heading's text. */
+  sectionHeading: 120,
+  /** #714 gap 10 — the nearest ancestor (or section heading) id. */
+  sectionId: 200
 };
 var HtmlAnchorKindSchema = external_exports.enum(["element", "text", "cell", "diagram-node", "link"]);
 var HtmlAnchorSchema = external_exports.object({
@@ -22485,7 +22489,11 @@ var HtmlAnchorSchema = external_exports.object({
   }).optional(),
   nodeId: external_exports.string().max(HTML_ANCHOR_LIMITS.nodeId).optional(),
   href: external_exports.string().max(HTML_ANCHOR_LIMITS.href).optional(),
-  version: external_exports.number().int().positive().optional()
+  version: external_exports.number().int().positive().optional(),
+  section: external_exports.object({
+    heading: external_exports.string().max(HTML_ANCHOR_LIMITS.sectionHeading).optional(),
+    id: external_exports.string().max(HTML_ANCHOR_LIMITS.sectionId).optional()
+  }).optional()
 }).superRefine((a, ctx) => {
   if (a.kind === "text" && a.quote.trim().length === 0) {
     ctx.addIssue({ code: "custom", path: ["quote"], message: "a text anchor needs the selected text as its quote" });
@@ -22598,6 +22606,14 @@ var PAGE_RULE_OUT_KEY_MAX = 120;
 var CommentRuleOutSchema = external_exports.object({
   description: external_exports.string().min(1).max(PAGE_RULE_OUT_KEY_MAX)
 });
+var CommentAddressedInSchema = external_exports.object({
+  artifactId: external_exports.string().min(1).max(256),
+  version: external_exports.number().int().positive(),
+  /** When that revision was made (its createdAt), so a later human reply can
+   *  reopen the comment. Optional: older stamps fall back to the revision's
+   *  own artifact record. */
+  at: external_exports.string().datetime().optional()
+});
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -22619,6 +22635,8 @@ var CommentSchema = external_exports.object({
   // #680 slice 4 — present only on the comment a page "Rule this out" leaves;
   // the matching rejected stance is in the project's rejection memory.
   ruleOut: CommentRuleOutSchema.optional(),
+  // #714 gap 7 — the page revision that addressed this comment (see above).
+  addressedIn: CommentAddressedInSchema.optional(),
   /** Server-stamped only for the note owned by a page verdict history entry. */
   verdictFeedback: external_exports.literal(true).optional(),
   /** Set when an agent-authored reply has answered this question. */
@@ -23662,6 +23680,73 @@ function describeRequestScope(scope) {
   return parts.join(" \xB7 ");
 }
 
+// ../shared/dist/schemas/page-render-issues.js
+var PAGE_RENDER_ISSUES_VISUAL_ID = "dp-page-render-issues";
+var PAGE_ERROR_CLASSES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "AggregateError", "InternalError", "DOMException", "SecurityError", "NetworkError", "AbortError", "NotAllowedError", "NotFoundError", "NotSupportedError", "InvalidStateError", "QuotaExceededError", "TimeoutError", "DataCloneError"];
+var PAGE_ERROR_CLASS_SET = new Set(PAGE_ERROR_CLASSES);
+function isPageErrorClass(name) {
+  return typeof name === "string" && PAGE_ERROR_CLASS_SET.has(name);
+}
+var PAGE_RESOURCE_KEYS = ["img src", "img srcset", "source src", "source srcset", "video src", "video poster", "audio src", "track src", "script src", "link href", "iframe src", "frame src", "embed src", "object data", "input src", "image href", "use href"];
+var PAGE_RESOURCE_OTHER = "other resource";
+var PAGE_CSP_DIRECTIVES = ["default-src", "script-src", "script-src-elem", "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src", "connect-src", "media-src", "object-src", "frame-src", "child-src", "worker-src", "manifest-src", "base-uri", "form-action", "frame-ancestors", "navigate-to", "prefetch-src", "sandbox", "trusted-types", "require-trusted-types-for", "upgrade-insecure-requests", "report-uri", "report-to"];
+var PAGE_DIRECTIVE_OTHER = "other";
+var RESOURCE_SET = /* @__PURE__ */ new Set([...PAGE_RESOURCE_KEYS, PAGE_RESOURCE_OTHER]);
+var DIRECTIVE_SET = /* @__PURE__ */ new Set([...PAGE_CSP_DIRECTIVES, PAGE_DIRECTIVE_OTHER]);
+function isPageResourceKey(key2) {
+  return typeof key2 === "string" && RESOURCE_SET.has(key2);
+}
+function isPageDirective(key2) {
+  return typeof key2 === "string" && DIRECTIVE_SET.has(key2);
+}
+var PAGE_RENDER_ISSUES_LIMITS = { perKind: 8, maxCount: 9999, maxLength: 500 };
+function validKey(kind, key2) {
+  if (kind === "script" || kind === "rejection")
+    return isPageErrorClass(key2);
+  if (kind === "resource")
+    return isPageResourceKey(key2);
+  return isPageDirective(key2);
+}
+var HEAD_RE = /^v([1-9][0-9]{0,5}) (scripts-on|scripts-off) \| (.+)$/;
+var ITEM_RE = /^(script|rejection|resource|blocked) (.+)=([1-9][0-9]{0,3})$/;
+function parsePageRenderIssues(text) {
+  if (typeof text !== "string" || text.length > PAGE_RENDER_ISSUES_LIMITS.maxLength)
+    return null;
+  const head = HEAD_RE.exec(text);
+  if (!head)
+    return null;
+  const items = [];
+  const perKind = {};
+  for (const raw of head[3].split("; ")) {
+    const m = ITEM_RE.exec(raw);
+    if (!m)
+      return null;
+    const kind = m[1];
+    const key2 = m[2];
+    if (!validKey(kind, key2))
+      return null;
+    if (items.some((i) => i.kind === kind && i.key === key2))
+      return null;
+    perKind[kind] = (perKind[kind] ?? 0) + 1;
+    if (perKind[kind] > PAGE_RENDER_ISSUES_LIMITS.perKind)
+      return null;
+    items.push({ kind, key: key2, count: Number(m[3]) });
+  }
+  return { version: Number(head[1]), running: head[2] === "scripts-on", items };
+}
+function describePageRenderIssues(p) {
+  const parts = p.items.map((i) => {
+    if (i.kind === "script")
+      return `${i.count} ${i.key}`;
+    if (i.kind === "rejection")
+      return `${i.count} unhandled rejection${i.count === 1 ? "" : "s"} (${i.key})`;
+    if (i.kind === "resource")
+      return `${i.count} ${i.key} that didn't load`;
+    return i.key === PAGE_DIRECTIVE_OTHER ? `${i.count} blocked by another CSP directive` : `${i.count} blocked by CSP ${i.key}`;
+  });
+  return `v${p.version}, ${p.running ? "with its scripts running" : "before Run"}: ${parts.join(", ")}`;
+}
+
 // ../shared/dist/schemas/request-bodies.js
 var CreateRequestBodySchema = external_exports.object({
   text: external_exports.string().min(1).max(2e3),
@@ -23789,6 +23874,10 @@ var RenderFailureBodySchema = external_exports.object({
   error: external_exports.string().min(1).max(500),
   /** The diagram's human title, when it has one. Optional + bounded. */
   title: external_exports.string().max(200).optional()
+}).superRefine((b, ctx) => {
+  if (b.visualId === PAGE_RENDER_ISSUES_VISUAL_ID && !parsePageRenderIssues(b.error)) {
+    ctx.addIssue({ code: "custom", path: ["error"], message: "page render issues must use the structured page-issues grammar (no free text)" });
+  }
 });
 var PromptBodySchema = external_exports.object({
   content: external_exports.string().min(1),
@@ -25493,7 +25582,7 @@ var PAGE_STRUCTURE_RULES = [
   `Mark each thing your pair must decide with ${PAGE_DECISION_ATTR} and each question with ${PAGE_QUESTION_ATTR}, and give both an id.`,
   "Give other key elements (tables, rows, diagrams) stable ids too.",
   "Use a table for any comparison.",
-  "Draw diagrams as inline SVG, or paste pre-rendered SVG. Mermaid source is not rendered for you."
+  'Draw diagrams as Mermaid source in <pre class="mermaid"> (the companion renders it to SVG) or as inline SVG.'
 ];
 var PAGE_CONSTRAINT_RULES = [
   "No network. Scripts, stylesheets, fonts and images from a URL (CDNs included) are blocked. Inline styles and scripts as <style>/<script>, and images and fonts as data: URIs. Video, audio, iframes and objects won't load at all.",
@@ -25540,7 +25629,7 @@ var PAGE_SKELETON_HTML = `<!doctype html>
 </section>
 </body>
 </html>`;
-var PAGE_AUTHORING_TOOL_NOTE = `Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline styles and scripts, and images and fonts as data: URIs; video, audio, iframes and objects won't load). Its scripts run only when your pair clicks Run, so the page must read well without them. Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, inline SVG diagrams (Mermaid source is not rendered), <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.`;
+var PAGE_AUTHORING_TOOL_NOTE = `Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline styles and scripts, and images and fonts as data: URIs; video, audio, iframes and objects won't load). Its scripts run only when your pair clicks Run, so the page must read well without them. Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, diagrams as Mermaid source in <pre class="mermaid"> (the companion renders it) or inline SVG, <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.`;
 
 // ../../node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@4.4.3/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
 function isZ4Schema(s) {
@@ -29927,8 +30016,18 @@ function describeHtmlAnchor(a) {
   if (headers.length) out += ` (${headers.join(", ")})`;
   if (a.nodeId) out += ` (node ${a.nodeId})`;
   if (a.href) out += ` (href ${clipProse(a.href, 120)})`;
+  const section = describeAnchorSection(a.section);
+  if (section) out += ` (in ${section})`;
   out += ` at \`${a.locator}\``;
   return out;
+}
+function describeAnchorSection(section) {
+  if (!section) return "";
+  const parts = [];
+  const heading = section.heading?.trim();
+  if (heading) parts.push(`"${clipProse(heading, 80)}"`);
+  if (section.id) parts.push(`#${clipProse(section.id, 80)}`);
+  return parts.join(" ");
 }
 function structuredHtmlAnchor(a) {
   if (!a) return {};
@@ -29942,7 +30041,8 @@ function structuredHtmlAnchor(a) {
       ...a.table && (a.table.row || a.table.col) ? { table: { ...a.table.row ? { row: a.table.row } : {}, ...a.table.col ? { col: a.table.col } : {} } } : {},
       ...a.nodeId ? { nodeId: a.nodeId } : {},
       ...a.href ? { href: a.href } : {},
-      ...a.version != null ? { version: a.version } : {}
+      ...a.version != null ? { version: a.version } : {},
+      ...a.section && (a.section.heading || a.section.id) ? { section: { ...a.section.heading ? { heading: a.section.heading } : {}, ...a.section.id ? { id: a.section.id } : {} } } : {}
     }
   };
 }
@@ -32205,6 +32305,10 @@ var ERROR_CODES = {
   parent_superseded: "parent_superseded",
   /** A review verdict raced a change to the artifact content being reviewed. */
   session_review_conflict: "session_review_conflict",
+  session_closing: "session_closing",
+  session_ended: "session_ended",
+  session_marker_invalid: "session_marker_invalid",
+  session_save_pending: "session_save_pending",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
@@ -38046,24 +38150,43 @@ ${reviewedPlans.join("\n")}`);
 ${lines.join("\n")}`);
   }
   const renderFailures = postWakeRenderFailures;
+  const isPageIssue = (f) => f.visualId === PAGE_RENDER_ISSUES_VISUAL_ID;
+  const diagramFailures = renderFailures.filter((f) => !isPageIssue(f));
+  const pageRenderIssues = renderFailures.filter(isPageIssue);
   const structuredRenderFailures = renderFailures.map((f) => ({
     artifactId: f.artifactId,
     visualId: f.visualId,
+    ...isPageIssue(f) ? { kind: "page" } : {},
     ...f.title ? { title: f.title } : {},
-    error: f.error
+    // A page entry carries only the closed grammar; anything else is withheld.
+    error: isPageIssue(f) && !parsePageRenderIssues(f.error) ? "[page render issues withheld]" : f.error
   }));
   if (renderFailures.length > 0) {
     await store.acknowledgeRenderFailures?.(
       renderFailures.map((f) => ({ artifactId: f.artifactId, visualId: f.visualId }))
     );
-    const lines = renderFailures.map((f) => {
+  }
+  if (diagramFailures.length > 0) {
+    const lines = diagramFailures.map((f) => {
       const name = f.title ? `"${f.title}"` : `visual ${f.visualId}`;
       return `- ${name} (${f.visualId}) on artifact ${f.artifactId} failed to render: ${f.error}`;
     });
     parts.push(
-      `\u{1F5BC}\uFE0F Diagram render failures (${renderFailures.length}) \u2014 the human sees a broken/repaired diagram:
+      `\u{1F5BC}\uFE0F Diagram render failures (${diagramFailures.length}) \u2014 the human sees a broken/repaired diagram:
 ${lines.join("\n")}
 Fix the Mermaid source and re-present the affected visual (revise_artifact).`
+    );
+  }
+  if (pageRenderIssues.length > 0) {
+    const lines = pageRenderIssues.map((f) => {
+      const parsed = parsePageRenderIssues(f.error);
+      const what = parsed ? `the page reported ${describePageRenderIssues(parsed)}` : "the page reported render issues (details unavailable)";
+      return `- ${f.title ? `"${f.title}"` : "page"} (${f.artifactId}): ${what}`;
+    });
+    parts.push(
+      `\u{1F9EF} Page render issues (${pageRenderIssues.length}) \u2014 your pair's review frame reported problems with your page:
+${lines.join("\n")}
+The frame has no network: inline images, media and fonts as data: URIs (relative and external paths can't load), and fix script errors. Revise the page so it renders as you intended.`
     );
   }
   const pageWatchRefs = store.selectFileWatchNotices ? await store.selectFileWatchNotices(postWakeArtifacts) : undeliveredFileWatchRefs(postWakeArtifacts);
@@ -38218,9 +38341,14 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
       `${pendingDec.length} decision${pendingDec.length === 1 ? " is" : "s are"} still awaiting your pair's selection (see the \u23F3 WAITING line) \u2014 don't build on an unpicked option.`
     );
   }
-  if (renderFailures.length > 0) {
+  if (diagramFailures.length > 0) {
     blockingClauses.push(
-      `${renderFailures.length} diagram${renderFailures.length === 1 ? "" : "s"} failed to render for the human \u2014 fix the Mermaid source and re-present (revise_artifact).`
+      `${diagramFailures.length} diagram${diagramFailures.length === 1 ? "" : "s"} failed to render for the human \u2014 fix the Mermaid source and re-present (revise_artifact).`
+    );
+  }
+  if (pageRenderIssues.length > 0) {
+    blockingClauses.push(
+      `${pageRenderIssues.length} page${pageRenderIssues.length === 1 ? " doesn't" : "s don't"} render cleanly for the human (see \u{1F9EF} Page render issues) \u2014 fix and revise the page.`
     );
   }
   if (newComments.length > 0 && pendingArts.length > 0) {
@@ -38431,6 +38559,7 @@ function validateSuggestionTransition(current, update) {
   }
   return { ok: true };
 }
+var PAGE_RENDER_ISSUES_WAKE_WINDOW_MS = 5 * 60 * 1e3;
 
 // src/mcp/tools/answer-question.ts
 async function handleAnswerQuestion(ctx, args) {
@@ -39848,6 +39977,7 @@ function completionScopeIds(artifact, sessionId) {
 var PAGE_LINT_LONG_PAGE_BYTES = 16 * 1024;
 var PAGE_LINT_CODES = {
   external_asset: "external_asset",
+  relative_asset: "relative_asset",
   no_headings: "no_headings",
   no_section_ids: "no_section_ids"
 };
@@ -39884,54 +40014,184 @@ function externalAt(lower, at) {
 function isExternal(value) {
   return externalAt(value.toLowerCase(), 0);
 }
-function externalSrcsetCount(value) {
-  let count2 = 0;
-  for (const candidate of value.split(",")) {
-    const url2 = candidate.trim().split(/\s/, 1)[0] ?? "";
-    if (url2 && isExternal(url2)) count2++;
+function isRelativeUrl(value) {
+  const v2 = value.trim();
+  if (!v2 || v2.startsWith("#") || isExternal(v2)) return false;
+  for (let i = 0; i < v2.length; i++) {
+    const c = v2[i];
+    if (c === ":") return i === 0;
+    if (c === "/" || c === "?" || c === "#") return true;
   }
-  return count2;
+  return true;
 }
-function stripCssComments(css) {
-  let out = "";
+function relativeSrcsetCount(value) {
+  return srcsetUrls(value).filter(isRelativeUrl).length;
+}
+function srcsetUrls(value) {
+  const urls = [];
+  const n = value.length;
   let i = 0;
-  while (i < css.length) {
-    const open = css.indexOf("/*", i);
-    if (open === -1) {
-      out += css.slice(i);
-      break;
+  while (i < n) {
+    while (i < n && (isSpace2(value.charCodeAt(i)) || value[i] === ",")) i++;
+    if (i >= n) break;
+    const start = i;
+    while (i < n && !isSpace2(value.charCodeAt(i))) i++;
+    let url2 = value.slice(start, i);
+    if (url2.endsWith(",")) {
+      url2 = url2.replace(/,+$/, "");
+    } else {
+      while (i < n && value[i] !== ",") i++;
     }
-    out += css.slice(i, open) + " ";
-    const close = css.indexOf("*/", open + 2);
-    if (close === -1) break;
-    i = close + 2;
+    if (url2) urls.push(url2);
   }
-  return out;
+  return urls;
 }
-function externalCssRefs(rawCss) {
-  const lower = stripCssComments(rawCss).toLowerCase();
+function externalSrcsetCount(value) {
+  return srcsetUrls(value).filter(isExternal).length;
+}
+function isCssNewline(c) {
+  return c === 10 || c === 13 || c === 12;
+}
+function isHexDigit(c) {
+  return c >= 48 && c <= 57 || c >= 97 && c <= 102 || c >= 65 && c <= 70;
+}
+function isNameChar(c) {
+  return isAlpha(c) || c >= 48 && c <= 57 || c === 95 || c === 45 || c >= 128;
+}
+function isEscapeAt(css, i) {
+  return css.charCodeAt(i) === 92 && i + 1 < css.length && !isCssNewline(css.charCodeAt(i + 1));
+}
+function consumeEscape(css, i) {
+  let j = i + 1;
+  if (isHexDigit(css.charCodeAt(j))) {
+    const hexStart = j;
+    while (j < css.length && j - hexStart < 6 && isHexDigit(css.charCodeAt(j))) j++;
+    const cp = parseInt(css.slice(hexStart, j), 16);
+    if (css.charCodeAt(j) === 13 && css.charCodeAt(j + 1) === 10) j += 2;
+    else if (isSpace2(css.charCodeAt(j))) j++;
+    const ok = cp > 0 && cp <= 1114111 && !(cp >= 55296 && cp <= 57343);
+    return [ok ? String.fromCodePoint(cp) : "\uFFFD", j];
+  }
+  return [css[j] ?? "", j + 1];
+}
+function consumeName(css, i) {
+  let name = "";
+  while (i < css.length) {
+    const c = css.charCodeAt(i);
+    if (isNameChar(c)) {
+      name += css[i];
+      i++;
+    } else if (isEscapeAt(css, i)) {
+      const [d, j] = consumeEscape(css, i);
+      name += d;
+      i = j;
+    } else break;
+  }
+  return [name, i];
+}
+function consumeString(css, i) {
+  const quote = css.charCodeAt(i);
+  let value = "";
+  i++;
+  while (i < css.length) {
+    const d = css.charCodeAt(i);
+    if (d === quote) return [value, i + 1];
+    if (isCssNewline(d)) return [value, i];
+    if (d === 92) {
+      if (i + 1 >= css.length) return [value, i + 1];
+      const e = css.charCodeAt(i + 1);
+      if (e === 13 && css.charCodeAt(i + 2) === 10) {
+        i += 3;
+        continue;
+      }
+      if (isCssNewline(e)) {
+        i += 2;
+        continue;
+      }
+      const [dec, j] = consumeEscape(css, i);
+      value += dec;
+      i = j;
+      continue;
+    }
+    value += css[i];
+    i++;
+  }
+  return [value, i];
+}
+function scanCss(css, onToken) {
+  const n = css.length;
+  let i = 0;
+  while (i < n) {
+    const c = css.charCodeAt(i);
+    if (c === 47 && css.charCodeAt(i + 1) === 42) {
+      const close = css.indexOf("*/", i + 2);
+      const end = close === -1 ? n : close + 2;
+      onToken({ kind: "comment", start: i, end });
+      i = end;
+    } else if (c === 34 || c === 39) {
+      const [value, j] = consumeString(css, i);
+      onToken({ kind: "string", value });
+      i = j;
+    } else if (isSpace2(c)) {
+      while (i < n && isSpace2(css.charCodeAt(i))) i++;
+      onToken({ kind: "space" });
+    } else if (c === 64 || c === 35) {
+      const [name, j] = consumeName(css, i + 1);
+      onToken(name ? { kind: c === 64 ? "at" : "hash", name: name.toLowerCase() } : { kind: "other" });
+      i = name ? j : i + 1;
+    } else if (isNameChar(c) || isEscapeAt(css, i)) {
+      const [rawName, j] = consumeName(css, i);
+      const name = rawName.toLowerCase();
+      if (name === "url" && css.charCodeAt(j) === 40) {
+        let k = j + 1;
+        while (k < n && isSpace2(css.charCodeAt(k))) k++;
+        const q = css.charCodeAt(k);
+        if (q === 34 || q === 39) {
+          const [value, m] = consumeString(css, k);
+          onToken({ kind: "url", value });
+          i = m;
+        } else {
+          let value = "";
+          while (k < n && css.charCodeAt(k) !== 41) {
+            if (isEscapeAt(css, k)) {
+              const [d, m] = consumeEscape(css, k);
+              value += d;
+              k = m;
+            } else {
+              value += css[k];
+              k++;
+            }
+          }
+          onToken({ kind: "url", value: value.trim() });
+          i = Math.min(k + 1, n);
+        }
+      } else {
+        onToken({ kind: "ident", name });
+        i = j;
+      }
+    } else if (c === 92) {
+      i += 2;
+    } else {
+      onToken({ kind: "other" });
+      i++;
+    }
+  }
+}
+function externalCssRefs(css) {
   const counts = { url: 0, import: 0 };
-  const target = (from) => {
-    let i = from;
-    while (i < lower.length && isSpace2(lower.charCodeAt(i))) i++;
-    if (lower[i] === '"' || lower[i] === "'") i++;
-    return i;
-  };
-  let at = lower.indexOf("@import");
-  while (at !== -1) {
-    let i = target(at + 7);
-    if (lower.startsWith("url(", i)) i = target(i + 4);
-    if (externalAt(lower, i)) counts.import++;
-    at = lower.indexOf("@import", at + 7);
-  }
-  at = lower.indexOf("url(");
-  while (at !== -1) {
-    let k = at - 1;
-    while (k >= 0 && isSpace2(lower.charCodeAt(k))) k--;
-    const isImportTarget = k >= 6 && lower.startsWith("@import", k - 6);
-    if (!isImportTarget && externalAt(lower, target(at + 4))) counts.url++;
-    at = lower.indexOf("url(", at + 4);
-  }
+  let afterImport = false;
+  scanCss(css, (t) => {
+    if (t.kind === "space" || t.kind === "comment") return;
+    if (afterImport) {
+      afterImport = false;
+      if (t.kind === "string" || t.kind === "url") {
+        if (isExternal(t.value)) counts.import++;
+        return;
+      }
+    }
+    if (t.kind === "at" && t.name === "import") afterImport = true;
+    else if (t.kind === "url" && isExternal(t.value)) counts.url++;
+  });
   return counts;
 }
 function readStartTag(html, lower, at) {
@@ -39992,6 +40252,10 @@ function lintPage(html) {
     add(`CSS url() in ${where}`, refs.url);
     add(`CSS @import in ${where}`, refs.import);
   };
+  const relative = /* @__PURE__ */ new Map();
+  const addRelative = (source, count2 = 1) => {
+    if (count2 > 0) relative.set(source, (relative.get(source) ?? 0) + count2);
+  };
   let headings = 0;
   let sectionIds = 0;
   let i = 0;
@@ -40027,14 +40291,18 @@ function lintPage(html) {
       for (const attr of resourceAttrs) {
         const value = tag.attrs[attr];
         if (value === void 0) continue;
-        if (attr === "srcset") add(`${tag.name} srcset`, externalSrcsetCount(value));
-        else if (isExternal(value)) add(`${tag.name} ${attr}`);
+        if (attr === "srcset") {
+          add(`${tag.name} srcset`, externalSrcsetCount(value));
+          addRelative(`${tag.name} srcset`, relativeSrcsetCount(value));
+        } else if (isExternal(value)) add(`${tag.name} ${attr}`);
+        else if (isRelativeUrl(value)) addRelative(`${tag.name} ${attr}`);
       }
     }
-    if (tag.name === "link" && tag.attrs.href !== void 0 && isExternal(tag.attrs.href)) {
+    if (tag.name === "link" && tag.attrs.href !== void 0) {
       const rels = (tag.attrs.rel ?? "").toLowerCase().split(/\s+/);
       const kind = ["stylesheet", "modulepreload", "preload", "icon"].find((r) => rels.includes(r));
-      if (kind) add(`link href (${kind})`);
+      if (kind && isExternal(tag.attrs.href)) add(`link href (${kind})`);
+      else if (kind && isRelativeUrl(tag.attrs.href)) addRelative(`link href (${kind})`);
     }
     if (tag.attrs.style) addCss(tag.attrs.style, "a style attribute");
     if (SKIPPED_BODY.includes(tag.name)) {
@@ -40054,6 +40322,16 @@ function lintPage(html) {
       count: total,
       sources,
       message: `${total} external asset reference${total === 1 ? "" : "s"} will not load (the page has no network): ${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. Inline images and fonts as data: URIs and styles and scripts as inline <style>/<script>; video, audio, iframes and objects won't load at all.`
+    });
+  }
+  if (relative.size > 0) {
+    const sources = [...relative].map(([source, count2]) => ({ source, count: count2 }));
+    const total = sources.reduce((sum, s) => sum + s.count, 0);
+    warnings.push({
+      code: PAGE_LINT_CODES.relative_asset,
+      count: total,
+      sources,
+      message: `${total} relative asset path${total === 1 ? "" : "s"} won't load in the review frame: ${sources.map((s) => `${s.source} x${s.count}`).join(", ")}. The page renders from a document with no base URL, so inline images and fonts as data: URIs and styles as inline <style>.`
     });
   }
   if (headings === 0) {
@@ -42553,7 +42831,7 @@ Give the human THIS exact URL to open the review surface.`;
 // src/mcp/server.ts
 var HTML_ANCHOR_OUTPUT_SCHEMA = {
   type: "object",
-  description: "Page artifacts \u2014 where on the page this comment points: kind (element|text|cell|diagram-node|link), CSS locator, quoted text (+ prefix/suffix), table header names for a cell, Mermaid nodeId, link href, and the page version it was made on. Find the spot in the HTML you authored.",
+  description: "Page artifacts \u2014 where on the page this comment points: kind (element|text|cell|diagram-node|link), CSS locator, quoted text (+ prefix/suffix), table header names for a cell, Mermaid nodeId, link href, the section it sits in (nearest heading + id), and the page version it was made on. Find the spot in the HTML you authored.",
   properties: {
     kind: { type: "string", enum: ["element", "text", "cell", "diagram-node", "link"] },
     locator: { type: "string" },
@@ -42563,7 +42841,12 @@ var HTML_ANCHOR_OUTPUT_SCHEMA = {
     table: { type: "object", properties: { row: { type: "string" }, col: { type: "string" } } },
     nodeId: { type: "string" },
     href: { type: "string" },
-    version: { type: "number" }
+    version: { type: "number" },
+    section: {
+      type: "object",
+      description: "Which part of the page the spot is in: the nearest preceding heading's text and the nearest ancestor (or that heading's) id.",
+      properties: { heading: { type: "string" }, id: { type: "string" } }
+    }
   }
 };
 function createMcpServer(store, broadcast, port = BASE_PORT, hintEnv = {}) {

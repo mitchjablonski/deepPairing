@@ -27,7 +27,13 @@
  * numbered outline pin, then reports which were found (`{dp:"pins-status",
  * found}`) so the parent can say "not found in this version". Pins are built
  * ONLY with DOM APIs and `textContent` — nothing the parent sends is ever parsed
- * as HTML. `{dp:"focus", index}` scrolls to a pin; `{dp:"mode", annotate}`
+ * as HTML. #714 gap 7: the pins message also carries `states` (open |
+ * addressed: the pin's colour) and `ids` (the comment id per pin). A pin's
+ * BADGE is a small click target, only while pointing is on and the page's
+ * scripts aren't running (so it never takes a click the page would handle):
+ * a click posts `{dp:"pin-click", id}` and hovering posts `{dp:"pin-hover",
+ * id, x, y}` / `{dp:"pin-hover", id:null}`. The parent renders the preview
+ * text; the frame never receives comment text. `{dp:"focus", index}` scrolls to a pin; `{dp:"mode", annotate}`
  * switches between annotating clicks and letting them through to the page (after
  * Run). Messages are accepted only from `parent`.
  *
@@ -59,7 +65,8 @@
 /** Function body; parameters `(document, window)`; returns the helper object. */
 export const ANNOTATOR_CORE_SOURCE = String.raw`
 "use strict";
-var LIMITS = { locator: 512, quote: 280, affix: 32, header: 200, nodeId: 200, href: 512 };
+var LIMITS = { locator: 512, quote: 280, affix: 32, header: 200, nodeId: 200, href: 512, sectionHeading: 120, sectionId: 200 };
+var SECTION_HEADS = "h1, h2, h3, h4, h5, h6";
 var SKIP = "script,style,noscript,template,[data-dp-annotator]";
 var STABLE_DATA = ["data-testid", "data-test", "data-id", "data-key", "data-name"];
 var NODE_SEL = "g.node, g[id^='flowchart-'], g[id*='-flowchart-']";
@@ -240,14 +247,64 @@ function elementText(el) {
   return t;
 }
 
+/** #714 gap 10 — the headings a section can be named by (h1–h6, document
+ *  order), unrendered subtrees skipped, capped so a hostile page stays cheap. */
+function sectionHeads() {
+  var els = document.querySelectorAll(SECTION_HEADS), out = [];
+  for (var i = 0; i < els.length && out.length < 2000; i++) {
+    if (inChangeSkip(els[i]) || els[i].closest(SKIP)) continue;
+    out.push(els[i]);
+  }
+  return out;
+}
+/** #714 gap 10 — which part of the page an element is in: heading = the
+ *  nearest preceding h1–h6 (or the first heading inside a clicked container),
+ *  id = the nearest ancestor-or-self id, except that a heading with its own id
+ *  INSIDE that ancestor is the more specific name (a page-wide wrapper id says
+ *  nothing). Falls back to the heading's id. An id over the cap is skipped,
+ *  never clipped (a clipped id names nothing). null when neither is known. */
+function sectionFor(el, heads) {
+  if (!isEl(el)) return null;
+  var hs = heads || sectionHeads();
+  var hi = sectionOf(el, hs), h = hi >= 0 ? hs[hi] : null, out = {};
+  if (h) { var ht = textPrefix(h, LIMITS.sectionHeading); if (ht) out.heading = ht; }
+  var hid = h && typeof h.id === "string" && h.id && h.id.length <= LIMITS.sectionId ? h.id : "";
+  var id = "";
+  for (var n = el; isEl(n) && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+    if (typeof n.id === "string" && n.id && n.id.length <= LIMITS.sectionId) {
+      id = hid && n !== h && n.contains(h) ? hid : n.id;
+      break;
+    }
+  }
+  if (!id) id = hid;
+  if (id) out.id = id;
+  return out.heading || out.id ? out : null;
+}
+/** #714 gap 10 — an element-grain anchor's context: the page text just
+ *  outside the element (up to LIMITS.affix each side, read exactly as
+ *  support() re-checks it) and its section. Best effort: a failure leaves the
+ *  anchor as it was. */
+function withContext(a, el) {
+  try {
+    var body = document.body || document.documentElement;
+    var ctx = contextOf(el, textIndex(body));
+    var p = norm(norm(ctx.before).slice(-LIMITS.affix));
+    var sx = norm(norm(ctx.after).slice(0, LIMITS.affix));
+    if (p) a.prefix = clip(p, LIMITS.affix);
+    if (sx) a.suffix = clip(sx, LIMITS.affix);
+    var sec = sectionFor(el);
+    if (sec) a.section = sec;
+  } catch (e) { /* context is optional */ }
+  return a;
+}
 function elementAnchor(el) {
-  return { kind: "element", locator: buildLocator(el), quote: clip(elementText(el), LIMITS.quote) };
+  return withContext({ kind: "element", locator: buildLocator(el), quote: clip(elementText(el), LIMITS.quote) }, el);
 }
 function linkAnchor(link) {
   var a = { kind: "link", locator: buildLocator(link), quote: clip(elementText(link), LIMITS.quote) };
   var href = link.getAttribute("href");
   if (href) a.href = clip(href, LIMITS.href);
-  return a;
+  return withContext(a, link);
 }
 function mermaidNodeId(g) {
   var d = g.getAttribute && g.getAttribute("data-id");
@@ -260,7 +317,7 @@ function nodeAnchor(g) {
   var a = { kind: "diagram-node", locator: buildLocator(g), quote: clip(elementText(g), LIMITS.quote) };
   var id = mermaidNodeId(g);
   if (id) a.nodeId = id;
-  return a;
+  return withContext(a, g);
 }
 function isCell(n) { return isEl(n) && (n.localName === "td" || n.localName === "th"); }
 function spanOf(c) { var n = parseInt(c.getAttribute("colspan") || "1", 10); return n > 0 ? n : 1; }
@@ -302,8 +359,8 @@ function headerRow(table) {
   }
   return null;
 }
-function cellAnchor(cell) {
-  var a = { kind: "cell", locator: buildLocator(cell), quote: clip(elementText(cell), LIMITS.quote) };
+/** A cell's row/column header text ({row?, col?}), as a cell anchor's table. */
+function cellTable(cell) {
   var row = cell.parentElement, table = cell.closest("table"), t = {};
   if (table && row && row.localName === "tr") {
     var hr = headerRow(table);
@@ -323,8 +380,13 @@ function cellAnchor(cell) {
       if (rt) t.row = clip(rt, LIMITS.header);
     }
   }
+  return t;
+}
+function cellAnchor(cell) {
+  var a = { kind: "cell", locator: buildLocator(cell), quote: clip(elementText(cell), LIMITS.quote) };
+  var t = cellTable(cell);
   if (t.row || t.col) a.table = t;
-  return a;
+  return withContext(a, cell);
 }
 function textAnchor(range) {
   var body = document.body || document.documentElement;
@@ -340,6 +402,10 @@ function textAnchor(range) {
   var suffix = norm(index.text.slice(e, e + LIMITS.affix));
   if (prefix) a.prefix = clip(prefix, LIMITS.affix);
   if (suffix) a.suffix = clip(suffix, LIMITS.affix);
+  try {
+    var sec = sectionFor(elementOf(range.startContainer) || common);
+    if (sec) a.section = sec;
+  } catch (e2) { /* section is optional */ }
   return a;
 }
 /** What a click on this target points at: link, then Mermaid node, then table
@@ -378,7 +444,7 @@ function closestOf(el, kind) {
 /** Does this element carry the anchor's identity? Required checks: the kind's
  *  element type, the quote, a cell's saved row/column headers, a node's id, a
  *  link's href. Returns a support score (>= 0) or -1 when it is not the spot. */
-function support(a, el, bodyIndex, fromLocator) {
+function support(a, el, bodyIndex, fromLocator, heads) {
   var kind = String(a.kind || "");
   if (!isEl(el)) return -1;
   if (kind === "cell" && !isCell(el)) return -1;
@@ -388,7 +454,7 @@ function support(a, el, bodyIndex, fromLocator) {
   // A saved Mermaid node id is identity enough: a revision may relabel the node.
   if (!idMatch && !textMatches(el, a.quote)) return -1;
   if (kind === "cell" && a.table && typeof a.table === "object") {
-    var t = cellAnchor(el).table || {};
+    var t = cellTable(el);
     if (typeof a.table.row === "string" && a.table.row && t.row !== a.table.row) return -1;
     if (typeof a.table.col === "string" && a.table.col && t.col !== a.table.col) return -1;
   }
@@ -401,7 +467,17 @@ function support(a, el, bodyIndex, fromLocator) {
     if (p && norm(ctx.before).slice(-p.length) === p) score += 2;
     if (sx && norm(ctx.after).slice(0, sx.length) === sx) score += 2;
   }
-  return score;
+  return score + sectionBonus(a, el, heads);
+}
+/** #714 gap 10 — +1 when the anchor saved a section id and the candidate is
+ *  in a section with that id (a tie-break between equal text in different
+ *  sections). Anchors saved without one score exactly as before. */
+function sectionBonus(a, el, heads) {
+  var want = a && a.section && typeof a.section === "object" ? a.section.id : null;
+  if (typeof want !== "string" || !want) return 0;
+  var sec = null;
+  try { sec = sectionFor(el, heads); } catch (e) { sec = null; }
+  return sec && sec.id === want ? 1 : 0;
 }
 /** Re-find an anchor in the current document. Every candidate (the saved
  *  locator's element, elements carrying the saved node id / href, and each
@@ -418,6 +494,7 @@ function findAnchor(a) {
   var bodyIndex = textIndex(body);
   var locEl = typeof a.locator === "string" && a.locator ? safeQuery(a.locator) : null;
   var i, j;
+  var heads = a.section && typeof a.section === "object" && typeof a.section.id === "string" && a.section.id ? sectionHeads() : null;
   if (kind === "text") {
     var hits = quoteHits(bodyIndex.text, quote, prefix, suffix);
     var qlen = norm(quote).length, scored = [];
@@ -426,7 +503,7 @@ function findAnchor(a) {
       if (!r) continue;
       var host = elementOf(r.commonAncestorContainer);
       var inLoc = !!(locEl && host && (locEl === host || locEl.contains(host)));
-      scored.push({ el: host || body, range: r, score: hits[i].score + (inLoc ? 1 : 0) });
+      scored.push({ el: host || body, range: r, score: hits[i].score + (inLoc ? 1 : 0) + (heads ? sectionBonus(a, host || body, heads) : 0) });
     }
     return pickBest(scored);
   }
@@ -462,16 +539,48 @@ function findAnchor(a) {
   }
   var out = [];
   for (i = 0; i < cands.length; i++) {
-    var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator);
-    if (sc >= 0) out.push({ el: cands[i].el, range: null, score: sc });
+    var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator, heads);
+    if (sc >= 0) {
+      out.push({ el: cands[i].el, range: null, score: sc, fromLocator: cands[i].fromLocator,
+        ctx: contextMatches(a, cands[i].el, bodyIndex), sec: heads ? sectionBonus(a, cands[i].el, heads) > 0 : false });
+    }
   }
   return pickBest(out);
 }
+/** Does the element's surrounding text match the anchor's saved prefix or
+ *  suffix (the same check support() scores)? */
+function contextMatches(a, el, bodyIndex) {
+  var p = norm(a.prefix), sx = norm(a.suffix);
+  if (!p && !sx) return false;
+  var ctx = contextOf(el, bodyIndex);
+  return !!((p && norm(ctx.before).slice(-p.length) === p) || (sx && norm(ctx.after).slice(0, sx.length) === sx));
+}
+/** The single best-scored candidate. On a tie, the saved locator's element
+ *  wins only if its surrounding text also matches the saved prefix/suffix
+ *  (#714 gap 10: "found where it was, in the same context"); otherwise a tie
+ *  is "not found", never a guess (an element that merely moved into the old
+ *  locator's place must not take the pin). A locator element outside the
+ *  saved section loses that tie-break when a tied candidate sits in the saved
+ *  section (sections reordered: the old locator now points into the other
+ *  one); the single in-section candidate whose context also matches wins,
+ *  and several are still "not found". */
 function pickBest(list) {
-  var best = null, tied = false;
-  for (var i = 0; i < list.length; i++) {
+  var best = null, tied = false, i;
+  for (i = 0; i < list.length; i++) {
     if (!best || list[i].score > best.score) { best = list[i]; tied = false; }
     else if (list[i].score === best.score) tied = true;
+  }
+  if (best && tied) {
+    var loc = null, inSec = [];
+    for (i = 0; i < list.length; i++) {
+      if (list[i].score !== best.score) continue;
+      if (list[i].fromLocator && list[i].ctx) loc = list[i];
+      if (list[i].sec) inSec.push(list[i]);
+    }
+    if (loc && !loc.sec && inSec.length) {
+      return inSec.length === 1 && inSec[0].ctx ? { el: inSec[0].el, range: inSec[0].range } : null;
+    }
+    if (loc) return { el: loc.el, range: loc.range };
   }
   return best && !tied ? { el: best.el, range: best.range } : null;
 }
@@ -657,6 +766,7 @@ return {
   linkAnchor: linkAnchor,
   nodeAnchor: nodeAnchor,
   cellAnchor: cellAnchor,
+  sectionFor: sectionFor,
   mermaidNodeId: mermaidNodeId,
   CHANGE_SKIP: CHANGE_SKIP,
   clippedText: clippedText,
@@ -678,6 +788,13 @@ export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
 var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0, pinEls = [];
+// #714 gap 7 — per pin: its colour state and the comment id a click on its
+// badge reports back (validated here; nothing else from the parent is used).
+var pinStates = [], pinIds = [], hoverPin = null;
+var PIN_COLORS = { open: "#f59e0b", addressed: "#9ca3af" };
+/** Badge element → comment id, by reference: an authored element named like
+ *  our badge can never pose as a pin (ownership is never read from markup). */
+var badgeIds = typeof WeakMap === "function" ? new WeakMap() : null;
 /** #714 gap 5 — the parent's tag for the pin list it sent, echoed on every
  *  report computed from that list (pins-status, asks), so the parent never
  *  attributes a report to a list that changed while it was in flight. */
@@ -694,6 +811,28 @@ function own(el) {
   return false;
 }
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
+/** #714 gap 12 — this document's instance id, put on ready and diagnostics:
+ *  srcDoc updates can reuse the frame's WindowProxy, so the parent tells an
+ *  old document's late messages from the new document's by this id, not by
+ *  the message source. The companion mints it per srcdoc and injects it
+ *  (DP_DOC, a parameter of our wrapper, so page script can't read it from a
+ *  global) and accepts only the id it injected into the CURRENT srcdoc: an
+ *  old document's queued ready can never claim the new one. Without an
+ *  injected id (a harness), a random one. */
+var docId = (function () {
+  if (typeof DP_DOC === "string" && /^[0-9a-f]{16,64}$/.test(DP_DOC)) return DP_DOC;
+  var hex = "", i;
+  try {
+    var c = window.crypto || (typeof crypto !== "undefined" ? crypto : null);
+    var a = new Uint8Array(16);
+    c.getRandomValues(a);
+    for (i = 0; i < a.length; i++) hex += (a[i] < 16 ? "0" : "") + a[i].toString(16);
+  } catch (e) {
+    hex = "";
+    for (i = 0; i < 32; i++) hex += Math.floor(Math.random() * 16).toString(16);
+  }
+  return hex;
+})();
 function important(el, styles) {
   for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) el.style.setProperty(k, styles[k], "important");
 }
@@ -844,7 +983,15 @@ function paintHover(t, alt, interact) {
   important(hoverBox, { display: "block" });
   place(hoverBox, (pass || t).getBoundingClientRect());
 }
-function onMove(e) { paintHover(targetEl(e), !!e.altKey, !!(e.ctrlKey || e.metaKey)); }
+function onMove(e) {
+  setModHeld(!!(e.ctrlKey || e.metaKey));
+  var t = targetEl(e);
+  var pid = badgesLive() && badgeOk && badgeOk.get(t) === true ? pinIdOf(t) : null;
+  setHoverPin(pid, pid !== null ? t : null);
+  paintHover(t, !!e.altKey, !!(e.ctrlKey || e.metaKey));
+}
+/** The pointer left the frame: drop any pin preview. */
+function onOut(e) { if (!e.relatedTarget && hoverPin !== null) setHoverPin(null, null); }
 function onKey(e) {
   if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I")) {
     // The companion's pointing shortcut, forwarded: while the reviewer is in
@@ -856,6 +1003,7 @@ function onKey(e) {
     post({ dp: "toggle-pointing" });
     return;
   }
+  if (e.key === "Control" || e.key === "Meta") setModHeld(!!(e.ctrlKey || e.metaKey) && e.type === "keydown");
   if ((e.key === "Alt" || e.key === "Control" || e.key === "Meta") && lastHover && lastHover.isConnected) {
     paintHover(lastHover, !!e.altKey, !!(e.ctrlKey || e.metaKey));
   }
@@ -868,10 +1016,115 @@ function samePins(a, b) {
 /** Re-resolve every anchor against the CURRENT document and redraw. Nothing
  *  about a target (element or rectangle) is cached between draws, so a pin
  *  follows its content after the page changes. */
+/** #714 gap 7 — a pin's badge is a click target only while a click there
+ *  would have POINTED anyway (pointing on, page scripts not running): it never
+ *  takes a click the page itself would have handled. The layer and the pin's
+ *  outline stay pointer-events:none. */
+var modHeld = false;
+function badgesLive() { return annotate && !scripts && !modHeld; }
+/** Per badge: may it ever take clicks? False when what lies under it is a
+ *  control that keeps its own click (passTarget: summary, label text, form
+ *  fields, #hash links, buttons after Run), so a badge never sits as a lid on
+ *  a native page action. Set at draw time, by reference. */
+var badgeOk = typeof WeakMap === "function" ? new WeakMap() : null;
+/** The page element under a frame-viewport point, skipping our own nodes. */
+function pageElAt(x, y) {
+  if (typeof document.elementsFromPoint !== "function") return null;
+  var list = [];
+  try { list = document.elementsFromPoint(x, y) || []; } catch (e) { list = []; }
+  for (var i = 0; i < list.length; i++) if (!own(list[i]) && list[i] !== layer) return list[i];
+  return null;
+}
+function nativeUnder(el) {
+  if (!el || el.nodeType !== 1) return false;
+  return !!passTarget(el) || editable(el);
+}
+/** Would this badge cover a native control? Hit-tests the page under the
+ *  badge's centre and corners. A badge off screen is never live until a redraw finds it on
+ *  screen (scrolling redraws). */
+function badgeCoversNative(badge) {
+  // No hit-testing (old engines, test DOMs): we can't know what lies under
+  // the offset badge, so it stays inert (conservative).
+  if (typeof document.elementsFromPoint !== "function") return true;
+  var r = badge.getBoundingClientRect();
+  var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+  if (!r.width || r.right < 0 || r.bottom < 0 || (vw && r.left > vw) || (vh && r.top > vh)) return true;
+  var pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 1, r.top + 1], [r.right - 1, r.top + 1], [r.left + 1, r.bottom - 1], [r.right - 1, r.bottom - 1]];
+  for (var i = 0; i < pts.length; i++) if (nativeUnder(pageElAt(pts[i][0], pts[i][1]))) return true;
+  return false;
+}
+/** Badge spots, in the pin box's coordinates (the box is the anchor +2px on
+ *  every side): outside top-left (preferred: never on the element itself),
+ *  outside top-right, then inside the anchor's top-left / top-right corners. */
+function badgeSpots(r, bw) {
+  var w = r.width + 4;
+  return [[-20, -20], [w + 2, -20], [4, 4], [w - 4 - bw, 4]];
+}
+/** Place the badge on the first spot that is fully inside the viewport
+ *  horizontally (and not above the document's top) AND clear of native
+ *  controls; else the first spot that is on screen (it stays inert); else
+ *  clamp it to the viewport edge. Returns badgeCoversNative() for the spot
+ *  chosen, so a badge over a control is never live. */
+function placeBadge(badge, r) {
+  var bw = Math.max(18, badge.offsetWidth || 0);
+  var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var sy = window.scrollY || window.pageYOffset || 0;
+  var spots = badgeSpots(r, bw), fallback = null;
+  function fits(s) {
+    var x = r.left - 2 + s[0], y = r.top - 2 + s[1];
+    return x >= 0 && (!vw || x + bw <= vw) && y + sy >= 0;
+  }
+  function put(s) { important(badge, { left: s[0] + "px", top: s[1] + "px" }); }
+  for (var i = 0; i < spots.length; i++) {
+    if (!fits(spots[i])) continue;
+    put(spots[i]);
+    if (!badgeCoversNative(badge)) return false;
+    if (!fallback) fallback = spots[i];
+  }
+  if (!fallback) {
+    // Nothing fits (e.g. an anchor scrolled partly out horizontally): clamp
+    // the outside-top-left spot into the viewport and the document.
+    var x = Math.min(Math.max(r.left - 22, 0), vw ? Math.max(vw - bw, 0) : Infinity);
+    var y = Math.max(r.top - 22, -sy);
+    fallback = [x - (r.left - 2), y - (r.top - 2)];
+  }
+  put(fallback);
+  return badgeCoversNative(badge);
+}
+function setModHeld(v) {
+  if (v === modHeld) return;
+  modHeld = v;
+  syncBadges();
+}
+function pinIdOf(t) {
+  if (!badgeIds || !t || t.nodeType !== 1) return null;
+  var id = badgeIds.get(t);
+  return typeof id === "string" ? id : null;
+}
+function syncBadges() {
+  var live = badgesLive();
+  var bs = layer ? layer.querySelectorAll("dp-annotator-badge") : [];
+  for (var i = 0; i < bs.length; i++) {
+    if (pinIdOf(bs[i]) === null) continue;
+    var on = live && !!badgeOk && badgeOk.get(bs[i]) === true;
+    important(bs[i], { "pointer-events": on ? "auto" : "none", cursor: on ? "pointer" : "default" });
+  }
+  if (!live) setHoverPin(null, null);
+}
+/** Tell the parent which pin the pointer is over (it renders the preview
+ *  from its own data; the frame never holds comment text). */
+function setHoverPin(id, el) {
+  if (id === hoverPin) return;
+  hoverPin = id;
+  if (id === null || !el) { post({ dp: "pin-hover", id: null }); return; }
+  var r = el.getBoundingClientRect();
+  post({ dp: "pin-hover", id: id, x: r.left, y: r.bottom });
+}
 function drawPins() {
   var l = ensureLayer();
   var olds = l.querySelectorAll("dp-annotator-pin");
   for (var i = 0; i < olds.length; i++) olds[i].remove();
+  var hoverStill = false;
   var found = [];
   pinEls = [];
   for (var j = 0; j < current.length; j++) {
@@ -882,21 +1135,39 @@ function drawPins() {
     if (!hit) continue;
     var r = rectOf(hit);
     if (!r) continue;
+    var state = pinStates[j] === "addressed" ? "addressed" : "open";
+    var color = PIN_COLORS[state];
     var pin = mk("dp-annotator-pin");
     pin.setAttribute("data-dp-pin", String(j));
-    important(pin, { position: "absolute", display: "block", "box-sizing": "border-box", outline: "2px solid #f59e0b",
+    pin.setAttribute("data-dp-pin-state", state);
+    important(pin, { position: "absolute", display: "block", "box-sizing": "border-box", outline: pinOutline(state),
       background: "transparent", "pointer-events": "none", margin: "0", padding: "0" });
     place(pin, r);
     var badge = mk("dp-annotator-badge");
     badge.textContent = String(j + 1);
-    important(badge, { position: "absolute", left: "-10px", top: "-10px", display: "block", "box-sizing": "border-box",
-      "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: "#f59e0b",
-      color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center" });
+    var id = pinIds[j];
+    if (id && badgeIds) badgeIds.set(badge, id);
+    // Preferably fully OUTSIDE the anchored element's top-left corner (the
+    // pin box is the element +2px; the 18px badge ends 2px before it), so it
+    // never sits on the element's own interactive area; placeBadge() moves it
+    // to a viewport-visible spot clear of native controls when that's off-screen.
+    important(badge, { position: "absolute", left: "-20px", top: "-20px", display: "block", "box-sizing": "border-box",
+      "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: color,
+      color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center",
+      "pointer-events": "none", cursor: "default" });
     pin.appendChild(badge);
     l.appendChild(pin);
+    var ok = !!id && !!badgeIds && !!badgeOk && !placeBadge(badge, r);
+    if (badgeOk) badgeOk.set(badge, ok);
+    var live = ok && badgesLive();
+    if (live) important(badge, { "pointer-events": "auto", cursor: "pointer" });
+    if (id && id === hoverPin && live) hoverStill = true;
   }
+  // A preview whose pin is gone (or no longer clickable) is withdrawn.
+  if (hoverPin !== null && !hoverStill) setHoverPin(null, null);
   return found;
 }
+function pinOutline(state) { return state === "addressed" ? "1px dashed " + PIN_COLORS.addressed : "2px solid " + PIN_COLORS.open; }
 var CHANGE_COLORS = { added: "#16a34a", changed: "#8b5cf6", moved: "#2563eb", hinted: "#0891b2" };
 var CHANGE_GLYPHS = { added: "+", changed: "~", moved: "\u2195", hinted: "*" };
 var CHANGE_KINDS = { added: 1, changed: 1, moved: 1, hinted: 1 };
@@ -1000,18 +1271,40 @@ function schedule() {
   if ((!current.length && !(showChanges && changes.length)) || pending) return;
   pending = setTimeout(function () { reconcile(false); }, 120);
 }
-function focusPin(index) {
-  if (typeof index !== "number" || index < 0 || index >= current.length) return;
-  var i = Math.floor(index);
+/** #714 gap 8 — put an element near the BOTTOM of THIS frame's viewport
+ *  (~24px above its bottom edge), next to the composer docked under the
+ *  frame. window.scrollTo moves only the frame's own document, never the
+ *  companion. An element taller than the viewport keeps its top in view. */
+function scrollNearBottom(el) {
+  if (!el || !el.getBoundingClientRect) return;
+  var r = el.getBoundingClientRect();
+  var vh = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
+  var sx = window.scrollX || window.pageXOffset || 0, sy = window.scrollY || window.pageYOffset || 0;
+  var y = r.bottom + sy - (vh - 24);
+  if (r.height > vh - 48) y = r.top + sy - 24;
+  try { window.scrollTo(sx, Math.max(0, y)); } catch (e) { /* ignore */ }
+}
+/** {dp:"focus", index[, block]} scrolls to a pin; {dp:"focus", anchor,
+ *  block} (a spot that has no pin yet: the composer just opened on it)
+ *  re-finds the anchor and scrolls to it. block "end" = near the bottom edge. */
+function focusPin(index, anchorArg, block) {
+  var i = typeof index === "number" && index >= 0 && index < current.length ? Math.floor(index) : -1;
+  var a = i >= 0 ? current[i] : anchorArg && typeof anchorArg === "object" ? anchorArg : null;
+  if (!a) return;
   // Re-resolve now: the page may have changed since the pins were drawn.
   var hit = null;
-  try { hit = core.findAnchor(current[i]); } catch (e) { hit = null; }
-  if (hit && hit.el && hit.el.scrollIntoView) hit.el.scrollIntoView({ block: "center", behavior: "smooth" });
+  try { hit = core.findAnchor(a); } catch (e) { hit = null; }
+  if (hit && hit.el) {
+    if (block === "end") scrollNearBottom(hit.el);
+    else if (hit.el.scrollIntoView) hit.el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  if (i < 0) { schedule(); return; }
   reconcile(false);
   var pin = layer ? layer.querySelector("dp-annotator-pin[data-dp-pin=\"" + i + "\"]") : null;
   if (pin) {
+    var st = pinStates[i] === "addressed" ? "addressed" : "open";
     important(pin, { outline: "3px solid #ef4444" });
-    setTimeout(function () { important(pin, { outline: "2px solid #f59e0b" }); }, 1600);
+    setTimeout(function () { important(pin, { outline: pinOutline(st) }); }, 1600);
   }
 }
 
@@ -1173,11 +1466,18 @@ function onMessage(e) {
   if (!d || typeof d !== "object") return;
   if (d.dp === "pins") {
     current = Array.isArray(d.anchors) ? d.anchors.slice(0, 500) : [];
+    var sts = Array.isArray(d.states) ? d.states : [], ids = Array.isArray(d.ids) ? d.ids : [];
+    pinStates = []; pinIds = [];
+    for (var pi = 0; pi < current.length; pi++) {
+      pinStates.push(sts[pi] === "addressed" ? "addressed" : "open");
+      var pid = ids[pi];
+      pinIds.push(typeof pid === "string" && pid.length > 0 && pid.length <= 128 ? pid : null);
+    }
     pinsKey = typeof d.key === "string" && /^[0-9a-z:]{1,64}$/.test(d.key) ? d.key : null;
     reconcile(true);
     scheduleOutline();
   } else if (d.dp === "focus") {
-    focusPin(d.index);
+    focusPin(d.index, d.anchor, d.block);
   } else if (d.dp === "changes") {
     var list = Array.isArray(d.marks) ? d.marks.slice(0, 300) : [];
     changes = [];
@@ -1197,6 +1497,7 @@ function onMessage(e) {
     annotate = d.annotate !== false;
     scripts = d.scripts === true;
     if (!annotate) hideHover();
+    syncBadges();
   }
 }
 function onMouseDown() { suppressClick = false; }
@@ -1222,6 +1523,20 @@ function onMouseUp(e) {
 function onClick(e) {
   var t = targetEl(e);
   if (!t) return;
+  // #714 gap 7 — a click on a pin's badge (one of OUR nodes, matched by
+  // reference) tells the parent which comment it is. Display-only: the parent
+  // scrolls to and highlights that comment; nothing is posted or changed.
+  var pinId = pinIdOf(t);
+  // Cmd/Ctrl held means "let this click through": a badge never turns it
+  // into a pin click (badges also go inert while the key is down).
+  if (pinId !== null && (e.ctrlKey || e.metaKey)) return;
+  if (pinId !== null) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (suppressClick) { suppressClick = false; return; }
+    if (badgesLive() && badgeOk && badgeOk.get(t) === true) post({ dp: "pin-click", id: pinId });
+    return;
+  }
   var link = closestLink(t);
   // The navigation guard runs before anything else, our own nodes included:
   // no link is ever allowed to navigate the frame.
@@ -1284,21 +1599,157 @@ function onScroll(e) {
   schedule();
   scheduleActive();
 }
+/** #714 gap 12 — render diagnostics: script errors, unhandled rejections,
+ *  resources that failed to load (capture phase: element errors don't
+ *  bubble) and requests the frame's CSP blocked. Installed with the other
+ *  listeners, before any page markup is parsed, so both the pre-Run document
+ *  and the running page are covered. Reported as bounded, de-duplicated
+ *  counts: at most DIAG.samples distinct messages per kind, each redacted
+ *  (URLs, data: and blob: URIs replaced) and clipped to DIAG.text; a resource
+ *  is named only by tag + attribute and a block only by its directive, never
+ *  by URL (a URL can carry credentials). Display-only for the parent. */
+var DIAG = { samples: 3, text: 120, keys: 8, max: 9999 };
+var DIAG_ATTRS = { img: ["src", "srcset"], source: ["src", "srcset"], video: ["src", "poster"], audio: ["src"], track: ["src"],
+  script: ["src"], link: ["href"], iframe: ["src"], frame: ["src"], embed: ["src"], object: ["data"], input: ["src"],
+  image: ["href", "xlink:href"], use: ["href", "xlink:href"] };
+/** Fixed allowlists, equal to the shared PAGE_RESOURCE_KEYS and
+ *  PAGE_CSP_DIRECTIVES (a parity test checks): anything else is reported as
+ *  "other resource" / "other". */
+var RESOURCE_KEYS = ["img src", "img srcset", "source src", "source srcset", "video src", "video poster", "audio src", "track src", "script src", "link href", "iframe src", "frame src", "embed src", "object data", "input src", "image href", "use href"];
+var CSP_DIRECTIVES = ["default-src", "script-src", "script-src-elem", "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src", "connect-src", "media-src", "object-src", "frame-src", "child-src", "worker-src", "manifest-src", "base-uri", "form-action", "frame-ancestors", "navigate-to", "prefetch-src", "sandbox", "trusted-types", "require-trusted-types-for", "upgrade-insecure-requests", "report-uri", "report-to"];
+var diag = { script: 0, rejection: 0, scriptSamples: [], rejectionSamples: [], scriptClasses: [], rejectionClasses: [], resources: [], blocked: [] };
+/** An error's CLASS name (the only part of an error the agent sees), from
+ *  a fixed allowlist; anything else is "Error". Must equal the shared
+ *  PAGE_ERROR_CLASSES (a parity test checks). */
+var ERROR_CLASSES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "AggregateError", "InternalError", "DOMException", "SecurityError", "NetworkError", "AbortError", "NotAllowedError", "NotFoundError", "NotSupportedError", "InvalidStateError", "QuotaExceededError", "TimeoutError", "DataCloneError"];
+function knownClass(n) { return typeof n === "string" && ERROR_CLASSES.indexOf(n) !== -1; }
+function errClass(name, message) {
+  if (knownClass(name)) return name;
+  var m = /^(?:Uncaught )?([A-Za-z]{1,40})\b/.exec(typeof message === "string" ? message : "");
+  return m && knownClass(m[1]) ? m[1] : "Error";
+}
+var diagSeen = typeof WeakSet === "function" ? new WeakSet() : null, diagPending = 0, lastDiagJson = "";
+/** Nothing is published before ready: until then the parent may not know
+ *  this document, and a report it dropped would be deduped away for good. */
+var readySent = false;
+function redactDiag(v) {
+  var t = core.norm(v);
+  t = t.replace(/\b(?:data|blob):[^\s"'<>()]*/gi, "[data URI]");
+  t = t.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>()]*/gi, "[url]");
+  t = t.replace(/(^|[\s("'=])\/\/[^\s"'<>()]+/g, "$1[url]");
+  return core.clip(t, DIAG.text);
+}
+function diagBump(n) { return n < DIAG.max ? n + 1 : n; }
+function diagSample(list, v) {
+  var t = redactDiag(v);
+  if (t && list.length < DIAG.samples && list.indexOf(t) === -1) list.push(t);
+}
+/** Every distinct key is kept (keys come from finite allowlists, so this is
+ *  bounded); the DIAG.keys cap is applied at report time, in canonical order
+ *  (see canonKeys), so the retained keys never depend on discovery order. */
+function diagKey(list, key) {
+  for (var i = 0; i < list.length; i++) if (list[i].key === key) { list[i].count = diagBump(list[i].count); return; }
+  list.push({ key: key, count: 1 });
+}
+function diagHas(el, attr) {
+  if (attr === "xlink:href") return !!(el.getAttributeNS && el.getAttributeNS(XLINK, "href") !== null);
+  return !!(el.hasAttribute && el.hasAttribute(attr));
+}
+function onDiagError(e) {
+  var t = e ? e.target : null;
+  if (t && t.nodeType === 1) {
+    if (own(t)) return;
+    var tag = String(t.localName || "").toLowerCase(), attrs = DIAG_ATTRS[tag];
+    if (!attrs) return;
+    if (diagSeen) { if (diagSeen.has(t)) return; diagSeen.add(t); }
+    var attr = attrs[0];
+    for (var i = 0; i < attrs.length; i++) if (diagHas(t, attrs[i])) { attr = attrs[i]; break; }
+    var rk = tag + " " + (attr === "xlink:href" ? "href" : attr);
+    diagKey(diag.resources, RESOURCE_KEYS.indexOf(rk) !== -1 ? rk : "other resource");
+  } else {
+    diag.script = diagBump(diag.script);
+    var m = "", cls = "Error";
+    try {
+      m = e && typeof e.message === "string" ? e.message : "";
+      var er = e ? e.error : null;
+      cls = errClass(er && typeof er === "object" ? er.name : null, m);
+    } catch (x) { m = ""; cls = "Error"; }
+    diagSample(diag.scriptSamples, m || "Script error");
+    diagKey(diag.scriptClasses, cls);
+  }
+  scheduleDiag();
+}
+function onDiagRejection(e) {
+  var m = "", cls = "Error";
+  try {
+    var r = e ? e.reason : undefined;
+    if (r && typeof r === "object" && typeof r.message === "string") {
+      m = (typeof r.name === "string" && r.name ? r.name + ": " : "") + r.message;
+      cls = errClass(r.name, "");
+    } else m = String(r);
+  } catch (x) { m = "Unhandled rejection"; cls = "Error"; }
+  diag.rejection = diagBump(diag.rejection);
+  diagSample(diag.rejectionSamples, m || "Unhandled rejection");
+  diagKey(diag.rejectionClasses, cls);
+  scheduleDiag();
+}
+function onDiagCsp(e) {
+  var d = "";
+  try { d = String((e && (e.effectiveDirective || e.violatedDirective)) || "").toLowerCase().split(" ")[0]; } catch (x) { d = ""; }
+  if (CSP_DIRECTIVES.indexOf(d) === -1) d = "other";
+  diagKey(diag.blocked, d);
+  scheduleDiag();
+}
+/** The first DIAG.keys keys in canonical order: allowlist position, the
+ *  catch-all ("Error" is listed; "other resource" / "other" are not) last.
+ *  Must rank as the shared pageRenderIssueKeyRank does. */
+function canonKeys(list, allow) {
+  var out = [];
+  for (var i = 0; i < list.length; i++) out.push({ key: list[i].key, count: list[i].count });
+  function rank(k) { var r = allow.indexOf(k); return r === -1 ? allow.length : r; }
+  out.sort(function (a, b) { return rank(a.key) - rank(b.key); });
+  return out.slice(0, DIAG.keys);
+}
+function reportDiag() {
+  diagPending = 0;
+  if (!readySent) return;
+  if (!diag.script && !diag.rejection && !diag.resources.length && !diag.blocked.length) return;
+  var msg = { dp: "diagnostics", doc: docId,
+    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: canonKeys(diag.scriptClasses, ERROR_CLASSES) },
+    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice(), classes: canonKeys(diag.rejectionClasses, ERROR_CLASSES) },
+    resources: canonKeys(diag.resources, RESOURCE_KEYS), blocked: canonKeys(diag.blocked, CSP_DIRECTIVES) };
+  var json = JSON.stringify(msg);
+  if (json !== lastDiagJson) { lastDiagJson = json; post(msg); }
+}
+function scheduleDiag() {
+  if (diagPending) return;
+  try { diagPending = setTimeout(reportDiag, 250); } catch (e) { diagPending = 0; }
+}
 function onReady() {
   if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
-  post({ dp: "ready" });
+  post({ dp: "ready", doc: docId });
+  // Ready opens publication: the full current snapshot follows at once,
+  // never suppressed by a dedupe from before ready.
+  readySent = true;
+  lastDiagJson = "";
+  if (diagPending) { clearTimeout(diagPending); diagPending = 0; }
   reportOutline();
+  reportDiag();
 }
 window.addEventListener("click", onClick, true);
 window.addEventListener("auxclick", onAuxClick, true);
 window.addEventListener("mousedown", onMouseDown, true);
 window.addEventListener("mouseup", onMouseUp, true);
 window.addEventListener("mousemove", onMove, true);
+window.addEventListener("mouseout", onOut, true);
 window.addEventListener("keydown", onKey, true);
 window.addEventListener("keyup", onKey, true);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
 window.addEventListener("scroll", onScroll, true);
+window.addEventListener("error", onDiagError, true);
+window.addEventListener("unhandledrejection", onDiagRejection);
+document.addEventListener("securitypolicyviolation", onDiagCsp, true);
 observe();
 if (document.readyState === "complete") onReady(); else window.addEventListener("load", onReady);
 return function uninstall() {
@@ -1307,12 +1758,17 @@ return function uninstall() {
   window.removeEventListener("mousedown", onMouseDown, true);
   window.removeEventListener("mouseup", onMouseUp, true);
   window.removeEventListener("mousemove", onMove, true);
+  window.removeEventListener("mouseout", onOut, true);
   window.removeEventListener("keydown", onKey, true);
   window.removeEventListener("keyup", onKey, true);
   window.removeEventListener("message", onMessage);
   window.removeEventListener("resize", onResize);
   window.removeEventListener("scroll", onScroll, true);
   window.removeEventListener("load", onReady);
+  window.removeEventListener("error", onDiagError, true);
+  window.removeEventListener("unhandledrejection", onDiagRejection);
+  document.removeEventListener("securitypolicyviolation", onDiagCsp, true);
+  if (diagPending) clearTimeout(diagPending);
   if (mo) mo.disconnect();
   if (ro) ro.disconnect();
   if (pending) clearTimeout(pending);
@@ -1323,9 +1779,18 @@ return function uninstall() {
 `;
 
 /** The script inlined first into the frame document. */
-export const ANNOTATOR_SCRIPT =
-  "(function(){try{var core=(function(document,window){" +
-  ANNOTATOR_CORE_SOURCE +
-  "\n})(document,window);(function(document,window,parent,core){" +
-  ANNOTATOR_MAIN_SOURCE +
-  "\n})(document,window,window.parent,core);}catch(e){}})();";
+/** The annotator script for one frame document. `doc` is the id the
+ *  companion minted for that srcdoc (#714 gap 12): it rides into the main
+ *  source as the DP_DOC parameter, never a global. Only a hex id is ever
+ *  embedded; anything else is dropped (the annotator then draws its own). */
+export function annotatorScript(doc?: string): string {
+  const id = typeof doc === "string" && /^[0-9a-f]{16,64}$/.test(doc) ? JSON.stringify(doc) : "undefined";
+  return (
+    "(function(){try{var core=(function(document,window){" +
+    ANNOTATOR_CORE_SOURCE +
+    "\n})(document,window);(function(document,window,parent,core,DP_DOC){" +
+    ANNOTATOR_MAIN_SOURCE +
+    "\n})(document,window,window.parent,core," + id + ");}catch(e){}})();"
+  );
+}
+export const ANNOTATOR_SCRIPT = annotatorScript();

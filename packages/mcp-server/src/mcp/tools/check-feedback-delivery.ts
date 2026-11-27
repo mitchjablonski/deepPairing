@@ -147,8 +147,8 @@ function clipProse(s: string, n: number): string {
  * #680 slice 2 — a comment pointed at a spot inside a `page` artifact's HTML
  * names that spot TEXTUALLY so the agent can find it in the HTML it authored:
  * the kind, the quoted text, the table headers (cell), the Mermaid node id, the
- * link target, and the CSS locator. e.g.
- * ` — on page cell "Up to 60s" (row "TTL expiry", column "Staleness") at \`tr:nth-of-type(2) > td:nth-of-type(2)\``.
+ * link target, the section it sits in (#714 gap 10), and the CSS locator. e.g.
+ * ` — on page cell "Up to 60s" (row "TTL expiry", column "Staleness") (in "Rollout" #rollout) at \`tr:nth-of-type(2) > td:nth-of-type(2)\``.
  */
 export function describeHtmlAnchor(a: CommentHtmlAnchor): string {
   if (!a) return "";
@@ -161,8 +161,20 @@ export function describeHtmlAnchor(a: CommentHtmlAnchor): string {
   if (headers.length) out += ` (${headers.join(", ")})`;
   if (a.nodeId) out += ` (node ${a.nodeId})`;
   if (a.href) out += ` (href ${clipProse(a.href, 120)})`;
+  const section = describeAnchorSection(a.section);
+  if (section) out += ` (in ${section})`;
   out += ` at \`${a.locator}\``;
   return out;
+}
+
+/** #714 gap 10 — `"Rollout" #rollout`, `"Rollout"`, `#rollout`, or "". */
+function describeAnchorSection(section: NonNullable<CommentHtmlAnchor>["section"]): string {
+  if (!section) return "";
+  const parts: string[] = [];
+  const heading = section.heading?.trim();
+  if (heading) parts.push(`"${clipProse(heading, 80)}"`);
+  if (section.id) parts.push(`#${clipProse(section.id, 80)}`);
+  return parts.join(" ");
 }
 
 /** #680 slice 2 — the structured mirror of a page anchor: every field the agent
@@ -180,6 +192,9 @@ function structuredHtmlAnchor(a: CommentHtmlAnchor): Record<string, unknown> {
       ...(a.nodeId ? { nodeId: a.nodeId } : {}),
       ...(a.href ? { href: a.href } : {}),
       ...(a.version != null ? { version: a.version } : {}),
+      ...(a.section && (a.section.heading || a.section.id)
+        ? { section: { ...(a.section.heading ? { heading: a.section.heading } : {}), ...(a.section.id ? { id: a.section.id } : {}) } }
+        : {}),
     },
   };
 }
