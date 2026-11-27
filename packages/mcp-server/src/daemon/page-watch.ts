@@ -8,6 +8,8 @@ import { readPageSource } from "../mcp/tools/present-page.js";
 import { validateRevisePageInput } from "../mcp/validate-tool-input.js";
 import { artifactProposal } from "../mcp/artifact-preflight.js";
 import { preflightRejectedApproaches, persistPreflightTrace } from "../mcp/tool-helpers.js";
+import { ERROR_CODES } from "../error-codes.js";
+import { StandaloneCloseoutError } from "./standalone-closeout.js";
 import { relocatePageComments } from "../mcp/page-anchor-relocate.js";
 
 /**
@@ -102,6 +104,7 @@ interface Entry {
    *  current describes a save that has since been overwritten. */
   gen: number;
   processing: Promise<void> | null;
+  draining: Promise<void> | null;
   stopped: boolean;
 }
 
@@ -181,9 +184,12 @@ export class PageWatcher {
   /** Resolves once no read/record is in flight for the session's watches. */
   async idle(sessionId?: string): Promise<void> {
     for (;;) {
-      const busy = [...this.entries.values()].filter((e) => (!sessionId || e.sessionId === sessionId) && e.processing);
+      const busy = [...this.entries.values()]
+        .filter((e) => !sessionId || e.sessionId === sessionId)
+        .map((e) => e.draining ?? e.processing)
+        .filter((work) => work !== null);
       if (busy.length === 0) return;
-      await Promise.all(busy.map((e) => e.processing));
+      await Promise.allSettled(busy);
     }
   }
 
@@ -226,6 +232,45 @@ export class PageWatcher {
     for (const e of [...this.entries.values()]) if (e.sessionId === sessionId) this.stop(e);
   }
 
+  /** Bypass quiet/rate timers only for work already observed at the cut. */
+  async drainQueuedSaves(sessionId: string): Promise<void> {
+    const drains = [...this.entries.values()].filter((entry) =>
+      entry.sessionId === sessionId && (entry.dirty || entry.processing || entry.draining),
+    ).map((entry) => {
+      const generation = entry.gen;
+      const checkGeneration = () => {
+        if (entry.gen !== generation || entry.dirty) {
+          throw new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
+            "A watched save changed while the standalone review was closing. Let it settle, then retry End review.");
+        }
+      };
+      if (entry.draining) return entry.draining.then(checkGeneration);
+      if (entry.quiet) clearTimeout(entry.quiet);
+      entry.quiet = null;
+      entry.draining = Promise.resolve().then(async () => {
+        await entry.processing;
+        if (entry.stopped) return;
+        const queued = entry.dirty;
+        entry.dirty = false;
+        try {
+          checkGeneration();
+          if (queued) await this.processAdmitted(entry);
+          checkGeneration();
+        } catch (error) {
+          entry.dirty = true;
+          throw error;
+        }
+      }).finally(() => {
+        entry.draining = null;
+        if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
+      });
+      return entry.draining;
+    });
+    // Keep the reservation until every entry settles, even if one failed.
+    const failed = (await Promise.allSettled(drains)).find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
+
   dispose(): void {
     this.disposed = true;
     for (const e of [...this.entries.values()]) this.stop(e);
@@ -259,6 +304,7 @@ export class PageWatcher {
       dirty: false,
       gen: 0,
       processing: null,
+      draining: null,
       stopped: false,
     };
     this.entries.set(this.key(sessionId, a.id), entry);
@@ -313,7 +359,7 @@ export class PageWatcher {
     entry.dirty = true;
     entry.gen++;
     // A read in flight reschedules itself when it finishes (dirty).
-    if (entry.processing) return;
+    if (entry.processing || entry.draining) return;
     this.arm(entry, this.quietMs);
   }
 
@@ -325,7 +371,7 @@ export class PageWatcher {
 
   private fire(entry: Entry): void {
     entry.quiet = null;
-    if (entry.stopped) return;
+    if (entry.stopped || entry.draining) return;
     const wait = entry.lastRecordAt ? entry.lastRecordAt + this.minIntervalMs - Date.now() : 0;
     if (wait > 0) {
       this.arm(entry, wait);
@@ -333,19 +379,23 @@ export class PageWatcher {
     }
     entry.dirty = false;
     entry.processing = this.process(entry)
-      .catch((err) => this.log(`could not record ${entry.sourcePath}: ${String((err as Error)?.message ?? err)}`))
+      .catch((err) => {
+        if (entry.draining) entry.dirty = true;
+        this.log(`could not record ${entry.sourcePath}: ${String((err as Error)?.message ?? err)}`);
+      })
       .finally(() => {
         entry.processing = null;
-        if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
+        if (entry.dirty && !entry.stopped && !entry.draining) this.arm(entry, this.quietMs);
       });
   }
 
   private async process(entry: Entry): Promise<void> {
+    const generation = entry.gen;
     const admission = this.deps.admitWatchedWrite?.(entry.sessionId);
     const release = admission ? await admission : undefined;
     if (admission && !release) return;
     try {
-      if (entry.stopped || this.disposed) return;
+      if (entry.stopped || this.disposed || entry.gen !== generation) return;
       await this.processAdmitted(entry);
     } finally {
       release?.();

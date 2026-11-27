@@ -25,7 +25,7 @@ import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
 import { presentStandalonePage } from "./standalone-page.js";
 import { reviseStandalonePage } from "./standalone-revise-page.js";
-import type { StandaloneCloseout } from "./standalone-closeout.js";
+import { StandaloneCloseoutError, type StandaloneCloseout } from "./standalone-closeout.js";
 import { pageRevisionFeedbackIdsSchema } from "../store/page-revision-feedback.js";
 import { readPageFeedback } from "./page-feedback.js";
 import { decisionFeedback, MAX_DECISION_WAIT_MS, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
@@ -450,6 +450,9 @@ export function createDaemonRoutes(
   const log: LogFn = logFn ?? (() => {});
   const app = new Hono();
   app.onError((error, c) => {
+    if (error instanceof StandaloneCloseoutError) {
+      return c.json({ error: error.message, code: error.code }, 409);
+    }
     if (isFileLockError(error)) return lockBusyRouteError(log, c, error);
     if (isSessionReviewConflictError(error)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
@@ -606,6 +609,7 @@ export function createDaemonRoutes(
       if (parsed.data.mode === "open" && (existing || sessions.has(sessionId))) {
         return c.json({ error: "Standalone session already exists. Resume it instead." }, 409);
       }
+      if (parsed.data.mode === "resume") standaloneCloseout?.state(sessionId);
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
       // A resumed standalone review re-arms the file watch for its live

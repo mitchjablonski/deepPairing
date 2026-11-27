@@ -62,6 +62,8 @@ export const ERROR_CODES = {
   session_review_conflict: "session_review_conflict",
   session_closing: "session_closing",
   session_ended: "session_ended",
+  session_marker_invalid: "session_marker_invalid",
+  session_save_pending: "session_save_pending",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** Context bank — a close-out aimed at a decision owned by ANOTHER project.

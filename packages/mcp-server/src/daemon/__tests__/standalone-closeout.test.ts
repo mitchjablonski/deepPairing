@@ -100,6 +100,25 @@ describe("standalone End review core", () => {
     }
   });
 
+  it("keeps a timed-out watch drain reserved until the save settles", async () => {
+    const f = fixture();
+    let release!: () => void;
+    const save = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const coordinator = new StandaloneCloseout(f.project, () => f.store, 50, undefined, () => save);
+      await expect(coordinator.end(f.sessionId)).rejects.toThrow(/still settling/);
+      expect(fs.existsSync(f.marker)).toBe(false);
+      expect(coordinator.state(f.sessionId)).toEqual({ state: "open" });
+      const retry = coordinator.end(f.sessionId);
+      expect(coordinator.state(f.sessionId)).toEqual({ state: "closing" });
+      release();
+      await expect(retry).resolves.toMatchObject({ sessionId: f.sessionId });
+    } finally {
+      release();
+      f.fx.dispose();
+    }
+  });
+
   it.each(["options", "page", "revision"] as const)("completes only the durable effects of an interrupted %s", async (kind) => {
     const f = fixture();
     try {
@@ -261,7 +280,8 @@ describe("standalone End review core", () => {
       await expect(coordinator.end(f.sessionId)).rejects.toThrow();
       expect(fs.existsSync(f.marker)).toBe(false);
       fs.writeFileSync(f.marker, JSON.stringify({ version: 1, sessionId: "another review", endedAt: new Date().toISOString() }));
-      expect(() => coordinator.admitWrite(f.sessionId)).toThrow(/different review/);
+      expect(() => coordinator.admitWrite(f.sessionId)).toThrow(/End marker cannot be verified/);
+      await expect(coordinator.end(f.sessionId)).rejects.toMatchObject({ code: "session_marker_invalid" });
     } finally {
       f.fx.dispose();
     }

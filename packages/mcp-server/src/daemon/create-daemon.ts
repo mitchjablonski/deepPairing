@@ -265,7 +265,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // is why the daemon used to leak a process per project forever.
   const activeSessions = new Set<string>();
   const standaloneCloseout = new StandaloneCloseout(projectRoot, (sessionId) => sessions.get(sessionId),
-    undefined, (sessionId) => pageWatcher.stopSession(sessionId));
+    undefined, (sessionId) => pageWatcher.stopSession(sessionId), (sessionId) => pageWatcher.drainQueuedSaves(sessionId));
   const demoRuns = new Map<string, () => void>();
   // #470 — active allowances live ONLY here (O1). A restart ends every grant:
   // each registrationId embeds this instanceId.
@@ -289,9 +289,15 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     broadcast: (sessionId, event) => broadcast(sessionId, event),
     // #679 — a standalone (CLI) review has no wrapper lease; its pages are
     // watched while the daemon holds the session and its review has not ended.
-    isSessionLive: (sessionId) => isStandaloneSessionForProject(sessionId, projectRoot)
-      ? sessions.has(sessionId) && standaloneCloseout.state(sessionId).state !== "ended"
-      : activeSessions.has(sessionId),
+    isSessionLive: (sessionId) => {
+      if (!isStandaloneSessionForProject(sessionId, projectRoot)) return activeSessions.has(sessionId);
+      try {
+        return sessions.has(sessionId) && standaloneCloseout.state(sessionId).state !== "ended";
+      } catch (error) {
+        log(`[page-watch] session ineligible: ${errorMessage(error)}`);
+        return false;
+      }
+    },
     admitWatchedWrite: (sessionId) => isStandaloneSessionForProject(sessionId, projectRoot)
       ? standaloneCloseout.admitWatchedWrite(sessionId)
       : undefined,
