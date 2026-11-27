@@ -438,6 +438,203 @@ it("End lets a held decision resolution settle before an admitted close-out insp
   }
 });
 
+const RULE_OUT_HTML =
+  "<table><tr><th>Strategy</th><th>Staleness</th></tr><tr><td>TTL expiry</td><td>Up to 60s</td></tr></table>";
+const RULE_OUT_ANCHOR = {
+  kind: "cell" as const,
+  locator: "table > tbody > tr:nth-of-type(2) > td:nth-of-type(2)",
+  quote: "Up to 60s",
+  table: { row: "TTL expiry", col: "Staleness" },
+  version: 1,
+};
+const CHANGESET_FILES = [
+  { path: "auth/middleware.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 26 }] }] },
+];
+
+function seedReviewWriters(store: FileStore): void {
+  store.createArtifact({ id: "held", type: "page", title: "Held", content: { title: "Held", html: "<p>Approve me</p>" } });
+  store.createArtifact({ id: "late", type: "page", title: "Late", content: { title: "Late", html: RULE_OUT_HTML } });
+  store.createArtifact({ id: "cs", type: "changeset", title: "Move TTL refresh", content: { files: CHANGESET_FILES } } as any);
+  store.createArtifact({
+    id: "decision", type: "decision", title: "Choose a cache",
+    content: { decisionId: "d1", context: "Choose a cache", options: OPTS },
+  });
+  store.recordDecisionRequest({ decisionId: "d1", artifactId: "decision", context: "Choose a cache", options: OPTS });
+  expect(store.resolveDecisionAtomic("d1", "o1")).toMatchObject({ kind: "resolved" });
+  store.forceFlush();
+}
+
+function reviewWriterHarness(tmpDir: string, daemon: Daemon) {
+  const headers = { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" };
+  const send = (method: string, route: string, body?: Record<string, unknown>, headerSession?: string) =>
+    daemon.app.request(`/api/${route}`, {
+      method,
+      headers: { ...headers, ...(headerSession ? { "X-Session-Id": headerSession } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  // `headerSession` selects the store for header-scoped writes (undefined =
+  // the headerless default); `otherHeader` rides on the path-scoped writes so
+  // the path, not the header, must decide which review is admitted.
+  const writes = (pathSession: string, headerSession: string | undefined, otherHeader: string) => [
+    ["POST", "artifacts/late/rule-out", { htmlAnchor: RULE_OUT_ANCHOR, reason: "Stale sessions log people out" }, headerSession],
+    ["POST", "decisions/d1/options/o2/never-suggest", { reason: "Too cold" }, headerSession],
+    ["POST", "artifacts/cs/changeset-review", { filePath: "auth/middleware.ts", state: "reviewed" }, headerSession],
+    ["POST", "render-failures", { artifactId: "late", visualId: "v1", error: "Parse error" }, headerSession],
+    // Last: a rejected page takes no further rule-out.
+    ["POST", "artifacts/late/status", { status: "rejected", feedback: "Not this" }, headerSession],
+    ["POST", `sessions/${pathSession}/annotations`, { targetEventId: "evt_1", note: "Late note" }, otherHeader],
+    ["DELETE", `sessions/${pathSession}/annotations/ann_existing`, undefined, otherHeader],
+  ] as const;
+  return { send, writes };
+}
+
+function seedAnnotation(tmpDir: string, sessionId: string): string {
+  const file = path.join(tmpDir, ".deeppairing", "sessions", sessionId, "annotations.json");
+  fs.writeFileSync(file, JSON.stringify([{ id: "ann_existing", sessionId, targetEventId: "evt_0", note: "Keep me", createdAt: new Date().toISOString() }]));
+  return file;
+}
+
+it("End drains an admitted headerless verdict and refuses seven late browser writes to the exact review (#711)", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  const sibling = daemon.createSession(createStandaloneSessionId(tmpDir));
+  const wrapper = daemon.createSession("session_wrapper");
+  for (const s of [store, sibling, wrapper]) seedReviewWriters(s as FileStore);
+  const annotations = seedAnnotation(tmpDir, sessionId);
+  seedAnnotation(tmpDir, sibling.getSessionId());
+  seedAnnotation(tmpDir, wrapper.getSessionId());
+  const annotationsBefore = fs.readFileSync(annotations, "utf8");
+  const { send, writes } = reviewWriterHarness(tmpDir, daemon);
+  const assertRefusals = async (code: string) => {
+    // Headerless default store; annotations carry the SIBLING in the header.
+    for (const [method, route, body, header] of writes(sessionId, undefined, sibling.getSessionId())) {
+      const response = await send(method, route, body, header);
+      expect(response.status, route).toBe(409);
+      expect(await response.json(), route).toMatchObject({ code });
+    }
+  };
+  const assertAccepted = async (pathSession: string, headerSession: string) => {
+    for (const [method, route, body, header] of writes(pathSession, pathSession, headerSession)) {
+      const response = await send(method, route, body, header);
+      expect(response.status, `${route} for ${pathSession}`).toBe(200);
+    }
+  };
+
+  let entered!: () => void;
+  let release!: () => void;
+  const enteredVerdict = new Promise<void>((resolve) => { entered = resolve; });
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const update = store.updateArtifactStatus.bind(store);
+  const delayed = vi.spyOn(store as IStore, "updateArtifactStatus").mockImplementationOnce(async (...args) => {
+    entered();
+    await blocked;
+    return update(...args);
+  });
+  const admitted = send("POST", "artifacts/held/status", { status: "approved" });
+  const marker = path.join(tmpDir, ".deeppairing", "sessions", sessionId, "review-ended.json");
+  try {
+    await Promise.race([enteredVerdict, admitted.then(() => { throw new Error("Verdict did not reach the hold."); })]);
+    const ending = daemon.standaloneCloseout.end(sessionId);
+    try {
+      await assertRefusals("session_closing");
+      expect(fs.existsSync(marker)).toBe(false);
+      // Rejected stances are project memory: none yet, so the refusals wrote none.
+      expect(store.getSessionMemory().rejectedApproaches).toEqual([]);
+      // A sibling review and a wrapper session keep writing, even with the
+      // closing review in the header of the path-scoped annotation writes.
+      await assertAccepted(sibling.getSessionId(), sessionId);
+      await assertAccepted(wrapper.getSessionId(), sessionId);
+    } finally {
+      release();
+      await ending;
+    }
+    expect((await admitted).status).toBe(200);
+    expect(fs.existsSync(marker)).toBe(true);
+    const rows = JSON.parse(fs.readFileSync(path.join(path.dirname(marker), "artifacts.json"), "utf8"));
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "held", status: "approved" }),
+      expect.objectContaining({ id: "late", status: "draft" }),
+    ]));
+    const memoryBefore = store.getSessionMemory().rejectedApproaches;
+    await assertRefusals("session_ended");
+
+    // Nothing a refused write would have touched moved.
+    expect(store.getArtifacts().find((a) => a.id === "late")?.status).toBe("draft");
+    expect((store.getArtifacts().find((a) => a.id === "cs")?.content as { reviewState?: unknown }).reviewState ?? {}).toEqual({});
+    expect(store.getSessionMemory().rejectedApproaches).toEqual(memoryBefore);
+    expect(store.getCommentsForArtifact("late")).toEqual([]);
+    expect(store.getUnacknowledgedRenderFailures()).toEqual([]);
+    expect(fs.readFileSync(annotations, "utf8")).toBe(annotationsBefore);
+    // The sibling's writes landed.
+    expect(sibling.getArtifacts().find((a) => a.id === "late")?.status).toBe("rejected");
+    expect(sibling.getUnacknowledgedRenderFailures()).toHaveLength(1);
+  } finally {
+    release();
+    await admitted;
+    delayed.mockRestore();
+  }
+});
+
+it("releases End admission when a guarded browser write 404s, 400s, or throws (#711)", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId) as FileStore;
+  seedReviewWriters(store);
+  const { send } = reviewWriterHarness(tmpDir, daemon);
+  const admission = vi.spyOn(daemon.standaloneCloseout, "admitWrite");
+  const statusThrow = vi.spyOn(store as IStore, "updateArtifactStatus").mockImplementationOnce(() => {
+    throw new Error("disk exploded");
+  });
+  const renderThrow = vi.spyOn(store, "recordRenderFailure").mockImplementationOnce(() => {
+    throw new Error("disk exploded");
+  });
+  try {
+    const failures = [
+      [send("POST", "decisions/missing/options/o2/never-suggest", {}), 404],
+      [send("POST", "decisions/d1/options/o1/never-suggest", {}), 400],
+      [send("POST", "artifacts/late/changeset-review", { filePath: "auth/middleware.ts", state: "reviewed" }), 400],
+      [send("POST", "artifacts/late/status", { status: "approved" }), 500],
+      [send("POST", "render-failures", { artifactId: "late", visualId: "v1", error: "Parse error" }), 500],
+      [send("DELETE", `sessions/${sessionId}/annotations/ann_missing`), 200],
+    ] as const;
+    for (const [pending, status] of failures) expect((await pending).status).toBe(status);
+    // Each of these took (and must have released) admission.
+    expect(admission.mock.results.filter(({ value }) => typeof value === "function")).toHaveLength(failures.length);
+    const ended = await Promise.race([
+      daemon.standaloneCloseout.end(sessionId).then(() => "ended"),
+      sleep(5_000).then(() => "hung"),
+    ]);
+    expect(ended).toBe("ended");
+    expect(daemon.standaloneCloseout.state(sessionId)).toMatchObject({ state: "ended" });
+    expect(store.getArtifacts().find((a) => a.id === "late")?.status).toBe("draft");
+  } finally {
+    statusThrow.mockRestore();
+    renderThrow.mockRestore();
+    admission.mockRestore();
+  }
+});
+
+it("answers a path-named standalone review with no directory as a typed 404, creating nothing (#711)", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  daemon.createSession(sessionId);
+  const ghost = createStandaloneSessionId(tmpDir);
+  const ghostDir = path.join(tmpDir, ".deeppairing", "sessions", ghost);
+  const { send } = reviewWriterHarness(tmpDir, daemon);
+  for (const [method, route, body] of [
+    ["POST", `sessions/${ghost}/annotations`, { targetEventId: "evt_1", note: "Lost note" }],
+    ["DELETE", `sessions/${ghost}/annotations/ann_existing`, undefined],
+  ] as const) {
+    const response = await send(method, route, body, sessionId);
+    expect(response.status, route).toBe(404);
+    expect(await response.json(), route).toMatchObject({ code: ERROR_CODES.session_not_found });
+  }
+  expect(fs.existsSync(ghostDir)).toBe(false);
+  await daemon.standaloneCloseout.end(sessionId);
+  expect(daemon.standaloneCloseout.state(sessionId)).toMatchObject({ state: "ended" });
+});
+
 it("wakes only the ended review's exact decision waiters after the marker commits", async () => {
   const { tmpDir, daemon } = makeDaemon();
   const sessionId = createStandaloneSessionId(tmpDir);

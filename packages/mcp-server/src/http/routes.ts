@@ -417,6 +417,14 @@ export function createHttpRoutes(
     return c.json({ error: "Internal server error" }, 500);
   });
 
+  // #711 — a path-named standalone review with no session directory is a
+  // typed 404 before admission (closeout cannot read a missing review), and
+  // nothing is created. Wrapper ids keep their existing behavior.
+  function missingStandaloneSession(c: Context, root: string, sessionId: string): Response | null {
+    if (!isStandaloneSessionForProject(sessionId, root) || sessionDirExists(root, sessionId)) return null;
+    return c.json({ error: "Session not found", code: ERROR_CODES.session_not_found }, 404);
+  }
+
   async function withReviewWrite(
     c: Context, store: Pick<IStore, "getSessionId"> | null, requestedSid: string | undefined,
     run: (sid: string | undefined) => Promise<Response>,
@@ -669,9 +677,12 @@ export function createHttpRoutes(
     // A read-only / non-FileStore backing store can't persist these; treat that
     // as a benign no-op success (nothing to surface, nothing broken).
     if (!store.recordRenderFailure) return c.json({ status: "ignored", artifactId, visualId });
-    await store.recordRenderFailure({ artifactId, visualId, error, title: pageIssues ? art.title || undefined : title });
-    broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
-    return c.json({ status: "recorded", artifactId, visualId });
+    const record = store.recordRenderFailure.bind(store);
+    return withReviewWrite(c, store, sid, async (sid) => {
+      await record({ artifactId, visualId, error, title: pageIssues ? art.title || undefined : title });
+      broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
+      return c.json({ status: "recorded", artifactId, visualId });
+    });
   });
 
   // Mark a human's OWN unanswered question resolved (human-side "I'm done
@@ -1976,9 +1987,16 @@ export function createHttpRoutes(
     if (!targetEventId || !note) {
       return c.json({ error: "targetEventId and note required" }, 400);
     }
-    const s = new FileStore(projectRoot, sessionId);
-    const annotation = s.addAnnotation({ targetEventId, note, tags });
-    return c.json({ annotation });
+    // #711 — admit the PATH session (the one actually written), never the
+    // header/default store, before constructing its writer.
+    const root = projectRoot;
+    const missing = missingStandaloneSession(c, root, sessionId);
+    if (missing) return missing;
+    return withReviewWrite(c, null, sessionId, async () => {
+      const s = new FileStore(root, sessionId);
+      const annotation = s.addAnnotation({ targetEventId, note, tags });
+      return c.json({ annotation });
+    });
   });
 
   // Save a re-pair prompt to .deeppairing/prompts/ so the developer can
@@ -2052,16 +2070,22 @@ export function createHttpRoutes(
     }
   });
 
-  app.delete("/api/sessions/:sessionId/annotations/:annotationId", (c) => {
+  app.delete("/api/sessions/:sessionId/annotations/:annotationId", async (c) => {
     const sessionId = c.req.param("sessionId");
     const annotationId = c.req.param("annotationId");
     if (!projectRoot) return c.json({ error: "No project root" }, 500);
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
       return c.json({ error: "Invalid session ID" }, 400);
     }
-    const s = new FileStore(projectRoot, sessionId);
-    const ok = s.deleteAnnotation(annotationId);
-    return c.json({ deleted: ok });
+    // #711 — admit the path session before constructing its writer.
+    const root = projectRoot;
+    const missing = missingStandaloneSession(c, root, sessionId);
+    if (missing) return missing;
+    return withReviewWrite(c, null, sessionId, async () => {
+      const s = new FileStore(root, sessionId);
+      const ok = s.deleteAnnotation(annotationId);
+      return c.json({ deleted: ok });
+    });
   });
 
   return app;

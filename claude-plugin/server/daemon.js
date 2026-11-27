@@ -26657,6 +26657,9 @@ var ERROR_CODES = {
   suggestion_response_required: "suggestion_response_required",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
+  /** A path-scoped browser write named a standalone review with no session
+   *  directory (#711): answered 404 before End admission, nothing created. */
+  session_not_found: "session_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
    *  (H1-5 write-refusal surfaced as a structured route error). */
   ledger_frozen: "ledger_frozen",
@@ -37608,7 +37611,7 @@ function createReviewRoutes({
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = DecisionOptionNeverSuggestBodySchema.safeParse(bodyVal.value ?? {});
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    return withDecisionResolveLock(store, async () => {
+    return withReviewWrite(c, store, sid, (sid2) => withDecisionResolveLock(store, async () => {
       const artifacts = await store.getArtifacts();
       const artifact = artifacts.find(
         (a) => a.type === "decision" && (a.content?.decisionId === requestedId || a.id === requestedId)
@@ -37658,7 +37661,7 @@ function createReviewRoutes({
       const reason = humanReason || composeOptionRejectReason(option, "");
       const description = `${label}: ${option.title}`;
       const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === description);
-      await recordRejectedOption(store, (event) => broadcast(event, sid), {
+      await recordRejectedOption(store, (event) => broadcast(event, sid2), {
         context: label,
         option,
         reason,
@@ -37672,7 +37675,7 @@ function createReviewRoutes({
         alreadyRecorded,
         ...stored?.reason ? { reason: stored.reason } : {}
       });
-    });
+    }));
   });
   app.post("/api/artifacts/:artifactId/rule-out", async (c) => {
     const sid = getSessionId(c);
@@ -37718,44 +37721,46 @@ function createReviewRoutes({
         `The gate can't find \u201C${description}\u201D within one block of this page, so it would never fire. Select text inside one paragraph, cell or heading.`
       );
     }
-    const before = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
-    const alreadyRecorded = !!before;
-    await store.recordRejectedApproach({ description, reason, sourceArtifactId: page.id, sourceAnchor: anchor, origin: "page_rule_out" });
-    const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
-    const storedReason = stored?.reason ?? reason;
-    let comment;
-    if (alreadyRecorded) {
-      comment = (await store.getCommentsForArtifact(page.id)).find((x) => x.author === "human" && x.ruleOut?.description === description);
-    }
-    const ownsRow = stored?.origin === "page_rule_out" && stored.sourceArtifactId === page.id;
-    if (!comment && ownsRow) {
-      const newId = `cmt_${nanoid3(10)}`;
-      const added = await store.addComment({
-        id: newId,
-        artifactId: page.id,
-        content: storedReason,
-        author: "human",
-        target: { artifactId: page.id, htmlAnchor: anchor },
-        intent: "comment",
-        parentCommentId: null,
-        ruleOut: { description }
-      });
-      comment = added;
-      if (added.id === newId) {
-        broadcast({ type: "comment_added", comment: added }, sid);
-        broadcast({ type: "feedback_received", commentId: added.id, artifactId: page.id, intent: "comment" }, sid);
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      const before = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+      const alreadyRecorded = !!before;
+      await store.recordRejectedApproach({ description, reason, sourceArtifactId: page.id, sourceAnchor: anchor, origin: "page_rule_out" });
+      const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+      const storedReason = stored?.reason ?? reason;
+      let comment;
+      if (alreadyRecorded) {
+        comment = (await store.getCommentsForArtifact(page.id)).find((x) => x.author === "human" && x.ruleOut?.description === description);
       }
-    }
-    if (!alreadyRecorded) {
-      broadcast({ type: "ledger_write", kind: "rejected", description, reason: storedReason, sourceArtifactId: page.id }, sid);
-    }
-    log2(`[page] rule-out ${page.id}${alreadyRecorded ? " (already recorded)" : ""}`);
-    return c.json({
-      status: "recorded",
-      description,
-      alreadyRecorded,
-      reason: storedReason,
-      ...comment ? { comment } : {}
+      const ownsRow = stored?.origin === "page_rule_out" && stored.sourceArtifactId === page.id;
+      if (!comment && ownsRow) {
+        const newId = `cmt_${nanoid3(10)}`;
+        const added = await store.addComment({
+          id: newId,
+          artifactId: page.id,
+          content: storedReason,
+          author: "human",
+          target: { artifactId: page.id, htmlAnchor: anchor },
+          intent: "comment",
+          parentCommentId: null,
+          ruleOut: { description }
+        });
+        comment = added;
+        if (added.id === newId) {
+          broadcast({ type: "comment_added", comment: added }, sid2);
+          broadcast({ type: "feedback_received", commentId: added.id, artifactId: page.id, intent: "comment" }, sid2);
+        }
+      }
+      if (!alreadyRecorded) {
+        broadcast({ type: "ledger_write", kind: "rejected", description, reason: storedReason, sourceArtifactId: page.id }, sid2);
+      }
+      log2(`[page] rule-out ${page.id}${alreadyRecorded ? " (already recorded)" : ""}`);
+      return c.json({
+        status: "recorded",
+        description,
+        alreadyRecorded,
+        reason: storedReason,
+        ...comment ? { comment } : {}
+      });
     });
   });
   app.post("/api/artifacts/:artifactId/status", async (c) => {
@@ -37788,133 +37793,135 @@ function createReviewRoutes({
         404
       );
     }
-    function stalePageResponse(successorId, successorVersion) {
-      broadcast({ type: "artifact_updated", artifactId, status: "superseded" }, sid);
-      return c.json({
-        error: ERROR_CODES.parent_superseded,
-        code: ERROR_CODES.parent_superseded,
-        currentStatus: "superseded",
-        successorId,
-        successorVersion,
-        message: `This page has been replaced by ${successorId}. Review the newer version before recording a verdict.`
-      }, 409);
-    }
-    const staleAtRead = stalePageVerdictSuccessor(target, artsBefore, reason);
-    if (staleAtRead) return stalePageResponse(staleAtRead.id, staleAtRead.version);
-    if (autoReason === "auto_confidence") {
-      const level = await store.getAutonomyLevel();
-      const confidence = target.content?.confidence;
-      if (status !== "approved" || target.type === "debrief" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
-        log2(`[status] REFUSED auto-approve on ${artifactId}: level=${level} confidence=${confidence ?? "(none)"} status=${target.status}`);
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      function stalePageResponse(successorId, successorVersion) {
+        broadcast({ type: "artifact_updated", artifactId, status: "superseded" }, sid2);
+        return c.json({
+          error: ERROR_CODES.parent_superseded,
+          code: ERROR_CODES.parent_superseded,
+          currentStatus: "superseded",
+          successorId,
+          successorVersion,
+          message: `This page has been replaced by ${successorId}. Review the newer version before recording a verdict.`
+        }, 409);
+      }
+      const staleAtRead = stalePageVerdictSuccessor(target, artsBefore, reason);
+      if (staleAtRead) return stalePageResponse(staleAtRead.id, staleAtRead.version);
+      if (autoReason === "auto_confidence") {
+        const level = await store.getAutonomyLevel();
+        const confidence = target.content?.confidence;
+        if (status !== "approved" || target.type === "debrief" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
+          log2(`[status] REFUSED auto-approve on ${artifactId}: level=${level} confidence=${confidence ?? "(none)"} status=${target.status}`);
+          return c.json(
+            {
+              error: "auto_approve_not_permitted",
+              code: "auto_approve_not_permitted",
+              autonomyLevel: level,
+              message: "Auto-approval is no longer permitted (the autonomy level or the artifact changed). Nothing was approved \u2014 review it and approve yourself."
+            },
+            409
+          );
+        }
+      }
+      if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
+        const at = target.updatedAt;
+        log2(
+          `[status] REFUSED cross-tab verdict flip on ${artifactId}: ${target.status} \u2192 ${status} (reason=${reason}) \u2014 verdict already final at ${at}`
+        );
+        broadcast({ type: "artifact_updated", artifactId, status: target.status }, sid2);
         return c.json(
           {
-            error: "auto_approve_not_permitted",
-            code: "auto_approve_not_permitted",
-            autonomyLevel: level,
-            message: "Auto-approval is no longer permitted (the autonomy level or the artifact changed). Nothing was approved \u2014 review it and approve yourself."
+            error: "verdict_already_final",
+            code: "verdict_already_final",
+            currentStatus: target.status,
+            at,
+            message: `This artifact was already ${target.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
           },
           409
         );
       }
-    }
-    if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
-      const at = target.updatedAt;
-      log2(
-        `[status] REFUSED cross-tab verdict flip on ${artifactId}: ${target.status} \u2192 ${status} (reason=${reason}) \u2014 verdict already final at ${at}`
-      );
-      broadcast({ type: "artifact_updated", artifactId, status: target.status }, sid);
-      return c.json(
-        {
-          error: "verdict_already_final",
-          code: "verdict_already_final",
-          currentStatus: target.status,
-          at,
-          message: `This artifact was already ${target.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
-        },
-        409
-      );
-    }
-    let rejection = null;
-    if (status === "rejected") {
-      const artifact = target;
-      if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
-      } else if (artifact && artifact.type !== "decision") {
-        const artConcept = artifact.content?.concept?.name;
-        const changesetFallback = artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : void 0;
-        const concept = humanConcept?.trim() || artConcept || changesetFallback || void 0;
-        rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
-      } else if (artifact && artifact.type === "decision") {
-        const content = artifact.content;
-        const context = content?.context?.trim() || artifact.title;
-        const concept = humanConcept?.trim() || content?.title?.trim() || context || void 0;
-        rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
-      }
-    }
-    let retractOnConflict = null;
-    let recordAfterFlush = false;
-    if (rejection && await store.previewReviewConflict?.(artifactId, status)) {
-      recordAfterFlush = true;
-    } else if (rejection) {
-      const had = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === rejection.description);
-      if (target.type === "page") {
-        const current = store.getArtifacts();
-        const artifacts = current instanceof Promise ? await current : current;
-        const stale = stalePageVerdictSuccessor(artifacts.find((a) => a.id === artifactId), artifacts, reason);
-        if (stale) return stalePageResponse(stale.id, stale.version);
-        const recorded = store.recordRejectedApproach(rejection);
-        if (recorded) await recorded;
-      } else {
-        await store.recordRejectedApproach(rejection);
-      }
-      if (!had) retractOnConflict = rejection.description;
-    }
-    const feedbackCommentId = feedback && target.type === "page" && (status === "revised" || status === "rejected") ? `cmt_${nanoid3(10)}` : void 0;
-    try {
-      if (feedbackCommentId) await store.updateArtifactStatus(artifactId, status, reason, { feedbackCommentId });
-      else await store.updateArtifactStatus(artifactId, status, reason);
-    } catch (err) {
-      if (target.type === "page" && err instanceof ParentSupersededError && err.successorId) {
-        return stalePageResponse(err.successorId, err.successorVersion);
-      }
-      throw err;
-    }
-    if (status !== "obsolete") {
-      await store.resolvePlanReview(artifactId, status, feedback);
-    }
-    await updateTaskStatus(artifactId, store);
-    if (feedback) {
-      const comment = await store.addComment({
-        id: feedbackCommentId ?? `cmt_${nanoid3(10)}`,
-        artifactId,
-        content: feedback,
-        author: "human",
-        verdictFeedback: true
-      });
-      broadcast({ type: "comment_added", comment }, sid);
-    }
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      if (isSessionReviewConflictError(err)) {
-        if (retractOnConflict) {
-          try {
-            await store.retractRejectedApproach?.(retractOnConflict);
-          } catch (retractErr) {
-            console.error(`[deepPairing] could not retract rejection after a review conflict: ${retractErr}`);
-          }
+      let rejection = null;
+      if (status === "rejected") {
+        const artifact = target;
+        if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
+        } else if (artifact && artifact.type !== "decision") {
+          const artConcept = artifact.content?.concept?.name;
+          const changesetFallback = artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : void 0;
+          const concept = humanConcept?.trim() || artConcept || changesetFallback || void 0;
+          rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
+        } else if (artifact && artifact.type === "decision") {
+          const content = artifact.content;
+          const context = content?.context?.trim() || artifact.title;
+          const concept = humanConcept?.trim() || content?.title?.trim() || context || void 0;
+          rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
         }
-        return c.json({
-          error: "session_review_conflict",
-          code: ERROR_CODES.session_review_conflict,
-          message: err.message
-        }, 409);
       }
-      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
-    }
-    if (rejection && recordAfterFlush) await store.recordRejectedApproach(rejection);
-    if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid);
-    broadcast({ type: "artifact_updated", artifactId, status }, sid);
-    return c.json({ status: "updated", artifactId });
+      let retractOnConflict = null;
+      let recordAfterFlush = false;
+      if (rejection && await store.previewReviewConflict?.(artifactId, status)) {
+        recordAfterFlush = true;
+      } else if (rejection) {
+        const had = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === rejection.description);
+        if (target.type === "page") {
+          const current = store.getArtifacts();
+          const artifacts = current instanceof Promise ? await current : current;
+          const stale = stalePageVerdictSuccessor(artifacts.find((a) => a.id === artifactId), artifacts, reason);
+          if (stale) return stalePageResponse(stale.id, stale.version);
+          const recorded = store.recordRejectedApproach(rejection);
+          if (recorded) await recorded;
+        } else {
+          await store.recordRejectedApproach(rejection);
+        }
+        if (!had) retractOnConflict = rejection.description;
+      }
+      const feedbackCommentId = feedback && target.type === "page" && (status === "revised" || status === "rejected") ? `cmt_${nanoid3(10)}` : void 0;
+      try {
+        if (feedbackCommentId) await store.updateArtifactStatus(artifactId, status, reason, { feedbackCommentId });
+        else await store.updateArtifactStatus(artifactId, status, reason);
+      } catch (err) {
+        if (target.type === "page" && err instanceof ParentSupersededError && err.successorId) {
+          return stalePageResponse(err.successorId, err.successorVersion);
+        }
+        throw err;
+      }
+      if (status !== "obsolete") {
+        await store.resolvePlanReview(artifactId, status, feedback);
+      }
+      await updateTaskStatus(artifactId, store);
+      if (feedback) {
+        const comment = await store.addComment({
+          id: feedbackCommentId ?? `cmt_${nanoid3(10)}`,
+          artifactId,
+          content: feedback,
+          author: "human",
+          verdictFeedback: true
+        });
+        broadcast({ type: "comment_added", comment }, sid2);
+      }
+      try {
+        await store.forceFlush();
+      } catch (err) {
+        if (isSessionReviewConflictError(err)) {
+          if (retractOnConflict) {
+            try {
+              await store.retractRejectedApproach?.(retractOnConflict);
+            } catch (retractErr) {
+              console.error(`[deepPairing] could not retract rejection after a review conflict: ${retractErr}`);
+            }
+          }
+          return c.json({
+            error: "session_review_conflict",
+            code: ERROR_CODES.session_review_conflict,
+            message: err.message
+          }, 409);
+        }
+        console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
+      }
+      if (rejection && recordAfterFlush) await store.recordRejectedApproach(rejection);
+      if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid2);
+      broadcast({ type: "artifact_updated", artifactId, status }, sid2);
+      return c.json({ status: "updated", artifactId });
+    });
   });
   app.post("/api/artifacts/:artifactId/changeset-review", async (c) => {
     const sid = getSessionId(c);
@@ -37940,20 +37947,23 @@ function createReviewRoutes({
     if (!store.setChangesetFileReview) {
       return c.json({ error: "unsupported", code: "unsupported", message: "This store can't persist changeset review state." }, 409);
     }
-    const updated = await store.setChangesetFileReview(artifactId, filePath, state, reason);
-    if (!updated) {
-      return c.json(
-        {
-          error: "not_a_changeset_file",
-          code: "not_a_changeset_file",
-          message: "That artifact is not a changeset, or the file path is not part of it."
-        },
-        400
-      );
-    }
-    await store.forceFlush();
-    broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
-    return c.json({ status: "updated", artifactId });
+    const setFileReview = store.setChangesetFileReview.bind(store);
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      const updated = await setFileReview(artifactId, filePath, state, reason);
+      if (!updated) {
+        return c.json(
+          {
+            error: "not_a_changeset_file",
+            code: "not_a_changeset_file",
+            message: "That artifact is not a changeset, or the file path is not part of it."
+          },
+          400
+        );
+      }
+      await store.forceFlush();
+      broadcast({ type: "changeset_review_updated", artifact: updated }, sid2);
+      return c.json({ status: "updated", artifactId });
+    });
   });
   return app;
 }
@@ -42018,6 +42028,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return c.json({ error: "Internal server error" }, 500);
   });
+  function missingStandaloneSession(c, root, sessionId) {
+    if (!isStandaloneSessionForProject(sessionId, root) || sessionDirExists(root, sessionId)) return null;
+    return c.json({ error: "Session not found", code: ERROR_CODES.session_not_found }, 404);
+  }
   async function withReviewWrite(c, store, requestedSid, run) {
     if (!standaloneCloseout || !projectRoot2) return run(requestedSid);
     const sessionId = store?.getSessionId() ?? requestedSid;
@@ -42186,9 +42200,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       );
     }
     if (!store.recordRenderFailure) return c.json({ status: "ignored", artifactId, visualId });
-    await store.recordRenderFailure({ artifactId, visualId, error: error51, title: pageIssues ? art.title || void 0 : title });
-    broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
-    return c.json({ status: "recorded", artifactId, visualId });
+    const record3 = store.recordRenderFailure.bind(store);
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      await record3({ artifactId, visualId, error: error51, title: pageIssues ? art.title || void 0 : title });
+      broadcast({ type: "render_failure_reported", artifactId, visualId }, sid2);
+      return c.json({ status: "recorded", artifactId, visualId });
+    });
   });
   app.post("/api/comments/:commentId/mark-resolved", async (c) => {
     const sid = getSessionId(c);
@@ -43063,9 +43080,14 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!targetEventId || !note) {
       return c.json({ error: "targetEventId and note required" }, 400);
     }
-    const s = new FileStore(projectRoot2, sessionId);
-    const annotation = s.addAnnotation({ targetEventId, note, tags });
-    return c.json({ annotation });
+    const root = projectRoot2;
+    const missing = missingStandaloneSession(c, root, sessionId);
+    if (missing) return missing;
+    return withReviewWrite(c, null, sessionId, async () => {
+      const s = new FileStore(root, sessionId);
+      const annotation = s.addAnnotation({ targetEventId, note, tags });
+      return c.json({ annotation });
+    });
   });
   app.post("/api/prompts", async (c) => {
     if (!projectRoot2) return c.json({ error: "No project root" }, 500);
@@ -43114,16 +43136,21 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       return c.json({ error: errorMessage(err, "Save failed") }, 500);
     }
   });
-  app.delete("/api/sessions/:sessionId/annotations/:annotationId", (c) => {
+  app.delete("/api/sessions/:sessionId/annotations/:annotationId", async (c) => {
     const sessionId = c.req.param("sessionId");
     const annotationId = c.req.param("annotationId");
     if (!projectRoot2) return c.json({ error: "No project root" }, 500);
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
       return c.json({ error: "Invalid session ID" }, 400);
     }
-    const s = new FileStore(projectRoot2, sessionId);
-    const ok = s.deleteAnnotation(annotationId);
-    return c.json({ deleted: ok });
+    const root = projectRoot2;
+    const missing = missingStandaloneSession(c, root, sessionId);
+    if (missing) return missing;
+    return withReviewWrite(c, null, sessionId, async () => {
+      const s = new FileStore(root, sessionId);
+      const ok = s.deleteAnnotation(annotationId);
+      return c.json({ deleted: ok });
+    });
   });
   return app;
 }

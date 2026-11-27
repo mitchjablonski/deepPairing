@@ -312,7 +312,9 @@ export function createReviewRoutes({
     const parsed = DecisionOptionNeverSuggestBodySchema.safeParse(bodyVal.value ?? {});
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
 
-    return withDecisionResolveLock(store, async () => {
+    // #711 — End admission before the shared resolve lock, as resolve does:
+    // never hold the resolve lock while waiting on closeout.
+    return withReviewWrite(c, store, sid, (sid) => withDecisionResolveLock(store, async () => {
       const artifacts = await store.getArtifacts();
       const artifact = artifacts.find(
         (a) =>
@@ -377,7 +379,7 @@ export function createReviewRoutes({
         alreadyRecorded,
         ...(stored?.reason ? { reason: stored.reason } : {}),
       });
-    });
+    }));
   });
 
   // #680 slice 4 — "Rule this out" on a spot in a page: record a rejected
@@ -455,56 +457,60 @@ export function createReviewRoutes({
       );
     }
 
-    // Idempotent on the description, like never-suggest: a repeat keeps the
-    // first recorded reason (the store only fills a blank one) and adds no
-    // second rule-out comment.
-    const before = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
-    const alreadyRecorded = !!before;
-    // origin page_rule_out: project-local always, never mirrored to the shared ledger.
-    await store.recordRejectedApproach({ description, reason, sourceArtifactId: page.id, sourceAnchor: anchor, origin: "page_rule_out" });
-    const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
-    // The reason that is actually recorded (the first one, on a repeat).
-    const storedReason = stored?.reason ?? reason;
+    // #711 — read-only checks above; End admission covers the ledger write,
+    // the rule-out comment and their broadcasts.
+    return withReviewWrite(c, store, sid, async (sid) => {
+      // Idempotent on the description, like never-suggest: a repeat keeps the
+      // first recorded reason (the store only fills a blank one) and adds no
+      // second rule-out comment.
+      const before = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+      const alreadyRecorded = !!before;
+      // origin page_rule_out: project-local always, never mirrored to the shared ledger.
+      await store.recordRejectedApproach({ description, reason, sourceArtifactId: page.id, sourceAnchor: anchor, origin: "page_rule_out" });
+      const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+      // The reason that is actually recorded (the first one, on a repeat).
+      const storedReason = stored?.reason ?? reason;
 
-    // The comment the agent hears about it through. On a repeat, reuse the
-    // existing rule-out comment; if there is none (the first attempt's comment
-    // never landed) and the row is this page's rule-out, leave one carrying the
-    // RECORDED reason; a pre-existing row from elsewhere gets no comment (the
-    // agent already holds that stance).
-    let comment: Awaited<ReturnType<ReviewStore["addComment"]>> | undefined;
-    if (alreadyRecorded) {
-      comment = (await store.getCommentsForArtifact(page.id))
-        .find((x) => x.author === "human" && x.ruleOut?.description === description);
-    }
-    const ownsRow = stored?.origin === "page_rule_out" && stored.sourceArtifactId === page.id;
-    if (!comment && ownsRow) {
-      const newId = `cmt_${nanoid(10)}`;
-      const added = await store.addComment({
-        id: newId,
-        artifactId: page.id,
-        content: storedReason,
-        author: "human",
-        target: { artifactId: page.id, htmlAnchor: anchor },
-        intent: "comment",
-        parentCommentId: null,
-        ruleOut: { description },
-      });
-      comment = added;
-      if (added.id === newId) {
-        broadcast({ type: "comment_added", comment: added }, sid);
-        broadcast({ type: "feedback_received", commentId: added.id, artifactId: page.id, intent: "comment" }, sid);
+      // The comment the agent hears about it through. On a repeat, reuse the
+      // existing rule-out comment; if there is none (the first attempt's comment
+      // never landed) and the row is this page's rule-out, leave one carrying the
+      // RECORDED reason; a pre-existing row from elsewhere gets no comment (the
+      // agent already holds that stance).
+      let comment: Awaited<ReturnType<ReviewStore["addComment"]>> | undefined;
+      if (alreadyRecorded) {
+        comment = (await store.getCommentsForArtifact(page.id))
+          .find((x) => x.author === "human" && x.ruleOut?.description === description);
       }
-    }
-    if (!alreadyRecorded) {
-      broadcast({ type: "ledger_write", kind: "rejected", description, reason: storedReason, sourceArtifactId: page.id }, sid);
-    }
-    log(`[page] rule-out ${page.id}${alreadyRecorded ? " (already recorded)" : ""}`);
-    return c.json({
-      status: "recorded",
-      description,
-      alreadyRecorded,
-      reason: storedReason,
-      ...(comment ? { comment } : {}),
+      const ownsRow = stored?.origin === "page_rule_out" && stored.sourceArtifactId === page.id;
+      if (!comment && ownsRow) {
+        const newId = `cmt_${nanoid(10)}`;
+        const added = await store.addComment({
+          id: newId,
+          artifactId: page.id,
+          content: storedReason,
+          author: "human",
+          target: { artifactId: page.id, htmlAnchor: anchor },
+          intent: "comment",
+          parentCommentId: null,
+          ruleOut: { description },
+        });
+        comment = added;
+        if (added.id === newId) {
+          broadcast({ type: "comment_added", comment: added }, sid);
+          broadcast({ type: "feedback_received", commentId: added.id, artifactId: page.id, intent: "comment" }, sid);
+        }
+      }
+      if (!alreadyRecorded) {
+        broadcast({ type: "ledger_write", kind: "rejected", description, reason: storedReason, sourceArtifactId: page.id }, sid);
+      }
+      log(`[page] rule-out ${page.id}${alreadyRecorded ? " (already recorded)" : ""}`);
+      return c.json({
+        status: "recorded",
+        description,
+        alreadyRecorded,
+        reason: storedReason,
+        ...(comment ? { comment } : {}),
+      });
     });
   });
 
@@ -560,248 +566,252 @@ export function createReviewRoutes({
       );
     }
 
-    function stalePageResponse(successorId: string, successorVersion: number | undefined) {
-      broadcast({ type: "artifact_updated", artifactId, status: "superseded" }, sid);
-      return c.json({
-        error: ERROR_CODES.parent_superseded,
-        code: ERROR_CODES.parent_superseded,
-        currentStatus: "superseded",
-        successorId,
-        successorVersion,
-        message: `This page has been replaced by ${successorId}. Review the newer version before recording a verdict.`,
-      }, 409);
-    }
-    const staleAtRead = stalePageVerdictSuccessor(target, artsBefore, reason);
-    if (staleAtRead) return stalePageResponse(staleAtRead.id, staleAtRead.version);
+    // #711 — End admission spans the verdict from its commit-time checks
+    // through the ledger record, status write, flush and broadcasts.
+    return withReviewWrite(c, store, sid, async (sid) => {
+      function stalePageResponse(successorId: string, successorVersion: number | undefined) {
+        broadcast({ type: "artifact_updated", artifactId, status: "superseded" }, sid);
+        return c.json({
+          error: ERROR_CODES.parent_superseded,
+          code: ERROR_CODES.parent_superseded,
+          currentStatus: "superseded",
+          successorId,
+          successorVersion,
+          message: `This page has been replaced by ${successorId}. Review the newer version before recording a verdict.`,
+        }, 409);
+      }
+      const staleAtRead = stalePageVerdictSuccessor(target, artsBefore, reason);
+      if (staleAtRead) return stalePageResponse(staleAtRead.id, staleAtRead.version);
 
-    // #521 — an AUTO (confidence countdown) approval must still be permitted
-    // at commit time: the human may have lowered the autonomy level (or the
-    // artifact may have been revised) after the countdown armed / the request
-    // was dispatched. Typed refusal, no state change. A human click carries no
-    // auto reason and is never gated.
-    if (autoReason === "auto_confidence") {
-      const level = await store.getAutonomyLevel();
-      const confidence = (target.content as { confidence?: string } | null)?.confidence;
-      if (status !== "approved" || target.type === "debrief" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
-        log(`[status] REFUSED auto-approve on ${artifactId}: level=${level} confidence=${confidence ?? "(none)"} status=${target.status}`);
+      // #521 — an AUTO (confidence countdown) approval must still be permitted
+      // at commit time: the human may have lowered the autonomy level (or the
+      // artifact may have been revised) after the countdown armed / the request
+      // was dispatched. Typed refusal, no state change. A human click carries no
+      // auto reason and is never gated.
+      if (autoReason === "auto_confidence") {
+        const level = await store.getAutonomyLevel();
+        const confidence = (target.content as { confidence?: string } | null)?.confidence;
+        if (status !== "approved" || target.type === "debrief" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
+          log(`[status] REFUSED auto-approve on ${artifactId}: level=${level} confidence=${confidence ?? "(none)"} status=${target.status}`);
+          return c.json(
+            {
+              error: "auto_approve_not_permitted",
+              code: "auto_approve_not_permitted",
+              autonomyLevel: level,
+              message:
+                "Auto-approval is no longer permitted (the autonomy level or the artifact changed). Nothing was approved — review it and approve yourself.",
+            },
+            409,
+          );
+        }
+      }
+
+      // O3 (#231) — cross-tab last-wins verdict guard. A stale second tab (opened
+      // before the verdict, still rendering the draft footer) can POST a DIFFERENT
+      // terminal verdict onto an already-final one — silently reversing the human's
+      // real decision. Refuse it with a 409 carrying the current truth, and
+      // re-broadcast the REAL status so the stale tab refreshes to it (its footer
+      // collapses to the passive verdict chip). Draft→terminal and same-verdict
+      // re-asserts are unaffected; the store backstops this too. See verdict-guard.ts.
+      if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
+        const at = target.updatedAt;
+        log(
+          `[status] REFUSED cross-tab verdict flip on ${artifactId}: ` +
+          `${target.status} → ${status} (reason=${reason}) — verdict already final at ${at}`,
+        );
+        // Refresh the stale tab to the TRUE status (not the attempted one).
+        broadcast({ type: "artifact_updated", artifactId, status: target.status }, sid);
         return c.json(
           {
-            error: "auto_approve_not_permitted",
-            code: "auto_approve_not_permitted",
-            autonomyLevel: level,
+            error: "verdict_already_final",
+            code: "verdict_already_final",
+            currentStatus: target.status,
+            at,
             message:
-              "Auto-approval is no longer permitted (the autonomy level or the artifact changed). Nothing was approved — review it and approve yourself.",
+              `This artifact was already ${target.status}${at ? ` at ${at}` : ""} in another tab. ` +
+              `A finalized verdict can't be reversed — this tab has been refreshed to the current state.`,
           },
           409,
         );
       }
-    }
 
-    // O3 (#231) — cross-tab last-wins verdict guard. A stale second tab (opened
-    // before the verdict, still rendering the draft footer) can POST a DIFFERENT
-    // terminal verdict onto an already-final one — silently reversing the human's
-    // real decision. Refuse it with a 409 carrying the current truth, and
-    // re-broadcast the REAL status so the stale tab refreshes to it (its footer
-    // collapses to the passive verdict chip). Draft→terminal and same-verdict
-    // re-asserts are unaffected; the store backstops this too. See verdict-guard.ts.
-    if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
-      const at = target.updatedAt;
-      log(
-        `[status] REFUSED cross-tab verdict flip on ${artifactId}: ` +
-        `${target.status} → ${status} (reason=${reason}) — verdict already final at ${at}`,
-      );
-      // Refresh the stale tab to the TRUE status (not the attempted one).
-      broadcast({ type: "artifact_updated", artifactId, status: target.status }, sid);
-      return c.json(
-        {
-          error: "verdict_already_final",
-          code: "verdict_already_final",
-          currentStatus: target.status,
-          at,
-          message:
-            `This artifact was already ${target.status}${at ? ` at ${at}` : ""} in another tab. ` +
-            `A finalized verdict can't be reversed — this tab has been refreshed to the current state.`,
-        },
-        409,
-      );
-    }
-
-    // #408 review — RECORD FIRST, then commit the verdict. The rejected
-    // approach is what makes the gate remember; recording it after the status
-    // flip meant a busy preferences lock (ELOCKED → 503) left the artifact
-    // `rejected` with no memory of it and no artifact_updated broadcast, while
-    // the UI rolled its optimistic patch back. Now a lock failure throws here,
-    // before anything is committed, and the route's onError answers 503
-    // lock_busy — status, plan review and comment all stay unchanged, so the
-    // UI rollback is the truth and a retry is clean. (recordRejectedApproach is
-    // idempotent on description, so a retry never duplicates the row.)
-    // When an artifact is rejected, remember the approach so pre-flight blocks
-    // any future re-proposal. reason is the feedback comment (required
-    // client-side).
-    let rejection: { description: string; reason?: string; sourceArtifactId: string; concept?: string } | null = null;
-    if (status === "rejected") {
-      const artifact = target;
-      // #193 E2 — the comprehension surfaces capture NO taste stance on reject
-      // (see LEDGER_EXEMPT_REJECT_TYPES): an explainer teaches existing code, a
-      // debrief accounts for finished work — neither proposes an approach. The
-      // plain `rejected` status still lands below; here we skip BOTH the
-      // ledger write and its `ledger_write` broadcast so nothing misreports a
-      // stance being remembered. recordRejectedApproach guards this
-      // authoritatively too — this is the belt to its suspenders.
-      if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
-        // no-op — status flip only, no cross-project stance
-      } else if (artifact && artifact.type !== "decision") {
-        // The cross-project ledger key, in priority order:
-        //   1. the HUMAN-named concept from the reject prompt (the whole point
-        //      — the user phrases the pattern they're rejecting, so a future
-        //      paraphrase gets caught), then
-        //   2. AA1 — the artifact's own Y5-style concept (code_change carries
-        //      one today; spec/plan may in future), then
-        //   3. #171 — for a changeset, the changeset TITLE (it carries no
-        //      top-level concept). This records exactly ONE framing entry —
-        //      NO per-file fan-out, the exact over-block class #195's review
-        //      killed; demo isolation is inherited via recordRejectedApproach.
-        const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
-        // Q2 review H2 — the changeset fallback is the ONE key here that no
-        // human ever authored: agents title changesets after the file they
-        // touch, so this used to publish "packages/api/src/auth/
-        // session-store.ts — swap Redis for a Map" verbatim into the shared
-        // ledger, from a UI promising no file paths leave the project. Strip
-        // the machine-generated path prefix (see concept-hygiene.ts for why
-        // this cannot cost recall — a path-laden key could never match another
-        // project's proposal in the first place). Applied ONLY here: a concept
-        // the human typed, or one the agent named via Y5, is kept verbatim.
-        const changesetFallback =
-          artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : undefined;
-        const concept = humanConcept?.trim() || artConcept || changesetFallback || undefined;
-        rejection = { description: artifact.title, reason: feedback?.trim() || undefined, sourceArtifactId: artifactId, concept };
-      } else if (artifact && artifact.type === "decision") {
-        // #169 (+F1) — a WHOLE-CARD decision rejection is the "wrong question /
-        // don't do this at all" gesture: the human rejects the FRAMING, not the
-        // individual options. So record ONE framing-level entry, NOT one per
-        // option. Fanning out per option (an earlier cut) poisoned every
-        // option's surface noun project-wide: rejecting "Which cache backend?"
-        // (Redis/Memcached/…) then surface-blocked a Redis job-queue edit, a
-        // docker `redis:` service, an `lru-cache` import — because the matcher
-        // pulls the post-colon noun ("…: Redis" → "redis") and matches it
-        // everywhere. Keying on the QUESTION instead means the concept lane
-        // catches a re-proposal of the same framing ("cache backend") while an
-        // unrelated Redis edit sails through. The per-option-with-a-pick signal
-        // lives on the explicit per-option "Never suggest this" (#549) and the
-        // "none of these fit" send-back — both of which name specific options.
-        //
-        // Concept key priority mirrors the non-decision path: (1) the
-        // HUMAN-named concept from the reject prompt (F3 — the whole point of
-        // the field; earlier this branch discarded it), then (2) the card's
-        // M1.1 SHORT title (the fork-naming question — a far tighter framing key
-        // than the full-paragraph context), then (3) the context/question.
-        // BACKCOMPAT: on a pre-M1 decision (no content.title) this collapses to
-        // `humanConcept?.trim() || context || undefined` — byte-identical to
-        // before, so no EXISTING ledger entry is re-keyed and the #195
-        // one-framing-entry semantics are untouched.
-        const content = artifact.content as { context?: string; title?: string } | null;
-        const context = content?.context?.trim() || artifact.title;
-        const concept = humanConcept?.trim() || content?.title?.trim() || context || undefined;
-        rejection = { description: artifact.title, reason: feedback?.trim() || undefined, sourceArtifactId: artifactId, concept };
-      }
-    }
-    // #408 review (M1) — the conflict check comes BEFORE recording: a verdict
-    // that will 409 session_review_conflict must leave preferences untouched,
-    // exactly as on main (which returned before recording). A predicted
-    // conflict skips the record and falls through unchanged, so the flush
-    // below still produces the 409 and keeps the human's feedback comment
-    // durable, as before.
-    let retractOnConflict: string | null = null;
-    let recordAfterFlush = false;
-    if (rejection && await store.previewReviewConflict?.(artifactId, status)) {
-      recordAfterFlush = true; // predicted 409; if the flush unexpectedly succeeds, record then
-    } else if (rejection) {
-      const had = (await store.getSessionMemory()).rejectedApproaches
-        .some((r) => r.description === rejection!.description);
-      if (target.type === "page") {
-        // The daemon's FileStore reads and records synchronously. Keep this
-        // live check, the ledger write and the status mutation in one turn.
-        const current = store.getArtifacts();
-        const artifacts = current instanceof Promise ? await current : current;
-        const stale = stalePageVerdictSuccessor(artifacts.find((a) => a.id === artifactId), artifacts, reason);
-        if (stale) return stalePageResponse(stale.id, stale.version);
-        const recorded = store.recordRejectedApproach(rejection);
-        if (recorded) await recorded;
-      } else {
-        await store.recordRejectedApproach(rejection);
-      }
-      if (!had) retractOnConflict = rejection.description;
-    }
-
-    const feedbackCommentId = feedback && target.type === "page" && (status === "revised" || status === "rejected")
-      ? `cmt_${nanoid(10)}` : undefined;
-    try {
-      if (feedbackCommentId) await store.updateArtifactStatus(artifactId, status, reason, { feedbackCommentId });
-      else await store.updateArtifactStatus(artifactId, status, reason);
-    } catch (err) {
-      if (target.type === "page" && err instanceof ParentSupersededError && err.successorId) {
-        return stalePageResponse(err.successorId, err.successorVersion);
-      }
-      throw err;
-    }
-    // "obsolete" is a dismissal, not a plan-review verdict — don't resolve a
-    // plan review with it (and it narrows status to the three verdicts).
-    if (status !== "obsolete") {
-      await store.resolvePlanReview(artifactId, status, feedback);
-    }
-    // X6 — see comment above; HTTP-side mutations pass null for `server`.
-    await updateTaskStatus(artifactId, store);
-
-    // Preserve the human's explanation even if the artifact verdict races a
-    // concurrent proposal rewrite. flush() keeps comments durable while it
-    // rejects the unsafe artifact merge below, so the 409 is truthful about
-    // the verdict without silently discarding the user's words.
-    if (feedback) {
-      const comment = await store.addComment({
-        id: feedbackCommentId ?? `cmt_${nanoid(10)}`,
-        artifactId,
-        content: feedback,
-        author: "human",
-        verdictFeedback: true,
-      });
-      broadcast({ type: "comment_added", comment }, sid);
-    }
-
-    // U0.6 — force the debounced flush so the Stop hook (which reads
-    // .deeppairing/sessions/*/artifacts.json directly from disk) sees the
-    // new status before its next tick. Without this, a 100ms debounce window
-    // can mean the hook reads stale `draft` and traps the agent in a poll
-    // loop even though the user just approved.
-    // AA7b — forceFlush is required on IStore, no cast needed.
-    // F10 review — ordinary disk failures remain log-and-retry because the
-    // verdict already landed in memory. A review/content ownership conflict is
-    // different: reporting success would authorize content this reviewer never
-    // saw. Return 409 before any success broadcast; FileStore freezes its
-    // authorization reads until the session is reloaded.
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      if (isSessionReviewConflictError(err)) {
-        // A concurrent rewrite landed in the ms between the preview and this
-        // flush: undo the local rejection row this request added.
-        if (retractOnConflict) {
-          try { await store.retractRejectedApproach?.(retractOnConflict); }
-          catch (retractErr) { console.error(`[deepPairing] could not retract rejection after a review conflict: ${retractErr}`); }
+      // #408 review — RECORD FIRST, then commit the verdict. The rejected
+      // approach is what makes the gate remember; recording it after the status
+      // flip meant a busy preferences lock (ELOCKED → 503) left the artifact
+      // `rejected` with no memory of it and no artifact_updated broadcast, while
+      // the UI rolled its optimistic patch back. Now a lock failure throws here,
+      // before anything is committed, and the route's onError answers 503
+      // lock_busy — status, plan review and comment all stay unchanged, so the
+      // UI rollback is the truth and a retry is clean. (recordRejectedApproach is
+      // idempotent on description, so a retry never duplicates the row.)
+      // When an artifact is rejected, remember the approach so pre-flight blocks
+      // any future re-proposal. reason is the feedback comment (required
+      // client-side).
+      let rejection: { description: string; reason?: string; sourceArtifactId: string; concept?: string } | null = null;
+      if (status === "rejected") {
+        const artifact = target;
+        // #193 E2 — the comprehension surfaces capture NO taste stance on reject
+        // (see LEDGER_EXEMPT_REJECT_TYPES): an explainer teaches existing code, a
+        // debrief accounts for finished work — neither proposes an approach. The
+        // plain `rejected` status still lands below; here we skip BOTH the
+        // ledger write and its `ledger_write` broadcast so nothing misreports a
+        // stance being remembered. recordRejectedApproach guards this
+        // authoritatively too — this is the belt to its suspenders.
+        if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
+          // no-op — status flip only, no cross-project stance
+        } else if (artifact && artifact.type !== "decision") {
+          // The cross-project ledger key, in priority order:
+          //   1. the HUMAN-named concept from the reject prompt (the whole point
+          //      — the user phrases the pattern they're rejecting, so a future
+          //      paraphrase gets caught), then
+          //   2. AA1 — the artifact's own Y5-style concept (code_change carries
+          //      one today; spec/plan may in future), then
+          //   3. #171 — for a changeset, the changeset TITLE (it carries no
+          //      top-level concept). This records exactly ONE framing entry —
+          //      NO per-file fan-out, the exact over-block class #195's review
+          //      killed; demo isolation is inherited via recordRejectedApproach.
+          const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
+          // Q2 review H2 — the changeset fallback is the ONE key here that no
+          // human ever authored: agents title changesets after the file they
+          // touch, so this used to publish "packages/api/src/auth/
+          // session-store.ts — swap Redis for a Map" verbatim into the shared
+          // ledger, from a UI promising no file paths leave the project. Strip
+          // the machine-generated path prefix (see concept-hygiene.ts for why
+          // this cannot cost recall — a path-laden key could never match another
+          // project's proposal in the first place). Applied ONLY here: a concept
+          // the human typed, or one the agent named via Y5, is kept verbatim.
+          const changesetFallback =
+            artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : undefined;
+          const concept = humanConcept?.trim() || artConcept || changesetFallback || undefined;
+          rejection = { description: artifact.title, reason: feedback?.trim() || undefined, sourceArtifactId: artifactId, concept };
+        } else if (artifact && artifact.type === "decision") {
+          // #169 (+F1) — a WHOLE-CARD decision rejection is the "wrong question /
+          // don't do this at all" gesture: the human rejects the FRAMING, not the
+          // individual options. So record ONE framing-level entry, NOT one per
+          // option. Fanning out per option (an earlier cut) poisoned every
+          // option's surface noun project-wide: rejecting "Which cache backend?"
+          // (Redis/Memcached/…) then surface-blocked a Redis job-queue edit, a
+          // docker `redis:` service, an `lru-cache` import — because the matcher
+          // pulls the post-colon noun ("…: Redis" → "redis") and matches it
+          // everywhere. Keying on the QUESTION instead means the concept lane
+          // catches a re-proposal of the same framing ("cache backend") while an
+          // unrelated Redis edit sails through. The per-option-with-a-pick signal
+          // lives on the explicit per-option "Never suggest this" (#549) and the
+          // "none of these fit" send-back — both of which name specific options.
+          //
+          // Concept key priority mirrors the non-decision path: (1) the
+          // HUMAN-named concept from the reject prompt (F3 — the whole point of
+          // the field; earlier this branch discarded it), then (2) the card's
+          // M1.1 SHORT title (the fork-naming question — a far tighter framing key
+          // than the full-paragraph context), then (3) the context/question.
+          // BACKCOMPAT: on a pre-M1 decision (no content.title) this collapses to
+          // `humanConcept?.trim() || context || undefined` — byte-identical to
+          // before, so no EXISTING ledger entry is re-keyed and the #195
+          // one-framing-entry semantics are untouched.
+          const content = artifact.content as { context?: string; title?: string } | null;
+          const context = content?.context?.trim() || artifact.title;
+          const concept = humanConcept?.trim() || content?.title?.trim() || context || undefined;
+          rejection = { description: artifact.title, reason: feedback?.trim() || undefined, sourceArtifactId: artifactId, concept };
         }
-        return c.json({
-          error: "session_review_conflict",
-          code: ERROR_CODES.session_review_conflict,
-          message: err.message,
-        }, 409);
       }
-      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
-    }
+      // #408 review (M1) — the conflict check comes BEFORE recording: a verdict
+      // that will 409 session_review_conflict must leave preferences untouched,
+      // exactly as on main (which returned before recording). A predicted
+      // conflict skips the record and falls through unchanged, so the flush
+      // below still produces the 409 and keeps the human's feedback comment
+      // durable, as before.
+      let retractOnConflict: string | null = null;
+      let recordAfterFlush = false;
+      if (rejection && await store.previewReviewConflict?.(artifactId, status)) {
+        recordAfterFlush = true; // predicted 409; if the flush unexpectedly succeeds, record then
+      } else if (rejection) {
+        const had = (await store.getSessionMemory()).rejectedApproaches
+          .some((r) => r.description === rejection!.description);
+        if (target.type === "page") {
+          // The daemon's FileStore reads and records synchronously. Keep this
+          // live check, the ledger write and the status mutation in one turn.
+          const current = store.getArtifacts();
+          const artifacts = current instanceof Promise ? await current : current;
+          const stale = stalePageVerdictSuccessor(artifacts.find((a) => a.id === artifactId), artifacts, reason);
+          if (stale) return stalePageResponse(stale.id, stale.version);
+          const recorded = store.recordRejectedApproach(rejection);
+          if (recorded) await recorded;
+        } else {
+          await store.recordRejectedApproach(rejection);
+        }
+        if (!had) retractOnConflict = rejection.description;
+      }
 
-    if (rejection && recordAfterFlush) await store.recordRejectedApproach(rejection);
-    if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid);
-    broadcast({ type: "artifact_updated", artifactId, status }, sid);
+      const feedbackCommentId = feedback && target.type === "page" && (status === "revised" || status === "rejected")
+        ? `cmt_${nanoid(10)}` : undefined;
+      try {
+        if (feedbackCommentId) await store.updateArtifactStatus(artifactId, status, reason, { feedbackCommentId });
+        else await store.updateArtifactStatus(artifactId, status, reason);
+      } catch (err) {
+        if (target.type === "page" && err instanceof ParentSupersededError && err.successorId) {
+          return stalePageResponse(err.successorId, err.successorVersion);
+        }
+        throw err;
+      }
+      // "obsolete" is a dismissal, not a plan-review verdict — don't resolve a
+      // plan review with it (and it narrows status to the three verdicts).
+      if (status !== "obsolete") {
+        await store.resolvePlanReview(artifactId, status, feedback);
+      }
+      // X6 — see comment above; HTTP-side mutations pass null for `server`.
+      await updateTaskStatus(artifactId, store);
 
-    return c.json({ status: "updated", artifactId });
+      // Preserve the human's explanation even if the artifact verdict races a
+      // concurrent proposal rewrite. flush() keeps comments durable while it
+      // rejects the unsafe artifact merge below, so the 409 is truthful about
+      // the verdict without silently discarding the user's words.
+      if (feedback) {
+        const comment = await store.addComment({
+          id: feedbackCommentId ?? `cmt_${nanoid(10)}`,
+          artifactId,
+          content: feedback,
+          author: "human",
+          verdictFeedback: true,
+        });
+        broadcast({ type: "comment_added", comment }, sid);
+      }
+
+      // U0.6 — force the debounced flush so the Stop hook (which reads
+      // .deeppairing/sessions/*/artifacts.json directly from disk) sees the
+      // new status before its next tick. Without this, a 100ms debounce window
+      // can mean the hook reads stale `draft` and traps the agent in a poll
+      // loop even though the user just approved.
+      // AA7b — forceFlush is required on IStore, no cast needed.
+      // F10 review — ordinary disk failures remain log-and-retry because the
+      // verdict already landed in memory. A review/content ownership conflict is
+      // different: reporting success would authorize content this reviewer never
+      // saw. Return 409 before any success broadcast; FileStore freezes its
+      // authorization reads until the session is reloaded.
+      try {
+        await store.forceFlush();
+      } catch (err) {
+        if (isSessionReviewConflictError(err)) {
+          // A concurrent rewrite landed in the ms between the preview and this
+          // flush: undo the local rejection row this request added.
+          if (retractOnConflict) {
+            try { await store.retractRejectedApproach?.(retractOnConflict); }
+            catch (retractErr) { console.error(`[deepPairing] could not retract rejection after a review conflict: ${retractErr}`); }
+          }
+          return c.json({
+            error: "session_review_conflict",
+            code: ERROR_CODES.session_review_conflict,
+            message: err.message,
+          }, 409);
+        }
+        console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
+      }
+
+      if (rejection && recordAfterFlush) await store.recordRejectedApproach(rejection);
+      if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid);
+      broadcast({ type: "artifact_updated", artifactId, status }, sid);
+
+      return c.json({ status: "updated", artifactId });
+    });
   });
 
   // #171/#175 — set ONE file's DISPOSITION: reviewed (looks right) or
@@ -837,24 +847,28 @@ export function createReviewRoutes({
     if (!store.setChangesetFileReview) {
       return c.json({ error: "unsupported", code: "unsupported", message: "This store can't persist changeset review state." }, 409);
     }
-    const updated = await store.setChangesetFileReview(artifactId, filePath, state, reason);
-    if (!updated) {
-      // Not a changeset, or the path isn't part of it — the caller's mistake,
-      // surfaced honestly rather than a silent 200.
-      return c.json(
-        { error: "not_a_changeset_file", code: "not_a_changeset_file",
-          message: "That artifact is not a changeset, or the file path is not part of it." },
-        400,
-      );
-    }
-    // Persist before reporting success. Review dispositions authorize the
-    // changeset's file contents, so a concurrent proposal rewrite must surface
-    // the global typed 409 and suppress the success broadcast.
-    await store.forceFlush();
-    // Full-artifact patch: review state lives in content, so the web store must
-    // replaceArtifact (like plan_progress_updated), not just patch a status.
-    broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
-    return c.json({ status: "updated", artifactId });
+    const setFileReview = store.setChangesetFileReview.bind(store);
+    // #711 — End admission covers the disposition write, flush and broadcast.
+    return withReviewWrite(c, store, sid, async (sid) => {
+      const updated = await setFileReview(artifactId, filePath, state, reason);
+      if (!updated) {
+        // Not a changeset, or the path isn't part of it — the caller's mistake,
+        // surfaced honestly rather than a silent 200.
+        return c.json(
+          { error: "not_a_changeset_file", code: "not_a_changeset_file",
+            message: "That artifact is not a changeset, or the file path is not part of it." },
+          400,
+        );
+      }
+      // Persist before reporting success. Review dispositions authorize the
+      // changeset's file contents, so a concurrent proposal rewrite must surface
+      // the global typed 409 and suppress the success broadcast.
+      await store.forceFlush();
+      // Full-artifact patch: review state lives in content, so the web store must
+      // replaceArtifact (like plan_progress_updated), not just patch a status.
+      broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
+      return c.json({ status: "updated", artifactId });
+    });
   });
 
   return app;
