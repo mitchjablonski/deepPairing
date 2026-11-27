@@ -38,7 +38,7 @@ export const PAGE_FEEDBACK_MAX_COMMENTS = MAX_COMMENTS;
 export const PAGE_FEEDBACK_MAX_KIB = MAX_RESPONSE_BYTES / 1024;
 
 /** The `waitStatus` values `read-decision --wait-ms` returns (decision-feedback.ts). */
-export const GUIDE_WAIT_STATUSES = ["resolved", "closed", "timed_out"] as const;
+export const GUIDE_WAIT_STATUSES = ["resolved", "closed", "timed_out", "session_ended"] as const;
 
 const OPTIONS_EXAMPLE = {
   title: "Which cache layer?",
@@ -241,6 +241,8 @@ ${renderPageAuthoringGuide()}
                  reasoning when they gave one. Proceed with that option.
   - "closed":    the card can no longer be answered. Stop waiting on it.
   - "timed_out": no choice yet. Run the same command again.
+  - "session_ended": the review ended while this card still awaited a choice.
+                     Stop waiting on it.
   recordedRejections lists the approaches the human rejected from this card,
   each with their reason. Don't propose those again.
   Without --wait-ms the read answers at once and has no waitStatus: no
