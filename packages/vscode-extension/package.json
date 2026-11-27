@@ -41,14 +41,16 @@
   "scripts": {
     "build": "tsc && node build.mjs",
     "lint": "eslint src --max-warnings 0",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.5.0",
     "eslint": "^10.6.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.9"
   },
   "dependencies": {
     "ws": "^8.21.0"
