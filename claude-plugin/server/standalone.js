@@ -23803,6 +23803,210 @@ var PageRuleOutBodySchema = external_exports.object({
   reason: external_exports.string().max(PAGE_RULE_OUT_REASON_MAX).refine((s) => s.trim().length > 0, { message: "Say why you're ruling this out" })
 });
 
+// ../shared/dist/schemas/page-asks.js
+var PAGE_DECISION_ATTR = "data-dp-decision";
+var PAGE_QUESTION_ATTR = "data-dp-question";
+var PAGE_ASK_LIMITS = { max: 50, text: 200, id: 200 };
+var PAGE_SANITIZE_DROP_TAGS = [
+  "script",
+  "noscript",
+  "template",
+  "iframe",
+  "frame",
+  "frameset",
+  "object",
+  "embed",
+  "applet",
+  "portal",
+  "base"
+];
+function cssEscapeIdent(value) {
+  const s = String(value);
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charAt(i);
+    const code = s.charCodeAt(i);
+    if (code === 0) {
+      out += "\uFFFD";
+      continue;
+    }
+    if (code >= 1 && code <= 31 || code === 127 || i === 0 && code >= 48 && code <= 57 || i === 1 && code >= 48 && code <= 57 && s.charCodeAt(0) === 45) {
+      out += "\\" + code.toString(16) + " ";
+      continue;
+    }
+    if (i === 0 && s.length === 1 && code === 45) {
+      out += "\\-";
+      continue;
+    }
+    if (code >= 128 || code === 45 || code === 95 || code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122) {
+      out += ch;
+      continue;
+    }
+    out += "\\" + ch;
+  }
+  return out;
+}
+function atOrInside(locator, base) {
+  return locator === base || locator.startsWith(base + " > ");
+}
+function anchorTargetsAsk(ask, anchor) {
+  if (ask.locator && atOrInside(anchor.locator, ask.locator))
+    return true;
+  if (ask.id && atOrInside(anchor.locator, "#" + cssEscapeIdent(ask.id)))
+    return true;
+  for (const c of ask.childIds ?? [])
+    if (atOrInside(anchor.locator, "#" + cssEscapeIdent(c)))
+      return true;
+  return false;
+}
+var PAGE_ASK_BREAK_TAGS = [
+  "br",
+  "hr",
+  "p",
+  "div",
+  "li",
+  "ul",
+  "ol",
+  "menu",
+  "dl",
+  "dt",
+  "dd",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "table",
+  "caption",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "td",
+  "th",
+  "section",
+  "article",
+  "aside",
+  "nav",
+  "main",
+  "header",
+  "footer",
+  "address",
+  "blockquote",
+  "pre",
+  "listing",
+  "figure",
+  "figcaption",
+  "details",
+  "summary",
+  "dialog",
+  "fieldset",
+  "legend",
+  "form",
+  "hgroup",
+  "search",
+  "select",
+  "option",
+  "optgroup",
+  "center"
+];
+var BREAK_TAG_SET = new Set(PAGE_ASK_BREAK_TAGS);
+function isAskBreakTag(tag) {
+  return BREAK_TAG_SET.has(tag);
+}
+function foldAskChars(s) {
+  return s.normalize("NFKC").replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'").replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
+}
+var AskTextHasher = class {
+  h1 = 3735928559;
+  h2 = 1103547991;
+  chars = 0;
+  /** A whitespace run was seen after some text and not emitted yet. */
+  pendingSpace = false;
+  emit(ch) {
+    this.h1 = Math.imul(this.h1 ^ ch, 2654435761);
+    this.h2 = Math.imul(this.h2 ^ ch, 1597334677);
+    this.chars++;
+  }
+  push(chunk) {
+    const s = foldAskChars(chunk);
+    for (let i = 0; i < s.length; i++) {
+      const ch = s.charCodeAt(i);
+      if (/\s/.test(s[i])) {
+        if (this.chars > 0)
+          this.pendingSpace = true;
+        continue;
+      }
+      if (this.pendingSpace) {
+        this.emit(32);
+        this.pendingSpace = false;
+      }
+      this.emit(ch);
+    }
+  }
+  /** A `<br>` or a block boundary: one separator, under the same collapse
+   *  and trim rules as whitespace (never doubled, never leading/trailing). */
+  separate() {
+    if (this.chars > 0)
+      this.pendingSpace = true;
+  }
+  /** The hash, or undefined when no text was pushed. */
+  digest() {
+    if (this.chars === 0)
+      return void 0;
+    let h1 = this.h1;
+    let h2 = this.h2;
+    h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507);
+    h1 ^= Math.imul(h2 ^ h2 >>> 13, 3266489909);
+    h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507);
+    h2 ^= Math.imul(h1 ^ h1 >>> 13, 3266489909);
+    const n = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+    return `${n.toString(36)}:${this.chars.toString(36)}`;
+  }
+};
+function askTextHash(text) {
+  const h = new AskTextHasher();
+  h.push(text);
+  return h.digest();
+}
+function askTextsContinue(prev, cur) {
+  return !!prev.fullHash && prev.fullHash === cur.fullHash;
+}
+function findEarlierAsk(cur, earlier) {
+  if (cur.id)
+    return earlier.find((o) => o.id === cur.id);
+  if (cur.locator)
+    return earlier.find((o) => !o.id && o.locator === cur.locator);
+  return void 0;
+}
+function isEarlierVersionComment(c, current) {
+  if (!current)
+    return false;
+  if (c.target.artifactId && c.target.artifactId !== current.artifactId)
+    return true;
+  const v2 = c.target.htmlAnchor?.version;
+  return typeof v2 === "number" && v2 < current.version;
+}
+function commentAnswersAsk(ask, c, current, opts = {}) {
+  if (c.author !== "human" || c.parentCommentId || c.humanResolvedAt)
+    return false;
+  const a = c.target.htmlAnchor;
+  if (!a || typeof a.locator !== "string" || typeof a.quote !== "string")
+    return false;
+  if (!isEarlierVersionComment(c, current))
+    return opts.insideByFrame === true || anchorTargetsAsk(ask, a);
+  const versionId = c.target.artifactId;
+  if (!versionId || versionId === current?.artifactId || !opts.earlierAsks)
+    return false;
+  const list2 = opts.earlierAsks(versionId);
+  const prev = list2 ? findEarlierAsk(ask, list2) : void 0;
+  return !!prev && askTextsContinue(prev, ask) && anchorTargetsAsk(prev, a);
+}
+function isPageAskAnswered(ask, comments, current, earlierAsks) {
+  return comments.some((c) => commentAnswersAsk(ask, c, current, { earlierAsks }));
+}
+
 // ../shared/dist/schemas/annotation.js
 var SessionAnnotationSchema = external_exports.object({
   id: external_exports.string(),
@@ -25282,8 +25486,6 @@ function isLivePlanVersion(art, artifacts) {
 }
 
 // src/page-authoring.ts
-var PAGE_DECISION_ATTR = "data-dp-decision";
-var PAGE_QUESTION_ATTR = "data-dp-question";
 var PAGE_CAP_MIB = PAGE_HTML_MAX_BYTES / (1024 * 1024);
 var PAGE_STRUCTURE_RULES = [
   "Open with a TL;DR block: two or three sentences on what the page proposes and what you want from your pair.",
@@ -36483,6 +36685,473 @@ ${lines.join("\n")}` : "";
   return { refs: out, prose, structured };
 }
 
+// src/mcp/page-anchor-relocate.ts
+var LATIN1_NAMES = "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml".split(" ");
+var NAMED = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  sbquo: "\u201A",
+  ldquo: "\u201C",
+  rdquo: "\u201D",
+  bdquo: "\u201E",
+  bull: "\u2022",
+  prime: "\u2032",
+  Prime: "\u2033",
+  trade: "\u2122",
+  euro: "\u20AC",
+  larr: "\u2190",
+  uarr: "\u2191",
+  rarr: "\u2192",
+  darr: "\u2193",
+  harr: "\u2194",
+  lArr: "\u21D0",
+  rArr: "\u21D2",
+  hArr: "\u21D4",
+  minus: "\u2212",
+  le: "\u2264",
+  ge: "\u2265",
+  ne: "\u2260",
+  asymp: "\u2248",
+  infin: "\u221E",
+  ensp: "\u2002",
+  emsp: "\u2003",
+  thinsp: "\u2009",
+  zwnj: "\u200C",
+  zwj: "\u200D",
+  OElig: "\u0152",
+  oelig: "\u0153",
+  Scaron: "\u0160",
+  scaron: "\u0161",
+  Yuml: "\u0178",
+  fnof: "\u0192",
+  circ: "\u02C6",
+  tilde: "\u02DC",
+  dagger: "\u2020",
+  Dagger: "\u2021",
+  permil: "\u2030",
+  lsaquo: "\u2039",
+  rsaquo: "\u203A",
+  check: "\u2713",
+  hearts: "\u2665",
+  star: "\u2606"
+};
+LATIN1_NAMES.forEach((n, i) => {
+  NAMED[n] = String.fromCharCode(160 + i);
+});
+function decodeHtmlEntities(s) {
+  let unknownEntity = false;
+  const text = s.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{1,31});?/g, (m, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return "\uFFFD";
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return "\uFFFD";
+      }
+    }
+    const hit = NAMED[body] ?? NAMED[body.toLowerCase()];
+    if (hit !== void 0) return hit;
+    if (m.endsWith(";")) unknownEntity = true;
+    return m;
+  });
+  return { text, unknownEntity };
+}
+
+// src/mcp/page-asks.ts
+var decode3 = (s) => decodeHtmlEntities(s).text;
+var IMPLICIT_CLOSES = /* @__PURE__ */ (() => {
+  const li = { siblings: /* @__PURE__ */ new Set(["li"]), scope: ["ul", "ol", "menu"] };
+  const dd = { siblings: /* @__PURE__ */ new Set(["dt", "dd"]), scope: ["dl"] };
+  const cell = { siblings: /* @__PURE__ */ new Set(["td", "th", "tr", "tbody", "thead", "tfoot"]), scope: ["table", "tr"] };
+  const section = { siblings: /* @__PURE__ */ new Set(["tbody", "thead", "tfoot"]), scope: ["table"] };
+  return {
+    li,
+    dt: dd,
+    dd,
+    option: { siblings: /* @__PURE__ */ new Set(["option", "optgroup"]), scope: ["select", "datalist", "optgroup"] },
+    optgroup: { siblings: /* @__PURE__ */ new Set(["optgroup"]), scope: ["select"] },
+    td: cell,
+    th: cell,
+    tr: { siblings: /* @__PURE__ */ new Set(["tr", "tbody", "thead", "tfoot"]), scope: ["table", "thead", "tbody", "tfoot"] },
+    thead: section,
+    tbody: section,
+    tfoot: section
+  };
+})();
+var IMPLICIT_TRIGGERS = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.siblings]));
+var TABLE_SCOPED = ["tr", "td", "th", "thead", "tbody", "tfoot"];
+var IMPLICIT_SCOPES = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.scope]));
+var CONTAINER_DROPS = PAGE_SANITIZE_DROP_TAGS.filter(
+  (t) => !DROP_ELEMENTS.includes(t) && t !== "base" && t !== "embed"
+);
+var CHILD_IDS_MAX = 50;
+var LEADING_NEWLINE_TAGS = /* @__PURE__ */ new Set(["pre", "listing", "textarea"]);
+function dropLeadingNewline(body, tag) {
+  if (!LEADING_NEWLINE_TAGS.has(tag)) return body;
+  if (body.startsWith("\r\n")) return body.slice(2);
+  return body[0] === "\n" || body[0] === "\r" ? body.slice(1) : body;
+}
+var VOID_TAGS = /* @__PURE__ */ new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "source",
+  "track",
+  "wbr"
+]);
+var P_CLOSERS = /* @__PURE__ */ new Set([
+  "li",
+  "dd",
+  "dt",
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "details",
+  "div",
+  "dl",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "table",
+  "ul"
+]);
+var RAW_BUDGET = PAGE_ASK_LIMITS.text * 5;
+function isSpace(c) {
+  return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
+}
+function tagAttributes(tag) {
+  const out = /* @__PURE__ */ new Map();
+  const n = tag.length;
+  let i = 1;
+  while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== ">" && tag[i] !== "/") i++;
+  while (i < n) {
+    while (i < n && (isSpace(tag.charCodeAt(i)) || tag[i] === "/")) i++;
+    if (i >= n || tag[i] === ">") break;
+    const nameStart = i;
+    while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== "=" && tag[i] !== ">" && tag[i] !== "/") i++;
+    const name = tag.slice(nameStart, i).toLowerCase();
+    while (i < n && isSpace(tag.charCodeAt(i))) i++;
+    let value = "";
+    if (tag[i] === "=") {
+      i++;
+      while (i < n && isSpace(tag.charCodeAt(i))) i++;
+      const q = tag[i];
+      if (q === '"' || q === "'") {
+        const end = tag.indexOf(q, i + 1);
+        const stop = end === -1 ? n : end;
+        value = tag.slice(i + 1, stop);
+        i = stop + 1;
+      } else {
+        const vStart = i;
+        while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== ">") i++;
+        value = tag.slice(vStart, i);
+      }
+    }
+    if (name && !out.has(name)) out.set(name, value);
+  }
+  return out;
+}
+function extractPageAsks(html) {
+  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  if (lower.indexOf("data-dp-decision") === -1 && lower.indexOf("data-dp-question") === -1) return [];
+  const n = html.length;
+  const lastAt = /* @__PURE__ */ new Map();
+  const memoIndexOf = (hay, needle, from) => {
+    const prev = lastAt.get(needle);
+    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
+    const at = hay.indexOf(needle, from);
+    lastAt.set(needle, at);
+    return at;
+  };
+  const tagEnd = (lt) => {
+    let at = lt + 1;
+    while (at < n) {
+      const c = html.charCodeAt(at);
+      if (c === 62) return at;
+      if ((c === 34 || c === 39) && /[\s=]/.test(html[at - 1])) {
+        const end = memoIndexOf(html, html[at], at + 1);
+        if (end === -1) return memoIndexOf(html, ">", at + 1);
+        at = end + 1;
+        continue;
+      }
+      at++;
+    }
+    return -1;
+  };
+  const out = [];
+  const openCount = /* @__PURE__ */ new Map();
+  const stacks = /* @__PURE__ */ new Map();
+  let hungry = [];
+  const openOrder = [];
+  const innermost = () => {
+    while (openOrder.length > 0 && openOrder[openOrder.length - 1].closed) openOrder.pop();
+    return openOrder[openOrder.length - 1];
+  };
+  const finish = (c) => {
+    if (c.done) return;
+    c.done = true;
+    const full = decode3(c.raw).replace(/\s+/g, " ").trim() || c.fallback;
+    c.ask.text = full.length > PAGE_ASK_LIMITS.text ? full.slice(0, PAGE_ASK_LIMITS.text) : full;
+  };
+  let hashing = [];
+  const seal = (c) => {
+    if (c.ask.fullHash !== void 0) return;
+    c.ask.fullHash = c.hasher.digest() ?? (c.fallback ? askTextHash(c.fallback) : void 0) ?? "";
+    if (!c.ask.fullHash) delete c.ask.fullHash;
+  };
+  const feed = (s, source = s) => {
+    if (!s && !source) return;
+    if (hashing.length > 0 && source) {
+      const text = decode3(source);
+      let closed = false;
+      for (const c of hashing) {
+        if (c.closed) closed = true;
+        else c.hasher.push(text);
+      }
+      if (closed) hashing = hashing.filter((c) => !c.closed);
+    }
+    if (hungry.length === 0 || !s) return;
+    let full = false;
+    for (const c of hungry) {
+      if (c.done) {
+        full = true;
+        continue;
+      }
+      c.raw += s.slice(0, RAW_BUDGET - c.raw.length);
+      if (c.raw.length >= RAW_BUDGET) {
+        finish(c);
+        full = true;
+      }
+    }
+    if (full) hungry = hungry.filter((c) => !c.done);
+  };
+  const closeTag = (name) => {
+    const count2 = Math.max(0, (openCount.get(name) ?? 0) - 1);
+    openCount.set(name, count2);
+    const stack = stacks.get(name);
+    while (stack && stack.length > 0 && stack[stack.length - 1].level > count2) {
+      const c = stack.pop();
+      c.closed = true;
+      finish(c);
+      seal(c);
+    }
+  };
+  const scopeDepth = (tag) => {
+    let d = 0;
+    for (const t of IMPLICIT_CLOSES[tag].scope) d += openCount.get(t) ?? 0;
+    return d;
+  };
+  const implicitClose = (c) => {
+    c.closed = true;
+    finish(c);
+    seal(c);
+    const stack = stacks.get(c.tag);
+    const at = stack ? stack.indexOf(c) : -1;
+    if (at !== -1) stack.splice(at, 1);
+  };
+  const implicitOnOpen = (name) => {
+    if (!IMPLICIT_TRIGGERS.has(name)) return;
+    for (const c of openOrder) {
+      if (c.closed || c.scope === void 0) continue;
+      if (IMPLICIT_CLOSES[c.tag].siblings.has(name) && scopeDepth(c.tag) === c.scope) implicitClose(c);
+    }
+  };
+  const implicitOnClose = (name) => {
+    if (!IMPLICIT_SCOPES.has(name)) return;
+    for (const c of openOrder) {
+      if (c.closed || c.scope === void 0) continue;
+      if (IMPLICIT_CLOSES[c.tag].scope.includes(name) && scopeDepth(c.tag) < c.scope) implicitClose(c);
+    }
+  };
+  const tableSnapshots = [];
+  let i = 0;
+  while (i < n) {
+    if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0 && hashing.every((c2) => c2.closed)) break;
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      feed(html.slice(i));
+      break;
+    }
+    feed(html.slice(i, lt));
+    if (lower.startsWith("<!--", lt)) {
+      if (lower.startsWith("<!-->", lt)) {
+        i = lt + 5;
+        continue;
+      }
+      if (lower.startsWith("<!--->", lt)) {
+        i = lt + 6;
+        continue;
+      }
+      const a = memoIndexOf(html, "-->", lt + 4);
+      const b = memoIndexOf(html, "--!>", lt + 4);
+      const end = a === -1 ? b === -1 ? -1 : b + 4 : b === -1 || a < b ? a + 3 : b + 4;
+      i = end === -1 ? n : end;
+      continue;
+    }
+    const gt = tagEnd(lt);
+    if (gt === -1) {
+      feed(html.slice(lt), "");
+      break;
+    }
+    if (opensElement(lower, lt, "plaintext")) {
+      feed(" " + html.slice(gt + 1), html.slice(gt + 1));
+      break;
+    }
+    const hidden = CONTAINER_DROPS.find((t) => opensElement(lower, lt, t));
+    if (hidden) {
+      const close = memoIndexOf(lower, `</${hidden}`, gt + 1);
+      if (close === -1) break;
+      const closeEnd = html.indexOf(">", close);
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const drop = DROP_ELEMENTS.find((t) => opensElement(lower, lt, t));
+    const literal2 = drop ? void 0 : TEXT_ELEMENTS.find((t) => opensElement(lower, lt, t));
+    const raw = drop ?? literal2;
+    if (raw) {
+      const close = memoIndexOf(lower, `</${raw}`, gt + 1);
+      if (close === -1) {
+        i = gt + 1;
+        continue;
+      }
+      if (literal2) {
+        const body = dropLeadingNewline(html.slice(gt + 1, close), literal2);
+        feed(" " + body + " ", body);
+      }
+      const closeEnd = html.indexOf(">", close);
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const m = /^<(\/?)\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
+    i = gt + 1;
+    if (!m) continue;
+    if (!m[1] && LEADING_NEWLINE_TAGS.has(m[2])) {
+      if (html.startsWith("\r\n", i)) i += 2;
+      else if (html[i] === "\n" || html[i] === "\r") i += 1;
+    }
+    const name = m[2];
+    if (BLOCK_TAGS.has(name)) feed(" ", "");
+    if (hashing.length > 0 && isAskBreakTag(name)) {
+      for (const c2 of hashing) if (!c2.closed) c2.hasher.separate();
+    }
+    if (m[1]) {
+      closeTag(name);
+      if (name === "table") {
+        const snap = tableSnapshots.pop();
+        if (snap) TABLE_SCOPED.forEach((t, k) => openCount.set(t, snap[k]));
+      }
+      implicitOnClose(name);
+      continue;
+    }
+    implicitOnOpen(name);
+    if (name === "table") tableSnapshots.push(TABLE_SCOPED.map((t) => openCount.get(t) ?? 0));
+    if (P_CLOSERS.has(name) && (openCount.get("p") ?? 0) > 0) {
+      openCount.set("p", 1);
+      closeTag("p");
+    }
+    const tagLower = lower.slice(lt, gt + 1);
+    const isAsk = tagLower.includes("data-dp-decision") || tagLower.includes("data-dp-question");
+    const isVoid = VOID_TAGS.has(name);
+    if (!isVoid) openCount.set(name, (openCount.get(name) ?? 0) + 1);
+    const inner = isAsk || tagLower.indexOf("id") === -1 ? void 0 : innermost();
+    if (inner) {
+      const childId = decode3(tagAttributes(html.slice(lt, gt + 1)).get("id") ?? "");
+      if (childId && childId.length <= PAGE_ASK_LIMITS.id && !/\s/.test(childId)) {
+        const ids = inner.ask.childIds ??= [];
+        if (ids.length < CHILD_IDS_MAX) ids.push(childId);
+      }
+    }
+    if (!isAsk || out.length >= PAGE_ASK_LIMITS.max) continue;
+    const attrs = tagAttributes(html.slice(lt, gt + 1));
+    const decision = attrs.has("data-dp-decision");
+    if (!decision && !attrs.has("data-dp-question")) continue;
+    const ask = { kind: decision ? "decision" : "question", text: "" };
+    const id = decode3(attrs.get("id") ?? "");
+    if (id && id.length <= PAGE_ASK_LIMITS.id && !/\s/.test(id)) ask.id = id;
+    out.push(ask);
+    const fallback = decode3(attrs.get("alt") || attrs.get("aria-label") || attrs.get("title") || attrs.get("value") || "").replace(/\s+/g, " ").trim();
+    const c = {
+      ask,
+      tag: name,
+      level: openCount.get(name) ?? 0,
+      raw: "",
+      fallback,
+      done: false,
+      closed: false,
+      hasher: new AskTextHasher()
+    };
+    if (IMPLICIT_CLOSES[name]) c.scope = scopeDepth(name);
+    if (isVoid) {
+      c.closed = true;
+      finish(c);
+      seal(c);
+      continue;
+    }
+    hashing.push(c);
+    openOrder.push(c);
+    const stack = stacks.get(name) ?? [];
+    stack.push(c);
+    stacks.set(name, stack);
+    hungry.push(c);
+  }
+  for (const stack of stacks.values()) for (const c of stack) {
+    finish(c);
+    seal(c);
+  }
+  for (const c of hashing) seal(c);
+  return out;
+}
+var scanCache = /* @__PURE__ */ new Map();
+var SCAN_CACHE_MAX = 50;
+function pageAsksFor(artifactId, html) {
+  const hit = scanCache.get(artifactId);
+  if (hit) {
+    scanCache.delete(artifactId);
+    scanCache.set(artifactId, hit);
+    return hit;
+  }
+  const asks = extractPageAsks(html);
+  scanCache.set(artifactId, asks);
+  if (scanCache.size > SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value);
+  return asks;
+}
+function openPageAsks(asks, comments, current, earlierAsks) {
+  return asks.filter((a) => !isPageAskAnswered(a, comments, current, earlierAsks));
+}
+
 // src/debrief-gate.ts
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
 var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
@@ -36817,6 +37486,30 @@ function changesetReviewField(a) {
   const out = { reviewState, filesReviewed, filesTotal: files.length };
   if (Object.keys(reviewReasons).length > 0) out.reviewReasons = reviewReasons;
   return out;
+}
+var PAGE_OPEN_ASKS_MAX = 20;
+async function pageOpenAsksField(a, allArtifacts, store) {
+  if (a.type !== "page") return [];
+  try {
+    const asks = pageAsksFor(a.id, coercePageContent(a.content).html);
+    if (asks.length === 0) return [];
+    const byId = new Map(allArtifacts.map((x) => [x.id, x]));
+    const comments = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (let cur = a; cur && !seen.has(cur.id) && seen.size < 50; cur = cur.parentId ? byId.get(cur.parentId) : void 0) {
+      seen.add(cur.id);
+      comments.push(...await store.getCommentsForArtifact(cur.id) ?? []);
+    }
+    const earlierAsks = (versionId) => {
+      const v2 = byId.get(versionId);
+      return v2 && v2.type === "page" ? pageAsksFor(v2.id, coercePageContent(v2.content).html) : void 0;
+    };
+    return openPageAsks(asks.filter((q) => q.id), comments, { artifactId: a.id, version: a.version }, earlierAsks).concat(
+      asks.filter((q) => !q.id)
+    );
+  } catch {
+    return [];
+  }
 }
 function changesetExternalField(a) {
   if (a.type !== "changeset") return {};
@@ -37383,6 +38076,31 @@ Fix the Mermaid source and re-present the affected visual (revise_artifact).`
     await store.markWorkerStopsDelivered?.(workerStops.map((w) => w.id));
   }
   if (workerStopsNotice) parts.push(workerStopsNotice);
+  const pageOpenAsks = /* @__PURE__ */ new Map();
+  for (const a of pendingArts) {
+    if (a.type !== "page") continue;
+    const open = await pageOpenAsksField(a, postWakeArtifacts, store);
+    if (open.length > 0) pageOpenAsks.set(a.id, open);
+  }
+  for (const [id, open] of pageOpenAsks) {
+    const page = pendingArts.find((a) => a.id === id);
+    const clipAsk = (t) => t.length > 100 ? `${t.slice(0, 99)}\u2026` : t;
+    const owed = open.filter((q) => q.id);
+    const unverifiable = open.length - owed.length;
+    const lines = [];
+    if (owed.length > 0) {
+      const named = owed.slice(0, 5).map((q) => `#${q.id} (${q.kind}) "${clipAsk(q.text)}"`).join("; ");
+      lines.push(
+        `\u{1F4DD} Page "${page.title}" has ${owed.length} open ask${owed.length === 1 ? "" : "s"} your pair hasn't answered yet: ${named}${owed.length > 5 ? `; and ${owed.length - 5} more` : ""}. They answer by commenting on the ask in the companion.`
+      );
+    }
+    if (unverifiable > 0) {
+      lines.push(
+        `${unverifiable} ask${unverifiable === 1 ? " has" : "s have"} no id on page "${page.title}", so ${unverifiable === 1 ? "its answer" : "their answers"} can't be checked here \u2014 add ids, or check the companion.`
+      );
+    }
+    parts.push(lines.join("\n"));
+  }
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
@@ -37603,7 +38321,19 @@ Suggested action: ${suggestedAction}`);
       // spread only for a Q6 external changeset so a local/other pending entry
       // stays byte-for-byte unchanged. Lets a structured-only client render the
       // "reviewing a colleague's PR — nothing to apply" posture.
-      ...changesetExternalField(a)
+      ...changesetExternalField(a),
+      // #714 gap 5 — a pending page's still-unanswered asks, spread only when
+      // there are some, so every other entry stays byte-for-byte unchanged.
+      // Capped at PAGE_OPEN_ASKS_MAX per page; id-less asks carry
+      // verifiable:false (their answers can't be checked server-side).
+      ...pageOpenAsks.has(a.id) ? {
+        openAsks: pageOpenAsks.get(a.id).slice(0, PAGE_OPEN_ASKS_MAX).map((q) => ({
+          ...q.id ? { id: q.id } : { verifiable: false },
+          kind: q.kind,
+          text: q.text
+        })),
+        ...pageOpenAsks.get(a.id).length > PAGE_OPEN_ASKS_MAX ? { openAsksOmitted: pageOpenAsks.get(a.id).length - PAGE_OPEN_ASKS_MAX } : {}
+      } : {}
     })),
     questions: structuredQuestions,
     comments: structuredComments,
@@ -39140,7 +39870,7 @@ var RESOURCE_ATTRS = {
   // SVG <use> pointing at another document
 };
 var HEADINGS = /* @__PURE__ */ new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
-function isSpace(c) {
+function isSpace2(c) {
   return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
 }
 function isAlpha(c) {
@@ -39148,7 +39878,7 @@ function isAlpha(c) {
 }
 function externalAt(lower, at) {
   let i = at;
-  while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
+  while (i < lower.length && isSpace2(lower.charCodeAt(i))) i++;
   return lower.startsWith("http://", i) || lower.startsWith("https://", i) || lower.startsWith("//", i);
 }
 function isExternal(value) {
@@ -39183,7 +39913,7 @@ function externalCssRefs(rawCss) {
   const counts = { url: 0, import: 0 };
   const target = (from) => {
     let i = from;
-    while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
+    while (i < lower.length && isSpace2(lower.charCodeAt(i))) i++;
     if (lower[i] === '"' || lower[i] === "'") i++;
     return i;
   };
@@ -39197,7 +39927,7 @@ function externalCssRefs(rawCss) {
   at = lower.indexOf("url(");
   while (at !== -1) {
     let k = at - 1;
-    while (k >= 0 && isSpace(lower.charCodeAt(k))) k--;
+    while (k >= 0 && isSpace2(lower.charCodeAt(k))) k--;
     const isImportTarget = k >= 6 && lower.startsWith("@import", k - 6);
     if (!isImportTarget && externalAt(lower, target(at + 4))) counts.url++;
     at = lower.indexOf("url(", at + 4);
@@ -39207,23 +39937,23 @@ function externalCssRefs(rawCss) {
 function readStartTag(html, lower, at) {
   const n = html.length;
   let i = at;
-  while (i < n && !isSpace(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">") i++;
+  while (i < n && !isSpace2(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">") i++;
   const name = lower.slice(at, i);
   const attrs = /* @__PURE__ */ Object.create(null);
   while (i < n) {
-    while (i < n && (isSpace(lower.charCodeAt(i)) || lower[i] === "/")) i++;
+    while (i < n && (isSpace2(lower.charCodeAt(i)) || lower[i] === "/")) i++;
     if (i >= n) break;
     if (lower[i] === ">") return { name, attrs, end: i + 1 };
     const nameStart = i;
     i++;
-    while (i < n && !isSpace(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">" && lower[i] !== "=") i++;
+    while (i < n && !isSpace2(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">" && lower[i] !== "=") i++;
     const attr = lower.slice(nameStart, i);
     let j = i;
-    while (j < n && isSpace(lower.charCodeAt(j))) j++;
+    while (j < n && isSpace2(lower.charCodeAt(j))) j++;
     let value = "";
     if (lower[j] === "=") {
       j++;
-      while (j < n && isSpace(lower.charCodeAt(j))) j++;
+      while (j < n && isSpace2(lower.charCodeAt(j))) j++;
       const q = html[j];
       if (q === '"' || q === "'") {
         const close = html.indexOf(q, j + 1);
@@ -39231,7 +39961,7 @@ function readStartTag(html, lower, at) {
         j = close === -1 ? n : close + 1;
       } else {
         const start = j;
-        while (j < n && !isSpace(lower.charCodeAt(j)) && lower[j] !== ">") j++;
+        while (j < n && !isSpace2(lower.charCodeAt(j)) && lower[j] !== ">") j++;
         value = html.slice(start, j);
       }
       i = j;

@@ -317,7 +317,7 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     const win = fakeFrameWindow();
     fromFrame(win, { dp: "ready" });
     expect(win.postMessage).toHaveBeenCalledWith(
-      { dp: "pins", anchors: [{ kind: "text", locator: "p", quote: "a sentence from v1" }] },
+      { dp: "pins", anchors: [{ kind: "text", locator: "p", quote: "a sentence from v1" }], key: expect.any(String) },
       "*",
     );
     fromFrame(win, { dp: "pins-status", found: [false] });
@@ -931,5 +931,419 @@ describe("PageArtifact — what changed since the previous version (#714 gap 2)"
     await userEvent.selectOptions(select, v1.id);
     expect(screen.getByTestId("page-changes-toggle")).toHaveTextContent("Changes since v1");
     expect(await within(panel).findByText(/Changed: Storage, Rollout; Added: Risks/)).toBeInTheDocument();
+  });
+});
+
+// --- #714 gaps 4+5: outline rail and "Wants from you" ------------------------
+describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
+  const OUTLINE = {
+    dp: "outline",
+    headings: [
+      { level: 1, text: "Cache invalidation", locator: "h1" },
+      { level: 2, text: "Options", locator: "#options > h2:nth-of-type(1)" },
+      { level: 3, text: "TTL expiry", locator: "#ttl" },
+    ],
+    pins: [] as number[],
+    changes: [] as number[],
+  };
+  const ASKS = {
+    dp: "asks",
+    asks: [
+      { kind: "decision", id: "decide-ttl", text: "Decide: a 60s TTL, or invalidate on write?", locator: "#decide-ttl" },
+      { kind: "question", id: "ask-budget", text: "Is one more Redis instance in budget?", locator: "#ask-budget" },
+    ],
+    pinAsks: [] as number[],
+  };
+  const human = (id: string, anchor: Record<string, unknown>, extra: Partial<Comment> = {}): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id, htmlAnchor: anchor as any },
+    parentCommentId: null,
+    author: "human",
+    content: `note ${id}`,
+    acknowledged: false,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, Number(id.replace(/\D/g, "")) || 0)).toISOString(),
+    ...extra,
+  });
+
+  it("renders nothing until the frame reports headings or asks", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    expect(screen.queryByTestId("page-outline-rail")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-outline-disclosure")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-asks")).not.toBeInTheDocument();
+  });
+
+  it("renders the outline as a rail and a disclosure, as text, and jumps the frame to a heading", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { ...OUTLINE, headings: [...OUTLINE.headings, { level: 2, text: "<img src=x onerror=alert(1)>", locator: "h2" }] });
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(rail).toHaveAttribute("aria-label", "Page outline");
+    const entries = within(rail).getAllByTestId("page-outline-entry");
+    expect(entries.map((e) => e.textContent)).toEqual(["Cache invalidation", "Options", "TTL expiry", "<img src=x onerror=alert(1)>"]);
+    expect(entries.map((e) => e.getAttribute("data-level"))).toEqual(["1", "2", "3", "2"]);
+    // Frame text is never markup.
+    expect(rail.querySelector("img")).toBeNull();
+    expect(screen.getByTestId("page-outline-disclosure")).toBeInTheDocument();
+    await userEvent.click(within(rail).getByRole("button", { name: /Go to Options/ }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-heading", index: 1, locator: "#options > h2:nth-of-type(1)" }, "*");
+    expect(within(rail).getByRole("button", { name: /Go to Options/ })).toHaveAttribute("aria-current", "location");
+    // Keyboard: entries are buttons in tab order; Enter jumps too.
+    within(rail).getByRole("button", { name: /Go to TTL expiry/ }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-heading", index: 2, locator: "#ttl" }, "*");
+  });
+
+  it("highlights the section the frame reports as current (reading progress)", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, OUTLINE);
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(within(rail).getByTestId("page-outline-progress")).toHaveTextContent("Top of the page (3 sections)");
+    fromFrame(win, { dp: "outline-active", index: 2 });
+    expect(within(rail).getByRole("button", { name: /TTL expiry, you are here/ })).toHaveAttribute("aria-current", "location");
+    expect(within(rail).getByTestId("page-outline-progress")).toHaveTextContent("Section 3 of 3: TTL expiry");
+    // Out of range or from another source: ignored.
+    fromFrame(win, { dp: "outline-active", index: 999 });
+    fromFrame({ postMessage: vi.fn() }, { dp: "outline-active", index: 0 });
+    expect(within(rail).getByTestId("page-outline-progress")).toHaveTextContent("Section 3 of 3");
+    // The outline shrinks before the frame re-reports where you are: no crash.
+    fromFrame(win, { ...OUTLINE, headings: OUTLINE.headings.slice(0, 1) });
+    expect(within(screen.getByTestId("page-outline-rail")).getByTestId("page-outline-progress")).toHaveTextContent("Top of the page (1 section)");
+  });
+
+  it("badges open comments per section (resolved and not-found ones excluded) and ignores a stale pin report", () => {
+    const comments = [
+      human("cmt_1", { kind: "element", locator: "#ttl > p", quote: "a" }),
+      human("cmt_2", { kind: "element", locator: "#ttl > p:nth-of-type(2)", quote: "b" }),
+      human("cmt_3", { kind: "element", locator: "h1", quote: "Cache invalidation" }, { humanResolvedAt: new Date().toISOString() }),
+      human("cmt_4", { kind: "element", locator: "#options", quote: "c" }),
+      human("cmt_5", { kind: "text", locator: "p", quote: "gone" }),
+    ];
+    for (const c of comments) useArtifactStore.getState().addComment(c);
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    // A report for a different pin list (4 pins, not 5) is not counted.
+    fromFrame(win, { ...OUTLINE, pins: [2, 2, 0, 1] });
+    expect(screen.queryAllByTestId("page-outline-comments")).toHaveLength(0);
+    fromFrame(win, { ...OUTLINE, pins: [2, 2, 0, 1, 1] });
+    const rail = screen.getByTestId("page-outline-rail");
+    const badges = within(rail).getAllByTestId("page-outline-entry").map((e) => within(e).queryByTestId("page-outline-comments")?.textContent ?? "");
+    // Rolled up: a heading counts its subsections up to the next heading of
+    // the same or higher level (own counts are 0 / 1 / 2).
+    expect(badges).toEqual(["3", "3", "2"]);
+    expect(within(rail).getByRole("button", { name: "Go to Cache invalidation, 3 open comments (0 in this section, 3 in subsections)" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Go to Options, 3 open comments (1 in this section, 2 in subsections)" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Go to TTL expiry, 2 open comments" })).toBeInTheDocument();
+  });
+
+  it("rolls change counts up to the next heading of the same or higher level", async () => {
+    const v1: Artifact = { ...pageArtifact, id: "art_ru_v1", version: 1, status: "superseded", content: { title: "P", html: "<h2>A</h2><p>a</p><h3>A1</h3><p>b</p><h2>B</h2><p>c</p>" } };
+    const v2: Artifact = { ...pageArtifact, id: "art_ru_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<h2>A</h2><p>a!</p><h3>A1</h3><p>b!</p><h2>B</h2><p>c!</p>" } };
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    render(<PageArtifact artifact={v2} />);
+    await screen.findByTestId("page-changes-count");
+    const win = fakeFrameWindow();
+    const headings = [
+      { level: 2, text: "A", locator: "h2:nth-of-type(1)" },
+      { level: 3, text: "A1", locator: "h3" },
+      { level: 2, text: "B", locator: "h2:nth-of-type(2)" },
+    ];
+    fromFrame(win, { dp: "outline", headings, pins: [], changes: [0, 1, 2] });
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(within(rail).getAllByTestId("page-outline-changes").map((b) => b.textContent)).toEqual(["~2", "~1", "~1"]);
+    expect(within(rail).getByRole("button", { name: "Go to A, 2 changed blocks (1 in this section, 1 in subsections)" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Go to B, 1 changed block" })).toBeInTheDocument();
+  });
+
+  it("badges changed blocks per section from the version diff (while changes are shown)", async () => {
+    const v1: Artifact = { ...pageArtifact, id: "art_ol_v1", version: 1, status: "superseded", content: { title: "P", html: "<h2>A</h2><p>one</p><h2>B</h2><p>two</p>" } };
+    const v2: Artifact = { ...pageArtifact, id: "art_ol_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<h2>A</h2><p>one!</p><h2>B</h2><p>two!</p><p>three</p>" } };
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    render(<PageArtifact artifact={v2} />);
+    await screen.findByTestId("page-changes-count");
+    const win = fakeFrameWindow();
+    const headings = [{ level: 2, text: "A", locator: "h2:nth-of-type(1)" }, { level: 2, text: "B", locator: "h2:nth-of-type(2)" }];
+    fromFrame(win, { dp: "outline", headings, pins: [], changes: [0, 1, 1] });
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(within(rail).getAllByTestId("page-outline-changes").map((b) => b.textContent)).toEqual(["~1", "~2"]);
+    expect(within(rail).getByRole("button", { name: "Go to B, 2 changed blocks" })).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("page-changes-toggle"));
+    expect(within(rail).queryAllByTestId("page-outline-changes")).toHaveLength(0);
+  });
+
+  it("shows 'Wants from you (N)' with kind, text, open/answered state, and Jump scrolls the frame", async () => {
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "text", locator: "#ask-budget > strong:nth-of-type(1)", quote: "budget" }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, ASKS);
+    const strip = screen.getByTestId("page-asks");
+    expect(within(strip).getByText("Wants from you (2)")).toBeInTheDocument();
+    const items = within(strip).getAllByTestId("page-ask");
+    expect(items.map((i) => within(i).getByTestId("page-ask-state").textContent)).toEqual(["Open", "Answered"]);
+    expect(within(items[0]!).getByText("Decide")).toBeInTheDocument();
+    expect(within(items[1]!).getByText("Question")).toBeInTheDocument();
+    expect(within(strip).getByTestId("page-asks-tally")).toHaveTextContent("1 open · 1 answered");
+    await userEvent.click(within(items[0]!).getByRole("button", { name: /Show on the page/ }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-ask", index: 0, locator: "#decide-ttl" }, "*");
+    // Display-only: nothing was created by the report.
+    expect(useArtifactStore.getState().comments[pageArtifact.id]).toHaveLength(1);
+  });
+
+  it("Reply opens the composer pre-anchored to the ask; submitting marks it answered", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      return {
+        ok: true,
+        json: async () => ({
+          comment: {
+            id: "cmt_srv_ask", sessionId: "sess_1", target: body.target, parentCommentId: null, author: "human",
+            content: body.content, acknowledged: false, createdAt: new Date().toISOString(),
+          },
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, ASKS);
+    const first = screen.getAllByTestId("page-ask")[0]!;
+    await userEvent.click(within(first).getByRole("button", { name: /Reply to/ }));
+    expect(win.postMessage).toHaveBeenLastCalledWith({ dp: "focus-ask", index: 0, locator: "#decide-ttl" }, "*");
+    const composer = screen.getByTestId("page-anchor-composer");
+    expect(within(composer).getByText(/Decide: a 60s TTL, or invalidate on write\?/)).toBeInTheDocument();
+    const box = within(composer).getByLabelText("Comment on the selected spot");
+    expect(document.activeElement).toBe(box);
+    await userEvent.type(box, "Invalidate on write");
+    await userEvent.click(within(composer).getByRole("button", { name: "Send" }));
+    const post = fetchMock.mock.calls.find(([u, init]: any[]) => String(u).includes("/api/comments") && init?.method === "POST") as any;
+    expect(JSON.parse(post[1].body).target.htmlAnchor).toEqual({
+      kind: "element", locator: "#decide-ttl", quote: "Decide: a 60s TTL, or invalidate on write?", version: pageArtifact.version,
+    });
+    expect(await within(screen.getAllByTestId("page-ask")[0]!).findByText("Answered")).toBeInTheDocument();
+  });
+
+  const states = () => screen.getAllByTestId("page-ask").map((i) => within(i).getByTestId("page-ask-state").textContent);
+  /** The key of the pin list the companion last sent this frame (frame
+   *  reports echo it); "ready" makes the companion (re)send it. */
+  const keyOf = (win: { postMessage: ReturnType<typeof vi.fn> }) => {
+    fromFrame(win, { dp: "ready" });
+    return win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "pins").at(-1).key as string;
+  };
+
+  describe("earlier-version answers: ask continuity", () => {
+    const V1 =
+      '<div id="db" data-dp-decision>Which database for sessions? <ul><li id="pg">Postgres</li><li>MySQL</li></ul></div>' +
+      '<p id="cache" data-dp-question>Isn&rsquo;t the &ldquo;caf&eacute;&rdquo; cache enough?</p>';
+    const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const setup = async (
+      v1Html: string | null,
+      v2Html: string,
+      v2Asks: Array<Record<string, unknown>>,
+      comments: Array<[string, Record<string, unknown>]>,
+    ) => {
+      const v1: Artifact = { ...pageArtifact, id: `art_ac_v1_${Math.random()}`, version: 1, status: "superseded", content: { title: "P", html: v1Html ?? "<p>v1</p>" } };
+      const v2: Artifact = { ...pageArtifact, id: `art_ac_v2_${Math.random()}`, version: 2, parentId: v1.id, content: { title: "P", html: v2Html } };
+      if (v1Html !== null) useArtifactStore.getState().addArtifact(v1);
+      useArtifactStore.getState().addArtifact(v2);
+      comments.forEach(([id, anchor]) =>
+        useArtifactStore.getState().addComment({ ...human(id, anchor), target: { artifactId: v1.id, htmlAnchor: { ...anchor, version: 1 } as any } }),
+      );
+      render(<PageArtifact artifact={v2} />);
+      const win = fakeFrameWindow();
+      const key = keyOf(win);
+      fromFrame(win, { dp: "pins-status", found: comments.map(() => true), key });
+      // The frame even says every v1 pin sits inside ask 0: never enough for
+      // an earlier-version comment.
+      fromFrame(win, { dp: "asks", asks: v2Asks, pinAsks: comments.map(() => 0), key });
+    };
+    const DB = { kind: "decision", id: "db", text: "Which database for sessions? Postgres MySQL", locator: "#db" };
+    const CACHE = { kind: "question", id: "cache", text: "Isn\u2019t the \u201Ccaf\u00E9\u201D cache enough?", locator: "#cache" };
+
+    it("the same question kept across a revise stays answered (child option, entity selection) once the parse lands", async () => {
+      // v2 spells the apostrophe as the character and adds whitespace: same full text.
+      const V2 = V1.replace("&rsquo;", "\u2019").replace("database for", "database \n  for");
+      await setup(V1, V2, [DB, CACHE], [
+        ["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }],
+        ["cmt_2", { kind: "text", locator: "#cache", quote: "caf\u00E9" }],
+      ]);
+      expect(states()).toEqual(["Open", "Open"]); // parse pending: not counted yet
+      await flush();
+      expect(states()).toEqual(["Answered", "Answered"]);
+    });
+
+    it("a reused id for a different question stays open, even with the frame placing the pin inside it (the Postgres probe)", async () => {
+      await setup(
+        '<div id="q1" data-dp-question>Which DB? <ul><li id="pg">Postgres</li><li>MySQL</li></ul></div>',
+        '<div id="q1" data-dp-question>Which Postgres version? <ul><li id="v15">15</li><li>16</li></ul></div>',
+        [{ kind: "question", id: "q1", text: "Which Postgres version? 15 16", locator: "#q1" }],
+        [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]],
+      );
+      await flush();
+      expect(states()).toEqual(["Open"]);
+    });
+
+    it("a long preamble with only the trailing question changed reopens (the frame's 200-char text is never compared)", async () => {
+      const preamble = "Context: " + "we measured the session store under load and ".repeat(8);
+      const ask = (q: string) => `<div id="d" data-dp-decision>${preamble}${q}</div>`;
+      const frameText = (q: string) => (preamble + q).slice(0, 200); // identical for both questions
+      await setup(ask("Which DB?"), ask("Which region?"), [{ kind: "decision", id: "d", text: frameText("Which region?"), locator: "#d" }], [
+        ["cmt_1", { kind: "element", locator: "#d", quote: frameText("Which DB?") }],
+      ]);
+      await flush();
+      expect(states()).toEqual(["Open"]);
+    });
+
+    it("a reworded question reopens", async () => {
+      await setup(V1, V1.replace("Which database for sessions?", "Which database for sessions and caches?"), [DB], [
+        ["cmt_1", { kind: "element", locator: "#db", quote: "Which database" }],
+      ]);
+      await flush();
+      expect(states()).toEqual(["Open"]);
+    });
+
+    it("an earlier answer isn't vetoed by its pin failing to relocate here: same text, renamed child id (agrees with check_feedback)", async () => {
+      const v2Html = V1.replace('id="pg"', 'id="postgres"');
+      await setup(V1, v2Html, [DB], [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]]);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "pins-status", found: [false], key: keyOf(win) }); // #pg is gone from v2's DOM
+      await flush();
+      expect(states()).toEqual(["Answered"]);
+    });
+
+    it("the old version's HTML not loaded: the comment doesn't count", async () => {
+      await setup(null, V1, [DB], [["cmt_1", { kind: "element", locator: "#pg", quote: "Postgres" }]]);
+      await flush();
+      expect(states()).toEqual(["Open"]);
+    });
+  });
+
+  it("an earlier version's comment at the same POSITION doesn't answer an id-less ask (probe)", () => {
+    const v1: Artifact = { ...pageArtifact, id: "art_pos_v1", version: 1, status: "superseded", content: { title: "P", html: "<p>v1</p>" } };
+    const v2: Artifact = { ...pageArtifact, id: "art_pos_v2", version: 2, parentId: v1.id, content: { title: "P", html: "<p>v2</p>" } };
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+    const anchor = { kind: "element", locator: "body > div:nth-of-type(2)", quote: "An unrelated card", version: 1 };
+    useArtifactStore.getState().addComment({ ...human("cmt_1", anchor), target: { artifactId: v1.id, htmlAnchor: anchor as any } });
+    render(<PageArtifact artifact={v2} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "asks", asks: [{ kind: "decision", text: "Ship on Friday?", locator: "body > div:nth-of-type(2)" }], pinAsks: [0] });
+    expect(states()).toEqual(["Open"]);
+  });
+
+  it("resolved comments and comments not found on this version don't answer; a child with its own id does (via the frame)", () => {
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#decide-ttl", quote: "x" }, { humanResolvedAt: new Date().toISOString() }));
+    useArtifactStore.getState().addComment(human("cmt_2", { kind: "element", locator: "#ask-budget", quote: "y" }));
+    useArtifactStore.getState().addComment(human("cmt_3", { kind: "element", locator: "#ttl-note", quote: "60s is fine" }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    const key = keyOf(win);
+    fromFrame(win, { dp: "pins-status", found: [true, false, true], key });
+    fromFrame(win, { ...ASKS, key });
+    expect(states()).toEqual(["Open", "Open"]);
+    // The frame says pin 3 (#ttl-note) sits inside ask 0.
+    fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0], key });
+    expect(states()).toEqual(["Answered", "Open"]);
+    // A report without the pin list's key (or for another list) is not used.
+    fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0] });
+    expect(states()).toEqual(["Open", "Open"]);
+    fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0], key: "x0:1" });
+    expect(states()).toEqual(["Open", "Open"]);
+  });
+
+  it("ask completion uses the pre-Run pin status, never a live post-Run one (the pin list stays live)", async () => {
+    // A current-version comment on a child of ask 0 the frame resolves inside it.
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#ttl-note", quote: "60s is fine" }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    let win = fakeFrameWindow();
+    const key = keyOf(win);
+    fromFrame(win, { dp: "pins-status", found: [true], key });
+    fromFrame(win, { ...ASKS, pinAsks: [0], key });
+    expect(states()).toEqual(["Answered", "Open"]);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    win = fakeFrameWindow();
+    // After Run, page script could post anything: a forged "not found"…
+    fromFrame(win, { dp: "pins-status", found: [false], key });
+    expect(states()).toEqual(["Answered", "Open"]);
+    // …which the pin list does show (it renders live status).
+    expect(screen.getByTestId("page-anchor-missing")).toBeInTheDocument();
+  });
+
+  it("a report computed for the previous pin list is never attributed to the new one (delete + add in one round trip)", () => {
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#ttl-note", quote: "60s is fine" }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    const oldKey = keyOf(win);
+    // Before the frame's report for [cmt_1] arrives, cmt_1 is deleted and
+    // cmt_2 (elsewhere on the page) is added: still one pin, a different one.
+    act(() => {
+      useArtifactStore.setState((st) => ({ comments: { ...st.comments, [pageArtifact.id]: [] } }));
+      useArtifactStore.getState().addComment(human("cmt_2", { kind: "element", locator: "#elsewhere", quote: "x" }));
+    });
+    // The in-flight report for the old list lands now.
+    fromFrame(win, { dp: "pins-status", found: [true], key: oldKey });
+    fromFrame(win, { ...ASKS, pinAsks: [0], key: oldKey });
+    expect(states()).toEqual(["Open", "Open"]);
+    // The frame's report for the new list (cmt_2 isn't in any ask) agrees.
+    const newKey = keyOf(win);
+    expect(newKey).not.toBe(oldKey);
+    fromFrame(win, { dp: "pins-status", found: [true], key: newKey });
+    fromFrame(win, { ...ASKS, pinAsks: [-1], key: newKey });
+    expect(states()).toEqual(["Open", "Open"]);
+  });
+
+  it("after Run, a new comment on a child with its own id inside an ask answers it (child ids from this version's parse)", async () => {
+    const page: Artifact = {
+      ...pageArtifact,
+      id: "art_page_child",
+      content: { title: "P", html: '<p id="decide-ttl" data-dp-decision>Decide: a 60s TTL, or invalidate on write? <em id="ttl-note">60s</em></p><script>1</script>' },
+    };
+    useArtifactStore.getState().addArtifact(page);
+    render(<PageArtifact artifact={page} />);
+    let win = fakeFrameWindow();
+    fromFrame(win, { ...ASKS, key: keyOf(win) });
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    win = fakeFrameWindow();
+    act(() => {
+      useArtifactStore.getState().addComment({
+        ...human("cmt_1", { kind: "element", locator: "#ttl-note", quote: "60s" }),
+        target: { artifactId: page.id, htmlAnchor: { kind: "element", locator: "#ttl-note", quote: "60s" } as any },
+      });
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(states()).toEqual(["Answered", "Open"]);
+  });
+
+  it("ignores outline, reading progress and asks reports while the page's scripts run (pre-Run values stand)", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    let win = fakeFrameWindow();
+    fromFrame(win, OUTLINE);
+    fromFrame(win, ASKS);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    win = fakeFrameWindow();
+    fromFrame(win, { ...OUTLINE, headings: [{ level: 1, text: "Forged", locator: "h1" }] });
+    fromFrame(win, { dp: "outline-active", index: 2 });
+    fromFrame(win, { dp: "asks", asks: [], pinAsks: [] });
+    const rail = screen.getByTestId("page-outline-rail");
+    expect(within(rail).getAllByTestId("page-outline-entry").map((e) => e.textContent)).toEqual(["Cache invalidation", "Options", "TTL expiry"]);
+    expect(within(rail).getByTestId("page-outline-progress")).toHaveTextContent("Top of the page");
+    expect(screen.getAllByTestId("page-ask")).toHaveLength(2);
+  });
+
+  it("a read-only page lists asks without Reply; malformed or foreign ask reports are ignored", () => {
+    const retracted: Artifact = { ...pageArtifact, id: "art_page_ro", status: "retracted" };
+    useArtifactStore.getState().addArtifact(retracted);
+    render(<PageArtifact artifact={retracted} />);
+    const win = fakeFrameWindow();
+    fromFrame({ postMessage: vi.fn() }, ASKS);
+    fromFrame(win, { dp: "asks", asks: [{ ...ASKS.asks[0], kind: "approve" }], pinAsks: [] });
+    expect(screen.queryByTestId("page-asks")).not.toBeInTheDocument();
+    fromFrame(win, ASKS);
+    const strip = screen.getByTestId("page-asks");
+    expect(within(strip).queryByRole("button", { name: /Reply to/ })).not.toBeInTheDocument();
+    expect(within(strip).getAllByRole("button", { name: /Show on the page/ })).toHaveLength(2);
   });
 });

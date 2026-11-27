@@ -39,6 +39,16 @@
  * found}` reports which were found and `{dp:"focus-change", index}` scrolls to
  * one.
  *
+ * #714 gaps 4+5 — on ready and after relevant changes (debounced) the
+ * annotator reports `{dp:"outline", headings, pins, changes}` (h1–h3 as
+ * {level, text, locator}, capped at 200 and 120 chars, plus the section index
+ * each pin and change mark sits in) and `{dp:"asks", asks}` (elements marked
+ * data-dp-decision / data-dp-question as {kind, text, locator, id?}, capped at
+ * 50 and 200 chars), each only when it changed. While the frame scrolls it
+ * reports the current section, throttled, as `{dp:"outline-active", index}`.
+ * `{dp:"focus-heading"|"focus-ask", index, locator}` scrolls to one. These are
+ * display-only hints: after Run agent script could post its own.
+ *
  * Written as plain JS inside `String.raw` (so no `${` or backticks below) and
  * split into a CORE (pure helpers: locator building, quote extraction,
  * re-finding) and a MAIN (event wiring), so jsdom tests can evaluate the exact
@@ -558,6 +568,79 @@ function findChanges(list, cache) {
   return out;
 }
 
+/** #714 gaps 4+5 — the page's shape and its asks, collected for the parent
+ *  as display-only hints (after Run agent script shares the frame and could
+ *  post its own). Every list and string is capped. */
+var OUTLINE = { max: 200, text: 120, asks: 50, askText: 200, id: 200 };
+var HEADING_SEL = "h1, h2, h3";
+var ASK_SEL = "[data-dp-decision], [data-dp-question]";
+/** The first max characters of elementText(el), without reading the rest of
+ *  a big subtree: the same walk and whitespace rule as textIndex, stopped
+ *  early. Equal to clip(elementText(el), max), so an element anchor built
+ *  from it re-finds like one from a click. */
+function textPrefix(el, max) {
+  var walker = document.createTreeWalker(el, 4, null), text = "", lastSpace = true, n;
+  outer: while ((n = walker.nextNode())) {
+    var p = n.parentNode;
+    if (p && p.closest && p.closest(SKIP)) continue;
+    var raw = n.nodeValue || "";
+    for (var i = 0; i < raw.length; i++) {
+      var ch = raw.charAt(i);
+      if (isWs(ch)) { if (!lastSpace) { text += " "; lastSpace = true; } }
+      else { text += ch; lastSpace = false; }
+      if (text.length > max) break outer;
+    }
+  }
+  var t = norm(text);
+  if (!t && el.getAttribute) {
+    t = norm(el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("value") || "");
+  }
+  return clip(t, max);
+}
+/** h1–h3 in document order, as {el, level, text, locator}; untitled headings
+ *  and unrendered subtrees skipped, capped at OUTLINE.max. */
+function collectHeadings() {
+  var els = document.querySelectorAll(HEADING_SEL), out = [];
+  for (var i = 0; i < els.length && out.length < OUTLINE.max; i++) {
+    var el = els[i];
+    if (inChangeSkip(el) || el.closest(SKIP)) continue;
+    var text = textPrefix(el, OUTLINE.text);
+    if (!text) continue;
+    out.push({ el: el, level: Number(String(el.localName).charAt(1)), text: text, locator: buildLocator(el) });
+  }
+  return out;
+}
+/** Elements marked data-dp-decision / data-dp-question, as {el, kind, text,
+ *  locator, id?}; decision wins when both are set. Capped at OUTLINE.asks. */
+function collectAsks() {
+  var els = document.querySelectorAll(ASK_SEL), out = [];
+  for (var i = 0; i < els.length && out.length < OUTLINE.asks; i++) {
+    var el = els[i];
+    if (inChangeSkip(el) || el.closest(SKIP)) continue;
+    var a = { el: el, kind: el.hasAttribute("data-dp-decision") ? "decision" : "question",
+      text: textPrefix(el, OUTLINE.askText), locator: buildLocator(el) };
+    var id = el.id;
+    if (typeof id === "string" && id && id.length <= OUTLINE.id) a.id = id;
+    out.push(a);
+  }
+  return out;
+}
+/** Which heading's section an element sits in: the last heading at or before
+ *  it in document order (binary search), or the first heading INSIDE it (a
+ *  comment on a whole <section> belongs to that section's heading). -1 =
+ *  before the first heading. */
+function sectionOf(el, heads) {
+  if (!isEl(el) || !heads.length) return -1;
+  var lo = 0, hi = heads.length - 1, idx = -1;
+  while (lo <= hi) {
+    var mid = (lo + hi) >> 1, h = heads[mid];
+    if (h === el || (h.compareDocumentPosition(el) & 4)) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  var next = heads[idx + 1];
+  if (next && el !== next && el.contains(next)) return idx + 1;
+  return idx;
+}
+
 return {
   LIMITS: LIMITS,
   LINK_SEL: LINK_SEL,
@@ -577,7 +660,15 @@ return {
   mermaidNodeId: mermaidNodeId,
   CHANGE_SKIP: CHANGE_SKIP,
   clippedText: clippedText,
-  findChanges: findChanges
+  findChanges: findChanges,
+  OUTLINE: OUTLINE,
+  HEADING_SEL: HEADING_SEL,
+  ASK_SEL: ASK_SEL,
+  safeQuery: safeQuery,
+  textPrefix: textPrefix,
+  collectHeadings: collectHeadings,
+  collectAsks: collectAsks,
+  sectionOf: sectionOf
 };
 `;
 
@@ -586,7 +677,12 @@ return {
 export const ANNOTATOR_MAIN_SOURCE = String.raw`
 "use strict";
 var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
-var current = [], lastFound = null, pending = 0;
+var current = [], lastFound = null, pending = 0, pinEls = [];
+/** #714 gap 5 — the parent's tag for the pin list it sent, echoed on every
+ *  report computed from that list (pins-status, asks), so the parent never
+ *  attributes a report to a list that changed while it was in flight. */
+var pinsKey = null;
+function withKey(msg) { if (pinsKey !== null) msg.key = pinsKey; return msg; }
 // #714 gap 2 — version-change marks (validated locators) and their toggle.
 var changes = [], showChanges = false, lastChangesFound = null;
 /** Our own nodes, by reference: an authored element can carry the marker
@@ -777,10 +873,12 @@ function drawPins() {
   var olds = l.querySelectorAll("dp-annotator-pin");
   for (var i = 0; i < olds.length; i++) olds[i].remove();
   var found = [];
+  pinEls = [];
   for (var j = 0; j < current.length; j++) {
     var hit = null;
     try { hit = core.findAnchor(current[j]); } catch (e) { hit = null; }
     found.push(!!hit);
+    pinEls.push(hit && hit.el ? hit.el : null);
     if (!hit) continue;
     var r = rectOf(hit);
     if (!r) continue;
@@ -891,7 +989,7 @@ function reconcile(force, forceChanges) {
   var found = drawPins();
   if (force || !samePins(lastFound, found)) {
     lastFound = found;
-    post({ dp: "pins-status", found: found });
+    post(withKey({ dp: "pins-status", found: found }));
   }
   if (forceChanges || !samePins(lastChangesFound, cf)) {
     lastChangesFound = cf;
@@ -916,6 +1014,127 @@ function focusPin(index) {
     setTimeout(function () { important(pin, { outline: "2px solid #f59e0b" }); }, 1600);
   }
 }
+
+/** #714 gaps 4+5 — the outline (h1–h3, with the section each pin and each
+ *  change mark sits in) and the asks, reported to the parent when they
+ *  change. Display-only hints: the parent validates every field and never
+ *  creates anything from them. outlineEls / askEls line up with the last
+ *  report, so a parent index points at the element it saw. The asks report
+ *  also carries pinAsks: per pin, the innermost ask containing it. */
+var outlineEls = [], askEls = [], lastOutlineJson = "", lastAsksJson = "", activeIdx = -2;
+var outlinePending = 0, activePending = 0;
+function reportOutline() {
+  outlinePending = 0;
+  var hs = [], j;
+  try { hs = core.collectHeadings(); } catch (e) { hs = []; }
+  var els = [], heads = [];
+  for (j = 0; j < hs.length; j++) { els.push(hs[j].el); heads.push({ level: hs[j].level, text: hs[j].text, locator: hs[j].locator }); }
+  outlineEls = els;
+  var pins = [];
+  for (j = 0; j < current.length; j++) pins.push(pinEls[j] && pinEls[j].isConnected ? core.sectionOf(pinEls[j], els) : -1);
+  var ch = [];
+  if (changes.length) {
+    if (!changeEls) { try { changeEls = core.findChanges(changes, changeIndex); } catch (e2) { changeEls = []; } }
+    for (j = 0; j < changes.length; j++) ch.push(changes[j] && changeEls[j] ? core.sectionOf(changeEls[j], els) : -1);
+  }
+  var msg = { dp: "outline", headings: heads, pins: pins, changes: ch };
+  var json = JSON.stringify(msg);
+  if (json !== lastOutlineJson) { lastOutlineJson = json; activeIdx = -2; post(msg); }
+  var as = [];
+  try { as = core.collectAsks(); } catch (e3) { as = []; }
+  var aels = [], asks = [];
+  for (j = 0; j < as.length; j++) {
+    aels.push(as[j].el);
+    var item = { kind: as[j].kind, text: as[j].text, locator: as[j].locator };
+    if (as[j].id) item.id = as[j].id;
+    asks.push(item);
+  }
+  askEls = aels;
+  // Per pin: the innermost ask its element sits in (-1 = none), so a comment
+  // on a child with its own id still counts as on the ask.
+  var pinAsks = [];
+  for (j = 0; j < current.length; j++) {
+    var pe = pinEls[j], hitAsk = -1;
+    if (pe && pe.isConnected) {
+      for (var k = 0; k < aels.length; k++) if (aels[k] === pe || aels[k].contains(pe)) hitAsk = k;
+    }
+    pinAsks.push(hitAsk);
+  }
+  var amsg = withKey({ dp: "asks", asks: asks, pinAsks: pinAsks });
+  var ajson = JSON.stringify(amsg);
+  if (ajson !== lastAsksJson) { lastAsksJson = ajson; post(amsg); }
+  reportActive();
+}
+function scheduleOutline() {
+  if (outlinePending) return;
+  outlinePending = setTimeout(reportOutline, 200);
+}
+/** Reading progress: the last heading scrolled past a line a quarter of the
+ *  way down the frame (headings with no box, e.g. in a closed details, are
+ *  skipped); at the very bottom, the last heading on screen. -1 = above the
+ *  first heading. */
+function computeActive() {
+  var vh = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
+  var line = Math.max(48, vh * 0.25), idx = -1, lastOnScreen = -1;
+  for (var i = 0; i < outlineEls.length; i++) {
+    var el = outlineEls[i];
+    if (!el.isConnected) continue;
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) continue;
+    if (r.top <= line) idx = i;
+    if (r.top < vh) lastOnScreen = i;
+  }
+  var de = document.documentElement, sy = window.scrollY || window.pageYOffset || 0;
+  if (de && vh && sy > 0 && sy + vh >= de.scrollHeight - 2 && lastOnScreen > idx) idx = lastOnScreen;
+  return idx;
+}
+function reportActive() {
+  activePending = 0;
+  var idx = -1;
+  try { idx = computeActive(); } catch (e) { idx = -1; }
+  if (idx !== activeIdx) { activeIdx = idx; post({ dp: "outline-active", index: idx }); }
+}
+function scheduleActive() {
+  if (activePending) return;
+  activePending = setTimeout(reportActive, 150);
+}
+/** The element a parent index names: the reported element when it still
+ *  matches the locator the parent saw, else the locator's element if it is
+ *  the right kind (the page changed since the report), else null. */
+function reported(list, index, locator, sel) {
+  var i = typeof index === "number" && isFinite(index) ? Math.floor(index) : -1;
+  var el = i >= 0 && i < list.length ? list[i] : null;
+  var loc = typeof locator === "string" && locator.length > 0 && locator.length <= core.LIMITS.locator ? locator : null;
+  if (el && el.isConnected && (!loc || core.buildLocator(el) === loc)) return el;
+  var q = loc ? core.safeQuery(loc) : null;
+  return q && q.matches && q.matches(sel) && !own(q) ? q : null;
+}
+function flash(el) {
+  if (!el || !el.getBoundingClientRect) return;
+  var box = mk("dp-annotator-flash");
+  important(box, { position: "absolute", display: "block", "box-sizing": "border-box", outline: "3px solid #6366f1",
+    background: "rgba(99,102,241,0.08)", "pointer-events": "none", margin: "0", padding: "0" });
+  place(box, el.getBoundingClientRect());
+  ensureLayer().appendChild(box);
+  setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 1600);
+}
+function openDetailsAround(el) {
+  for (var d = el.parentElement; d; d = d.parentElement) if (d.localName === "details" && !d.open) d.open = true;
+}
+function focusHeading(index, locator) {
+  var el = reported(outlineEls, index, locator, core.HEADING_SEL);
+  if (!el) return;
+  goTo(el);
+  flash(el);
+  scheduleActive();
+}
+function focusAsk(index, locator) {
+  var el = reported(askEls, index, locator, core.ASK_SEL);
+  if (!el) return;
+  openDetailsAround(el);
+  if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center", behavior: "smooth" });
+  flash(el);
+}
 /** A mutation that only touches our own layer/pins/hover box is ignored, so
  *  drawing pins never re-triggers a redraw. */
 function ownOnly(list) {
@@ -936,7 +1155,7 @@ var mo = null, ro = null;
 function observe() {
   try {
     if (typeof window.MutationObserver === "function") {
-      mo = new window.MutationObserver(function (records) { if (relevant(records)) { invalidateChanges(); schedule(); } });
+      mo = new window.MutationObserver(function (records) { if (relevant(records)) { invalidateChanges(); schedule(); scheduleOutline(); } });
       mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     }
   } catch (e) { mo = null; }
@@ -954,7 +1173,9 @@ function onMessage(e) {
   if (!d || typeof d !== "object") return;
   if (d.dp === "pins") {
     current = Array.isArray(d.anchors) ? d.anchors.slice(0, 500) : [];
+    pinsKey = typeof d.key === "string" && /^[0-9a-z:]{1,64}$/.test(d.key) ? d.key : null;
     reconcile(true);
+    scheduleOutline();
   } else if (d.dp === "focus") {
     focusPin(d.index);
   } else if (d.dp === "changes") {
@@ -965,8 +1186,13 @@ function onMessage(e) {
     showChanges = d.show === true;
     invalidateChanges();
     reconcile(false, true);
+    scheduleOutline();
   } else if (d.dp === "focus-change") {
     focusChange(d.index);
+  } else if (d.dp === "focus-heading") {
+    focusHeading(d.index, d.locator);
+  } else if (d.dp === "focus-ask") {
+    focusAsk(d.index, d.locator);
   } else if (d.dp === "mode") {
     annotate = d.annotate !== false;
     scripts = d.scripts === true;
@@ -1049,17 +1275,19 @@ function onClick(e) {
 function onAuxClick(e) {
   if (closestLink(targetEl(e))) e.preventDefault();
 }
-function onResize() { schedule(); }
+function onResize() { schedule(); scheduleActive(); }
 /** Capture phase so an inner scroll container (a wide table, a diagram) is
  *  seen too; schedule() coalesces bursts into one bounded redraw. */
 function onScroll(e) {
   var t = e && e.target;
   if (t && t.nodeType === 1 && own(t)) return;
   schedule();
+  scheduleActive();
 }
 function onReady() {
   if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
   post({ dp: "ready" });
+  reportOutline();
 }
 window.addEventListener("click", onClick, true);
 window.addEventListener("auxclick", onAuxClick, true);
@@ -1088,6 +1316,8 @@ return function uninstall() {
   if (mo) mo.disconnect();
   if (ro) ro.disconnect();
   if (pending) clearTimeout(pending);
+  if (outlinePending) clearTimeout(outlinePending);
+  if (activePending) clearTimeout(activePending);
   if (layer && layer.parentNode) layer.parentNode.removeChild(layer);
 };
 `;

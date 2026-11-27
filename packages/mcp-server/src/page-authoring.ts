@@ -10,12 +10,12 @@
  *
  * Written in second person to the agent. Keep it short: agents skim it.
  */
-import { PAGE_HTML_MAX_BYTES } from "@deeppairing/shared";
+import { PAGE_DECISION_ATTR, PAGE_HTML_MAX_BYTES, PAGE_QUESTION_ATTR } from "@deeppairing/shared";
 
-/** Marks a callout that asks the human to decide something. */
-export const PAGE_DECISION_ATTR = "data-dp-decision";
-/** Marks a callout that asks the human a question. */
-export const PAGE_QUESTION_ATTR = "data-dp-question";
+// The ask attributes have ONE source, shared with the companion's annotator
+// and the check_feedback ask scanner (#714 gap 5); re-exported here for the
+// guidance surfaces and their tests.
+export { PAGE_DECISION_ATTR, PAGE_QUESTION_ATTR };
 
 const PAGE_CAP_MIB = PAGE_HTML_MAX_BYTES / (1024 * 1024);
 

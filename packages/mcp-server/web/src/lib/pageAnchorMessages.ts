@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HtmlAnchorSchema, type HtmlAnchor } from "@deeppairing/shared";
+import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, type HtmlAnchor } from "@deeppairing/shared";
 import { LOCATOR_TEXT_MAX, MAX_CHANGE_MARKS } from "./pageVersionDiff";
 
 /**
@@ -38,13 +38,27 @@ export function acceptAnchorMessage(event: FrameMessage, frame: Window | null | 
 /** The most pins a status report may describe (the annotator caps at 500). */
 const MAX_PINS = 500;
 
-/** A valid `{dp:"pins-status", found:boolean[]}` from this frame → `found`; else null. */
-export function acceptPinsStatus(event: FrameMessage, frame: Window | null | undefined): boolean[] | null {
+/** #714 gap 5 — the tag the parent puts on a pin list (`{dp:"pins", anchors,
+ *  key}`) and the frame echoes on reports computed from it. */
+export const PinsKeySchema = z.string().regex(/^[0-9a-z:]{1,64}$/);
+
+/** A valid `{dp:"pins-status", found:boolean[], key?}` from this frame → the
+ *  report (key only when it is well-formed); else null. */
+export function acceptPinsStatusReport(
+  event: FrameMessage,
+  frame: Window | null | undefined,
+): { found: boolean[]; key?: string } | null {
   const d = fromFrame(event, frame);
   if (!d || d.dp !== "pins-status") return null;
   const found = d.found;
   if (!Array.isArray(found) || found.length > MAX_PINS || !found.every((f) => typeof f === "boolean")) return null;
-  return found as boolean[];
+  const key = PinsKeySchema.safeParse(d.key);
+  return key.success ? { found: found as boolean[], key: key.data } : { found: found as boolean[] };
+}
+
+/** A valid `{dp:"pins-status", found:boolean[]}` from this frame → `found`; else null. */
+export function acceptPinsStatus(event: FrameMessage, frame: Window | null | undefined): boolean[] | null {
+  return acceptPinsStatusReport(event, frame)?.found ?? null;
 }
 
 /** `{dp:"ready"}` from this frame: the annotator is listening, send pins. */
@@ -101,4 +115,100 @@ export function acceptChangesStatus(event: FrameMessage, frame: Window | null | 
   const found = d.found;
   if (!Array.isArray(found) || found.length > MAX_CHANGE_MARKS || !found.every((f) => typeof f === "boolean")) return null;
   return found as boolean[];
+}
+
+/** #714 gap 4 — outline bounds; the annotator caps the same way. */
+export const OUTLINE_MAX_HEADINGS = 200;
+export const OUTLINE_TEXT_MAX = 120;
+
+const LocatorSchema = z.string().min(1).max(HTML_ANCHOR_LIMITS.locator);
+/** A section index (-1 = before the first heading or not found on the page). */
+const SectionIndexSchema = z.number().int().min(-1).max(OUTLINE_MAX_HEADINGS - 1);
+
+export const PageOutlineHeadingSchema = z
+  .object({
+    level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    text: z.string().min(1).max(OUTLINE_TEXT_MAX),
+    locator: LocatorSchema,
+  })
+  .strict();
+export type PageOutlineHeading = z.infer<typeof PageOutlineHeadingSchema>;
+
+export const PageOutlineMessageSchema = z
+  .object({
+    dp: z.literal("outline"),
+    headings: z.array(PageOutlineHeadingSchema).max(OUTLINE_MAX_HEADINGS),
+    /** Per pin (same order as the pins the parent sent): its section. */
+    pins: z.array(SectionIndexSchema).max(500),
+    /** Per change mark (same order as the marks the parent sent): its section. */
+    changes: z.array(SectionIndexSchema).max(MAX_CHANGE_MARKS),
+  })
+  .strict()
+  .superRefine((m, ctx) => {
+    for (const [key, list] of [["pins", m.pins], ["changes", m.changes]] as const) {
+      if (list.some((i) => i >= m.headings.length)) ctx.addIssue({ code: "custom", path: [key], message: "section index out of range" });
+    }
+  });
+export type PageOutlineMessage = z.infer<typeof PageOutlineMessageSchema>;
+
+/** A valid `{dp:"outline"}` from this frame → the parsed outline; else null.
+ *  Display-only: after Run agent script could forge one. */
+export function acceptOutlineMessage(event: FrameMessage, frame: Window | null | undefined): PageOutlineMessage | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "outline") return null;
+  const parsed = PageOutlineMessageSchema.safeParse(d);
+  return parsed.success ? parsed.data : null;
+}
+
+/** A valid `{dp:"outline-active", index}` from this frame → index (-1 = above
+ *  the first heading); else null. */
+export function acceptOutlineActive(event: FrameMessage, frame: Window | null | undefined): number | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "outline-active") return null;
+  const parsed = SectionIndexSchema.safeParse(d.index);
+  return parsed.success ? parsed.data : null;
+}
+
+/** #714 gap 5 — an ask the page marks (data-dp-decision / data-dp-question). */
+export const PageAskSchema = z
+  .object({
+    kind: z.enum(["decision", "question"]),
+    text: z.string().max(PAGE_ASK_LIMITS.text),
+    locator: LocatorSchema,
+    id: z.string().min(1).max(PAGE_ASK_LIMITS.id).optional(),
+  })
+  .strict();
+export type PageAsk = z.infer<typeof PageAskSchema>;
+
+export const PageAsksMessageSchema = z
+  .object({
+    dp: z.literal("asks"),
+    asks: z.array(PageAskSchema).max(PAGE_ASK_LIMITS.max),
+    /** Per pin (same order as the pins the parent sent): the innermost ask
+     *  its element sits in, -1 for none. */
+    pinAsks: z.array(z.number().int().min(-1).max(PAGE_ASK_LIMITS.max - 1)).max(500),
+    /** The pin list's key, echoed from the `pins` message `pinAsks` describes. */
+    key: PinsKeySchema.optional(),
+  })
+  .strict()
+  .superRefine((m, ctx) => {
+    if (m.pinAsks.some((i) => i >= m.asks.length)) ctx.addIssue({ code: "custom", path: ["pinAsks"], message: "ask index out of range" });
+  });
+export type PageAsksMessage = z.infer<typeof PageAsksMessageSchema>;
+
+/** A valid `{dp:"asks", asks, pinAsks}` from this frame → the report; else
+ *  null. Display-only: an ask never creates a comment by itself. */
+export function acceptAsksMessage(event: FrameMessage, frame: Window | null | undefined): PageAsksMessage | null {
+  const d = fromFrame(event, frame);
+  if (!d || d.dp !== "asks") return null;
+  const parsed = PageAsksMessageSchema.safeParse(d);
+  return parsed.success ? parsed.data : null;
+}
+
+/** The element anchor a "Reply" to an ask opens the composer at: the same
+ *  shape a click on the ask posts (locator + its text prefix as the quote),
+ *  re-validated so a spoofed ask can't produce an invalid anchor. */
+export function askAnchor(ask: PageAsk): HtmlAnchor | null {
+  const parsed = HtmlAnchorSchema.safeParse({ kind: "element", locator: ask.locator, quote: ask.text });
+  return parsed.success ? parsed.data : null;
 }

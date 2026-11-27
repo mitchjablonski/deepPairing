@@ -21,23 +21,12 @@
  * so anything that survives this pass still cannot execute. And the frame is
  * always an opaque-origin sandbox (never `allow-same-origin`) with no network.
  */
+import { PAGE_SANITIZE_DROP_TAGS } from "@deeppairing/shared";
 
 /** Matched by `localName`, lowercased, over every element in every namespace
  *  (HTML, SVG, MathML), so an SVG `<script>` or an odd-case tag can't slip past
  *  a namespace- or case-sensitive selector. */
-const DROP_TAGS = new Set([
-  "script",
-  "noscript",
-  "template",
-  "iframe",
-  "frame",
-  "frameset",
-  "object",
-  "embed",
-  "applet",
-  "portal",
-  "base",
-]);
+const DROP_TAGS: ReadonlySet<string> = new Set(PAGE_SANITIZE_DROP_TAGS);
 
 /** True for a URL that would run script or load an HTML document. Control
  *  characters and whitespace are ignored the way browsers ignore them. */

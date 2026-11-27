@@ -14,19 +14,28 @@ import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
 import {
   acceptAnchorMessage,
+  acceptAsksMessage,
   acceptChangesStatus,
-  acceptPinsStatus,
+  acceptOutlineActive,
+  acceptOutlineMessage,
+  acceptPinsStatusReport,
+  askAnchor,
   buildChangesMessage,
   isReadyMessage,
   isTogglePointingMessage,
+  type PageAsk,
+  type PageOutlineMessage,
 } from "../../lib/pageAnchorMessages";
+import { PageOutline } from "./PageOutline";
+import { PageAsksStrip } from "./PageAsksStrip";
+import { usePageAskVersions } from "../../hooks/usePageAskVersions";
 import { usePageLineage, usePageVersionDiff } from "../../hooks/usePageVersionDiff";
 import { PageChangeLine, PageRemovedList } from "./PageChangeSummary";
 import type { ChangeLocator } from "../../lib/pageVersionDiff";
 import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { PageRuleOutControl } from "./PageRuleOutControl";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
-import { pageRuleOutKey } from "@deeppairing/shared";
+import { askTextHash, commentAnswersAsk, isEarlierVersionComment, pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -130,6 +139,13 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const { rows: rememberedRows, remember } = useRememberedRejections(owner);
   const liveStances = useMemo(() => new Set(rememberedRows.map((r) => r.description)), [rememberedRows]);
   const anchored = useMemo(() => anchoredPageComments(comments), [comments]);
+  /** Identifies the anchored-comment list (the pin order the frame reports in). */
+  const anchoredKey = useMemo(() => anchored.map((c) => c.id).join("\u0000"), [anchored]);
+  /** The pin list's tag, sent with `pins` and echoed by the frame on every
+   *  report computed from that list: a report is used for ask completion
+   *  only when its key matches the list on screen, so a delete + add while a
+   *  report is in flight can't be misattributed. */
+  const pinsKey = useMemo(() => askTextHash(anchoredKey) ?? "0", [anchoredKey]);
   const anchors = useMemo(() => anchored.map((c) => c.target.htmlAnchor as HtmlAnchor), [anchored]);
 
   const [draft, setDraft] = useState<HtmlAnchor | null>(null);
@@ -158,6 +174,25 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   frameOwnsFocusRef.current = frameOwnsFocus;
   const [found, setFound] = useState<boolean[] | null>(null);
   const [running, setRunning] = useState(false);
+  // #714 gaps 4+5 — the page's outline and asks, as the frame reports them
+  // (display-only hints: validated, rendered as text, never acted on alone).
+  const [outline, setOutline] = useState<PageOutlineMessage | null>(null);
+  const [activeSection, setActiveSection] = useState(-1);
+  const [asks, setAsks] = useState<PageAsk[]>([]);
+  // Ask completion reads the frame's pre-Run reports only, each tagged with
+  // the page and the anchored-comment list it describes: `pinAsks` (which
+  // ask each pin sits in) and the pre-Run pin status. A live post-Run
+  // pins-status (agent script shares the frame then) never mixes in; the
+  // pin list itself keeps showing live status.
+  const [pinAsks, setPinAsks] = useState<{ forId: string; key: string; list: number[] } | null>(null);
+  const [askPinStatus, setAskPinStatus] = useState<{ forId: string; key: string; found: boolean[] } | null>(null);
+  useEffect(() => {
+    setOutline(null);
+    setActiveSection(-1);
+    setAsks([]);
+    setPinAsks(null);
+    setAskPinStatus(null);
+  }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
 
   // #714 gap 2 — what changed since the previous version: a block diff of the
@@ -186,7 +221,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     // (anchors the human already made on this page, never comment text).
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
-  const sendPins = useCallback(() => postToFrame({ dp: "pins", anchors }), [postToFrame, anchors]);
+  const sendPins = useCallback(() => postToFrame({ dp: "pins", anchors, key: pinsKey }), [postToFrame, anchors, pinsKey]);
   // #714 — pointing is the reviewer's choice before Run as well as after: a
   // page with no scripts never shows Run, and its own links, details and
   // CSS-only tabs work either way (the annotator lets native controls keep
@@ -247,9 +282,32 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         if (!readOnly && !runningRef.current && frameOwnsFocusRef.current(element)) setAnnotate((a) => !a);
         return;
       }
-      const status = acceptPinsStatus(event, frame);
+      const status = acceptPinsStatusReport(event, frame);
       if (status) {
-        setFound(status);
+        setFound(status.found);
+        if (!runningRef.current) setAskPinStatus({ forId: artifactIdRef.current, key: status.key ?? "", found: status.found });
+        return;
+      }
+      // #714 gaps 4+5 — outline, reading progress and asks follow the same
+      // trust model as changes-status below: once the page's own scripts run
+      // they could forge these, so they are ignored then and the last
+      // pre-Run report stands.
+      const reportedOutline = acceptOutlineMessage(event, frame);
+      if (reportedOutline) {
+        if (!runningRef.current) setOutline(reportedOutline);
+        return;
+      }
+      const active = acceptOutlineActive(event, frame);
+      if (active !== null) {
+        if (!runningRef.current) setActiveSection(active);
+        return;
+      }
+      const reportedAsks = acceptAsksMessage(event, frame);
+      if (reportedAsks) {
+        if (!runningRef.current) {
+          setAsks(reportedAsks.asks);
+          setPinAsks({ forId: artifactIdRef.current, key: reportedAsks.key ?? "", list: reportedAsks.pinAsks });
+        }
         return;
       }
       // Trust model: once the page's own scripts run they share the frame and
@@ -337,6 +395,116 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       setExplicitOpen(true);
       setOpenNonce((n) => n + 1);
     }
+  };
+
+  // #714 gap 4 — per-section badges. The frame says which section each pin
+  // and change mark sits in; the companion decides what counts: a comment the
+  // reviewer hasn't resolved whose spot is on this version, a change mark from
+  // its own diff. A report for a different pin/mark list is ignored until the
+  // frame re-reports.
+  const headings = outline?.headings ?? [];
+  const sectionCounts = useMemo(() => {
+    const n = outline?.headings.length ?? 0;
+    const comments = new Array<number>(n).fill(0);
+    const changes = new Array<number>(n).fill(0);
+    if (!outline) return { comments, changes };
+    if (outline.pins.length === anchored.length) {
+      anchored.forEach((c, i) => {
+        const s = outline.pins[i]!;
+        if (s < 0 || c.humanResolvedAt || (found && found[i] === false)) return;
+        comments[s] = (comments[s] ?? 0) + 1;
+      });
+    }
+    if (outline.changes.length === marks.length) {
+      outline.changes.forEach((s) => {
+        if (s >= 0) changes[s] = (changes[s] ?? 0) + 1;
+      });
+    }
+    return { comments, changes };
+  }, [outline, anchored, found, marks]);
+  const jumpToHeading = (index: number) => {
+    const h = headings[index];
+    if (!h) return;
+    setActiveSection(index);
+    postToFrame({ dp: "focus-heading", index, locator: h.locator });
+  };
+
+  // #714 gap 5 — an ask is answered once a human comment on THIS version is
+  // anchored to it (its locator or #id, or inside it — including a child
+  // with its own id, which the frame resolves as pinAsks for a found pin).
+  // Never by a comment the reviewer resolved or whose spot isn't on this
+  // version. A comment from an EARLIER version counts only through ask
+  // continuity: the same ask (same id) exists in that version and this one
+  // with the same FULL text — both read from parsed HTML, never from the
+  // frame's clipped display text — and the comment targeted it there. The
+  // parse runs off the render path; until it lands, earlier answers don't
+  // count yet (the ask shows open).
+  const earlierVersionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of anchored) if (c.target.artifactId && c.target.artifactId !== artifact.id) ids.add(c.target.artifactId);
+    return ids;
+  }, [anchored, artifact.id]);
+  const askVersions = useMemo(
+    () => [artifact, ...lineage.map((l) => l.artifact).filter((a) => earlierVersionIds.has(a.id))],
+    [artifact, lineage, earlierVersionIds],
+  );
+  // The current version is parsed too whenever asks have comments: its
+  // full-text hashes (continuity) and child ids (a comment on a child with its
+  // own id, also after Run when the frame's reports are frozen).
+  const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && anchored.length > 0);
+  const askAnswered = useMemo(() => {
+    const current = { artifactId: artifact.id, version: artifact.version };
+    // The pre-Run reports, only when they describe this page's current pins.
+    const scoped = <T extends { forId: string; key: string }>(r: T | null) =>
+      r && r.forId === artifact.id && r.key === pinsKey ? r : null;
+    const askPins = scoped(pinAsks)?.list ?? null;
+    const preRunFound = scoped(askPinStatus)?.found ?? null;
+    const pinsAligned = !!askPins && askPins.length === anchored.length;
+    const currentParsed = parsedAsks(artifact.id);
+    const earlierAsks = (versionId: string) => (versionId === artifact.id ? undefined : parsedAsks(versionId));
+    return asks.map((ask, k) => {
+      // Continuity compares the full-text hash from THIS version's parsed HTML.
+      const parsed = ask.id ? currentParsed?.find((p) => p.id === ask.id) : undefined;
+      const ref = {
+        ...ask,
+        ...(parsed?.fullHash ? { fullHash: parsed.fullHash } : {}),
+        ...(parsed?.childIds ? { childIds: parsed.childIds } : {}),
+      };
+      return anchored.some((c, i) => {
+        // An earlier version's comment is judged only against its own source
+        // version (ask continuity); whether its pin relocates in the current
+        // view is irrelevant to it, as it is for check_feedback.
+        if (isEarlierVersionComment(c, current)) return commentAnswersAsk(ref, c, current, { earlierAsks });
+        // A current-version comment whose spot the (pre-Run) frame can't find
+        // doesn't count; one it found inside this ask does.
+        if (preRunFound && preRunFound[i] === false) return false;
+        const insideByFrame = pinsAligned && askPins![i] === k && preRunFound?.[i] === true;
+        return commentAnswersAsk(ref, c, current, { insideByFrame });
+      });
+    });
+  }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
+  const jumpToAsk = (index: number) => {
+    const ask = asks[index];
+    if (ask) postToFrame({ dp: "focus-ask", index, locator: ask.locator });
+  };
+  /** Reply = the same flow as clicking the ask in the frame: the composer
+   *  opens anchored to it (focused, since the reviewer asked for it). */
+  const replyToAsk = (index: number) => {
+    const ask = asks[index];
+    const anchor = ask ? askAnchor(ask) : null;
+    if (!ask || !anchor || readOnly) return;
+    postToFrame({ dp: "focus-ask", index, locator: ask.locator });
+    acceptingFrame.current = null;
+    setDraft({ ...anchor, version: artifact.version });
+    setExplicitOpen(true);
+    setOpenNonce((n) => n + 1);
+  };
+  const outlineProps = {
+    headings,
+    commentCounts: sectionCounts.comments,
+    changeCounts: showChanges ? sectionCounts.changes : [],
+    active: activeSection,
+    onJump: jumpToHeading,
   };
 
   const draftComments = draft
@@ -513,16 +681,35 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
           </span>
         </div>
       )}
-      <PrototypeFrame
-        html={page.html}
-        maxBytes={PAGE_HTML_MAX_BYTES}
-        staticFirst
-        noun="page"
-        frameClassName="w-full h-[70vh] min-h-[420px] rounded border border-border-default bg-white"
-        annotation={PAGE_ANNOTATION}
-        iframeRef={iframeRef}
-        onRunningChange={onRunningChange}
-      />
+      <PageAsksStrip asks={asks} answered={askAnswered} readOnly={readOnly} onJump={jumpToAsk} onReply={replyToAsk} />
+      {/* #714 gap 4 — the outline: a sticky rail beside the frame when the
+          panel is wide, a collapsible disclosure above it when narrow. */}
+      <div className="@container">
+        {headings.length > 0 && (
+          <div className="@3xl:hidden mb-2">
+            <PageOutline {...outlineProps} variant="disclosure" />
+          </div>
+        )}
+        <div className="flex items-start gap-3">
+          {headings.length > 0 && (
+            <div className="hidden @3xl:block w-56 shrink-0 self-stretch">
+              <PageOutline {...outlineProps} variant="rail" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <PrototypeFrame
+              html={page.html}
+              maxBytes={PAGE_HTML_MAX_BYTES}
+              staticFirst
+              noun="page"
+              frameClassName="w-full h-[70vh] min-h-[420px] rounded border border-border-default bg-white"
+              annotation={PAGE_ANNOTATION}
+              iframeRef={iframeRef}
+              onRunningChange={onRunningChange}
+            />
+          </div>
+        </div>
+      </div>
 
       {draft && !readOnly && (
         <div

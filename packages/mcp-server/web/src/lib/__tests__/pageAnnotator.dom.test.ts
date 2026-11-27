@@ -963,3 +963,253 @@ describe("clippedText parity: annotator core vs companion diff (#714 gap 2)", ()
     expect((makeCore() as any).CHANGE_SKIP).toBe(TEXT_SKIP_SELECTOR);
   });
 });
+
+// --- #714 gaps 4+5: outline, asks, reading progress --------------------------
+
+const OUTLINE_PAGE =
+  "<header id=\"tldr\"><h1>Profile cache</h1><p>TL;DR: put Redis in front.</p></header>" +
+  "<section id=\"options\"><h2>Options</h2><p id=\"opt-p\">Redis or LRU.</p>" +
+  "<h3>Redis</h3><p id=\"redis-p\">About 15ms.</p></section>" +
+  "<section id=\"asks\"><h2>What I need <em>from</em> you</h2>" +
+  "<p id=\"decide-ttl\" data-dp-decision><strong>Decide:</strong> a 60s TTL,<br>or invalidate on write?</p>" +
+  "<div id=\"ask-budget\" data-dp-question data-dp-decision>Is one more instance in budget?</div>" +
+  "<p data-dp-question>An ask with no id</p></section>" +
+  "<h4>Not in the outline</h4><h2>   </h2>" +
+  "<template><h2>Inert</h2></template>";
+
+describe("annotator core — outline and asks (#714 gaps 4+5)", () => {
+  type OutlineCore = Core & {
+    collectHeadings(): Array<{ el: Element; level: number; text: string; locator: string }>;
+    collectAsks(): Array<{ el: Element; kind: string; text: string; locator: string; id?: string }>;
+    sectionOf(el: Element, heads: Element[]): number;
+    textPrefix(el: Element, max: number): string;
+    OUTLINE: { max: number; text: number; asks: number; askText: number };
+  };
+  const core = () => makeCore() as OutlineCore;
+  beforeEach(() => {
+    document.body.innerHTML = OUTLINE_PAGE;
+  });
+
+  it("collects h1–h3 in document order with level, text and a locator that resolves (h4+, empty and inert headings skipped)", () => {
+    const hs = core().collectHeadings();
+    expect(hs.map((h) => [h.level, h.text])).toEqual([
+      [1, "Profile cache"],
+      [2, "Options"],
+      [3, "Redis"],
+      [2, "What I need from you"],
+    ]);
+    for (const h of hs) expect(document.querySelector(h.locator)).toBe(h.el);
+  });
+
+  it("bounds the outline: at most 200 headings, each at most 120 characters", () => {
+    document.body.innerHTML = Array.from({ length: 260 }, (_, i) => `<h2>${"Heading " + i + " " + "x".repeat(200)}</h2>`).join("");
+    const c = core();
+    const hs = c.collectHeadings();
+    expect(hs).toHaveLength(200);
+    expect(hs.every((h) => h.text.length <= 120)).toBe(true);
+    expect(hs[0]!.text.startsWith("Heading 0 x")).toBe(true);
+  });
+
+  it("collects asks: kind (decision wins), id, a text prefix that equals the element anchor's quote, and a locator", () => {
+    const c = core();
+    const asks = c.collectAsks();
+    expect(asks.map((a) => ({ kind: a.kind, id: a.id, text: a.text, locator: a.locator }))).toEqual([
+      { kind: "decision", id: "decide-ttl", text: "Decide: a 60s TTL,or invalidate on write?", locator: "#decide-ttl" },
+      { kind: "decision", id: "ask-budget", text: "Is one more instance in budget?", locator: "#ask-budget" },
+      { kind: "question", id: undefined, text: "An ask with no id", locator: expect.stringContaining("p:nth-of-type") },
+    ]);
+    // Same text a click on the element would quote, so a reply's pin re-finds.
+    for (const a of asks) expect(a.text).toBe(c.anchorForTarget(a.el)!.quote.slice(0, 200));
+    expect(document.querySelector(asks[2]!.locator)).toBe(asks[2]!.el);
+  });
+
+  it("bounds the asks: at most 50, text at most 200 characters, read without walking a huge subtree", () => {
+    document.body.innerHTML = Array.from({ length: 70 }, (_, i) => `<p id="a${i}" data-dp-question>${"q".repeat(500)}</p>`).join("");
+    const asks = core().collectAsks();
+    expect(asks).toHaveLength(50);
+    expect(asks.every((a) => a.text.length === 200)).toBe(true);
+    const big = document.createElement("div");
+    big.innerHTML = "<p>" + "word ".repeat(50_000) + "</p>";
+    expect(core().textPrefix(big, 200)).toHaveLength(200);
+  });
+
+  it("sectionOf: the last heading at or before the element; a whole section belongs to its own heading; -1 above the first", () => {
+    const c = core();
+    const heads = c.collectHeadings().map((h) => h.el);
+    expect(c.sectionOf(document.getElementById("opt-p")!, heads)).toBe(1);
+    expect(c.sectionOf(document.getElementById("redis-p")!, heads)).toBe(2);
+    expect(c.sectionOf(document.getElementById("decide-ttl")!, heads)).toBe(3);
+    expect(c.sectionOf(heads[2]!, heads)).toBe(2);
+    expect(c.sectionOf(document.getElementById("options")!, heads)).toBe(1);
+    document.body.insertAdjacentHTML("afterbegin", "<p id=\"pre\">Before any heading</p>");
+    expect(c.sectionOf(document.getElementById("pre")!, heads)).toBe(-1);
+  });
+});
+
+describe("annotator main — outline, asks and reading progress (#714 gaps 4+5)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  let scrolled: Element[];
+  const origScroll = Element.prototype.scrollIntoView;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = OUTLINE_PAGE;
+    posted = [];
+    scrolled = [];
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+    if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+  });
+  afterEach(() => {
+    uninstall();
+    Element.prototype.scrollIntoView = origScroll;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const send = (data: unknown, source: unknown = window) =>
+    window.dispatchEvent(new MessageEvent("message", { data, source: source as MessageEventSource }));
+  const of = (dp: string) => posted.filter((m) => m?.dp === dp);
+
+  it("posts the outline and the asks on ready, once each", () => {
+    const outline = of("outline");
+    expect(outline).toHaveLength(1);
+    expect(outline[0].headings.map((h: any) => h.text)).toEqual(["Profile cache", "Options", "Redis", "What I need from you"]);
+    expect(outline[0]).toMatchObject({ pins: [], changes: [] });
+    expect(of("asks")).toHaveLength(1);
+    expect(of("asks")[0].asks.map((a: any) => a.id ?? null)).toEqual(["decide-ttl", "ask-budget", null]);
+    // An unchanged page reports nothing new.
+    send({ dp: "pins", anchors: [] });
+    vi.advanceTimersByTime(500);
+    expect(of("outline")).toHaveLength(1);
+    expect(of("asks")).toHaveLength(1);
+  });
+
+  it("maps each pin and each change mark to its section", () => {
+    send({
+      dp: "pins",
+      anchors: [
+        { kind: "element", locator: "#redis-p", quote: "About 15ms." },
+        { kind: "element", locator: "#gone", quote: "Not on this page" },
+        { kind: "text", locator: "#decide-ttl", quote: "invalidate on write" },
+      ],
+    });
+    send({ dp: "changes", show: false, marks: [{ kind: "changed", tag: "p", text: "Redis or LRU.", occurrence: 0 }] });
+    vi.advanceTimersByTime(300);
+    expect(of("outline").at(-1)).toMatchObject({ pins: [2, -1, 3], changes: [1] });
+  });
+
+  it("reports, per pin, the innermost ask its element sits in (a child with its own id counts)", () => {
+    document.getElementById("decide-ttl")!.insertAdjacentHTML("beforeend", " <em id=\"ttl-note\">60s</em>");
+    return Promise.resolve().then(() => {
+      send({
+        dp: "pins",
+        anchors: [
+          { kind: "element", locator: "#ttl-note", quote: "60s" },
+          { kind: "element", locator: "#redis-p", quote: "About 15ms." },
+          { kind: "element", locator: "#ask-budget", quote: "Is one more instance in budget?" },
+        ],
+      });
+      vi.advanceTimersByTime(300);
+      expect(of("asks").at(-1).pinAsks).toEqual([0, -1, 1]);
+    });
+  });
+
+  it("echoes the parent's pin-list key on pins-status and asks reports; a malformed key is dropped", () => {
+    send({ dp: "pins", anchors: [{ kind: "element", locator: "#redis-p", quote: "About 15ms." }], key: "abc123:9" });
+    vi.advanceTimersByTime(300);
+    expect(of("pins-status").at(-1)).toEqual({ dp: "pins-status", found: [true], key: "abc123:9" });
+    expect(of("asks").at(-1)).toMatchObject({ pinAsks: [-1], key: "abc123:9" });
+    send({ dp: "pins", anchors: [{ kind: "element", locator: "#redis-p", quote: "About 15ms." }], key: "<img src=x>" });
+    vi.advanceTimersByTime(300);
+    expect(of("pins-status").at(-1)).toEqual({ dp: "pins-status", found: [true] });
+    expect(of("asks").at(-1)).not.toHaveProperty("key");
+  });
+
+  it("re-reports after a relevant page mutation (debounced), never for its own layer", () => {
+    document.querySelector("h3")!.textContent = "Redis (managed)";
+    document.body.insertAdjacentHTML("beforeend", "<p id=\"late\" data-dp-question>Late ask?</p>");
+    return Promise.resolve().then(() => {
+      vi.advanceTimersByTime(300);
+      expect(of("outline").at(-1).headings[2].text).toBe("Redis (managed)");
+      expect(of("asks").at(-1).asks.map((a: any) => a.id ?? null)).toEqual(["decide-ttl", "ask-budget", null, "late"]);
+    });
+  });
+
+  it("focus-heading scrolls to the heading (by index, re-checked against the locator) and opens details around it", () => {
+    document.body.insertAdjacentHTML("beforeend", "<details><summary>More</summary><h2 id=\"deep\">Deep</h2></details>");
+    return Promise.resolve().then(() => {
+      vi.advanceTimersByTime(300);
+      const heads = of("outline").at(-1).headings;
+      const i = heads.findIndex((h: any) => h.text === "Deep");
+      send({ dp: "focus-heading", index: i, locator: heads[i].locator });
+      expect(scrolled.at(-1)).toBe(document.getElementById("deep"));
+      expect(document.querySelector("details")!.open).toBe(true);
+      send({ dp: "focus-heading", index: 1, locator: heads[1].locator });
+      expect(scrolled.at(-1)!.textContent).toBe("Options");
+      // A stale index falls back to the locator; a locator for a non-heading,
+      // a bogus index, or a message from anyone but the parent does nothing.
+      send({ dp: "focus-heading", index: 99, locator: heads[2].locator });
+      expect(scrolled.at(-1)!.textContent).toBe("Redis");
+      const n = scrolled.length;
+      send({ dp: "focus-heading", index: 99, locator: "#redis-p" });
+      send({ dp: "focus-heading", index: "1" });
+      send({ dp: "focus-heading", index: 0, locator: heads[0].locator }, null);
+      expect(scrolled.length).toBe(n);
+    });
+  });
+
+  it("focus-ask scrolls to the ask and flashes it with our own layer only", () => {
+    const asks = of("asks").at(-1).asks;
+    send({ dp: "focus-ask", index: 1, locator: asks[1].locator });
+    expect(scrolled.at(-1)).toBe(document.getElementById("ask-budget"));
+    expect(document.querySelectorAll("dp-annotator-flash")).toHaveLength(1);
+    vi.advanceTimersByTime(2000);
+    expect(document.querySelectorAll("dp-annotator-flash")).toHaveLength(0);
+    const n = scrolled.length;
+    send({ dp: "focus-ask", index: 7, locator: "#opt-p" });
+    expect(scrolled.length).toBe(n);
+  });
+
+  it("reports the current section as the frame scrolls, throttled and only on change", () => {
+    const heads = Array.from(document.querySelectorAll("h1, h2, h3")).slice(0, 4);
+    let offset = 0;
+    const tops = [0, 300, 600, 900];
+    heads.forEach((h, i) => {
+      (h as any).getBoundingClientRect = () => ({ top: tops[i]! - offset, bottom: tops[i]! - offset + 20, left: 0, right: 100, width: 100, height: 20 });
+    });
+    Object.defineProperty(window, "innerHeight", { value: 400, configurable: true });
+    const scrollTo = (y: number) => { offset = y; window.dispatchEvent(new Event("scroll")); };
+    scrollTo(0);
+    scrollTo(10);
+    vi.advanceTimersByTime(200);
+    expect(of("outline-active").at(-1)).toEqual({ dp: "outline-active", index: 0 });
+    const before = of("outline-active").length;
+    scrollTo(20);
+    vi.advanceTimersByTime(200);
+    expect(of("outline-active")).toHaveLength(before); // same section: nothing posted
+    scrollTo(560);
+    vi.advanceTimersByTime(200);
+    expect(of("outline-active").at(-1).index).toBe(2);
+  });
+});
+
+describe("ask id locators: annotator vs shared matcher (#714 gap 5)", () => {
+  it("the shared cssEscapeIdent builds the same #id locator the annotator does", async () => {
+    const { cssEscapeIdent } = await import("@deeppairing/shared");
+    const core = makeCore() as Core & { cssEscape(v: string): string };
+    for (const id of ["decide-ttl", "1st", "-2x", "a.b:c", "ünï", "with space", "-", "x\u0001y"]) {
+      expect(cssEscapeIdent(id)).toBe(core.cssEscape(id));
+    }
+  });
+});
+
+describe("ask attributes: annotator selector vs shared constants (#714 gap 5)", () => {
+  it("the annotator collects exactly the shared PAGE_DECISION_ATTR / PAGE_QUESTION_ATTR", async () => {
+    const { PAGE_DECISION_ATTR, PAGE_QUESTION_ATTR } = await import("@deeppairing/shared");
+    const core = makeCore() as Core & { ASK_SEL: string };
+    expect(core.ASK_SEL).toBe(`[${PAGE_DECISION_ATTR}], [${PAGE_QUESTION_ATTR}]`);
+  });
+});
