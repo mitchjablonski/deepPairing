@@ -1264,11 +1264,11 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0], key });
     expect(states()).toEqual(["Answered", "Open"]);
     // A report without the pin list's key (or for another list) is not used:
-    // nothing reported for the list on screen yet, so not settled (#727).
-    fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0] });
-    expect(states()).toEqual(["Checking\u2026", "Checking\u2026"]);
-    fromFrame(win, { ...ASKS, pinAsks: [0, 1, 0], key: "x0:1" });
-    expect(states()).toEqual(["Checking\u2026", "Checking\u2026"]);
+    // the last state the frame settled for this list stands (#727).
+    fromFrame(win, { ...ASKS, pinAsks: [0, 0, 0] });
+    expect(states()).toEqual(["Answered", "Open"]);
+    fromFrame(win, { ...ASKS, pinAsks: [1, 1, 1], key: "x0:1" });
+    expect(states()).toEqual(["Answered", "Open"]);
   });
 
   it("ask completion uses the pre-Run pin status, never a live post-Run one (the pin list stays live)", async () => {
@@ -1335,6 +1335,27 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
       fromFrame(win, { ...ASKS, key: keyOf(win) });
       expect(states()).toEqual(["Checking\u2026", "Answered"]);
       expect(screen.getByTestId("page-asks-tally")).toHaveTextContent("1 checking · 1 answered");
+    });
+
+    it("after the first settle, a pin-list change keeps the settled state (no Open → Checking… → Open flicker)", () => {
+      useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "#elsewhere", quote: "x" }));
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      const key = keyOf(win);
+      fromFrame(win, { dp: "pins-status", found: [true], key });
+      fromFrame(win, { ...ASKS, pinAsks: [-1], key });
+      expect(states()).toEqual(["Open", "Open"]);
+      // A second comment elsewhere: the pin list (and its key) changes.
+      act(() => useArtifactStore.getState().addComment(human("cmt_2", { kind: "element", locator: "#elsewhere-too", quote: "y" })));
+      expect(states()).toEqual(["Open", "Open"]);
+      // A comment that answers ask 1 by its locator shows at once.
+      act(() => useArtifactStore.getState().addComment(human("cmt_3", { kind: "text", locator: "#ask-budget > strong:nth-of-type(1)", quote: "budget" })));
+      expect(states()).toEqual(["Open", "Answered"]);
+      const newKey = keyOf(win);
+      expect(newKey).not.toBe(key);
+      fromFrame(win, { dp: "pins-status", found: [true, true, true], key: newKey });
+      fromFrame(win, { ...ASKS, pinAsks: [-1, -1, 1], key: newKey });
+      expect(states()).toEqual(["Open", "Answered"]);
     });
 
     it("no comments: nothing can answer an ask, so it is Open at once", () => {
