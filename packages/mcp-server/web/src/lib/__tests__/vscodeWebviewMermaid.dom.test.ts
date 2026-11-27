@@ -1,4 +1,4 @@
-// @vitest-environment-options {"settings":{"navigation":{"disableChildFrameNavigation":true,"disableChildPageNavigation":true}}}
+// @vitest-environment-options {"url":"https://webview.test/","settings":{"navigation":{"disableChildFrameNavigation":true,"disableChildPageNavigation":true}}}
 /**
  * #727 — Mermaid page diagrams inside the VS Code webview.
  *
@@ -11,16 +11,20 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import {
-  DAEMON_ORIGIN_META, MermaidFrameRenderer, RendererUnavailableError, createSandboxedRendererFrame,
+  DAEMON_ORIGIN_META, readDaemonOriginMeta, MermaidFrameRenderer, RendererUnavailableError, createSandboxedRendererFrame,
   rendererUrlForHost,
 } from "../mermaidFrameRenderer";
 import { MERMAID_RENDERER_PATH } from "../mermaidRendererProtocol";
 import { VSCodeAdapter, isVSCodeHostMessage } from "../connection-adapter";
 
 describe("rendererUrlForHost", () => {
-  it("keeps the relative path on a daemon-served (http/https) page, whatever the meta says", () => {
+  it("keeps the relative path on a daemon-served (http/https) page with no valid meta", () => {
     expect(rendererUrlForHost("http:", null)).toBe(MERMAID_RENDERER_PATH);
     expect(rendererUrlForHost("https:", "http://evil.example:80")).toBe(MERMAID_RENDERER_PATH);
+  });
+
+  it("prefers a valid meta origin even on an https host (VS Code for Web shape)", () => {
+    expect(rendererUrlForHost("https:", "http://localhost:29901")).toBe(`http://localhost:29901${MERMAID_RENDERER_PATH}`);
   });
 
   it("uses the extension-named loopback daemon origin in the webview", () => {
@@ -92,14 +96,36 @@ describe("the renderer frame in the webview", () => {
   });
 });
 
+describe("readDaemonOriginMeta", () => {
+  afterEach(() => { document.querySelectorAll(`meta[name="${DAEMON_ORIGIN_META}"]`).forEach((m) => m.remove()); });
+
+  it("reads the meta from <head>", () => {
+    const m = document.createElement("meta");
+    m.setAttribute("name", DAEMON_ORIGIN_META);
+    m.setAttribute("content", "http://localhost:29901");
+    document.head.appendChild(m);
+    expect(readDaemonOriginMeta()).toBe("http://localhost:29901");
+  });
+
+  it("ignores a same-named meta outside <head>", () => {
+    const m = document.createElement("meta");
+    m.setAttribute("name", DAEMON_ORIGIN_META);
+    m.setAttribute("content", "http://localhost:29901");
+    document.body.appendChild(m);
+    expect(readDaemonOriginMeta()).toBeNull();
+  });
+});
+
 describe("VSCodeAdapter ignores sandboxed child frames", () => {
   const w = window as unknown as { acquireVsCodeApi?: () => { postMessage(m: unknown): void } };
   afterEach(() => { delete w.acquireVsCodeApi; });
 
-  it("only opaque-origin (sandboxed) messages are refused", () => {
-    expect(isVSCodeHostMessage({ origin: "null" })).toBe(false);
-    expect(isVSCodeHostMessage({ origin: "vscode-webview://abc" })).toBe(true);
-    expect(isVSCodeHostMessage({ origin: "" })).toBe(true);
+  it("only messages from the webview's own origin are host messages", () => {
+    const self = "vscode-webview://abc";
+    expect(isVSCodeHostMessage({ origin: self }, self)).toBe(true);
+    expect(isVSCodeHostMessage({ origin: "null" }, self)).toBe(false);
+    expect(isVSCodeHostMessage({ origin: "" }, self)).toBe(false);
+    expect(isVSCodeHostMessage({ origin: "http://localhost:29901" }, self)).toBe(false);
   });
 
   it("drops a dp:message posted by a sandboxed frame, keeps the host's", () => {
@@ -114,11 +140,14 @@ describe("VSCodeAdapter ignores sandboxed child frames", () => {
     window.dispatchEvent(new MessageEvent("message", { origin: "null", data: { type: "dp:message", data: { type: "fake" } } }));
     expect(got).toEqual([]);
 
-    window.dispatchEvent(new MessageEvent("message", { origin: "vscode-webview://abc", data: { type: "dp:message", data: { type: "real" } } }));
+    window.dispatchEvent(new MessageEvent("message", { origin: "http://localhost:29901", data: { type: "dp:message", data: { type: "daemon-frame" } } }));
+    expect(got).toEqual([]);
+
+    window.dispatchEvent(new MessageEvent("message", { origin: location.origin, data: { type: "dp:message", data: { type: "real" } } }));
     expect(got).toEqual([{ type: "real" }]);
 
     // Malformed host data is ignored rather than thrown on.
-    window.dispatchEvent(new MessageEvent("message", { origin: "vscode-webview://abc", data: null }));
+    window.dispatchEvent(new MessageEvent("message", { origin: location.origin, data: null }));
     expect(got).toHaveLength(1);
   });
 });

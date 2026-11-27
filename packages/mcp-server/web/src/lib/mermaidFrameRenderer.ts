@@ -296,20 +296,22 @@ export const DAEMON_ORIGIN_META = "deeppairing-daemon-origin";
 const LOOPBACK_DAEMON_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})$/;
 
 /** Where to load the renderer page from on this host, or null when it can't
- *  load at all. A daemon-served page (http/https) uses the relative path, as
- *  before. Any other page (the VS Code webview) needs a daemon origin from
- *  the embedder, and only a loopback `http://host:port` is accepted. */
+ *  load at all. A valid embedder-named daemon origin wins (the VS Code
+ *  webview, whose location may be `vscode-webview:` or, on VS Code for Web,
+ *  `https:`); only a loopback `http://host:port` counts. Otherwise a
+ *  daemon-served page (http/https) uses the relative path, as before. */
 export function rendererUrlForHost(protocol: string | undefined, daemonOrigin: string | null | undefined): string | null {
-  if (rendererHostSupported(protocol)) return MERMAID_RENDERER_PATH;
   const origin = daemonOrigin?.trim() ?? "";
   const m = LOOPBACK_DAEMON_ORIGIN.exec(origin);
-  if (!m || Number(m[1]) > 65535) return null;
-  return `${origin}${MERMAID_RENDERER_PATH}`;
+  if (m && Number(m[1]) <= 65535) return `${origin}${MERMAID_RENDERER_PATH}`;
+  return rendererHostSupported(protocol) ? MERMAID_RENDERER_PATH : null;
 }
 
-function readDaemonOriginMeta(): string | null {
+/** The embedder's daemon-origin meta, read from `<head>` only (the shared
+ *  renderer reads it once, when first created). */
+export function readDaemonOriginMeta(): string | null {
   if (typeof document === "undefined") return null;
-  return document.querySelector(`meta[name="${DAEMON_ORIGIN_META}"]`)?.getAttribute("content") ?? null;
+  return document.querySelector(`head > meta[name="${DAEMON_ORIGIN_META}"]`)?.getAttribute("content") ?? null;
 }
 
 let shared: MermaidFrameRenderer | null = null;
