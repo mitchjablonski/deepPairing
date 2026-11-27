@@ -750,6 +750,74 @@ function sectionOf(el, heads) {
   return idx;
 }
 
+/** #714 gap 9 — keyboard commenting: the blocks a reviewer can step through
+ *  with the keyboard, in document order. Text blocks, table cells, links,
+ *  images, controls, Mermaid nodes and the page's asks. Unrendered subtrees,
+ *  hidden elements, closed details content and our own layer are skipped; a
+ *  wrapper whose only block child says the same thing (li > p, td > p) is
+ *  left to the child. An svg is a block only when it has no Mermaid nodes
+ *  (the nodes are). Capped so a hostile page stays cheap. */
+var BLOCK_SEL = "h1, h2, h3, h4, h5, h6, p, li, dt, dd, blockquote, pre, figure, img, svg, caption, th, td, a[href], area[href], button, summary, label, input, select, textarea, [data-dp-decision], [data-dp-question], " + NODE_SEL;
+var BLOCKS_MAX = 2000;
+function layoutLive() {
+  var de = document.documentElement;
+  if (!de || !de.getBoundingClientRect) return false;
+  var r = de.getBoundingClientRect();
+  return !!(r.width || r.height);
+}
+function blockVisible(el, live) {
+  if (el.closest("[hidden], template")) return false;
+  for (var d = el.parentElement; d; d = d.parentElement) {
+    if (d.localName === "details" && !d.open) {
+      // Only a details' own first summary shows while it is closed.
+      var s = el.closest("summary");
+      if (!s || s.parentElement !== d) return false;
+    }
+  }
+  try {
+    var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (cs && (cs.display === "none" || cs.visibility === "hidden")) return false;
+  } catch (e) { /* keep it */ }
+  // A real engine draws every visible element at least once; a test DOM has
+  // no layout at all, so the box check runs only when there is one.
+  if (live && el.getClientRects && el.getClientRects().length === 0) return false;
+  return true;
+}
+function commentableBlocks() {
+  var els = document.querySelectorAll(BLOCK_SEL), out = [], live = layoutLive();
+  for (var i = 0; i < els.length && out.length < BLOCKS_MAX; i++) {
+    var el = els[i];
+    if (inChangeSkip(el) || el.closest(SKIP)) continue;
+    if (el.localName === "svg" && el.querySelector(NODE_SEL)) continue;
+    if (el.ownerSVGElement && !el.matches(NODE_SEL)) continue;
+    if (!blockVisible(el, live)) continue;
+    var only = el.children.length === 1 ? el.children[0] : null;
+    if (only && only.matches && only.matches(BLOCK_SEL) && !el.matches("[data-dp-decision], [data-dp-question], a[href], button, summary, label") &&
+        textPrefix(only, 200) === textPrefix(el, 200)) continue;
+    out.push(el);
+  }
+  return out;
+}
+/** A block's kind, from a fixed list (what a screen reader is told). */
+function blockKind(el) {
+  if (!isEl(el)) return "block";
+  if (el.hasAttribute("data-dp-decision")) return "decision";
+  if (el.hasAttribute("data-dp-question")) return "question";
+  if (el.matches(NODE_SEL)) return "diagram node";
+  var t = String(el.localName).toLowerCase();
+  if (/^h[1-6]$/.test(t)) return "heading";
+  if (t === "p") return "paragraph";
+  if (t === "li" || t === "dt" || t === "dd") return "list item";
+  if (t === "blockquote") return "quote";
+  if (t === "pre") return "code";
+  if (t === "figure" || t === "img" || t === "svg") return "image";
+  if (t === "caption") return "caption";
+  if (t === "th" || t === "td") return "cell";
+  if (t === "a" || t === "area") return "link";
+  if (t === "button" || t === "summary" || t === "label" || t === "input" || t === "select" || t === "textarea") return "control";
+  return "block";
+}
+
 return {
   LIMITS: LIMITS,
   LINK_SEL: LINK_SEL,
@@ -778,7 +846,10 @@ return {
   textPrefix: textPrefix,
   collectHeadings: collectHeadings,
   collectAsks: collectAsks,
-  sectionOf: sectionOf
+  sectionOf: sectionOf,
+  BLOCK_SEL: BLOCK_SEL,
+  commentableBlocks: commentableBlocks,
+  blockKind: blockKind
 };
 `;
 
@@ -839,6 +910,10 @@ function important(el, styles) {
 function mk(tag) {
   var el = document.createElement(tag);
   el.setAttribute("data-dp-annotator", "");
+  // #714 gap 13 — our outlines and badges are decoration on the page: a
+  // screen reader gets the pins, the keyboard cursor and the queue from the
+  // companion (labelled list + live region), never as stray numbers here.
+  el.setAttribute("aria-hidden", "true");
   if (ownNodes) ownNodes.add(el);
   return el;
 }
@@ -985,6 +1060,10 @@ function paintHover(t, alt, interact) {
 }
 function onMove(e) {
   setModHeld(!!(e.ctrlKey || e.metaKey));
+  // #714 gap 9 — a touch has no hover: the compatibility mouse events a tap
+  // fires must not paint an outline (on iOS a hover-time DOM change can
+  // swallow the tap's click).
+  if (touchRecent()) { hideHover(); return; }
   var t = targetEl(e);
   var pid = badgesLive() && badgeOk && badgeOk.get(t) === true ? pinIdOf(t) : null;
   setHoverPin(pid, pid !== null ? t : null);
@@ -993,6 +1072,12 @@ function onMove(e) {
 /** The pointer left the frame: drop any pin preview. */
 function onOut(e) { if (!e.relatedTarget && hoverPin !== null) setHoverPin(null, null); }
 function onKey(e) {
+  // #725 — the keyup/keypress of a key we handled is ours too, so the page's
+  // listeners never see half a keystroke.
+  if (e.type === "keydown") forgetOtherKeys(e);
+  if (e.type !== "keydown" && swallowedKey(e)) return;
+  if (e.type === "keypress") return;
+  if (e.type === "keydown" && onKbdKey(e)) return;
   if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I")) {
     // The companion's pointing shortcut, forwarded: while the reviewer is in
     // the frame, the companion never sees the keystroke. Never while typing
@@ -1007,6 +1092,234 @@ function onKey(e) {
   if ((e.key === "Alt" || e.key === "Control" || e.key === "Meta") && lastHover && lastHover.isConnected) {
     paintHover(lastHover, !!e.altKey, !!(e.ctrlKey || e.metaKey));
   }
+}
+/** #714 gap 9 — KEYBOARD COMMENT MODE. The parent turns it on (its toggle,
+ *  or the C key); while it is on and pointing is on, the arrow keys and
+ *  Tab / Shift+Tab move a cursor between commentable blocks, Home / End jump
+ *  to the first / last, Enter posts an anchor for the block under the cursor
+ *  (exactly what a click on it posts: the parent opens the composer) and
+ *  Escape leaves the mode. Tab past the last block (or Shift+Tab before the
+ *  first) leaves the mode and lets focus move on, so the frame is never a
+ *  keyboard trap. Handled keys are stopped here, in the capture phase,
+ *  before the page's own listeners: page scripts never see the reviewer's
+ *  navigation keys, and the comment itself is typed in the companion, never
+ *  in this frame. (A synthetic key event from page script could at most do
+ *  what that script can already do by posting to the parent directly: open
+ *  the composer on a spot, which the human still has to submit.)
+ *
+ *  Each move reports {dp:"kbd-cursor", index, total, kind, text, pins} for
+ *  the parent's live region: the block's kind (fixed list), up to 120
+ *  characters of its text and the pins on it. Display-only. */
+var kbd = false, kbdEl = null, kbdBox = null, kbdBlocks = null, dark = false;
+var KBD_TEXT = 120, KBD_PINS = 20;
+function blocks() {
+  if (!kbdBlocks) { try { kbdBlocks = core.commentableBlocks(); } catch (e) { kbdBlocks = []; } }
+  return kbdBlocks;
+}
+function kbdIndexIn(list) {
+  if (!kbdEl) return -1;
+  for (var i = 0; i < list.length; i++) if (list[i] === kbdEl) return i;
+  return -1;
+}
+/** The first block on screen (else the first block): where the mode starts. */
+function firstInView(list) {
+  var vh = window.innerHeight || 0;
+  for (var i = 0; i < list.length; i++) {
+    var r = list[i].getBoundingClientRect();
+    if ((r.width || r.height) && r.bottom > 0 && (!vh || r.top < vh)) return i;
+  }
+  return list.length ? 0 : -1;
+}
+function drawKbd() {
+  if (!kbd || !kbdEl || !kbdEl.isConnected || !kbdEl.getBoundingClientRect) {
+    if (kbdBox && kbdBox.parentNode) kbdBox.parentNode.removeChild(kbdBox);
+    return;
+  }
+  if (!kbdBox || !kbdBox.isConnected) {
+    kbdBox = mk("dp-annotator-kbd");
+    ensureLayer().appendChild(kbdBox);
+  }
+  // A ring with a contrasting halo, so it reads on light and dark content.
+  important(kbdBox, { position: "absolute", display: "block", "box-sizing": "border-box", "pointer-events": "none",
+    margin: "0", padding: "0", background: "transparent", "border-radius": "3px",
+    outline: "3px solid " + (dark ? "#93c5fd" : "#1d4ed8"),
+    "box-shadow": "0 0 0 5px " + (dark ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.9)") });
+  place(kbdBox, kbdEl.getBoundingClientRect());
+}
+function kbdPins(el) {
+  var out = [];
+  for (var j = 0; j < pinEls.length && out.length < KBD_PINS; j++) {
+    var p = pinEls[j];
+    if (p && p.isConnected && (p === el || el.contains(p))) out.push(j);
+  }
+  return out;
+}
+function kbdReport(i, list) {
+  var el = i >= 0 ? list[i] : null;
+  var text = "";
+  if (el) { try { text = core.textPrefix(el, KBD_TEXT); } catch (e) { text = ""; } }
+  post({ dp: "kbd-cursor", index: i, total: list.length, kind: el ? core.blockKind(el) : "block", text: text, pins: el ? kbdPins(el) : [] });
+}
+/** step: 1 / -1, "first" / "last", or 0 (enter the mode: stay on the cursor's
+ *  block if it is still on the page, else the first block on screen). */
+function kbdMove(step) {
+  var list = blocks();
+  if (!list.length) { kbdEl = null; drawKbd(); kbdReport(-1, list); return; }
+  var i = kbdIndexIn(list);
+  if (step === "first") i = 0;
+  else if (step === "last") i = list.length - 1;
+  else if (i < 0) i = firstInView(list);
+  else i = Math.min(list.length - 1, Math.max(0, i + step));
+  kbdEl = list[i];
+  if (typeof kbdEl.scrollIntoView === "function") kbdEl.scrollIntoView({ block: "nearest" });
+  drawKbd();
+  kbdReport(i, list);
+}
+function setKbd(on) {
+  if (on === kbd) return;
+  kbd = on;
+  if (on) kbdMove(0);
+  else drawKbd();
+}
+function kbdComment() {
+  if (!kbdEl || !kbdEl.isConnected) return;
+  var a = null;
+  try { a = core.anchorForTarget(kbdEl); } catch (e) { a = null; }
+  if (a) { flash(kbdEl); post({ dp: "anchor", anchor: a }); }
+}
+/** Single-key shortcuts forwarded to the parent, only before Run (no page
+ *  script then to take a key from): C comment mode, ? shortcut help, ] / [
+ *  next / previous comment in the review queue, Escape (leave the expanded
+ *  view). The parent decides what each may do. */
+var FRAME_KEYS = { c: "toggle-kbd", "?": "help", "]": "next", "[": "prev", Escape: "escape" };
+/** Keys whose keydown we handled, until their keyup — by physical key
+ *  (e.code), so "?" released after Shift (keyup "/") still matches. The
+ *  keyup may never come here (Enter opens the composer, ] / [ focus a queue
+ *  row): an entry is dropped on the next keydown of any other key, when the
+ *  frame loses or gains focus, and never applies in a page field (we never
+ *  handle keys there). */
+var swallowed = {};
+function keyId(e) { return String(e.code || e.key || ""); }
+function stopKey(e) {
+  e.preventDefault();
+  if (e.stopImmediatePropagation) e.stopImmediatePropagation(); else e.stopPropagation();
+}
+function forgetOtherKeys(e) {
+  var id = keyId(e);
+  for (var k in swallowed) if (Object.prototype.hasOwnProperty.call(swallowed, k) && k !== id) delete swallowed[k];
+}
+function forgetKeys() { swallowed = {}; }
+function swallowedKey(e) {
+  var id = keyId(e);
+  if (!Object.prototype.hasOwnProperty.call(swallowed, id)) return false;
+  if (e.type === "keyup") delete swallowed[id];
+  if (editable(targetEl(e))) { delete swallowed[id]; return false; }
+  stopKey(e);
+  return true;
+}
+function frameKey(k) {
+  // C with Caps Lock (or Shift) is still C.
+  return k === "C" ? "c" : k;
+}
+/** True when the key was ours (handled and stopped). */
+function onKbdKey(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  if (editable(targetEl(e))) return false;
+  var k = e.key;
+  if (kbd && annotate) {
+    var list = blocks(), at = kbdIndexIn(list);
+    if (k === "Tab" && ((!e.shiftKey && at >= list.length - 1) || (e.shiftKey && at <= 0))) {
+      // Past either end: leave the mode and let Tab move focus on.
+      setKbd(false);
+      post({ dp: "kbd-off" });
+      return true;
+    }
+    var handled = true;
+    if (k === "ArrowDown" || k === "ArrowRight" || (k === "Tab" && !e.shiftKey)) kbdMove(1);
+    else if (k === "ArrowUp" || k === "ArrowLeft" || (k === "Tab" && e.shiftKey)) kbdMove(-1);
+    else if (k === "Home") kbdMove("first");
+    else if (k === "End") kbdMove("last");
+    else if (k === "Enter") { if (!e.repeat) kbdComment(); }
+    else if (k === "Escape") { setKbd(false); post({ dp: "kbd-off" }); }
+    else handled = false;
+    if (handled) {
+      swallowed[keyId(e)] = true;
+      stopKey(e);
+      return true;
+    }
+  }
+  var fk = frameKey(k);
+  if (scripts || e.repeat || !Object.prototype.hasOwnProperty.call(FRAME_KEYS, fk)) return false;
+  e.preventDefault();
+  swallowed[keyId(e)] = true;
+  post({ dp: "key", key: FRAME_KEYS[fk] });
+  return true;
+}
+
+/** #714 gap 9 — TOUCH. A tap is a click, so it points as one (no hover
+ *  needed). After a touch, the compatibility mouse events never paint the
+ *  hover outline. A text selection made by touch (long-press, then the
+ *  handles) gets a 44px "Comment" button under it once it settles; tapping
+ *  the button posts the text anchor computed when it was shown. Mouse
+ *  selections keep the mouseup path. */
+var lastPointer = "", lastTouchAt = 0, selBtn = null, selAnchor = null, selPending = 0;
+function now() { return Date.now ? Date.now() : new Date().getTime(); }
+function touchRecent() { return lastPointer === "touch" && now() - lastTouchAt < 1500; }
+function coarse() {
+  if (lastPointer === "touch") return true;
+  if (lastPointer === "mouse") return false;
+  try { return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (e) { return false; }
+}
+function isSelBtn(t) { return !!(selBtn && t && (t === selBtn || (selBtn.contains && selBtn.contains(t)))); }
+function onPointerDown(e) {
+  var pt = e && e.pointerType;
+  if (pt === "touch" || pt === "pen") { lastPointer = "touch"; lastTouchAt = now(); hideHover(); }
+  else if (pt === "mouse") lastPointer = "mouse";
+  // Keep the selection alive while the Comment button is pressed.
+  if (isSelBtn(targetEl(e))) e.preventDefault();
+}
+function hideSelBtn() {
+  selAnchor = null;
+  if (selBtn && selBtn.parentNode) selBtn.parentNode.removeChild(selBtn);
+}
+function onSelectionChange() {
+  if (selPending) clearTimeout(selPending);
+  selPending = setTimeout(checkSelection, 350);
+}
+function checkSelection() {
+  selPending = 0;
+  if (!annotate || lastPointer !== "touch") { hideSelBtn(); return; }
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) { hideSelBtn(); return; }
+  var range = sel.getRangeAt(0);
+  var host = range.commonAncestorContainer;
+  if (host && host.nodeType !== 1) host = host.parentElement;
+  if (!host || own(host)) { hideSelBtn(); return; }
+  var a = null;
+  try { a = core.textAnchor(range); } catch (e) { a = null; }
+  if (!a) { hideSelBtn(); return; }
+  var r = null;
+  try { r = range.getBoundingClientRect(); } catch (e2) { r = null; }
+  if (!r) { hideSelBtn(); return; }
+  if (!selBtn) {
+    selBtn = mk("dp-annotator-selbtn");
+    // The one control of ours a screen reader may reach.
+    selBtn.removeAttribute("aria-hidden");
+    selBtn.setAttribute("role", "button");
+    selBtn.setAttribute("aria-label", "Comment on the selected text");
+    selBtn.textContent = "Comment";
+  }
+  // Outside our aria-hidden layer, so a screen reader can reach it.
+  if (!selBtn.isConnected) (document.documentElement || document.body).appendChild(selBtn);
+  selAnchor = a;
+  var sx = window.scrollX || window.pageXOffset || 0, sy = window.scrollY || window.pageYOffset || 0;
+  var vw = window.innerWidth || 0;
+  var left = Math.max(4, Math.min(r.left, (vw || r.left + 120) - 124));
+  important(selBtn, { position: "absolute", display: "block", "box-sizing": "border-box", left: (left + sx) + "px",
+    top: (r.bottom + sy + 8) + "px", "min-width": "44px", "min-height": "44px", padding: "0 16px", margin: "0",
+    "border-radius": "22px", border: "0", background: dark ? "#93c5fd" : "#1d4ed8", color: dark ? "#0b1220" : "#fff",
+    font: "600 15px/44px system-ui, sans-serif", "pointer-events": "auto", cursor: "pointer", "z-index": "2147483647",
+    "box-shadow": "0 2px 8px rgba(0,0,0,0.35)", "user-select": "none", "-webkit-user-select": "none" });
 }
 function samePins(a, b) {
   if (!a || a.length !== b.length) return false;
@@ -1042,13 +1355,15 @@ function nativeUnder(el) {
 /** Would this badge cover a native control? Hit-tests the page under the
  *  badge's centre and corners. A badge off screen is never live until a redraw finds it on
  *  screen (scrolling redraws). */
-function badgeCoversNative(badge) {
+function badgeCoversNative(badge, hit) {
   // No hit-testing (old engines, test DOMs): we can't know what lies under
   // the offset badge, so it stays inert (conservative).
   if (typeof document.elementsFromPoint !== "function") return true;
   var r = badge.getBoundingClientRect();
-  var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+  var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var vh = window.innerHeight || document.documentElement.clientHeight || 0;
   if (!r.width || r.right < 0 || r.bottom < 0 || (vw && r.left > vw) || (vh && r.top > vh)) return true;
+  if (hit && (r.left < 0 || r.top < 0 || (vw && r.right > vw) || (vh && r.bottom > vh))) return true;
   var pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 1, r.top + 1], [r.right - 1, r.top + 1], [r.left + 1, r.bottom - 1], [r.right - 1, r.bottom - 1]];
   for (var i = 0; i < pts.length; i++) if (nativeUnder(pageElAt(pts[i][0], pts[i][1]))) return true;
   return false;
@@ -1056,40 +1371,48 @@ function badgeCoversNative(badge) {
 /** Badge spots, in the pin box's coordinates (the box is the anchor +2px on
  *  every side): outside top-left (preferred: never on the element itself),
  *  outside top-right, then inside the anchor's top-left / top-right corners. */
-function badgeSpots(r, bw) {
-  var w = r.width + 4;
-  return [[-20, -20], [w + 2, -20], [4, 4], [w - 4 - bw, 4]];
+function badgeSpots(r, bw, hit) {
+  var w = r.width + 4, out = -(20 + 2 * (hit || 0));
+  return [[out, out], [w + 2, out], [4, 4], [w - 4 - bw, 4]];
 }
-/** Place the badge on the first spot that is fully inside the viewport
- *  horizontally (and not above the document's top) AND clear of native
- *  controls; else the first spot that is on screen (it stays inert); else
- *  clamp it to the viewport edge. Returns badgeCoversNative() for the spot
- *  chosen, so a badge over a control is never live. */
-function placeBadge(badge, r) {
-  var bw = Math.max(18, badge.offsetWidth || 0);
+/** Choose an unobstructed spot. Touch badges must fit in both viewport axes.
+ *  Desktop badges keep the original horizontal fit and document-top bound.
+ *  Recheck the final rectangle after clamping before making a badge live. */
+function placeBadge(badge, r, hit) {
+  // #714 gap 9 — hit is the touch hit-area border on each side.
+  var bw = Math.max(18 + 2 * (hit || 0), badge.offsetWidth || 0);
+  var bh = 18 + 2 * (hit || 0);
   var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var vh = window.innerHeight || document.documentElement.clientHeight || 0;
   var sy = window.scrollY || window.pageYOffset || 0;
-  var spots = badgeSpots(r, bw), fallback = null;
+  var spots = badgeSpots(r, bw, hit), fallback = null;
   function fits(s) {
     var x = r.left - 2 + s[0], y = r.top - 2 + s[1];
-    return x >= 0 && (!vw || x + bw <= vw) && y + sy >= 0;
+    var fitsY = hit ? y >= 0 && (!vh || y + bh <= vh) : y + sy >= 0;
+    return x >= 0 && (!vw || x + bw <= vw) && fitsY;
   }
   function put(s) { important(badge, { left: s[0] + "px", top: s[1] + "px" }); }
   for (var i = 0; i < spots.length; i++) {
     if (!fits(spots[i])) continue;
     put(spots[i]);
-    if (!badgeCoversNative(badge)) return false;
+    if (!badgeCoversNative(badge, hit)) return false;
     if (!fallback) fallback = spots[i];
   }
   if (!fallback) {
     // Nothing fits (e.g. an anchor scrolled partly out horizontally): clamp
     // the outside-top-left spot into the viewport and the document.
-    var x = Math.min(Math.max(r.left - 22, 0), vw ? Math.max(vw - bw, 0) : Infinity);
-    var y = Math.max(r.top - 22, -sy);
+    var o = 22 + 2 * (hit || 0);
+    var x = Math.min(Math.max(r.left - o, 0), vw ? Math.max(vw - bw, 0) : Infinity);
+    var y = Math.max(r.top - o, -sy);
+    // Keep a touch fallback fully in view while its anchor is visible.
+    // An offscreen anchor should continue to scroll with its badge.
+    if (hit && r.bottom > 0 && (!vh || r.top < vh)) {
+      y = Math.min(Math.max(y, 0), vh ? Math.max(vh - bh, 0) : Infinity);
+    }
     fallback = [x - (r.left - 2), y - (r.top - 2)];
   }
   put(fallback);
-  return badgeCoversNative(badge);
+  return badgeCoversNative(badge, hit);
 }
 function setModHeld(v) {
   if (v === modHeld) return;
@@ -1151,13 +1474,17 @@ function drawPins() {
     // pin box is the element +2px; the 18px badge ends 2px before it), so it
     // never sits on the element's own interactive area; placeBadge() moves it
     // to a viewport-visible spot clear of native controls when that's off-screen.
-    important(badge, { position: "absolute", left: "-20px", top: "-20px", display: "block", "box-sizing": "border-box",
-      "min-width": "18px", height: "18px", padding: "0 4px", "border-radius": "9px", background: color,
+    // #714 gap 9 — on a touch screen the badge keeps its 18px look but takes
+    // a 44px hit area (a transparent border; the background stops at it).
+    var hit = coarse() ? 13 : 0, off = -(20 + 2 * hit);
+    important(badge, { position: "absolute", left: off + "px", top: off + "px", display: "block", "box-sizing": "content-box",
+      "min-width": "10px", height: "18px", padding: "0 4px", "border-radius": (9 + hit) + "px", background: color,
+      border: hit + "px solid transparent", "background-clip": "padding-box",
       color: "#111", font: "600 11px/18px system-ui, sans-serif", "text-align": "center",
       "pointer-events": "none", cursor: "default" });
     pin.appendChild(badge);
     l.appendChild(pin);
-    var ok = !!id && !!badgeIds && !!badgeOk && !placeBadge(badge, r);
+    var ok = !!id && !!badgeIds && !!badgeOk && !placeBadge(badge, r, hit);
     if (badgeOk) badgeOk.set(badge, ok);
     var live = ok && badgesLive();
     if (live) important(badge, { "pointer-events": "auto", cursor: "pointer" });
@@ -1258,6 +1585,7 @@ function reconcile(force, forceChanges) {
   pending = 0;
   var cf = drawChanges();
   var found = drawPins();
+  drawKbd();
   if (force || !samePins(lastFound, found)) {
     lastFound = found;
     post(withKey({ dp: "pins-status", found: found }));
@@ -1268,7 +1596,7 @@ function reconcile(force, forceChanges) {
   }
 }
 function schedule() {
-  if ((!current.length && !(showChanges && changes.length)) || pending) return;
+  if ((!current.length && !(showChanges && changes.length) && !kbd) || pending) return;
   pending = setTimeout(function () { reconcile(false); }, 120);
 }
 /** #714 gap 8 — put an element near the BOTTOM of THIS frame's viewport
@@ -1448,7 +1776,7 @@ var mo = null, ro = null;
 function observe() {
   try {
     if (typeof window.MutationObserver === "function") {
-      mo = new window.MutationObserver(function (records) { if (relevant(records)) { invalidateChanges(); schedule(); scheduleOutline(); } });
+      mo = new window.MutationObserver(function (records) { if (relevant(records)) { invalidateChanges(); kbdBlocks = null; schedule(); scheduleOutline(); } });
       mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     }
   } catch (e) { mo = null; }
@@ -1496,13 +1824,21 @@ function onMessage(e) {
   } else if (d.dp === "mode") {
     annotate = d.annotate !== false;
     scripts = d.scripts === true;
-    if (!annotate) hideHover();
+    // #714 gaps 9+13 — keyboard comment mode (only while pointing) and
+    // whether the page renders dark (our cursor and button colours).
+    var wasDark = dark;
+    dark = d.dark === true;
+    if (!annotate) { hideHover(); hideSelBtn(); }
     syncBadges();
+    setKbd(d.kbd === true && annotate);
+    if (dark !== wasDark) drawKbd();
   }
 }
 function onMouseDown() { suppressClick = false; }
 function onMouseUp(e) {
   if (!annotate || e.ctrlKey || e.metaKey) return;
+  // A touch selection gets the Comment button instead (checkSelection).
+  if (touchRecent()) return;
   var t = targetEl(e);
   if (t && own(t)) return;
   var sel = window.getSelection ? window.getSelection() : null;
@@ -1523,6 +1859,18 @@ function onMouseUp(e) {
 function onClick(e) {
   var t = targetEl(e);
   if (!t) return;
+  // #714 gap 9 — the touch selection's Comment button (ours, by reference).
+  if (isSelBtn(t)) {
+    e.preventDefault();
+    e.stopPropagation();
+    var sa = selAnchor;
+    hideSelBtn();
+    if (annotate && sa) {
+      post({ dp: "anchor", anchor: sa });
+      try { window.getSelection().removeAllRanges(); } catch (x) { /* ignore */ }
+    }
+    return;
+  }
   // #714 gap 7 — a click on a pin's badge (one of OUR nodes, matched by
   // reference) tells the parent which comment it is. Display-only: the parent
   // scrolls to and highlights that comment; nothing is posted or changed.
@@ -1742,8 +2090,13 @@ window.addEventListener("mousedown", onMouseDown, true);
 window.addEventListener("mouseup", onMouseUp, true);
 window.addEventListener("mousemove", onMove, true);
 window.addEventListener("mouseout", onOut, true);
+window.addEventListener("pointerdown", onPointerDown, true);
+document.addEventListener("selectionchange", onSelectionChange);
 window.addEventListener("keydown", onKey, true);
 window.addEventListener("keyup", onKey, true);
+window.addEventListener("keypress", onKey, true);
+window.addEventListener("blur", forgetKeys);
+window.addEventListener("focus", forgetKeys);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
 window.addEventListener("scroll", onScroll, true);
@@ -1759,8 +2112,15 @@ return function uninstall() {
   window.removeEventListener("mouseup", onMouseUp, true);
   window.removeEventListener("mousemove", onMove, true);
   window.removeEventListener("mouseout", onOut, true);
+  window.removeEventListener("pointerdown", onPointerDown, true);
+  document.removeEventListener("selectionchange", onSelectionChange);
+  if (selPending) clearTimeout(selPending);
   window.removeEventListener("keydown", onKey, true);
   window.removeEventListener("keyup", onKey, true);
+  window.removeEventListener("keypress", onKey, true);
+  window.removeEventListener("blur", forgetKeys);
+  window.removeEventListener("focus", forgetKeys);
+  if (selBtn && selBtn.parentNode) selBtn.parentNode.removeChild(selBtn);
   window.removeEventListener("message", onMessage);
   window.removeEventListener("resize", onResize);
   window.removeEventListener("scroll", onScroll, true);

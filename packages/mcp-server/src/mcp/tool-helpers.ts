@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
+import { commentResolutionSnapshot } from "../store/comment-resolution.js";
 import type { TeamPreference, Comment, ProseMode, ProseSeverity, StanceRef } from "@deeppairing/shared";
 import { lintArtifactContent, lintProse, bySeverity } from "@deeppairing/shared";
 import type { ToolResult } from "./tools/types.js";
@@ -539,13 +540,12 @@ export function isObligationBearingComment(c: Comment): boolean {
 export async function getPassiveFeedback(store: IStore, excludeIds: string[] = []): Promise<string> {
   const comments = await store.getUnacknowledgedComments();
   if (comments.length === 0) return "";
-  // N1 (#225) — never drain/ack obligation-bearing comments (questions /
-  // suggested edits); leave them for check_feedback's rich lane.
-  const drainable = comments.filter((c) => !isObligationBearingComment(c));
+  // Keep obligations and explicit reopens for check_feedback's rich lane.
+  const drainable = comments.filter((c) => c.humanResolvedAt !== null && !isObligationBearingComment(c));
   if (drainable.length === 0) return "";
   // Acknowledge ALL drainable comments (including N2-excluded ones — they have
   // now been seen/handled) so nothing re-surfaces on a later unrelated drain.
-  await store.acknowledgeComments(drainable.map((c) => c.id));
+  await store.acknowledgeComments(drainable.map((c) => c.id), drainable.map(commentResolutionSnapshot));
   // N2 (#226 scope 6) — keep excluded comments out of the visible echo.
   const exclude = new Set(excludeIds);
   const shown = drainable.filter((c) => !exclude.has(c.id));

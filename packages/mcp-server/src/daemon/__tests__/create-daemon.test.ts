@@ -25,6 +25,7 @@ import crypto from "node:crypto";
 import type { DecisionOption } from "@deeppairing/shared";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
 import { FileStore } from "../../store/file-store.js";
+import type { IStore } from "../../store/store-interface.js";
 import { projectHashOf } from "../../project-root.js";
 import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
@@ -181,6 +182,142 @@ it("waits for the exact committed standalone choice and releases a disconnected 
     disconnect.abort();
     continueWait.abort();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+it("drains an admitted default browser comment and refuses a late request only for that review", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  const sibling = daemon.createSession(createStandaloneSessionId(tmpDir));
+  const wrapper = daemon.createSession("session_wrapper");
+  const headers = {
+    "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json", Authorization: "Bearer test-token",
+  };
+  const post = (route: string, body: Record<string, unknown>, sid?: string) =>
+    daemon.app.request(`/api/${route}`, {
+      method: "POST", headers: { ...headers, ...(sid ? { "X-Session-Id": sid } : {}) },
+      body: JSON.stringify(body),
+    });
+  const request = { text: "Explain the change", intent: "explain" };
+  const comment = { artifactId: "__session__", content: "Keep this feedback" };
+  let entered = false;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const addComment = store.addComment.bind(store);
+  const delayed = vi.spyOn(store as IStore, "addComment").mockImplementationOnce(async (params) => {
+    entered = true;
+    await blocked;
+    return addComment(params);
+  });
+  const admitted = post("comments", comment);
+  try {
+    await vi.waitFor(() => expect(entered).toBe(true));
+    const ending = daemon.standaloneCloseout.end(sessionId);
+    const marker = path.join(tmpDir, ".deeppairing", "sessions", sessionId, "review-ended.json");
+    try {
+      const late = await post("requests", request, sessionId);
+      expect(late.status).toBe(409);
+      expect(await late.json()).toMatchObject({ code: "session_closing" });
+      expect(fs.existsSync(marker)).toBe(false);
+      expect((await post("requests", request, sibling.getSessionId())).status).toBe(200);
+      expect((await post("requests", request, wrapper.getSessionId())).status).toBe(200);
+    } finally {
+      release();
+      await ending;
+    }
+    expect((await admitted).status).toBe(200);
+    expect(fs.existsSync(marker)).toBe(true);
+    const disk = JSON.parse(fs.readFileSync(path.join(path.dirname(marker), "comments.json"), "utf8"));
+    expect(disk).toEqual([expect.objectContaining({
+      sessionId, content: comment.content, target: expect.objectContaining({ artifactId: comment.artifactId }),
+    })]);
+    expect(store.getRequests()).toEqual([]);
+    const ended = await post("requests", request);
+    expect(ended.status).toBe(409);
+    expect(await ended.json()).toMatchObject({ code: "session_ended" });
+    fs.writeFileSync(marker, "{");
+    const invalid = await post("comments", comment);
+    expect(invalid.status).toBe(409);
+    expect(await invalid.json()).toMatchObject({ code: "session_marker_invalid" });
+  } finally {
+    release();
+    await admitted;
+    delayed.mockRestore();
+  }
+});
+
+it("wakes only the ended review's exact decision waiters after the marker commits", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const siblingId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  const sibling = daemon.createSession(siblingId);
+  for (const [source, id] of [[store, "pending"], [store, "closed"], [store, "picked"], [sibling, "pending"]] as const) {
+    source.createArtifact({ id: `art_${id}`, type: "decision", title: "Which cache?", content: { decisionId: id } });
+    source.recordDecisionRequest({ decisionId: id, artifactId: `art_${id}`, context: "Which cache?", options: OPTS });
+  }
+  store.updateArtifactStatus("art_closed", "obsolete", "agent_obsolete");
+  const headers = {
+    "X-Project-Hash": projectHashOf(tmpDir), "X-Session-Id": sessionId,
+    "Content-Type": "application/json", Authorization: "Bearer test-token",
+  };
+  const picked = await daemon.app.request("/api/decisions/picked", {
+    method: "POST", headers, body: JSON.stringify({ optionId: "o2" }),
+  });
+  expect(picked.status).toBe(200);
+  store.forceFlush();
+  const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  const decisionFile = path.join(dir, "decisions.json");
+  const decisionsBefore = fs.readFileSync(decisionFile, "utf8");
+  const cancel = new AbortController();
+  const read = (sid: string, decisionId: string, waitMs?: number) =>
+    daemon.app.request(`/api/internal/sessions/${sid}/read-decision`, {
+      method: "POST", headers: { ...headers, "X-Session-Id": sid }, signal: cancel.signal,
+      body: JSON.stringify({ expectedProjectRoot: tmpDir, decisionId, waitMs }),
+    });
+  const waiters = (source: typeof store) =>
+    (source as unknown as { feedbackWaiters: Array<() => void> }).feedbackWaiters;
+
+  try {
+    const generalPending = store.waitForFeedback(10_000, cancel.signal);
+    const [generalWaiter] = waiters(store);
+    const pending = read(sessionId, "pending", 10_000);
+    const otherPending = read(siblingId, "pending", 10_000);
+    await vi.waitFor(() => {
+      expect(waiters(store)).toHaveLength(2);
+      expect(waiters(sibling)).toHaveLength(1);
+    });
+    const before = [...waiters(store)];
+    const siblingBefore = [...waiters(sibling)];
+    const flush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("End flush failed"); });
+    try {
+      await expect(daemon.standaloneCloseout.end(sessionId)).rejects.toThrow("End flush failed");
+      expect(waiters(store)).toEqual(before);
+    } finally {
+      flush.mockRestore();
+    }
+    const marker = await daemon.standaloneCloseout.end(sessionId);
+    expect(waiters(store)).toEqual([generalWaiter]);
+    expect(waiters(sibling)).toEqual(siblingBefore);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "review-ended.json"), "utf8"))).toEqual(marker);
+    expect(fs.readFileSync(decisionFile, "utf8")).toBe(decisionsBefore);
+    const ended = await (await pending).json();
+    expect(ended).toMatchObject({ waitStatus: "session_ended", artifactStatus: "draft", decisionId: "pending", sessionId });
+    expect(ended).not.toHaveProperty("selectedOptionId");
+    expect(await (await read(sessionId, "pending", 10_000)).json()).toEqual(ended);
+    expect(await (await read(sessionId, "pending")).json()).not.toHaveProperty("waitStatus");
+    expect(await (await read(sessionId, "closed", 10_000)).json()).toMatchObject({ waitStatus: "closed" });
+    expect(await (await read(sessionId, "picked", 10_000)).json()).toMatchObject({ waitStatus: "resolved", selectedOptionId: "o2" });
+    expect((await read(sessionId, "unknown", 10_000)).status).toBe(404);
+    expect(await daemon.standaloneCloseout.end(sessionId)).toEqual(marker);
+    expect(fs.readFileSync(decisionFile, "utf8")).toBe(decisionsBefore);
+    expect(waiters(store)).toHaveLength(1);
+    expect(waiters(sibling)).toHaveLength(1);
+    cancel.abort();
+    await Promise.all([otherPending, generalPending]);
+  } finally {
+    cancel.abort();
   }
 });
 

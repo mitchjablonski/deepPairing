@@ -100,6 +100,19 @@ describe("H2-2 — malformed body yields 400, never 500", () => {
   }
 });
 
+it("rejects a malformed internal resolution timestamp without touching the comment", async () => {
+  const store = sessions.get("real")!;
+  store.addComment({ id: "c1", artifactId: "__session__", content: "please review", author: "human" });
+  const route = "/api/internal/sessions/real/comments/c1/mark-resolved";
+  const post = (resolvedAt: unknown) => app.request(route, { method: "POST", headers: authed, body: JSON.stringify({ resolvedAt }) });
+  expect((await post("not-a-timestamp")).status).toBe(400);
+  expect(store.getComment("c1")?.humanResolvedAt).toBeUndefined();
+  expect((await post(undefined)).status).toBe(200);
+  expect(store.getComment("c1")?.humanResolvedAt).toBeTruthy();
+  expect((await post(null)).status).toBe(200);
+  expect(store.getComment("c1")?.humanResolvedAt).toBeNull();
+});
+
 describe("H2-2 review — /register accepts an empty body but rejects non-object bodies", () => {
   // /register is the ONE route that legitimately accepts "" (⇒ {}). But a
   // valid-JSON `null`/scalar used to sneak past `.catch(() => ({}))`: `null`

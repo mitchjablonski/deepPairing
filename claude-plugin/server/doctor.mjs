@@ -15939,6 +15939,8 @@ var CommentSchema = external_exports.object({
    * human-driven; does not touch the agent's `acknowledged` queue.
    */
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  /** Changes on each explicit Resolve/Reopen so stale delivery cannot drain a newer reopen. */
+  humanResolutionToken: external_exports.string().uuid().optional(),
   /**
    * #160 — secret-scanner matches found in this comment's body at create
    * time. A comment with a secret is HUMAN-authored (the risk is a key

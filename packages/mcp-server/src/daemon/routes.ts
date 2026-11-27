@@ -712,7 +712,7 @@ export function createDaemonRoutes(
           const decision = store.getDecision(decisionId);
           const artifacts = decision ? store.getArtifacts() : [];
           const artifact = decision && artifacts.find((a) =>
-            a.type === "decision" && a.id === decision.artifactId &&
+            a.sessionId === sessionId && a.type === "decision" && a.id === decision.artifactId &&
             (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
           if (!decision || !artifact) return null;
           let waitStatus: StandaloneDecisionRead["waitStatus"];
@@ -722,13 +722,16 @@ export function createDaemonRoutes(
               waitStatus = "resolved";
             } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
               waitStatus = "closed";
+            } else if (standaloneCloseout?.state(sessionId).state === "ended") {
+              waitStatus = "session_ended";
             } else if (remaining > 0) {
               // Give an accepted wait a fresh idle interval without a wrapper lease.
               if (!idleRefreshed) {
                 refreshCompanionLink();
                 idleRefreshed = true;
               }
-              return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+              // The marker check and waiter registration are synchronous.
+              return { wake: store.waitForFeedback(Math.ceil(remaining), signal, "review_end") };
             } else {
               waitStatus = "timed_out";
             }
@@ -1204,8 +1207,16 @@ export function createDaemonRoutes(
     if (!body || typeof body !== "object") {
       return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
     }
-    const { ids } = body as { ids?: unknown };
-    r.store.acknowledgeComments(Array.isArray(ids) ? ids : []);
+    const { ids, delivered } = body as { ids?: unknown; delivered?: unknown };
+    const snapshots = z.array(z.object({
+      id: z.string(),
+      resolvedAt: z.string().nullable().optional(),
+      token: z.string().uuid().optional(),
+    })).optional().safeParse(delivered);
+    if (!snapshots.success) {
+      return c.json({ error: "Invalid delivered comment resolution state", code: ERROR_CODES.validation_error }, 400);
+    }
+    r.store.acknowledgeComments(Array.isArray(ids) ? ids : [], snapshots.data);
     return c.json({ status: "acknowledged" });
   });
 
@@ -1378,9 +1389,13 @@ export function createDaemonRoutes(
     // client always sends an object (`{resolvedAt}`), so no empty-body affordance.
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
-    const { resolvedAt } = parsed.body as { resolvedAt?: string };
-    r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
-    return c.json({ status: "resolved" });
+    const stamp = z.string().datetime().nullable().optional().safeParse(parsed.body.resolvedAt);
+    if (!stamp.success) {
+      return c.json({ error: "Expected resolvedAt to be an ISO timestamp or null", code: ERROR_CODES.validation_error }, 400);
+    }
+    const resolvedAt = stamp.data;
+    const changed = r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
+    return c.json({ status: resolvedAt === null ? (changed ? "reopened" : "unchanged") : "resolved", changed });
   });
 
   // --- Decisions ---

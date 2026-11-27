@@ -285,6 +285,63 @@ describe("FileStore", () => {
     expect(Number.isNaN(Date.parse(resolved as string))).toBe(false);
   });
 
+  it("#714 — markCommentHumanResolved(id, null) withdraws the resolve and persists the null", () => {
+    const store = createStore("human-resolved-reopen");
+    store.addComment({ id: "c1", artifactId: "art_1", content: "Tighten this", author: "human" });
+    store.markCommentHumanResolved("c1", "2026-05-31T12:00:00.000Z");
+    store.markCommentHumanResolved("c1", null);
+    expect(store.getComment("c1")?.humanResolvedAt).toBeNull();
+    store.forceFlush();
+    expect(createStore("human-resolved-reopen").getComment("c1")?.humanResolvedAt).toBeNull();
+  });
+
+  it("settles only the delivered Resolve/Reopen generation, including across store instances", () => {
+    const session = "human-resolution-ack";
+    const store = createStore(session);
+    const id = "c1";
+    store.addComment({ id, artifactId: "a1", content: "Review this", author: "human" });
+    const snapshot = (reader: FileStore) => {
+      const row = reader.getUnacknowledgedComments().find((comment) => comment.id === id)!;
+      return { id, resolvedAt: row.humanResolvedAt, token: row.humanResolutionToken };
+    };
+    const initial = snapshot(store);
+    store.markCommentHumanResolved(id);
+    store.markCommentHumanResolved(id, null);
+    store.acknowledgeComments([id], [initial]);
+    expect(store.getComment(id)?.acknowledged).toBe(false);
+
+    const firstReopen = snapshot(store);
+    const writer = createStore(session);
+    writer.markCommentHumanResolved(id);
+    writer.markCommentHumanResolved(id, null);
+    store.acknowledgeComments([id], [firstReopen]);
+    expect(store.getComment(id)?.acknowledged).toBe(false);
+    const latest = snapshot(store);
+    expect(latest.resolvedAt).toBeNull();
+    expect(latest.token).not.toBe(firstReopen.token);
+
+    store.acknowledgeComments([id], [latest]);
+    expect(createStore(session).getComment(id)).toMatchObject({ acknowledged: true, humanResolutionToken: latest.token });
+  });
+
+  it("settles delivery alongside a legacy malformed stamp without rewriting it", () => {
+    const session = "legacy-resolution-stamp";
+    const writer = createStore(session);
+    const legacy = writer.addComment({ id: "legacy", artifactId: "a1", content: "Old comment", author: "human" });
+    legacy.humanResolvedAt = "previously accepted opaque text";
+    writer.addComment({ id: "next", artifactId: "a1", content: "New comment", author: "human" });
+    writer.forceFlush();
+
+    const reader = createStore(session);
+    const delivered = reader.getUnacknowledgedComments().map((c) => ({
+      id: c.id, resolvedAt: c.humanResolvedAt, token: c.humanResolutionToken,
+    }));
+    reader.acknowledgeComments(["legacy", "next"], delivered);
+    const reloaded = createStore(session);
+    expect(reloaded.getComment("legacy")).toMatchObject({ humanResolvedAt: legacy.humanResolvedAt, acknowledged: true });
+    expect(reloaded.getComment("next")?.acknowledged).toBe(true);
+  });
+
   it("pending plan-reviews / decisions exclude CLOSED artifacts (F1 orphan guard)", () => {
     const store = createStore("orphan_guard");
     store.createArtifact({ id: "p1", type: "plan", title: "Plan", content: { steps: [], estimatedChanges: 0 } });

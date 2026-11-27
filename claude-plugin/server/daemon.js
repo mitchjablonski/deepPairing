@@ -6117,13 +6117,13 @@ function time(args) {
   return new RegExp(`^${timeSource(args)}$`);
 }
 function datetime(args) {
-  const time3 = timeSource({ precision: args.precision });
+  const time4 = timeSource({ precision: args.precision });
   const opts = ["Z"];
   if (args.local)
     opts.push("");
   if (args.offset)
     opts.push(`([+-](?:[01]\\d|2[0-3]):[0-5]\\d)`);
-  const timeRegex = `${time3}(?:${opts.join("|")})`;
+  const timeRegex = `${time4}(?:${opts.join("|")})`;
   return new RegExp(`^${dateSource}T(?:${timeRegex})$`);
 }
 var string = (params) => {
@@ -20331,6 +20331,8 @@ var CommentSchema = external_exports.object({
    * human-driven; does not touch the agent's `acknowledged` queue.
    */
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  /** Changes on each explicit Resolve/Reopen so stale delivery cannot drain a newer reopen. */
+  humanResolutionToken: external_exports.string().uuid().optional(),
   /**
    * #160 — secret-scanner matches found in this comment's body at create
    * time. A comment with a secret is HUMAN-authored (the risk is a key
@@ -21616,6 +21618,59 @@ var PageRuleOutBodySchema = external_exports.object({
 });
 
 // ../shared/dist/schemas/page-asks.js
+var PAGE_ASK_LIMITS = { max: 50, text: 200, id: 200 };
+var PAGE_SANITIZE_DROP_TAGS = [
+  "script",
+  "noscript",
+  "template",
+  "iframe",
+  "frame",
+  "frameset",
+  "object",
+  "embed",
+  "applet",
+  "portal",
+  "base"
+];
+function cssEscapeIdent(value) {
+  const s = String(value);
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charAt(i);
+    const code = s.charCodeAt(i);
+    if (code === 0) {
+      out += "\uFFFD";
+      continue;
+    }
+    if (code >= 1 && code <= 31 || code === 127 || i === 0 && code >= 48 && code <= 57 || i === 1 && code >= 48 && code <= 57 && s.charCodeAt(0) === 45) {
+      out += "\\" + code.toString(16) + " ";
+      continue;
+    }
+    if (i === 0 && s.length === 1 && code === 45) {
+      out += "\\-";
+      continue;
+    }
+    if (code >= 128 || code === 45 || code === 95 || code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122) {
+      out += ch;
+      continue;
+    }
+    out += "\\" + ch;
+  }
+  return out;
+}
+function atOrInside(locator, base) {
+  return locator === base || locator.startsWith(base + " > ");
+}
+function anchorTargetsAsk(ask, anchor) {
+  if (ask.locator && atOrInside(anchor.locator, ask.locator))
+    return true;
+  if (ask.id && atOrInside(anchor.locator, "#" + cssEscapeIdent(ask.id)))
+    return true;
+  for (const c of ask.childIds ?? [])
+    if (atOrInside(anchor.locator, "#" + cssEscapeIdent(c)))
+      return true;
+  return false;
+}
 var PAGE_ASK_BREAK_TAGS = [
   "br",
   "hr",
@@ -21669,6 +21724,97 @@ var PAGE_ASK_BREAK_TAGS = [
   "center"
 ];
 var BREAK_TAG_SET = new Set(PAGE_ASK_BREAK_TAGS);
+function isAskBreakTag(tag) {
+  return BREAK_TAG_SET.has(tag);
+}
+function foldAskChars(s) {
+  return s.normalize("NFKC").replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'").replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
+}
+var AskTextHasher = class {
+  h1 = 3735928559;
+  h2 = 1103547991;
+  chars = 0;
+  /** A whitespace run was seen after some text and not emitted yet. */
+  pendingSpace = false;
+  emit(ch) {
+    this.h1 = Math.imul(this.h1 ^ ch, 2654435761);
+    this.h2 = Math.imul(this.h2 ^ ch, 1597334677);
+    this.chars++;
+  }
+  push(chunk) {
+    const s = foldAskChars(chunk);
+    for (let i = 0; i < s.length; i++) {
+      const ch = s.charCodeAt(i);
+      if (/\s/.test(s[i])) {
+        if (this.chars > 0)
+          this.pendingSpace = true;
+        continue;
+      }
+      if (this.pendingSpace) {
+        this.emit(32);
+        this.pendingSpace = false;
+      }
+      this.emit(ch);
+    }
+  }
+  /** A `<br>` or a block boundary: one separator, under the same collapse
+   *  and trim rules as whitespace (never doubled, never leading/trailing). */
+  separate() {
+    if (this.chars > 0)
+      this.pendingSpace = true;
+  }
+  /** The hash, or undefined when no text was pushed. */
+  digest() {
+    if (this.chars === 0)
+      return void 0;
+    let h1 = this.h1;
+    let h2 = this.h2;
+    h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507);
+    h1 ^= Math.imul(h2 ^ h2 >>> 13, 3266489909);
+    h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507);
+    h2 ^= Math.imul(h1 ^ h1 >>> 13, 3266489909);
+    const n = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+    return `${n.toString(36)}:${this.chars.toString(36)}`;
+  }
+};
+function askTextHash(text) {
+  const h = new AskTextHasher();
+  h.push(text);
+  return h.digest();
+}
+function askTextsContinue(prev, cur) {
+  return !!prev.fullHash && prev.fullHash === cur.fullHash;
+}
+function findEarlierAsk(cur, earlier) {
+  if (cur.id)
+    return earlier.find((o) => o.id === cur.id);
+  if (cur.locator)
+    return earlier.find((o) => !o.id && o.locator === cur.locator);
+  return void 0;
+}
+function isEarlierVersionComment(c, current) {
+  if (!current)
+    return false;
+  if (c.target.artifactId && c.target.artifactId !== current.artifactId)
+    return true;
+  const v2 = c.target.htmlAnchor?.version;
+  return typeof v2 === "number" && v2 < current.version;
+}
+function commentAnswersAsk(ask, c, current, opts = {}) {
+  if (c.author !== "human" || c.parentCommentId || c.humanResolvedAt)
+    return false;
+  const a = c.target.htmlAnchor;
+  if (!a || typeof a.locator !== "string" || typeof a.quote !== "string")
+    return false;
+  if (!isEarlierVersionComment(c, current))
+    return opts.insideByFrame === true || anchorTargetsAsk(ask, a);
+  const versionId = c.target.artifactId;
+  if (!versionId || versionId === current?.artifactId || !opts.earlierAsks)
+    return false;
+  const list2 = opts.earlierAsks(versionId);
+  const prev = list2 ? findEarlierAsk(ask, list2) : void 0;
+  return !!prev && askTextsContinue(prev, ask) && anchorTargetsAsk(prev, a);
+}
 
 // ../shared/dist/schemas/annotation.js
 var SessionAnnotationSchema = external_exports.object({
@@ -26495,6 +26641,9 @@ var ERROR_CODES = {
   decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #725 — mark-resolved on a plain comment that answers one of a page's
+   *  asks (resolving it would reopen the ask). */
+  comment_answers_page_ask: "comment_answers_page_ask",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
   suggestion_not_countered: "suggestion_not_countered",
   /** #172 — agent tried to counter a suggestion the human INSISTED on (their
@@ -30015,8 +30164,12 @@ var RetirementCommentFields = external_exports.object({
   acknowledged: external_exports.boolean(),
   answeredByCommentId: external_exports.string().nullable().optional(),
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  humanResolutionToken: external_exports.string().uuid().optional(),
   suggestion: external_exports.object({ state: external_exports.enum(["pending", "countered", "applied", "insisted"]) }).passthrough().optional()
 }).passthrough();
+var DeliveryCommentFields = RetirementCommentFields.extend({
+  humanResolvedAt: external_exports.string().nullable().optional()
+});
 var MIRROR_QUEUE_MAX = 200;
 var MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
@@ -30319,8 +30472,8 @@ var FileStore = class _FileStore {
   retirementFeedbackBlocked = false;
   /** An uncertain attempt must announce its truth once a retry confirms persistence. */
   unannouncedRetirements = /* @__PURE__ */ new Map();
-  validateRetirementComments(raw2) {
-    if (!Array.isArray(raw2) || raw2.some((c) => !RetirementCommentFields.safeParse(c).success) || new Set(raw2.map((c) => c.id)).size !== raw2.length || raw2.some((c) => c.sessionId !== this.sessionId)) {
+  validateRetirementComments(raw2, fields = RetirementCommentFields) {
+    if (!Array.isArray(raw2) || raw2.some((c) => !fields.safeParse(c).success) || new Set(raw2.map((c) => c.id)).size !== raw2.length || raw2.some((c) => c.sessionId !== this.sessionId)) {
       throw Object.assign(new Error("Retirement feedback remains unreadable; original comments were not overwritten."), { code: "ERETIREMENTFEEDBACKUNKNOWN" });
     }
     return raw2;
@@ -31053,13 +31206,38 @@ var FileStore = class _FileStore {
     return this.comments;
   }
   getUnacknowledgedComments() {
-    return this.comments.filter((c) => !c.acknowledged);
+    return this.comments.filter((c) => !c.acknowledged).map((c) => ({ ...c }));
   }
-  acknowledgeComments(ids) {
+  acknowledgeComments(ids, delivered) {
+    if (delivered !== void 0) {
+      const selected = new Set(ids);
+      const snapshots = new Map(delivered.map((snapshot) => [snapshot.id, snapshot]));
+      this.updateDurableComments((comments) => {
+        for (const comment of comments) {
+          const snapshot = snapshots.get(comment.id);
+          if (snapshot && selected.has(comment.id) && snapshot.resolvedAt === comment.humanResolvedAt && snapshot.token === comment.humanResolutionToken) {
+            comment.acknowledged = true;
+          }
+        }
+      });
+      return;
+    }
     for (const c of this.comments) {
       if (ids.includes(c.id)) c.acknowledged = true;
     }
     this.scheduleFlush();
+  }
+  /** Run guarded settlement against the latest comment state under the same lock
+   * as other writers, and expose the update only after its atomic disk write. */
+  updateDurableComments(update) {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    return withSessionFlushLock(path17.join(this.sessionDir(), ".flush.lock"), () => {
+      const { merged, filePath, diskBytes } = this.readDurableComments(true, DeliveryCommentFields);
+      const comments = merged.map((comment) => ({ ...comment }));
+      const result = update(comments);
+      this.writeDurableComments(comments, filePath, diskBytes, { clearRetirementBlock: false });
+      return result;
+    });
   }
   /** Caller holds the session flush lock. Validate raw input before merging. */
   readDurablePageRevisionFeedback(parentId, proof, allowBuffered) {
@@ -31067,6 +31245,14 @@ var FileStore = class _FileStore {
     if (!Array.isArray(artifacts) || artifacts.some((a) => !ArtifactSchema.safeParse(a).success)) {
       throw new Error("Unreadable page revision artifact history.");
     }
+    const { disk, local, baseline, merged, filePath, diskBytes } = this.readDurableComments(allowBuffered);
+    const observed = new Set([...baseline, ...disk].map((c) => c.id));
+    const comparable = allowBuffered ? [...disk, ...local.filter((c) => !observed.has(c.id))] : disk;
+    const current = provePageRevisionFeedback(artifacts, comparable, this.sessionId, parentId, proof.commentIds, merged);
+    if (current?.digest !== proof.digest) throw new PageRevisionFeedbackConflictError("Page revision feedback no longer matches its receipt.");
+    return { artifacts, merged, filePath, diskBytes };
+  }
+  readDurableComments(allowBuffered, fields = RetirementCommentFields) {
     const file2 = "comments.json";
     const filePath = path17.join(this.sessionDir(), file2);
     let diskBytes;
@@ -31077,7 +31263,7 @@ var FileStore = class _FileStore {
     }
     const validate = (read) => {
       try {
-        return this.validateRetirementComments(read());
+        return this.validateRetirementComments(read(), fields);
       } catch (error51) {
         this.retirementFeedbackBlocked = true;
         throw error51;
@@ -31086,12 +31272,8 @@ var FileStore = class _FileStore {
     const disk = validate(() => JSON.parse(diskBytes ?? "[]"));
     const local = validate(() => this.comments);
     const baseline = JSON.parse(this.recordBaselines[file2] ?? "[]");
-    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id));
-    const observed = new Set([...baseline, ...disk].map((c) => c.id));
-    const comparable = allowBuffered ? [...disk, ...local.filter((c) => !observed.has(c.id))] : disk;
-    const current = provePageRevisionFeedback(artifacts, comparable, this.sessionId, parentId, proof.commentIds, merged);
-    if (current?.digest !== proof.digest) throw new PageRevisionFeedbackConflictError("Page revision feedback no longer matches its receipt.");
-    return { artifacts, merged, filePath, diskBytes };
+    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id), fields);
+    return { disk, local, baseline, merged, filePath, diskBytes };
   }
   /** Validate the bound selection under the same lock used by disk writers. */
   preparePageRevisionFeedback(parentId, proof, create) {
@@ -31102,18 +31284,18 @@ var FileStore = class _FileStore {
       if (!parent || artifacts.some((artifact) => artifact.parentId === parentId)) {
         throw new PageRevisionFeedbackConflictError("Page revision predecessor already has a durable successor.");
       }
-      this.writePageRevisionComments(merged, filePath, diskBytes);
+      this.writeDurableComments(merged, filePath, diskBytes);
       return create(parent);
     });
   }
-  writePageRevisionComments(comments, filePath, diskBytes) {
+  writeDurableComments(comments, filePath, diskBytes, { clearRetirementBlock = true } = {}) {
     const bytes2 = JSON.stringify(comments, null, 2);
     if (bytes2 !== diskBytes) writeStringAtomic(filePath, bytes2);
     this.comments = comments;
     this.recordBaselines["comments.json"] = JSON.stringify(comments);
     this.observedRecordFiles.add("comments.json");
     delete this.backedUpCorruption[filePath];
-    this.retirementFeedbackBlocked = false;
+    if (clearRetirementBlock) this.retirementFeedbackBlocked = false;
   }
   /** Keep the warm read unchanged until the exact acknowledgement is durable. */
   acknowledgePageRevisionFeedback(parentId, proof, verifyRevision) {
@@ -31131,7 +31313,7 @@ var FileStore = class _FileStore {
         const stamp = advances ? { addressedIn } : {};
         return comment.acknowledged && !("addressedIn" in stamp) ? comment : { ...comment, acknowledged: true, ...stamp };
       });
-      this.writePageRevisionComments(updated, filePath, diskBytes);
+      this.writeDurableComments(updated, filePath, diskBytes);
       return updated.filter((comment) => selected.has(comment.id));
     });
   }
@@ -31482,11 +31664,20 @@ var FileStore = class _FileStore {
     }
   }
   markCommentHumanResolved(commentId, resolvedAt) {
-    const comment = this.comments.find((c) => c.id === commentId);
-    if (comment) {
-      comment.humanResolvedAt = resolvedAt ?? (/* @__PURE__ */ new Date()).toISOString();
-      this.scheduleFlush();
-    }
+    let requeued = false;
+    const changed = this.updateDurableComments((comments) => {
+      const comment = comments.find((c) => c.id === commentId);
+      if (!comment || resolvedAt === null && (!comment.humanResolvedAt || !Number.isFinite(Date.parse(comment.humanResolvedAt)))) return false;
+      comment.humanResolvedAt = resolvedAt === null ? null : resolvedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+      comment.humanResolutionToken = crypto4.randomUUID();
+      if (resolvedAt === null && comment.acknowledged) {
+        comment.acknowledged = false;
+        requeued = true;
+      }
+      return true;
+    });
+    if (requeued) this.notifyFeedbackWaiters();
+    return changed;
   }
   // --- Decisions ---
   // C6c review — the interface narrowed options to DecisionOption[] but this
@@ -32597,21 +32788,28 @@ var FileStore = class _FileStore {
   }
   // --- Feedback notification (for long-poll) ---
   feedbackWaiters = [];
+  reviewEndWaiters = /* @__PURE__ */ new Set();
   /** Register a waiter until feedback arrives, the budget expires, or the caller leaves. */
-  waitForFeedback(timeoutMs = 3e4, signal) {
+  waitForFeedback(timeoutMs = 3e4, signal, wakeOn) {
     if (signal?.aborted) return Promise.resolve();
     return new Promise((resolve) => {
       const finish = () => {
         clearTimeout(timer);
         signal?.removeEventListener("abort", finish);
+        this.reviewEndWaiters.delete(finish);
         const index = this.feedbackWaiters.indexOf(finish);
         if (index !== -1) this.feedbackWaiters.splice(index, 1);
         resolve();
       };
       const timer = setTimeout(finish, timeoutMs);
       this.feedbackWaiters.push(finish);
+      if (wakeOn === "review_end") this.reviewEndWaiters.add(finish);
       signal?.addEventListener("abort", finish, { once: true });
     });
+  }
+  /** Exact decision readers recheck under the resolve lock after this wake. */
+  notifyStandaloneReviewEnded() {
+    for (const finish of this.reviewEndWaiters) finish();
   }
   /** Notify all waiters that feedback has arrived */
   notifyFeedbackWaiters() {
@@ -32740,8 +32938,8 @@ var FileStore = class _FileStore {
 };
 
 // src/http/routes.ts
-import fs22 from "node:fs";
-import path21 from "node:path";
+import fs27 from "node:fs";
+import path30 from "node:path";
 
 // src/store/context-bank.ts
 import fs19 from "node:fs";
@@ -36462,50 +36660,6 @@ async function maybeUpdateTaskStatus(_server, _artifactId, _store) {
   void taskHandleForArtifact;
 }
 
-// src/http/origin-policy.ts
-function corsAllowedOrigin(origin) {
-  if (origin.startsWith("vscode-webview://")) return origin;
-  return void 0;
-}
-function isLoopbackHostname(hostname3) {
-  return hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "[::1]" || hostname3 === "::1";
-}
-function isAllowedWsOrigin(origin, hostHeader) {
-  if (!origin) return true;
-  if (origin.startsWith("vscode-webview://")) return true;
-  if (!hostHeader) return false;
-  try {
-    const o = new URL(origin);
-    return o.host === hostHeader && isLoopbackHostname(o.hostname);
-  } catch {
-    return false;
-  }
-}
-
-// src/http/route-helpers.ts
-var NO_SESSION_RESPONSE = {
-  error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
-  code: ERROR_CODES.no_active_session
-};
-async function readJsonValue(c) {
-  const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
-  let raw2;
-  try {
-    raw2 = await c.req.text();
-  } catch {
-    return invalid();
-  }
-  if (raw2.trim() === "") return invalid();
-  try {
-    return { ok: true, value: JSON.parse(raw2) };
-  } catch {
-    return invalid();
-  }
-}
-function getSessionId(c) {
-  return c.req.header("X-Session-Id") ?? void 0;
-}
-
 // src/mcp/page-text.ts
 var DROP_ELEMENTS = ["script", "style", "template", "title"];
 var TEXT_ELEMENTS = ["textarea", "xmp"];
@@ -36673,6 +36827,577 @@ function extractPageTextBlocks(html) {
     if (blocks.length >= PAGE_TEXT_MAX_BLOCKS) break;
   }
   return blocks;
+}
+
+// src/mcp/page-anchor-relocate.ts
+var LATIN1_NAMES = "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml".split(" ");
+var NAMED = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  sbquo: "\u201A",
+  ldquo: "\u201C",
+  rdquo: "\u201D",
+  bdquo: "\u201E",
+  bull: "\u2022",
+  prime: "\u2032",
+  Prime: "\u2033",
+  trade: "\u2122",
+  euro: "\u20AC",
+  larr: "\u2190",
+  uarr: "\u2191",
+  rarr: "\u2192",
+  darr: "\u2193",
+  harr: "\u2194",
+  lArr: "\u21D0",
+  rArr: "\u21D2",
+  hArr: "\u21D4",
+  minus: "\u2212",
+  le: "\u2264",
+  ge: "\u2265",
+  ne: "\u2260",
+  asymp: "\u2248",
+  infin: "\u221E",
+  ensp: "\u2002",
+  emsp: "\u2003",
+  thinsp: "\u2009",
+  zwnj: "\u200C",
+  zwj: "\u200D",
+  OElig: "\u0152",
+  oelig: "\u0153",
+  Scaron: "\u0160",
+  scaron: "\u0161",
+  Yuml: "\u0178",
+  fnof: "\u0192",
+  circ: "\u02C6",
+  tilde: "\u02DC",
+  dagger: "\u2020",
+  Dagger: "\u2021",
+  permil: "\u2030",
+  lsaquo: "\u2039",
+  rsaquo: "\u203A",
+  check: "\u2713",
+  hearts: "\u2665",
+  star: "\u2606"
+};
+LATIN1_NAMES.forEach((n, i) => {
+  NAMED[n] = String.fromCharCode(160 + i);
+});
+function decodeHtmlEntities(s) {
+  let unknownEntity = false;
+  const text = s.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{1,31});?/g, (m, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return "\uFFFD";
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return "\uFFFD";
+      }
+    }
+    const hit = NAMED[body] ?? NAMED[body.toLowerCase()];
+    if (hit !== void 0) return hit;
+    if (m.endsWith(";")) unknownEntity = true;
+    return m;
+  });
+  return { text, unknownEntity };
+}
+function core(s) {
+  return s.normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, "");
+}
+function norm(s) {
+  return s.replace(/\s+/g, " ").trim();
+}
+function pageHaystack(html) {
+  const blocks = extractPageTextBlocks(html);
+  const decoded = decodeHtmlEntities(html);
+  const text = decodeHtmlEntities(blocks.join(" "));
+  return {
+    text: core(text.text),
+    raw: core(decoded.text),
+    html: decoded.text,
+    unknownEntity: decoded.unknownEntity || text.unknownEntity,
+    truncated: blocks.length >= PAGE_TEXT_MAX_BLOCKS
+  };
+}
+function present(hay, s) {
+  const c = core(s);
+  if (!c) return null;
+  return hay.text.includes(c) || hay.raw.includes(c);
+}
+function relocateHtmlAnchor(anchor, hay) {
+  const checks = [];
+  const quote = norm(anchor.quote ?? "");
+  checks.push(present(hay, anchor.kind === "text" ? quote : quote.slice(0, 60)));
+  if (anchor.kind === "cell" && anchor.table) {
+    if (anchor.table.row) checks.push(present(hay, anchor.table.row));
+    if (anchor.table.col) checks.push(present(hay, anchor.table.col));
+  }
+  if (anchor.kind === "link" && anchor.href) checks.push(hay.html.includes(anchor.href));
+  if (anchor.kind === "diagram-node" && anchor.nodeId) {
+    if (hay.html.includes(anchor.nodeId)) return "carried";
+  }
+  const known = checks.filter((c) => c !== null);
+  if (known.length === 0) return "unknown";
+  if (known.every(Boolean)) return "carried";
+  if (hay.truncated || hay.unknownEntity) return "unknown";
+  return "orphaned";
+}
+function relocatePageComments(html, comments) {
+  const hay = pageHaystack(html);
+  const out = { carried: [], orphaned: [], orphanedOverflow: 0, unknown: [] };
+  const roots = comments.filter((c) => c.author === "human" && !c.parentCommentId && c.target.htmlAnchor).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const c of roots) {
+    const a = c.target.htmlAnchor;
+    const v2 = relocateHtmlAnchor(a, hay);
+    if (v2 === "carried") out.carried.push(c.id);
+    else if (v2 === "unknown") out.unknown.push(c.id);
+    else if (out.orphaned.length >= PAGE_FILE_WATCH_LIMITS.orphans) out.orphanedOverflow++;
+    else {
+      out.orphaned.push({
+        commentId: c.id,
+        kind: a.kind,
+        quote: a.quote.slice(0, PAGE_FILE_WATCH_LIMITS.quote),
+        locator: a.locator.slice(0, PAGE_FILE_WATCH_LIMITS.locator),
+        ...a.version != null ? { version: a.version } : {}
+      });
+    }
+  }
+  return out;
+}
+
+// src/mcp/page-asks.ts
+var decode3 = (s) => decodeHtmlEntities(s).text;
+var IMPLICIT_CLOSES = /* @__PURE__ */ (() => {
+  const li = { siblings: /* @__PURE__ */ new Set(["li"]), scope: ["ul", "ol", "menu"] };
+  const dd = { siblings: /* @__PURE__ */ new Set(["dt", "dd"]), scope: ["dl"] };
+  const cell = { siblings: /* @__PURE__ */ new Set(["td", "th", "tr", "tbody", "thead", "tfoot"]), scope: ["table", "tr"] };
+  const section = { siblings: /* @__PURE__ */ new Set(["tbody", "thead", "tfoot"]), scope: ["table"] };
+  return {
+    li,
+    dt: dd,
+    dd,
+    option: { siblings: /* @__PURE__ */ new Set(["option", "optgroup"]), scope: ["select", "datalist", "optgroup"] },
+    optgroup: { siblings: /* @__PURE__ */ new Set(["optgroup"]), scope: ["select"] },
+    td: cell,
+    th: cell,
+    tr: { siblings: /* @__PURE__ */ new Set(["tr", "tbody", "thead", "tfoot"]), scope: ["table", "thead", "tbody", "tfoot"] },
+    thead: section,
+    tbody: section,
+    tfoot: section
+  };
+})();
+var IMPLICIT_TRIGGERS = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.siblings]));
+var TABLE_SCOPED = ["tr", "td", "th", "thead", "tbody", "tfoot"];
+var IMPLICIT_SCOPES = new Set(Object.values(IMPLICIT_CLOSES).flatMap((r) => [...r.scope]));
+var CONTAINER_DROPS = PAGE_SANITIZE_DROP_TAGS.filter(
+  (t) => !DROP_ELEMENTS.includes(t) && t !== "base" && t !== "embed"
+);
+var CHILD_IDS_MAX = 50;
+var LEADING_NEWLINE_TAGS = /* @__PURE__ */ new Set(["pre", "listing", "textarea"]);
+function dropLeadingNewline(body, tag) {
+  if (!LEADING_NEWLINE_TAGS.has(tag)) return body;
+  if (body.startsWith("\r\n")) return body.slice(2);
+  return body[0] === "\n" || body[0] === "\r" ? body.slice(1) : body;
+}
+var VOID_TAGS = /* @__PURE__ */ new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "source",
+  "track",
+  "wbr"
+]);
+var P_CLOSERS = /* @__PURE__ */ new Set([
+  "li",
+  "dd",
+  "dt",
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "details",
+  "div",
+  "dl",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "table",
+  "ul"
+]);
+var RAW_BUDGET = PAGE_ASK_LIMITS.text * 5;
+function isSpace(c) {
+  return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
+}
+function tagAttributes(tag) {
+  const out = /* @__PURE__ */ new Map();
+  const n = tag.length;
+  let i = 1;
+  while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== ">" && tag[i] !== "/") i++;
+  while (i < n) {
+    while (i < n && (isSpace(tag.charCodeAt(i)) || tag[i] === "/")) i++;
+    if (i >= n || tag[i] === ">") break;
+    const nameStart = i;
+    while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== "=" && tag[i] !== ">" && tag[i] !== "/") i++;
+    const name = tag.slice(nameStart, i).toLowerCase();
+    while (i < n && isSpace(tag.charCodeAt(i))) i++;
+    let value = "";
+    if (tag[i] === "=") {
+      i++;
+      while (i < n && isSpace(tag.charCodeAt(i))) i++;
+      const q = tag[i];
+      if (q === '"' || q === "'") {
+        const end = tag.indexOf(q, i + 1);
+        const stop = end === -1 ? n : end;
+        value = tag.slice(i + 1, stop);
+        i = stop + 1;
+      } else {
+        const vStart = i;
+        while (i < n && !isSpace(tag.charCodeAt(i)) && tag[i] !== ">") i++;
+        value = tag.slice(vStart, i);
+      }
+    }
+    if (name && !out.has(name)) out.set(name, value);
+  }
+  return out;
+}
+function extractPageAsks(html) {
+  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+  if (lower.indexOf("data-dp-decision") === -1 && lower.indexOf("data-dp-question") === -1) return [];
+  const n = html.length;
+  const lastAt = /* @__PURE__ */ new Map();
+  const memoIndexOf = (hay, needle, from) => {
+    const prev = lastAt.get(needle);
+    if (prev !== void 0 && (prev === -1 || prev >= from)) return prev;
+    const at = hay.indexOf(needle, from);
+    lastAt.set(needle, at);
+    return at;
+  };
+  const tagEnd = (lt) => {
+    let at = lt + 1;
+    while (at < n) {
+      const c = html.charCodeAt(at);
+      if (c === 62) return at;
+      if ((c === 34 || c === 39) && /[\s=]/.test(html[at - 1])) {
+        const end = memoIndexOf(html, html[at], at + 1);
+        if (end === -1) return memoIndexOf(html, ">", at + 1);
+        at = end + 1;
+        continue;
+      }
+      at++;
+    }
+    return -1;
+  };
+  const out = [];
+  const openCount = /* @__PURE__ */ new Map();
+  const stacks = /* @__PURE__ */ new Map();
+  let hungry = [];
+  const openOrder = [];
+  const innermost = () => {
+    while (openOrder.length > 0 && openOrder[openOrder.length - 1].closed) openOrder.pop();
+    return openOrder[openOrder.length - 1];
+  };
+  const finish = (c) => {
+    if (c.done) return;
+    c.done = true;
+    const full = decode3(c.raw).replace(/\s+/g, " ").trim() || c.fallback;
+    c.ask.text = full.length > PAGE_ASK_LIMITS.text ? full.slice(0, PAGE_ASK_LIMITS.text) : full;
+  };
+  let hashing = [];
+  const seal = (c) => {
+    if (c.ask.fullHash !== void 0) return;
+    c.ask.fullHash = c.hasher.digest() ?? (c.fallback ? askTextHash(c.fallback) : void 0) ?? "";
+    if (!c.ask.fullHash) delete c.ask.fullHash;
+  };
+  const feed = (s, source = s) => {
+    if (!s && !source) return;
+    if (hashing.length > 0 && source) {
+      const text = decode3(source);
+      let closed = false;
+      for (const c of hashing) {
+        if (c.closed) closed = true;
+        else c.hasher.push(text);
+      }
+      if (closed) hashing = hashing.filter((c) => !c.closed);
+    }
+    if (hungry.length === 0 || !s) return;
+    let full = false;
+    for (const c of hungry) {
+      if (c.done) {
+        full = true;
+        continue;
+      }
+      c.raw += s.slice(0, RAW_BUDGET - c.raw.length);
+      if (c.raw.length >= RAW_BUDGET) {
+        finish(c);
+        full = true;
+      }
+    }
+    if (full) hungry = hungry.filter((c) => !c.done);
+  };
+  const closeTag = (name) => {
+    const count2 = Math.max(0, (openCount.get(name) ?? 0) - 1);
+    openCount.set(name, count2);
+    const stack = stacks.get(name);
+    while (stack && stack.length > 0 && stack[stack.length - 1].level > count2) {
+      const c = stack.pop();
+      c.closed = true;
+      finish(c);
+      seal(c);
+    }
+  };
+  const scopeDepth = (tag) => {
+    let d = 0;
+    for (const t of IMPLICIT_CLOSES[tag].scope) d += openCount.get(t) ?? 0;
+    return d;
+  };
+  const implicitClose = (c) => {
+    c.closed = true;
+    finish(c);
+    seal(c);
+    const stack = stacks.get(c.tag);
+    const at = stack ? stack.indexOf(c) : -1;
+    if (at !== -1) stack.splice(at, 1);
+  };
+  const implicitOnOpen = (name) => {
+    if (!IMPLICIT_TRIGGERS.has(name)) return;
+    for (const c of openOrder) {
+      if (c.closed || c.scope === void 0) continue;
+      if (IMPLICIT_CLOSES[c.tag].siblings.has(name) && scopeDepth(c.tag) === c.scope) implicitClose(c);
+    }
+  };
+  const implicitOnClose = (name) => {
+    if (!IMPLICIT_SCOPES.has(name)) return;
+    for (const c of openOrder) {
+      if (c.closed || c.scope === void 0) continue;
+      if (IMPLICIT_CLOSES[c.tag].scope.includes(name) && scopeDepth(c.tag) < c.scope) implicitClose(c);
+    }
+  };
+  const tableSnapshots = [];
+  let i = 0;
+  while (i < n) {
+    if (out.length >= PAGE_ASK_LIMITS.max && hungry.length === 0 && hashing.every((c2) => c2.closed)) break;
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      feed(html.slice(i));
+      break;
+    }
+    feed(html.slice(i, lt));
+    if (lower.startsWith("<!--", lt)) {
+      if (lower.startsWith("<!-->", lt)) {
+        i = lt + 5;
+        continue;
+      }
+      if (lower.startsWith("<!--->", lt)) {
+        i = lt + 6;
+        continue;
+      }
+      const a = memoIndexOf(html, "-->", lt + 4);
+      const b = memoIndexOf(html, "--!>", lt + 4);
+      const end = a === -1 ? b === -1 ? -1 : b + 4 : b === -1 || a < b ? a + 3 : b + 4;
+      i = end === -1 ? n : end;
+      continue;
+    }
+    const gt = tagEnd(lt);
+    if (gt === -1) {
+      feed(html.slice(lt), "");
+      break;
+    }
+    if (opensElement(lower, lt, "plaintext")) {
+      feed(" " + html.slice(gt + 1), html.slice(gt + 1));
+      break;
+    }
+    const hidden = CONTAINER_DROPS.find((t) => opensElement(lower, lt, t));
+    if (hidden) {
+      const close = memoIndexOf(lower, `</${hidden}`, gt + 1);
+      if (close === -1) break;
+      const closeEnd = html.indexOf(">", close);
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const drop = DROP_ELEMENTS.find((t) => opensElement(lower, lt, t));
+    const literal2 = drop ? void 0 : TEXT_ELEMENTS.find((t) => opensElement(lower, lt, t));
+    const raw2 = drop ?? literal2;
+    if (raw2) {
+      const close = memoIndexOf(lower, `</${raw2}`, gt + 1);
+      if (close === -1) {
+        i = gt + 1;
+        continue;
+      }
+      if (literal2) {
+        const body = dropLeadingNewline(html.slice(gt + 1, close), literal2);
+        feed(" " + body + " ", body);
+      }
+      const closeEnd = html.indexOf(">", close);
+      i = closeEnd === -1 ? n : closeEnd + 1;
+      continue;
+    }
+    const m = /^<(\/?)\s*([a-z][a-z0-9-]*)/.exec(lower.slice(lt, Math.min(gt + 1, lt + 40)));
+    i = gt + 1;
+    if (!m) continue;
+    if (!m[1] && LEADING_NEWLINE_TAGS.has(m[2])) {
+      if (html.startsWith("\r\n", i)) i += 2;
+      else if (html[i] === "\n" || html[i] === "\r") i += 1;
+    }
+    const name = m[2];
+    if (BLOCK_TAGS.has(name)) feed(" ", "");
+    if (hashing.length > 0 && isAskBreakTag(name)) {
+      for (const c2 of hashing) if (!c2.closed) c2.hasher.separate();
+    }
+    if (m[1]) {
+      closeTag(name);
+      if (name === "table") {
+        const snap = tableSnapshots.pop();
+        if (snap) TABLE_SCOPED.forEach((t, k) => openCount.set(t, snap[k]));
+      }
+      implicitOnClose(name);
+      continue;
+    }
+    implicitOnOpen(name);
+    if (name === "table") tableSnapshots.push(TABLE_SCOPED.map((t) => openCount.get(t) ?? 0));
+    if (P_CLOSERS.has(name) && (openCount.get("p") ?? 0) > 0) {
+      openCount.set("p", 1);
+      closeTag("p");
+    }
+    const tagLower = lower.slice(lt, gt + 1);
+    const isAsk = tagLower.includes("data-dp-decision") || tagLower.includes("data-dp-question");
+    const isVoid = VOID_TAGS.has(name);
+    if (!isVoid) openCount.set(name, (openCount.get(name) ?? 0) + 1);
+    const inner = isAsk || tagLower.indexOf("id") === -1 ? void 0 : innermost();
+    if (inner) {
+      const childId = decode3(tagAttributes(html.slice(lt, gt + 1)).get("id") ?? "");
+      if (childId && childId.length <= PAGE_ASK_LIMITS.id && !/\s/.test(childId)) {
+        const ids = inner.ask.childIds ??= [];
+        if (ids.length < CHILD_IDS_MAX) ids.push(childId);
+      }
+    }
+    if (!isAsk || out.length >= PAGE_ASK_LIMITS.max) continue;
+    const attrs = tagAttributes(html.slice(lt, gt + 1));
+    const decision = attrs.has("data-dp-decision");
+    if (!decision && !attrs.has("data-dp-question")) continue;
+    const ask = { kind: decision ? "decision" : "question", text: "" };
+    const id = decode3(attrs.get("id") ?? "");
+    if (id && id.length <= PAGE_ASK_LIMITS.id && !/\s/.test(id)) ask.id = id;
+    out.push(ask);
+    const fallback = decode3(attrs.get("alt") || attrs.get("aria-label") || attrs.get("title") || attrs.get("value") || "").replace(/\s+/g, " ").trim();
+    const c = {
+      ask,
+      tag: name,
+      level: openCount.get(name) ?? 0,
+      raw: "",
+      fallback,
+      done: false,
+      closed: false,
+      hasher: new AskTextHasher()
+    };
+    if (IMPLICIT_CLOSES[name]) c.scope = scopeDepth(name);
+    if (isVoid) {
+      c.closed = true;
+      finish(c);
+      seal(c);
+      continue;
+    }
+    hashing.push(c);
+    openOrder.push(c);
+    const stack = stacks.get(name) ?? [];
+    stack.push(c);
+    stacks.set(name, stack);
+    hungry.push(c);
+  }
+  for (const stack of stacks.values()) for (const c of stack) {
+    finish(c);
+    seal(c);
+  }
+  for (const c of hashing) seal(c);
+  return out;
+}
+var scanCache = /* @__PURE__ */ new Map();
+var SCAN_CACHE_MAX = 50;
+function pageAsksFor(artifactId, html) {
+  const hit = scanCache.get(artifactId);
+  if (hit) {
+    scanCache.delete(artifactId);
+    scanCache.set(artifactId, hit);
+    return hit;
+  }
+  const asks = extractPageAsks(html);
+  scanCache.set(artifactId, asks);
+  if (scanCache.size > SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value);
+  return asks;
+}
+
+// src/http/origin-policy.ts
+function corsAllowedOrigin(origin) {
+  if (origin.startsWith("vscode-webview://")) return origin;
+  return void 0;
+}
+function isLoopbackHostname(hostname3) {
+  return hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "[::1]" || hostname3 === "::1";
+}
+function isAllowedWsOrigin(origin, hostHeader) {
+  if (!origin) return true;
+  if (origin.startsWith("vscode-webview://")) return true;
+  if (!hostHeader) return false;
+  try {
+    const o = new URL(origin);
+    return o.host === hostHeader && isLoopbackHostname(o.hostname);
+  } catch {
+    return false;
+  }
+}
+
+// src/http/route-helpers.ts
+var NO_SESSION_RESPONSE = {
+  error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
+  code: ERROR_CODES.no_active_session
+};
+async function readJsonValue(c) {
+  const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
+  let raw2;
+  try {
+    raw2 = await c.req.text();
+  } catch {
+    return invalid();
+  }
+  if (raw2.trim() === "") return invalid();
+  try {
+    return { ok: true, value: JSON.parse(raw2) };
+  } catch {
+    return invalid();
+  }
+}
+function getSessionId(c) {
+  return c.req.header("X-Session-Id") ?? void 0;
 }
 
 // src/mcp/artifact-preflight.ts
@@ -37232,1407 +37957,6 @@ function createReviewRoutes({
   return app;
 }
 
-// src/http/routes.ts
-async function demoLedgerOverlay(sessionId, store) {
-  if (!sessionId?.startsWith("demo_") || !store) return [];
-  try {
-    const memory = await store.getSessionMemory();
-    return memory.rejectedApproaches.map((r) => {
-      const concept = r.concept?.trim() || r.description;
-      const at = r.rejectedAt ?? (/* @__PURE__ */ new Date()).toISOString();
-      const entry = {
-        key: normalizeConceptKey(concept),
-        concept,
-        instances: [
-          {
-            project: "demo",
-            sessionId,
-            verdict: "rejected",
-            reason: r.reason,
-            description: r.description,
-            at
-          }
-        ],
-        firstSeenAt: at,
-        lastSeenAt: at
-      };
-      return { ...entry, stance: deriveStance(entry) };
-    });
-  } catch {
-    return [];
-  }
-}
-function checkProjectHash(c, daemonHash) {
-  if (!daemonHash) return null;
-  const sentHash = c.req.header("X-Project-Hash");
-  if (!sentHash || sentHash !== daemonHash) {
-    return c.json(
-      {
-        // BB10 — message is fallback copy. The browser specializes the
-        // toast on `code` and offers a one-click reload action.
-        error: `Project hash mismatch \u2014 your tab is pointed at a daemon serving a different project. Reload the page to re-bind.`,
-        code: ERROR_CODES.project_hash_mismatch,
-        expected: daemonHash
-      },
-      403
-    );
-  }
-  return null;
-}
-var EMPTY_STATE = {
-  sessionId: null,
-  status: "no_active_session",
-  artifacts: [],
-  comments: [],
-  decisions: [],
-  planReviews: [],
-  autonomyLevel: "supervised",
-  detailDensity: "terse",
-  persona: "auto",
-  rejectedApproaches: [],
-  approvedPatterns: [],
-  // G1 (#198b) — requests ride the empty state so a no-session UI reads a
-  // consistent shape (the composer shows nothing until a session exists).
-  requests: []
-};
-function sessionDirExists(projectRoot2, sessionId) {
-  if (!sessionId || sessionId.includes("/") || sessionId.includes("\\") || sessionId.includes("..")) return false;
-  try {
-    return fs22.existsSync(path21.join(projectRoot2, ".deeppairing", "sessions", sessionId));
-  } catch {
-    return false;
-  }
-}
-function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources, stanceExceptions) {
-  const getStore = typeof storeOrGetter === "function" ? storeOrGetter : () => storeOrGetter;
-  const broadcast = broadcastFn;
-  const log2 = logFn ?? (() => {
-  });
-  const daemonHash = projectRoot2 ? projectHashOf(projectRoot2) : void 0;
-  const app = new Hono2();
-  const MAX_BODY_BYTES = 64 * 1024;
-  app.use("*", async (c, next) => {
-    if (c.req.method === "OPTIONS" || c.req.method === "GET" || c.req.method === "HEAD") {
-      return next();
-    }
-    const lenHeader = c.req.header("content-length");
-    if (lenHeader) {
-      const len = parseInt(lenHeader, 10);
-      if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
-        return c.json(
-          { error: `Request body exceeds ${MAX_BODY_BYTES}-byte cap.`, code: ERROR_CODES.body_too_large },
-          413
-        );
-      }
-    }
-    return next();
-  });
-  app.use("*", async (c, next) => {
-    const host = c.req.header("host");
-    if (host) {
-      const hostname3 = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
-      const isLoopback = hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "::1";
-      if (!isLoopback) {
-        return c.json(
-          { error: "Forbidden host \u2014 the daemon only serves loopback origins.", code: ERROR_CODES.forbidden_host },
-          403
-        );
-      }
-    }
-    return next();
-  });
-  app.use("*", async (c, next) => {
-    if (c.req.method === "OPTIONS") return next();
-    const p = c.req.path;
-    const isBootstrap = c.req.method === "GET" && (!p.startsWith("/api/") || p === "/api/daemon-info" || // MP1 — read-only cross-daemon discovery (project switcher). Returns no
-    // session data (just peer projectRoot/port/hash), so the wrong-store
-    // threat model doesn't apply; and it can't be hash-gated because the
-    // SPA may query it for a project whose hash it doesn't hold yet.
-    p === "/api/projects");
-    const isDemoRun = p === "/api/demo/run";
-    if (isBootstrap || isDemoRun) return next();
-    const hashFail = checkProjectHash(c, daemonHash);
-    if (hashFail) return hashFail;
-    return next();
-  });
-  app.use("*", async (c, next) => {
-    const method = c.req.method;
-    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
-    if (c.req.path === "/api/demo/run") return next();
-    if (authToken) {
-      if (c.req.header("Authorization") !== `Bearer ${authToken}`) {
-        return c.json(
-          { error: "Authorization required for this action.", code: ERROR_CODES.daemon_auth_required },
-          401
-        );
-      }
-    }
-    return next();
-  });
-  app.use("/*", cors({
-    // D5 — vscode-webview:// ONLY (see origin-policy.ts). Loopback-origin
-    // reflection let any local web page read responses cross-origin —
-    // including the served HTML with the injected bearer token.
-    origin: (origin) => corsAllowedOrigin(origin)
-  }));
-  app.onError((err, c) => {
-    if (isFileLockError(err)) return c.json(lockBusyBody(err), 503);
-    if (isSessionReviewConflictError(err)) {
-      return c.json({
-        error: "session_review_conflict",
-        code: ERROR_CODES.session_review_conflict,
-        message: err.message
-      }, 409);
-    }
-    if (err instanceof SyntaxError) {
-      return c.json({ error: "Invalid JSON" }, 400);
-    }
-    return c.json({ error: "Internal server error" }, 500);
-  });
-  app.get("/api/state", async (c) => {
-    const store = getStore(getSessionId(c));
-    if (!store) return c.json(EMPTY_STATE);
-    return c.json(await store.getFullState());
-  });
-  app.get("/api/requests", async (c) => {
-    const store = getStore(getSessionId(c));
-    if (!store) return c.json({ requests: [] });
-    return c.json({ requests: await store.getRequests?.() ?? [] });
-  });
-  app.post("/api/requests", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = CreateRequestBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    if (!store.addRequest) {
-      return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
-    }
-    const request = await store.addRequest({
-      text: parsed.data.text,
-      intent: parsed.data.intent,
-      ...parsed.data.source ? { source: parsed.data.source } : {},
-      ...parsed.data.scope ? { scope: parsed.data.scope } : {}
-    });
-    broadcast({ type: "request_added", request }, sid);
-    return c.json({ request });
-  });
-  app.post("/api/comments", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = CommentBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { artifactId, content, target, intent, parentCommentId, suggestion } = parsed.data;
-    const targetArtifactId = target?.artifactId;
-    const idsToOwn = [artifactId, targetArtifactId].filter(
-      (id) => !!id && id !== "__session__"
-    );
-    if (idsToOwn.length > 0) {
-      const arts = await store.getArtifacts();
-      const owns = idsToOwn.every((id) => arts.some((a) => a.id === id));
-      if (!owns) {
-        return c.json(
-          {
-            error: "artifact_not_in_session",
-            code: "artifact_not_in_session",
-            message: "This artifact belongs to a different session than the one this tab is bound to."
-          },
-          404
-        );
-      }
-    }
-    const sendBackLedgerEvents = [];
-    if (target?.sectionId === "decision_revision_requested") {
-      const arts = await store.getArtifacts();
-      const decision = arts.find((a) => a.id === artifactId && a.type === "decision");
-      const dContent = decision?.content;
-      const options = Array.isArray(dContent?.options) ? dContent.options : [];
-      if (decision && options.length > 0) {
-        const reason = content.trim() || void 0;
-        const buffered = (event) => {
-          sendBackLedgerEvents.push(event);
-        };
-        for (const option of options) {
-          await recordRejectedOptionConcept(store, buffered, {
-            option,
-            reason,
-            sourceArtifactId: artifactId
-          });
-        }
-      }
-    }
-    const newId = `cmt_${nanoid3(10)}`;
-    const comment = await store.addComment({
-      id: newId,
-      artifactId,
-      content,
-      author: "human",
-      target,
-      intent,
-      parentCommentId: parentCommentId ?? null,
-      suggestion
-    });
-    const isNew = comment.id === newId;
-    if (isNew) {
-      broadcast({ type: "comment_added", comment }, sid);
-      broadcast({
-        type: "feedback_received",
-        commentId: comment.id,
-        artifactId,
-        intent: intent ?? "comment"
-      }, sid);
-    } else {
-      log2(`[comment] DEDUPED \u2014 sid=${sid ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} len=${content.length}`);
-    }
-    if (isNew) {
-      for (const event of sendBackLedgerEvents) broadcast(event, sid);
-    }
-    if (projectRoot2) {
-      const sectionId = target?.sectionId;
-      if (typeof sectionId === "string" && sectionId.startsWith("horizon_check:request:")) {
-        try {
-          recordMetricEvent(projectRoot2, { kind: "horizon_check_requested" });
-        } catch {
-        }
-      }
-    }
-    return c.json({ comment });
-  });
-  app.post("/api/render-failures", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = RenderFailureBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { artifactId, visualId, error: error51, title } = parsed.data;
-    const arts = await store.getArtifacts();
-    const art = arts.find((a) => a.id === artifactId);
-    if (!art) {
-      return c.json(
-        {
-          error: "artifact_not_in_session",
-          code: "artifact_not_in_session",
-          message: "This artifact belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    const pageIssues = visualId === PAGE_RENDER_ISSUES_VISUAL_ID;
-    if (pageIssues && art.type !== "page") {
-      return c.json(
-        {
-          error: `visualId ${PAGE_RENDER_ISSUES_VISUAL_ID} is reserved for page artifacts`,
-          code: ERROR_CODES.validation_error,
-          issues: [{ path: "visualId", message: "reserved for page artifacts" }]
-        },
-        400
-      );
-    }
-    if (!store.recordRenderFailure) return c.json({ status: "ignored", artifactId, visualId });
-    await store.recordRenderFailure({ artifactId, visualId, error: error51, title: pageIssues ? art.title || void 0 : title });
-    broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
-    return c.json({ status: "recorded", artifactId, visualId });
-  });
-  app.post("/api/comments/:commentId/mark-resolved", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const commentId = c.req.param("commentId");
-    if (!await store.getComment(commentId)) {
-      return c.json(
-        {
-          error: "comment_not_in_session",
-          code: "comment_not_in_session",
-          message: "This comment belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    const resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
-    await store.markCommentHumanResolved(commentId, resolvedAt);
-    const comment = await store.getComment(commentId);
-    if (comment) {
-      broadcast({ type: "comment_updated", comment }, sid);
-    }
-    return c.json({ status: "resolved", commentId, comment: comment ?? null });
-  });
-  app.post("/api/comments/:commentId/suggestion", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const commentId = c.req.param("commentId");
-    const existing = await store.getComment(commentId);
-    if (!existing) {
-      return c.json(
-        {
-          error: "comment_not_in_session",
-          code: "comment_not_in_session",
-          message: "This comment belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    if (!existing.suggestion || existing.suggestion.state !== "countered") {
-      return c.json(
-        {
-          error: "suggestion_not_countered",
-          code: "suggestion_not_countered",
-          message: "Only a suggestion the agent has countered can be taken or insisted on."
-        },
-        409
-      );
-    }
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = SuggestionResolveBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const comment = await store.updateCommentSuggestion(commentId, {
-      state: parsed.data.action === "insist" ? "insisted" : "applied",
-      resetAcknowledged: true
-    });
-    if (comment) {
-      broadcast({ type: "comment_updated", comment }, sid);
-      broadcast({ type: "feedback_received", commentId, artifactId: comment.target.artifactId, intent: "suggestion" }, sid);
-    }
-    return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
-  });
-  app.route("/", createReviewRoutes({
-    getStore,
-    broadcast,
-    log: log2,
-    updateTaskStatus: async (artifactId, store) => maybeUpdateTaskStatus(null, artifactId, store)
-  }));
-  app.post("/api/decisions/:decisionId/close-out", async (c) => {
-    const decisionId = c.req.param("decisionId");
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = DecisionCloseOutBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { projectRoot: targetRoot, sessionId: bodySessionId, note } = parsed.data;
-    if (targetRoot && (!projectRoot2 || path21.resolve(targetRoot) !== path21.resolve(projectRoot2))) {
-      return c.json(
-        {
-          error: "cross_project_close_out_unsupported",
-          code: ERROR_CODES.cross_project_close_out_unsupported,
-          message: "This decision belongs to another project. Open that project's companion UI to close it out \u2014 cross-project writes are not supported yet.",
-          projectRoot: targetRoot
-        },
-        400
-      );
-    }
-    const sid = bodySessionId ?? getSessionId(c);
-    let transient = null;
-    if (!getStore(sid) && sid && projectRoot2 && sessionDirExists(projectRoot2, sid)) {
-      try {
-        transient = new FileStore(projectRoot2, sid);
-      } catch (err) {
-        log2(`[close-out] transient store for ${sid} failed: ${err}`);
-      }
-    }
-    const store = getStore(sid) ?? transient;
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const artifacts = await store.getArtifacts();
-    const record3 = await store.getDecision(decisionId);
-    const isDecisionArtifact = (a) => !!a && a.type === "decision";
-    const byRecord = record3?.artifactId ? artifacts.find((a) => a.id === record3.artifactId) : void 0;
-    const artifact = (isDecisionArtifact(byRecord) ? byRecord : void 0) ?? artifacts.find(
-      (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
-    );
-    if (!artifact) {
-      return c.json(
-        {
-          error: "decision_not_in_session",
-          code: ERROR_CODES.decision_not_in_session,
-          message: "This decision belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    if (record3?.response) {
-      return c.json(
-        {
-          error: "decision_already_resolved",
-          code: ERROR_CODES.decision_already_resolved,
-          currentStatus: artifact.status,
-          message: "This decision was already answered \u2014 nothing to close out."
-        },
-        409
-      );
-    }
-    if (isClosedArtifactStatus(artifact.status)) {
-      return c.json({ status: "already_closed", decisionId, artifactId: artifact.id, artifactStatus: artifact.status });
-    }
-    await store.updateArtifactStatus(artifact.id, "obsolete", "ui_dismiss_obsolete");
-    if (note?.trim()) {
-      try {
-        await store.addComment({
-          id: `c_${nanoid3(8)}`,
-          artifactId: artifact.id,
-          content: note.trim(),
-          author: "human",
-          target: { artifactId: artifact.id }
-        });
-      } catch (err) {
-        log2(`[close-out] note comment failed for ${artifact.id}: ${err}`);
-      }
-    }
-    await store.forceFlush();
-    transient?.dispose();
-    clearContextBankCache();
-    broadcast({ type: "artifact_updated", artifactId: artifact.id, status: "obsolete", reason: "ui_dismiss_obsolete" }, sid);
-    log2(`[close-out] decisionId=${decisionId} artifactId=${artifact.id} \u2192 obsolete (no option selected)`);
-    return c.json({ status: "closed_out", decisionId, artifactId: artifact.id, artifactStatus: "obsolete" });
-  });
-  app.get("/api/context-bank", (c) => {
-    try {
-      return c.json(getContextBank({ fresh: c.req.query("fresh") === "1" }));
-    } catch (err) {
-      log2(`[context-bank] read failed, returning empty: ${err}`);
-      return c.json({
-        generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        projects: [],
-        totals: { projects: 0, sessions: 0, openDecisions: 0, needsYou: 0, waitingOnAgent: 0, staleProjects: 0 },
-        staleAfterDays: DEFAULT_STALE_AFTER_DAYS
-      });
-    }
-  });
-  app.post("/api/artifacts/:artifactId/rename", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const artifactId = c.req.param("artifactId");
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = RenameBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const title = parsed.data.title.trim();
-    if (!(await store.getArtifacts()).some((a) => a.id === artifactId)) {
-      return c.json(
-        {
-          error: "artifact_not_in_session",
-          code: "artifact_not_in_session",
-          message: "This artifact belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    await store.renameArtifact(artifactId, title);
-    broadcast({ type: "artifact_renamed", artifactId, title }, sid);
-    return c.json({ status: "renamed", artifactId });
-  });
-  app.get("/api/artifacts/:artifactId/comments", async (c) => {
-    const store = getStore(getSessionId(c));
-    if (!store) return c.json({ comments: [] });
-    const artifactId = c.req.param("artifactId");
-    return c.json({ comments: await store.getCommentsForArtifact(artifactId) });
-  });
-  app.get("/api/artifacts/:artifactId/preflight-trace", async (c) => {
-    const store = getStore(getSessionId(c));
-    if (!store) return c.json({ trace: null });
-    const artifactId = c.req.param("artifactId");
-    if (!store.getPreflightTrace) return c.json({ trace: null });
-    const trace = await store.getPreflightTrace(artifactId);
-    return c.json({ trace: trace ?? null });
-  });
-  app.get("/api/philosophy", async (c) => {
-    const stance = c.req.query("stance");
-    const concept = c.req.query("concept") ?? void 0;
-    const limit = Number(c.req.query("limit") ?? 50);
-    let entries;
-    try {
-      entries = getGlobalStore().query({
-        stance: stance && ["avoid", "prefer", "mixed"].includes(stance) ? stance : void 0,
-        concept,
-        limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 500) : 50
-      });
-    } catch (err) {
-      log2(`[philosophy] query failed, returning empty: ${err}`);
-      entries = [];
-    }
-    const sid = getSessionId(c);
-    if (sid?.startsWith("demo_")) {
-      const realKeys = new Set(entries.map((e) => e.key));
-      const q = concept?.trim().toLowerCase();
-      const overlay = (await demoLedgerOverlay(sid, getStore(sid))).filter(
-        (e) => !realKeys.has(e.key) && (!q || e.key.includes(q) || e.concept.toLowerCase().includes(q)) && (!stance || e.stance === stance)
-      );
-      entries = [...overlay, ...entries];
-    }
-    if (entries.length === 0) return c.json({ entries: [], total: 0 });
-    const summary = entries.map((e) => {
-      const projects = new Set(e.instances.map((i) => i.project));
-      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-      const verdicts = e.instances.reduce(
-        (acc, i) => {
-          acc[i.verdict]++;
-          return acc;
-        },
-        { approved: 0, rejected: 0 }
-      );
-      return {
-        key: e.key,
-        concept: e.concept,
-        stance: e.stance,
-        projectCount: projects.size,
-        projects: Array.from(projects).slice(0, 5),
-        // surface the first few
-        instanceCount: e.instances.length,
-        approved: verdicts.approved,
-        rejected: verdicts.rejected,
-        latestReason,
-        firstSeenAt: e.firstSeenAt,
-        lastSeenAt: e.lastSeenAt
-      };
-    });
-    return c.json({ entries: summary, total: summary.length });
-  });
-  app.post("/api/philosophy/seed", async (c) => {
-    let body;
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
-    }
-    const raw2 = String(body?.concept ?? "");
-    const verdict = body?.verdict === "rejected" ? "rejected" : "approved";
-    const reason = body?.reason ? String(body.reason).trim() || void 0 : void 0;
-    const MAX_BODY_BYTES2 = 16 * 1024;
-    const MAX_LINES = 50;
-    if (Buffer.byteLength(raw2, "utf8") > MAX_BODY_BYTES2) {
-      return c.json(
-        {
-          error: `seed body exceeds ${MAX_BODY_BYTES2} bytes \u2014 paste in smaller batches.`,
-          code: ERROR_CODES.validation_error
-        },
-        400
-      );
-    }
-    const lines = raw2.split(/\r?\n/).map((s) => s.trim()).filter((s) => s.length > 0);
-    if (lines.length > MAX_LINES) {
-      return c.json(
-        {
-          error: `seed exceeds ${MAX_LINES} lines (got ${lines.length}) \u2014 paste in smaller batches.`,
-          code: ERROR_CODES.validation_error
-        },
-        400
-      );
-    }
-    const seenInThisPost = /* @__PURE__ */ new Set();
-    const concepts = lines.filter((l) => {
-      const k = l.toLowerCase();
-      if (seenInThisPost.has(k)) return false;
-      seenInThisPost.add(k);
-      return true;
-    });
-    if (concepts.length === 0) {
-      return c.json(
-        { error: "concept is required (paste a rule, idea, or pattern name)", code: ERROR_CODES.validation_error },
-        400
-      );
-    }
-    for (const concept of concepts) {
-      getGlobalStore().recordInstance(concept, {
-        project: "manual",
-        sessionId: "seed",
-        verdict,
-        reason,
-        description: reason ?? concept
-      });
-    }
-    return c.json({
-      status: "seeded",
-      concept: concepts[0],
-      concepts,
-      seededCount: concepts.length,
-      verdict
-    });
-  });
-  app.post("/api/philosophy/remove", async (c) => {
-    let body;
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
-    }
-    const rawConcept = body?.concept;
-    const concept = typeof rawConcept === "string" ? rawConcept.trim() : "";
-    if (!concept) {
-      return c.json(
-        { error: "concept is required (the stance to remove)", code: ERROR_CODES.validation_error },
-        400
-      );
-    }
-    let result;
-    try {
-      result = getGlobalStore().removeConcept(concept);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return c.json(
-        { error: `Could not remove the stance: ${msg}`, code: ERROR_CODES.ledger_frozen },
-        409
-      );
-    }
-    if (!result) {
-      return c.json(
-        { error: `No stance recorded for "${concept}".`, code: ERROR_CODES.stance_not_found },
-        404
-      );
-    }
-    log2(
-      `[philosophy/remove] removed "${result.concept}" (${result.instanceCount} instance(s)); backup at ${result.backupPath}`
-    );
-    return c.json({
-      status: "removed",
-      concept: result.concept,
-      instancesRemoved: result.instanceCount,
-      backupPath: result.backupPath
-    });
-  });
-  app.post("/api/philosophy/override", async (c) => {
-    let body;
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
-    }
-    if (body?.source === "team") {
-      return c.json(
-        {
-          error: "Team-rule blocks can't be overridden here \u2014 edit .deeppairing/team.json (it's shared and committed).",
-          code: ERROR_CODES.validation_error
-        },
-        400
-      );
-    }
-    const description = typeof body?.description === "string" ? body.description : void 0;
-    const concept = typeof body?.concept === "string" ? body.concept : void 0;
-    if (!description && !concept) {
-      return c.json(
-        { error: "description or concept is required to identify the stance", code: ERROR_CODES.validation_error },
-        400
-      );
-    }
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) {
-      return c.json(
-        { error: "No active session to override against.", code: ERROR_CODES.no_active_session },
-        409
-      );
-    }
-    const result = await store.overrideRejectedApproach({ description, concept });
-    broadcast({ type: "stance_overridden", concept: concept ?? description, retired: result.retired }, sid);
-    return c.json({ status: "overridden", concept: concept ?? description, ...result });
-  });
-  app.get("/api/philosophy/digest", async (c) => {
-    const sinceDays = Math.min(Math.max(Number(c.req.query("sinceDays") ?? 7), 1), 90);
-    const now = Date.now();
-    const fromMs = now - sinceDays * 24 * 60 * 60 * 1e3;
-    const fromIso = new Date(fromMs).toISOString();
-    const toIso = new Date(now).toISOString();
-    let entries;
-    try {
-      entries = getGlobalStore().query({ limit: 500 });
-    } catch (err) {
-      log2(`[philosophy/digest] query failed, returning empty digest: ${err}`);
-      return c.json({
-        window: { sinceDays, fromIso, toIso },
-        totals: { concepts: 0, instances: 0, multiProjectConcepts: 0 },
-        newThisPeriod: [],
-        strengthenedThisPeriod: []
-      });
-    }
-    const digestSid = getSessionId(c);
-    if (digestSid?.startsWith("demo_")) {
-      const realKeys = new Set(entries.map((e) => e.key));
-      const overlay = (await demoLedgerOverlay(digestSid, getStore(digestSid))).filter(
-        (e) => !realKeys.has(e.key)
-      );
-      entries = [...overlay, ...entries];
-    }
-    const realProjects = (insts) => new Set(insts.filter((i) => i.project !== "manual").map((i) => i.project));
-    const totals = {
-      concepts: entries.length,
-      instances: entries.reduce((a, e) => a + e.instances.length, 0),
-      multiProjectConcepts: entries.filter((e) => realProjects(e.instances).size > 1).length
-    };
-    const mapEntry = (e) => {
-      const projects = realProjects(e.instances);
-      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-      return {
-        key: e.key,
-        concept: e.concept,
-        stance: e.stance,
-        projectCount: projects.size,
-        firstSeenAt: e.firstSeenAt,
-        lastSeenAt: e.lastSeenAt,
-        latestReason
-      };
-    };
-    const newThisPeriod = entries.filter((e) => new Date(e.firstSeenAt).getTime() >= fromMs).map(mapEntry);
-    const strengthenedThisPeriod = entries.filter((e) => new Date(e.firstSeenAt).getTime() < fromMs).map((e) => {
-      const newInstancesInPeriod = e.instances.filter((i) => new Date(i.at).getTime() >= fromMs).length;
-      return { ...mapEntry(e), newInstancesInPeriod };
-    }).filter((e) => e.newInstancesInPeriod > 0);
-    return c.json({
-      window: { sinceDays, fromIso, toIso },
-      totals,
-      newThisPeriod,
-      strengthenedThisPeriod
-    });
-  });
-  app.get("/api/ledger/digest", (c) => {
-    if (!projectRoot2) {
-      return c.json({
-        shapedThisProject: 0,
-        nearMissesThisProject: 0,
-        blockedThisProject: 0,
-        sessionsTouched: 0,
-        topCitedStances: [],
-        seededStances: [],
-        globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 }
-      });
-    }
-    let project;
-    let entries;
-    try {
-      project = FileStore.ledgerDigest(projectRoot2);
-      entries = getGlobalStore().query({ limit: 1e4 });
-    } catch (err) {
-      log2(`[ledger/digest] read failed, returning empty digest: ${err}`);
-      return c.json({
-        shapedThisProject: 0,
-        nearMissesThisProject: 0,
-        blockedThisProject: 0,
-        sessionsTouched: 0,
-        topCitedStances: [],
-        seededStances: [],
-        globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 }
-      });
-    }
-    const projects = /* @__PURE__ */ new Set();
-    let multiProjectConcepts = 0;
-    const globalCitationByConcept = /* @__PURE__ */ new Map();
-    const seededRaw = [];
-    for (const e of entries) {
-      let realInstanceCount = 0;
-      let entryProjects = null;
-      for (const inst of e.instances) {
-        if (inst.project === "manual") continue;
-        realInstanceCount++;
-        projects.add(inst.project);
-        if (realInstanceCount === 2 && !entryProjects) {
-          entryProjects = /* @__PURE__ */ new Set();
-          for (const prior of e.instances) {
-            if (prior.project !== "manual") entryProjects.add(prior.project);
-          }
-        } else if (entryProjects) {
-          entryProjects.add(inst.project);
-        }
-      }
-      if (entryProjects && entryProjects.size > 1) multiProjectConcepts++;
-      if (realInstanceCount > 0) globalCitationByConcept.set(e.concept, realInstanceCount);
-      if (isSeededEntry(e)) {
-        seededRaw.push({
-          concept: e.concept,
-          stance: e.stance,
-          citedTimesElsewhere: realInstanceCount
-        });
-      }
-    }
-    const sampleByConcept = /* @__PURE__ */ new Map();
-    for (const s of project.topCitedStances) {
-      if (s.sampleArtifactId) {
-        sampleByConcept.set(s.concept, {
-          sampleArtifactId: s.sampleArtifactId,
-          sampleSessionId: s.sampleSessionId
-        });
-      }
-    }
-    const seededStances = seededRaw.map((s) => {
-      const sample = sampleByConcept.get(s.concept);
-      return {
-        ...s,
-        sampleArtifactId: sample?.sampleArtifactId,
-        sampleSessionId: sample?.sampleSessionId
-      };
-    });
-    const topCitedStancesWithGlobal = project.topCitedStances.map((s) => ({
-      ...s,
-      globalCitationCount: globalCitationByConcept.get(s.concept) ?? s.citationCount
-    }));
-    return c.json({
-      ...project,
-      topCitedStances: topCitedStancesWithGlobal,
-      seededStances,
-      globalLedger: {
-        concepts: entries.length,
-        projects: projects.size,
-        multiProjectConcepts
-      }
-    });
-  });
-  app.get("/api/metrics", (c) => {
-    if (!projectRoot2) return c.json({ error: "projectRoot not configured" }, 400);
-    return c.json(readMetrics(projectRoot2));
-  });
-  app.get("/api/preflight-blocks", (c) => {
-    if (!projectRoot2) return c.json({ blocks: [] });
-    const viewer = getSessionId(c);
-    const blocks = readPreflightBlocks(projectRoot2).filter(
-      (b) => !viewer || b.lane !== "hook" || b.sessionId === "hook" || b.sessionId === viewer
-    );
-    return c.json({ blocks: stanceExceptions ? blocks.map((b) => stanceExceptions.deriveReceipt(b)) : blocks });
-  });
-  if (stanceExceptions) registerStanceExceptionRoutes(app, stanceExceptions);
-  app.get("/api/team-preferences", async (c) => {
-    const store = getStore(getSessionId(c));
-    if (!store) return c.json({ preferences: [], exists: false });
-    const preferences = await store.getTeamPreferences?.() ?? [];
-    return c.json({ preferences, exists: preferences.length > 0 });
-  });
-  app.get("/api/export", async (c) => {
-    const store = getStore(getSessionId(c));
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const format = c.req.query("format") ?? "full";
-    const state = await store.getFullState();
-    const markdown = formatSessionMarkdown(state, format);
-    return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });
-  });
-  app.get("/api/export.html", async (c) => {
-    const store = getStore(getSessionId(c));
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const includeCodeParam = c.req.query("includeCode");
-    const includeCode = includeCodeParam !== "0" && includeCodeParam !== "false";
-    const state = await store.getFullState();
-    const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
-    const secretMatches = scanExportForSecrets(state);
-    const html = await assembleSessionHtml(state, {
-      store,
-      includeCode,
-      projectRoot: projectRoot2 ?? void 0,
-      version: SERVER_VERSION,
-      generatedAt,
-      secretLabels: secretLabelsOf(secretMatches),
-      secretCount: secretCountOf(secretMatches)
-    });
-    const warningHeader = secretWarningHeader(secretMatches);
-    return c.body(html, 200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${htmlExportFileName(state.sessionId, generatedAt)}"`,
-      // Exposed by name so a cross-origin fetch (the project switcher points
-      // the SPA at another daemon's port) can still read it.
-      "Access-Control-Expose-Headers": "Content-Disposition, X-DeepPairing-Secret-Warning",
-      ...warningHeader ? { "X-DeepPairing-Secret-Warning": warningHeader } : {}
-    });
-  });
-  app.post("/api/preferences", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = PreferenceBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    if (parsed.data.autonomyLevel) {
-      await store.setAutonomyLevel(parsed.data.autonomyLevel);
-      broadcast({ type: "preference_changed", autonomyLevel: parsed.data.autonomyLevel }, sid);
-    }
-    if (parsed.data.detailDensity) {
-      await store.setDetailDensity(parsed.data.detailDensity);
-      broadcast({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
-    }
-    if (parsed.data.persona && store.setPersona) {
-      await store.setPersona(parsed.data.persona);
-      broadcast({ type: "preference_changed", persona: parsed.data.persona }, sid);
-    }
-    if (parsed.data.globalLedgerPublish !== void 0) {
-      if (sid?.startsWith("demo_")) {
-        return c.json(
-          {
-            error: "publish_toggle_unsupported",
-            code: ERROR_CODES.publish_toggle_unsupported,
-            message: "This is a demo session \u2014 it never writes to your real project or your cross-project ledger. Open a real session to turn cross-project memory on."
-          },
-          409
-        );
-      }
-      if (!store.setGlobalLedgerPublish) {
-        return c.json(
-          {
-            error: "publish_toggle_unsupported",
-            code: ERROR_CODES.publish_toggle_unsupported,
-            message: "This session's store has no project preferences file to write."
-          },
-          409
-        );
-      }
-      await store.setGlobalLedgerPublish(parsed.data.globalLedgerPublish);
-      broadcast(
-        { type: "preference_changed", globalLedgerPublish: parsed.data.globalLedgerPublish },
-        sid
-      );
-    }
-    return c.json({ status: "updated" });
-  });
-  app.get("/api/files", (c) => {
-    if (authToken) {
-      const auth = c.req.header("Authorization");
-      if (auth !== `Bearer ${authToken}`) {
-        log2(`[files-auth] 401 \u2014 bad/missing Authorization header`);
-        return c.json(
-          { error: "Authorization required to read project files.", code: ERROR_CODES.daemon_auth_required },
-          401
-        );
-      }
-    }
-    const filePath = c.req.query("path");
-    if (!filePath || !projectRoot2) {
-      return c.json({ error: "path parameter required" }, 400);
-    }
-    const resolved = path21.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
-    const resolvedRoot = path21.resolve(projectRoot2);
-    if (!resolved.startsWith(resolvedRoot + path21.sep) && resolved !== resolvedRoot) {
-      return c.json({ error: "Path outside project root" }, 403);
-    }
-    let realResolved;
-    let realRoot;
-    try {
-      realResolved = fs22.realpathSync(resolved);
-      realRoot = fs22.realpathSync(resolvedRoot);
-    } catch (err) {
-      if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
-      return c.json({ error: "Cannot read file" }, 500);
-    }
-    if (!realResolved.startsWith(realRoot + path21.sep) && realResolved !== realRoot) {
-      return c.json({ error: "Path outside project root" }, 403);
-    }
-    try {
-      const MAX_FILE_BYTES = 5 * 1024 * 1024;
-      const size = fs22.statSync(realResolved).size;
-      if (size > MAX_FILE_BYTES) {
-        return c.json(
-          { error: `File too large to view (${size} bytes > ${MAX_FILE_BYTES}-byte cap).`, code: ERROR_CODES.body_too_large },
-          413
-        );
-      }
-      const content = fs22.readFileSync(realResolved, "utf-8");
-      return c.json({ content, filePath, lines: content.split("\n").length });
-    } catch (err) {
-      if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
-      return c.json({ error: "Cannot read file" }, 500);
-    }
-  });
-  app.get("/api/memory", async (c) => {
-    const store = getStore(getSessionId(c));
-    if (!store) return c.json({ rejectedApproaches: [], approvedPatterns: [] });
-    return c.json(await store.getSessionMemory());
-  });
-  app.get("/api/hook-state", (c) => {
-    if (!projectRoot2) return c.json({ version: 1, fires: [] });
-    const statePath = path21.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    if (!fs22.existsSync(statePath)) return c.json({ version: 1, fires: [] });
-    try {
-      const raw2 = JSON.parse(fs22.readFileSync(statePath, "utf-8"));
-      const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25).map((f) => {
-        if (!f || typeof f !== "object") return f;
-        const { gate: _gate, ...summary } = f;
-        void _gate;
-        return summary;
-      }) : [];
-      return c.json({ version: 1, fires });
-    } catch {
-      return c.json({ version: 1, fires: [] });
-    }
-  });
-  app.get("/api/sessions", (c) => {
-    if (!projectRoot2) return c.json({ sessions: [] });
-    const sessions = FileStore.listSessions(projectRoot2);
-    return c.json({ sessions });
-  });
-  app.get("/api/decisions", (c) => {
-    if (!projectRoot2) return c.json({ decisions: [], failedSessions: [] });
-    let live = [];
-    try {
-      live = getLiveDecisionSources?.() ?? [];
-    } catch (err) {
-      log2(`[decisions] live-session snapshot failed, falling back to disk: ${err}`);
-    }
-    try {
-      return c.json(FileStore.listAllDecisions(projectRoot2, live));
-    } catch (err) {
-      log2(`[decisions] read failed, returning empty: ${err}`);
-      return c.json({ decisions: [], failedSessions: [] });
-    }
-  });
-  app.get("/api/features", (c) => {
-    if (!projectRoot2) return c.json({ groups: [], failedSessions: [] });
-    try {
-      const overrides = readFeatureOverrides(projectRoot2);
-      return c.json(FileStore.groupByFeature(projectRoot2, overrides));
-    } catch (err) {
-      log2(`[features] read failed, returning empty: ${err}`);
-      return c.json({ groups: [], failedSessions: [] });
-    }
-  });
-  app.post("/api/features/overrides", async (c) => {
-    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = FeatureOverrideBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    try {
-      if (parsed.data.action === "rename") {
-        setFeatureGroupTitle(projectRoot2, parsed.data.groupKey, parsed.data.title);
-      } else {
-        assignArtifactToFeature(projectRoot2, parsed.data.artifactId, parsed.data.groupKey);
-      }
-    } catch (err) {
-      log2(`[features] override write failed: ${err}`);
-      return c.json({ error: "Could not persist the correction.", code: ERROR_CODES.validation_error }, 500);
-    }
-    const overrides = readFeatureOverrides(projectRoot2);
-    return c.json(FileStore.groupByFeature(projectRoot2, overrides));
-  });
-  app.get("/api/search", (c) => {
-    if (!projectRoot2) return c.json({ results: [] });
-    const q = c.req.query("q") ?? "";
-    if (!q.trim()) return c.json({ results: [] });
-    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
-    const results = FileStore.searchAll(projectRoot2, q, limit);
-    return c.json({ results });
-  });
-  app.get("/api/sessions/:sessionId", (c) => {
-    const sessionId = c.req.param("sessionId");
-    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
-    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-      return c.json({ error: "Invalid session ID" }, 400);
-    }
-    try {
-      const state = FileStore.loadSession(projectRoot2, sessionId);
-      return c.json(state);
-    } catch {
-      return c.json({ error: "Session not found" }, 404);
-    }
-  });
-  app.get("/api/sessions/:sessionId/annotations", (c) => {
-    const sessionId = c.req.param("sessionId");
-    if (!projectRoot2) return c.json({ annotations: [] });
-    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-      return c.json({ error: "Invalid session ID" }, 400);
-    }
-    const result = FileStore.readAnnotationsIfSessionExists(projectRoot2, sessionId);
-    if (!result.ok) {
-      return c.json({ error: result.message }, 500);
-    }
-    if (!result.exists) {
-      return c.json({ error: "Session not found" }, 404);
-    }
-    return c.json({ annotations: result.annotations });
-  });
-  app.post("/api/sessions/:sessionId/annotations", async (c) => {
-    const sessionId = c.req.param("sessionId");
-    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
-    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-      return c.json({ error: "Invalid session ID" }, 400);
-    }
-    const body = await c.req.json().catch(() => null);
-    const { targetEventId, note, tags } = body ?? {};
-    if (!targetEventId || !note) {
-      return c.json({ error: "targetEventId and note required" }, 400);
-    }
-    const s = new FileStore(projectRoot2, sessionId);
-    const annotation = s.addAnnotation({ targetEventId, note, tags });
-    return c.json({ annotation });
-  });
-  app.post("/api/prompts", async (c) => {
-    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
-    if (authToken) {
-      const auth = c.req.header("Authorization");
-      if (auth !== `Bearer ${authToken}`) {
-        log2(`[prompts-auth] 401 \u2014 bad/missing Authorization header`);
-        return c.json(
-          { error: "Authorization required for prompt save.", code: ERROR_CODES.daemon_auth_required },
-          401
-        );
-      }
-    }
-    const body = await c.req.json().catch(() => null);
-    const content = typeof body?.content === "string" ? body.content : "";
-    if (!content.trim()) return c.json({ error: "content required" }, 400);
-    const sanitize = (s) => String(s ?? "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
-    const decisionTag = sanitize(body?.decisionId);
-    const sessionTag = sanitize(body?.sessionId);
-    const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    const filename = [ts, sessionTag, decisionTag].filter(Boolean).join("_") + ".md";
-    const promptsDir = path21.join(projectRoot2, ".deeppairing", "prompts");
-    try {
-      fs22.mkdirSync(promptsDir, { recursive: true });
-      const fullPath = path21.join(promptsDir, filename);
-      const resolved = path21.resolve(fullPath);
-      const resolvedDir = path21.resolve(promptsDir);
-      if (!resolved.startsWith(resolvedDir + path21.sep)) {
-        return c.json({ error: "invalid path" }, 400);
-      }
-      try {
-        const stat = fs22.lstatSync(resolved);
-        if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
-      } catch (err) {
-        if (errorCode(err) !== "ENOENT") throw err;
-      }
-      const realDir = fs22.realpathSync(resolvedDir);
-      const realRoot = fs22.realpathSync(path21.resolve(projectRoot2));
-      if (!realDir.startsWith(realRoot + path21.sep) && realDir !== realRoot) {
-        return c.json({ error: "invalid path" }, 400);
-      }
-      fs22.writeFileSync(resolved, content, "utf-8");
-      const relPath = path21.relative(projectRoot2, resolved);
-      return c.json({ status: "saved", path: resolved, relPath });
-    } catch (err) {
-      return c.json({ error: errorMessage(err, "Save failed") }, 500);
-    }
-  });
-  app.delete("/api/sessions/:sessionId/annotations/:annotationId", (c) => {
-    const sessionId = c.req.param("sessionId");
-    const annotationId = c.req.param("annotationId");
-    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
-    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-      return c.json({ error: "Invalid session ID" }, 400);
-    }
-    const s = new FileStore(projectRoot2, sessionId);
-    const ok = s.deleteAnnotation(annotationId);
-    return c.json({ deleted: ok });
-  });
-  return app;
-}
-
-// src/http/static-ui.ts
-import fs23 from "node:fs";
-import path22 from "node:path";
-var MIME_TYPES = {
-  html: "text/html",
-  js: "application/javascript",
-  css: "text/css",
-  json: "application/json",
-  svg: "image/svg+xml",
-  woff2: "font/woff2",
-  png: "image/png"
-};
-var HASHED_ASSET = /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
-var MERMAID_RENDERER_DOC = "/mermaid-renderer.html";
-function mermaidRendererCsp(host) {
-  const own2 = host && /^[A-Za-z0-9.\-[\]:]+$/.test(host) ? ` http://${host}` : "";
-  return [
-    "default-src 'none'",
-    `script-src 'self'${own2}`,
-    "style-src 'unsafe-inline'",
-    "img-src 'none'",
-    "font-src 'none'",
-    "connect-src 'none'",
-    "frame-src 'none'",
-    "child-src 'none'",
-    "worker-src 'none'",
-    "object-src 'none'",
-    "media-src 'none'",
-    "manifest-src 'none'",
-    "base-uri 'none'",
-    "form-action 'none'"
-    // No frame-ancestors: the companion itself may be embedded (the VS Code
-    // webview), and this document holds nothing worth framing protection.
-  ].join("; ");
-}
-function mountStaticUi(app, opts) {
-  const { webDistPath, authToken, projectHash, log: log2 } = opts;
-  if (!fs23.existsSync(webDistPath)) return;
-  const serveInjectedIndex = (indexPath) => {
-    const html = fs23.readFileSync(indexPath, "utf-8");
-    const tokenJson = JSON.stringify(authToken);
-    const hashJson = JSON.stringify(projectHash);
-    const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
-    let injected;
-    if (html.includes("</head>")) {
-      injected = html.replace("</head>", `${injection}</head>`);
-    } else if (/<head\b[^>]*>/i.test(html)) {
-      injected = html.replace(/(<head\b[^>]*>)/i, `$1${injection}`);
-    } else if (/<html\b[^>]*>/i.test(html)) {
-      injected = html.replace(/(<html\b[^>]*>)/i, `$1${injection}`);
-    } else {
-      log2?.(`[token-inject] no <head>/<html> in index.html; serving without token. Bearer routes will 401 until UI is rebuilt.`);
-      injected = html;
-    }
-    return new Response(injected, {
-      headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" }
-    });
-  };
-  app.get("/*", async (c, next) => {
-    if (c.req.path.startsWith("/api/")) return next();
-    const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
-    const fullPath = path22.join(webDistPath, filePath);
-    const resolvedPath = path22.resolve(fullPath);
-    const resolvedBase = path22.resolve(webDistPath);
-    if (!resolvedPath.startsWith(resolvedBase + path22.sep) && resolvedPath !== resolvedBase) {
-      return c.notFound();
-    }
-    if (filePath === MERMAID_RENDERER_DOC) {
-      if (!fs23.existsSync(fullPath)) return c.notFound();
-      return new Response(fs23.readFileSync(fullPath), {
-        headers: {
-          "Content-Type": "text/html",
-          "Cache-Control": "no-cache",
-          "Content-Security-Policy": mermaidRendererCsp(c.req.header("host")),
-          "X-Content-Type-Options": "nosniff",
-          "Referrer-Policy": "no-referrer"
-        }
-      });
-    }
-    if (fs23.existsSync(fullPath)) {
-      const ext = path22.extname(filePath).slice(1);
-      if (ext === "html") return serveInjectedIndex(fullPath);
-      const content = fs23.readFileSync(fullPath);
-      const headers = { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" };
-      if (ext === "js" && filePath.startsWith("/assets/")) headers["Access-Control-Allow-Origin"] = "*";
-      if (filePath.startsWith("/assets/") && HASHED_ASSET.test(filePath)) {
-        headers["Cache-Control"] = "public, max-age=31536000, immutable";
-      }
-      return new Response(content, { headers });
-    }
-    const indexPath = path22.join(webDistPath, "index.html");
-    if (fs23.existsSync(indexPath)) {
-      return serveInjectedIndex(indexPath);
-    }
-    return c.notFound();
-  });
-}
-
-// src/daemon/routes.ts
-import fs29 from "node:fs";
-import path32 from "node:path";
-
-// ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/middleware/body-limit/index.js
-var ERROR_MESSAGE = "Payload Too Large";
-var bodyLimit = (options) => {
-  const onError = options.onError || (() => {
-    const res = new Response(ERROR_MESSAGE, {
-      status: 413
-    });
-    throw new HTTPException(413, { res });
-  });
-  const maxSize = options.maxSize;
-  return async function bodyLimit2(c, next) {
-    if (!c.req.raw.body) {
-      return next();
-    }
-    const hasTransferEncoding = c.req.raw.headers.has("transfer-encoding");
-    const hasContentLength = c.req.raw.headers.has("content-length");
-    if (hasContentLength && !hasTransferEncoding) {
-      const contentLength = parseInt(c.req.raw.headers.get("content-length") || "0", 10);
-      return contentLength > maxSize ? onError(c) : next();
-    }
-    let size = 0;
-    const chunks = [];
-    const rawReader = c.req.raw.body.getReader();
-    for (; ; ) {
-      const { done, value } = await rawReader.read();
-      if (done) {
-        break;
-      }
-      size += value.length;
-      if (size > maxSize) {
-        return onError(c);
-      }
-      chunks.push(value);
-    }
-    const requestInit = {
-      body: new ReadableStream({
-        start(controller) {
-          for (const chunk of chunks) {
-            controller.enqueue(chunk);
-          }
-          controller.close();
-        }
-      }),
-      duplex: "half"
-    };
-    c.req.raw = new Request(c.req.raw, requestInit);
-    return next();
-  };
-};
-
-// src/http/guards.ts
-var ARTIFACT_CREATE_MAX_BODY_BYTES = 512 * 1024;
-var STANDALONE_PAGE_MAX_BODY_BYTES = 4 * Math.ceil(PAGE_HTML_MAX_BYTES / 3) + 256 * 1024;
-var STANDALONE_PAGE_ROUTE = /^\/api\/internal\/sessions\/[^/]+\/(?:present-page|revise-page)$/;
-function isArtifactCreateRoute(method, pathname) {
-  if (method !== "POST") return false;
-  return STANDALONE_PAGE_ROUTE.test(pathname) || /^\/api\/internal\/sessions\/[^/]+\/(?:artifacts|present-options)$/.test(pathname);
-}
-function projectHashGate(daemonHash) {
-  return async (c, next) => {
-    const sent = c.req.header("X-Project-Hash");
-    if (daemonHash && sent !== daemonHash) {
-      return c.json(
-        { error: "Project hash mismatch \u2014 reload to re-bind.", code: ERROR_CODES.project_hash_mismatch, expected: daemonHash },
-        403
-      );
-    }
-    return next();
-  };
-}
-function isLoopbackHost(host) {
-  if (!host) return true;
-  const hostname3 = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
-  return hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "::1";
-}
-function applyTopLevelGuards(app, opts) {
-  const artifactCreateLimit = bodyLimit({
-    maxSize: ARTIFACT_CREATE_MAX_BODY_BYTES,
-    onError: (c) => c.json(
-      {
-        error: `Request body exceeds the ${ARTIFACT_CREATE_MAX_BODY_BYTES}-byte artifact cap. ` + (c.req.path.endsWith("/present-options") ? "Shorten the options or their visuals, and use a new request ID for the changed input." : "A diff this large is past what one review surface can hold \u2014 split it by area (and keep each part a changeset your pair approves)."),
-        code: ERROR_CODES.body_too_large
-      },
-      413
-    )
-  });
-  const standalonePageLimit = bodyLimit({
-    maxSize: STANDALONE_PAGE_MAX_BODY_BYTES,
-    onError: (c) => c.json(
-      {
-        error: `Request body exceeds the ${STANDALONE_PAGE_MAX_BODY_BYTES}-byte standalone page cap (a ${PAGE_HTML_MAX_BYTES}-byte page plus its metadata). Trim the page, and use a new request ID for the changed input.`,
-        code: ERROR_CODES.body_too_large
-      },
-      413
-    )
-  });
-  const defaultLimit = bodyLimit({
-    maxSize: opts.maxBodyBytes,
-    onError: (c) => c.json(
-      { error: `Request body exceeds ${opts.maxBodyBytes}-byte cap.`, code: ERROR_CODES.body_too_large },
-      413
-    )
-  });
-  app.use("*", (c, next) => {
-    if (!isArtifactCreateRoute(c.req.method, c.req.path)) return defaultLimit(c, next);
-    return (STANDALONE_PAGE_ROUTE.test(c.req.path) ? standalonePageLimit : artifactCreateLimit)(c, next);
-  });
-  app.use("*", async (c, next) => {
-    if (!isLoopbackHost(c.req.header("host"))) {
-      return c.json(
-        { error: "Forbidden host \u2014 the daemon only serves loopback origins.", code: ERROR_CODES.forbidden_host },
-        403
-      );
-    }
-    return next();
-  });
-}
-
 // src/standalone-session-id.ts
 var REVIEW_SESSION = /^review_[0-9a-f]{8}_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 var prefixFor = (projectRoot2) => `review_${projectHashOf(projectRoot2)}_`;
@@ -38643,11 +37967,56 @@ function isStandaloneSessionForProject(id, projectRoot2) {
   return isStandaloneSessionId(id) && id.startsWith(prefixFor(projectRoot2));
 }
 
+// src/daemon/standalone-closeout.ts
+import fs26 from "node:fs";
+import path29 from "node:path";
+
 // src/daemon/standalone-options.ts
-import path24 from "node:path";
+import path22 from "node:path";
 
 // src/mcp/tool-helpers.ts
 import { createHash as createHash5 } from "node:crypto";
+
+// src/store/comment-resolution.ts
+function time3(value) {
+  if (!value) return void 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : void 0;
+}
+function effectiveHumanResolution(comments, artifacts) {
+  const revisionTimes = new Map(artifacts.map((artifact) => [artifact.id, artifact.createdAt]));
+  const replies = /* @__PURE__ */ new Map();
+  for (const comment of comments) {
+    if (!comment.parentCommentId) continue;
+    const children = replies.get(comment.parentCommentId);
+    if (children) children.push(comment);
+    else replies.set(comment.parentCommentId, [comment]);
+  }
+  return (comment) => {
+    const stamp = comment.humanResolvedAt;
+    if (!stamp) return stamp;
+    const resolvedAt = time3(stamp);
+    const rootAt = time3(comment.createdAt) ?? 0;
+    if (resolvedAt === void 0 || rootAt > resolvedAt) return void 0;
+    const addressed = comment.addressedIn;
+    if (addressed && Number.isInteger(addressed.version) && addressed.version > 0) {
+      const revisionAt = time3(addressed.at) ?? time3(revisionTimes.get(addressed.artifactId)) ?? rootAt;
+      if (revisionAt >= resolvedAt) return void 0;
+    }
+    const seen = /* @__PURE__ */ new Set([comment.id]);
+    const pending = [...replies.get(comment.id) ?? []];
+    while (pending.length) {
+      const reply = pending.pop();
+      if (seen.has(reply.id) || reply.sessionId !== comment.sessionId) continue;
+      seen.add(reply.id);
+      const replyAt = time3(reply.createdAt) ?? rootAt;
+      if (replyAt > resolvedAt || reply.author === "agent" && replyAt === resolvedAt) return void 0;
+      for (const nested of replies.get(reply.id) ?? []) pending.push(nested);
+    }
+    if (comment.answeredByCommentId && !seen.has(comment.answeredByCommentId) && rootAt >= resolvedAt) return void 0;
+    return stamp;
+  };
+}
 
 // src/mcp/advisory-recall.ts
 function tokenSetKey(s) {
@@ -40061,19 +39430,19 @@ async function handlePresentOptions(ctx, args, standalone) {
 }
 
 // src/daemon/standalone-receipts.ts
-import fs24 from "node:fs";
-import path23 from "node:path";
+import fs22 from "node:fs";
+import path21 from "node:path";
 var receiptDigestSchema = external_exports.string().regex(/^[a-f0-9]{64}$/);
 function readJsonFile(file2) {
   try {
-    return JSON.parse(fs24.readFileSync(file2, "utf8"));
+    return JSON.parse(fs22.readFileSync(file2, "utf8"));
   } catch (err) {
     if (err instanceof Error && "code" in err && err.code === "ENOENT") return void 0;
     throw err;
   }
 }
 function readSessionRecord(dir, file2, key2, id) {
-  const raw2 = readJsonFile(path23.join(dir, file2));
+  const raw2 = readJsonFile(path21.join(dir, file2));
   if (raw2 === void 0) return void 0;
   const rows = external_exports.array(external_exports.record(external_exports.string(), external_exports.unknown())).parse(raw2).filter((row) => row[key2] === id);
   if (rows.length > 1) throw new Error("Standalone review history has conflicting records.");
@@ -40103,13 +39472,13 @@ var receiptSchema = external_exports.object({
 }).strict();
 function optionsOperation(projectRoot2, store, operationId, broadcast) {
   const sessionId = store.getSessionId();
-  const dir = path24.join(projectRoot2, ".deeppairing", "sessions", sessionId);
-  const receiptPath = path24.join(dir, `present-options-${operationId}.json`);
+  const dir = path22.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+  const receiptPath = path22.join(dir, `present-options-${operationId}.json`);
   const key2 = standaloneOperationKey(projectRoot2, sessionId, "present_options", operationId);
   const artifactId = `art_${key2}`;
   const decisionId = `dec_${key2}`;
   const save = (receipt) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 384 });
-  const lock = (run) => withFileLock(path24.join(dir, ".standalone-options.lock"), run);
+  const lock = (run) => withFileLock(path22.join(dir, ".standalone-options.lock"), run);
   const readReceipt = () => receiptSchema.parse(readJsonFile(receiptPath));
   const reply = () => ({
     content: [{ type: "text", text: `This operation already presented artifact ${artifactId} and decision ${decisionId}.` }],
@@ -40237,11 +39606,11 @@ async function presentStandaloneOptions(projectRoot2, store, operationId, args, 
 }
 
 // src/daemon/standalone-page.ts
-import path26 from "node:path";
+import path24 from "node:path";
 
 // src/mcp/tools/present-page.ts
-import fs25 from "node:fs";
-import path25 from "node:path";
+import fs23 from "node:fs";
+import path23 from "node:path";
 
 // src/mcp/page-lint.ts
 var PAGE_LINT_LONG_PAGE_BYTES = 16 * 1024;
@@ -40270,7 +39639,7 @@ var RESOURCE_ATTRS = {
   // SVG <use> pointing at another document
 };
 var HEADINGS = /* @__PURE__ */ new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
-function isSpace(c) {
+function isSpace2(c) {
   return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
 }
 function isAlpha(c) {
@@ -40278,7 +39647,7 @@ function isAlpha(c) {
 }
 function externalAt(lower, at) {
   let i = at;
-  while (i < lower.length && isSpace(lower.charCodeAt(i))) i++;
+  while (i < lower.length && isSpace2(lower.charCodeAt(i))) i++;
   return lower.startsWith("http://", i) || lower.startsWith("https://", i) || lower.startsWith("//", i);
 }
 function isExternal(value) {
@@ -40302,10 +39671,10 @@ function srcsetUrls(value) {
   const n = value.length;
   let i = 0;
   while (i < n) {
-    while (i < n && (isSpace(value.charCodeAt(i)) || value[i] === ",")) i++;
+    while (i < n && (isSpace2(value.charCodeAt(i)) || value[i] === ",")) i++;
     if (i >= n) break;
     const start = i;
-    while (i < n && !isSpace(value.charCodeAt(i))) i++;
+    while (i < n && !isSpace2(value.charCodeAt(i))) i++;
     let url2 = value.slice(start, i);
     if (url2.endsWith(",")) {
       url2 = url2.replace(/,+$/, "");
@@ -40338,7 +39707,7 @@ function consumeEscape(css, i) {
     while (j < css.length && j - hexStart < 6 && isHexDigit(css.charCodeAt(j))) j++;
     const cp = parseInt(css.slice(hexStart, j), 16);
     if (css.charCodeAt(j) === 13 && css.charCodeAt(j + 1) === 10) j += 2;
-    else if (isSpace(css.charCodeAt(j))) j++;
+    else if (isSpace2(css.charCodeAt(j))) j++;
     const ok = cp > 0 && cp <= 1114111 && !(cp >= 55296 && cp <= 57343);
     return [ok ? String.fromCodePoint(cp) : "\uFFFD", j];
   }
@@ -40402,8 +39771,8 @@ function scanCss(css, onToken) {
       const [value, j] = consumeString(css, i);
       onToken({ kind: "string", value });
       i = j;
-    } else if (isSpace(c)) {
-      while (i < n && isSpace(css.charCodeAt(i))) i++;
+    } else if (isSpace2(c)) {
+      while (i < n && isSpace2(css.charCodeAt(i))) i++;
       onToken({ kind: "space" });
     } else if (c === 64 || c === 35) {
       const [name, j] = consumeName(css, i + 1);
@@ -40414,7 +39783,7 @@ function scanCss(css, onToken) {
       const name = rawName.toLowerCase();
       if (name === "url" && css.charCodeAt(j) === 40) {
         let k = j + 1;
-        while (k < n && isSpace(css.charCodeAt(k))) k++;
+        while (k < n && isSpace2(css.charCodeAt(k))) k++;
         const q = css.charCodeAt(k);
         if (q === 34 || q === 39) {
           const [value, m] = consumeString(css, k);
@@ -40467,23 +39836,23 @@ function externalCssRefs(css) {
 function readStartTag(html, lower, at) {
   const n = html.length;
   let i = at;
-  while (i < n && !isSpace(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">") i++;
+  while (i < n && !isSpace2(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">") i++;
   const name = lower.slice(at, i);
   const attrs = /* @__PURE__ */ Object.create(null);
   while (i < n) {
-    while (i < n && (isSpace(lower.charCodeAt(i)) || lower[i] === "/")) i++;
+    while (i < n && (isSpace2(lower.charCodeAt(i)) || lower[i] === "/")) i++;
     if (i >= n) break;
     if (lower[i] === ">") return { name, attrs, end: i + 1 };
     const nameStart = i;
     i++;
-    while (i < n && !isSpace(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">" && lower[i] !== "=") i++;
+    while (i < n && !isSpace2(lower.charCodeAt(i)) && lower[i] !== "/" && lower[i] !== ">" && lower[i] !== "=") i++;
     const attr = lower.slice(nameStart, i);
     let j = i;
-    while (j < n && isSpace(lower.charCodeAt(j))) j++;
+    while (j < n && isSpace2(lower.charCodeAt(j))) j++;
     let value = "";
     if (lower[j] === "=") {
       j++;
-      while (j < n && isSpace(lower.charCodeAt(j))) j++;
+      while (j < n && isSpace2(lower.charCodeAt(j))) j++;
       const q = html[j];
       if (q === '"' || q === "'") {
         const close = html.indexOf(q, j + 1);
@@ -40491,7 +39860,7 @@ function readStartTag(html, lower, at) {
         j = close === -1 ? n : close + 1;
       } else {
         const start = j;
-        while (j < n && !isSpace(lower.charCodeAt(j)) && lower[j] !== ">") j++;
+        while (j < n && !isSpace2(lower.charCodeAt(j)) && lower[j] !== ">") j++;
         value = html.slice(start, j);
       }
       i = j;
@@ -40647,33 +40016,33 @@ function refuse(message) {
   };
 }
 function isWithin(root, target) {
-  const rel = path25.relative(root, target);
-  return rel === "" || rel !== ".." && !rel.startsWith(`..${path25.sep}`) && !path25.isAbsolute(rel);
+  const rel = path23.relative(root, target);
+  return rel === "" || rel !== ".." && !rel.startsWith(`..${path23.sep}`) && !path23.isAbsolute(rel);
 }
 function nativeRealpath(p) {
   try {
-    return fs25.realpathSync.native(p);
+    return fs23.realpathSync.native(p);
   } catch {
     try {
-      return fs25.realpathSync(p);
+      return fs23.realpathSync(p);
     } catch {
       return p;
     }
   }
 }
 function isInDaemonDir(root, target) {
-  const first = path25.relative(root, target).split(path25.sep)[0] ?? "";
+  const first = path23.relative(root, target).split(path23.sep)[0] ?? "";
   return first.toLowerCase() === ".deeppairing";
 }
 function readPageSource(projectRoot2, requested) {
   if (requested.includes("\0")) return refuse("`path` contains a NUL byte.");
   let rootReal;
   try {
-    rootReal = fs25.realpathSync(projectRoot2);
+    rootReal = fs23.realpathSync(projectRoot2);
   } catch {
     return refuse("the project root could not be resolved, so `path` cannot be checked. Pass the page inline as `html`.");
   }
-  const lexical = path25.resolve(projectRoot2, requested);
+  const lexical = path23.resolve(projectRoot2, requested);
   if (!isWithin(projectRoot2, lexical) && !isWithin(rootReal, lexical)) {
     return refuse(`\`path\` "${requested}" is outside the project root. Write the page inside the project, or pass it inline as \`html\`.`);
   }
@@ -40682,7 +40051,7 @@ function readPageSource(projectRoot2, requested) {
   }
   let real;
   try {
-    real = fs25.realpathSync(lexical);
+    real = fs23.realpathSync(lexical);
   } catch {
     return refuse(`no file at \`path\` "${requested}" (resolved inside the project root).`);
   }
@@ -40692,10 +40061,10 @@ function readPageSource(projectRoot2, requested) {
   if (isInDaemonDir(nativeRealpath(rootReal), nativeRealpath(real))) {
     return refuse(`\`path\` "${requested}" resolves (through a symlink) into .deeppairing/, deepPairing's own state directory.`);
   }
-  const { O_RDONLY, O_NOFOLLOW: O_NOFOLLOW2, O_NONBLOCK: O_NONBLOCK2 } = fs25.constants;
+  const { O_RDONLY, O_NOFOLLOW: O_NOFOLLOW2, O_NONBLOCK: O_NONBLOCK2 } = fs23.constants;
   let fd;
   try {
-    fd = fs25.openSync(real, O_RDONLY | (O_NOFOLLOW2 ?? 0) | (O_NONBLOCK2 ?? 0));
+    fd = fs23.openSync(real, O_RDONLY | (O_NOFOLLOW2 ?? 0) | (O_NONBLOCK2 ?? 0));
   } catch {
     return refuse(`\`path\` "${requested}" could not be opened.`);
   }
@@ -40703,20 +40072,20 @@ function readPageSource(projectRoot2, requested) {
   try {
     let again;
     try {
-      again = fs25.realpathSync(lexical);
+      again = fs23.realpathSync(lexical);
     } catch {
       return refuse(`\`path\` "${requested}" changed while it was being read.`);
     }
     if (again !== real || !isWithin(rootReal, again)) {
       return refuse(`\`path\` "${requested}" changed while it was being read.`);
     }
-    const stat = fs25.fstatSync(fd);
+    const stat = fs23.fstatSync(fd);
     if (!stat.isFile()) return refuse(`\`path\` "${requested}" is not a regular file.`);
     if (stat.size > PAGE_HTML_MAX_BYTES) return { ok: false, error: pageTooLargeError("present_page", stat.size) };
     const buf = Buffer.alloc(PAGE_HTML_MAX_BYTES + 1);
     let total = 0;
     while (total < buf.length) {
-      const got = fs25.readSync(fd, buf, total, buf.length - total, total);
+      const got = fs23.readSync(fd, buf, total, buf.length - total, total);
       if (got === 0) break;
       total += got;
     }
@@ -40726,12 +40095,12 @@ function readPageSource(projectRoot2, requested) {
     return refuse(`\`path\` "${requested}" could not be read.`);
   } finally {
     try {
-      fs25.closeSync(fd);
+      fs23.closeSync(fd);
     } catch {
     }
   }
   if (!html.trim()) return refuse(`the file at \`path\` "${requested}" is empty.`);
-  const sourcePath = path25.relative(rootReal, real).split(path25.sep).join("/");
+  const sourcePath = path23.relative(rootReal, real).split(path23.sep).join("/");
   return { ok: true, html, sourcePath };
 }
 async function presentPage(ctx, args, opts = {}) {
@@ -40839,7 +40208,7 @@ var receiptSchema2 = external_exports.object({
   committed: external_exports.literal(true).optional()
 }).strict();
 function isClientRelativePath(p) {
-  return !path26.isAbsolute(p) && !path26.win32.isAbsolute(p) && !/^[\\/]/.test(p) && !p.includes("\0");
+  return !path24.isAbsolute(p) && !path24.win32.isAbsolute(p) && !/^[\\/]/.test(p) && !p.includes("\0");
 }
 function contentDigest(content) {
   const { title: _title, ...payload } = PageContentSchema.parse(content);
@@ -40855,11 +40224,11 @@ function inputRefusal(message) {
 }
 function pageOperation(projectRoot2, store, operationId) {
   const sessionId = store.getSessionId();
-  const dir = path26.join(projectRoot2, ".deeppairing", "sessions", sessionId);
-  const receiptPath = path26.join(dir, `present-page-${operationId}.json`);
+  const dir = path24.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+  const receiptPath = path24.join(dir, `present-page-${operationId}.json`);
   const artifactId = `art_${standaloneOperationKey(projectRoot2, sessionId, "present_page", operationId)}`;
   const save = (receipt) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 384 });
-  const lock = (run) => withFileLock(path26.join(dir, ".standalone-page.lock"), run);
+  const lock = (run) => withFileLock(path24.join(dir, ".standalone-page.lock"), run);
   const readReceipt = () => receiptSchema2.parse(readJsonFile(receiptPath));
   const reply = (disk) => {
     const saved = PageContentSchema.safeParse(disk.content);
@@ -40978,14 +40347,14 @@ async function presentStandalonePage(projectRoot2, store, operationId, input, po
 }
 
 // src/daemon/standalone-revise-page.ts
-import path30 from "node:path";
+import path28 from "node:path";
 
 // src/mcp/skeleton-snapshot.ts
-import path29 from "node:path";
+import path27 from "node:path";
 
 // src/skeleton-scope.ts
-import fs26 from "node:fs";
-import path27 from "node:path";
+import fs24 from "node:fs";
+import path25 from "node:path";
 var SKEL_TODO = "SKEL_TODO";
 var SKELETON_SCOPE_DIR = "skeleton-scopes";
 var SKELETON_SCOPE_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
@@ -41056,13 +40425,13 @@ var BINARY_FILE = /\.(png|jpe?g|gif|webp|ico|bmp|tiff?|psd|pdf|zip|gz|tgz|bz2|xz
 function scanFile(root, abs, fences, errors) {
   let text;
   try {
-    if (fs26.statSync(abs).size > 1e6) return;
-    text = fs26.readFileSync(abs, "utf-8");
+    if (fs24.statSync(abs).size > 1e6) return;
+    text = fs24.readFileSync(abs, "utf-8");
   } catch {
     return;
   }
   if (!text.includes("SKEL[")) return;
-  const rel = path27.relative(root, abs).split(path27.sep).join("/");
+  const rel = path25.relative(root, abs).split(path25.sep).join("/");
   try {
     fences.push(...scanSkeletonText(text, rel));
   } catch (err) {
@@ -41074,7 +40443,7 @@ function scanSkeletonFences(root, opts = {}) {
   const errors = [];
   if (opts.files && opts.files.length > 0) {
     for (const f of new Set(opts.files)) {
-      const abs = path27.resolve(root, f);
+      const abs = path25.resolve(root, f);
       if (within(root, abs)) scanFile(root, abs, fences, errors);
     }
     return { fences, errors, truncated: false };
@@ -41085,7 +40454,7 @@ function scanSkeletonFences(root, opts = {}) {
   const walk = (dir) => {
     let entries;
     try {
-      entries = fs26.readdirSync(dir, { withFileTypes: true });
+      entries = fs24.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -41094,7 +40463,7 @@ function scanSkeletonFences(root, opts = {}) {
         truncated = true;
         return;
       }
-      const abs = path27.join(dir, e.name);
+      const abs = path25.join(dir, e.name);
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) walk(abs);
         continue;
@@ -41122,7 +40491,7 @@ function planDeclaredFiles(content) {
   return [...new Set(out)];
 }
 function skeletonScopeDir(projectRoot2) {
-  return path27.join(projectRoot2, ".deeppairing", SKELETON_SCOPE_DIR);
+  return path25.join(projectRoot2, ".deeppairing", SKELETON_SCOPE_DIR);
 }
 function scopeFileName(artifactId) {
   return /^[A-Za-z0-9_-]{1,80}$/.test(artifactId) ? `${artifactId}.json` : null;
@@ -41148,14 +40517,14 @@ function parseScope(raw2, now) {
 function readSkeletonScopes(projectRoot2, now = Date.now()) {
   let names;
   try {
-    names = fs26.readdirSync(skeletonScopeDir(projectRoot2)).filter((n) => n.endsWith(".json"));
+    names = fs24.readdirSync(skeletonScopeDir(projectRoot2)).filter((n) => n.endsWith(".json"));
   } catch {
     return [];
   }
   const out = [];
   for (const n of names) {
     try {
-      const scope = parseScope(JSON.parse(fs26.readFileSync(path27.join(skeletonScopeDir(projectRoot2), n), "utf-8")), now);
+      const scope = parseScope(JSON.parse(fs24.readFileSync(path25.join(skeletonScopeDir(projectRoot2), n), "utf-8")), now);
       if (scope) out.push(scope);
     } catch {
     }
@@ -41165,16 +40534,16 @@ function readSkeletonScopes(projectRoot2, now = Date.now()) {
 function writeSkeletonScope(projectRoot2, scope) {
   const name = scopeFileName(scope.artifactId);
   if (!name) return;
-  const file2 = path27.join(skeletonScopeDir(projectRoot2), name);
+  const file2 = path25.join(skeletonScopeDir(projectRoot2), name);
   try {
     if (scope.activeSkelIds.length === 0 && !scope.reshape) {
-      fs26.rmSync(file2, { force: true });
+      fs24.rmSync(file2, { force: true });
       return;
     }
-    fs26.mkdirSync(path27.dirname(file2), { recursive: true });
+    fs24.mkdirSync(path25.dirname(file2), { recursive: true });
     const tmp = `${file2}.tmp.${process.pid}.${Date.now()}`;
-    fs26.writeFileSync(tmp, JSON.stringify(scope, null, 2));
-    fs26.renameSync(tmp, file2);
+    fs24.writeFileSync(tmp, JSON.stringify(scope, null, 2));
+    fs24.renameSync(tmp, file2);
   } catch {
   }
 }
@@ -41188,8 +40557,8 @@ function clearReshapeRestores(projectRoot2, fromId, exceptId, now = Date.now()) 
   }
 }
 function within(dir, abs) {
-  const rel = path27.relative(dir, abs);
-  return rel === "" || !rel.startsWith("..") && !path27.isAbsolute(rel);
+  const rel = path25.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path25.isAbsolute(rel);
 }
 
 // src/mcp/skeleton-drift.ts
@@ -41224,8 +40593,8 @@ function skeletonExteriorDigest(text, file2) {
 }
 
 // src/mcp/skeleton-read.ts
-import fs27 from "node:fs";
-import path28 from "node:path";
+import fs25 from "node:fs";
+import path26 from "node:path";
 var SKELETON_SNAPSHOT_LIMITS = {
   maxFiles: 12,
   maxFileBytes: 48 * 1024,
@@ -41235,15 +40604,15 @@ var SKELETON_SNAPSHOT_LIMITS = {
 var MAX_RENAME_FILE_BYTES = 256 * 1024;
 var MAX_RENAME_TOTAL_BYTES = 2 * 1024 * 1024;
 function within2(dir, abs) {
-  const rel = path28.relative(dir, abs);
-  return rel === "" || !rel.startsWith("..") && !path28.isAbsolute(rel);
+  const rel = path26.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path26.isAbsolute(rel);
 }
 function normalizeSkeletonPath(root, raw2) {
   if (typeof raw2 !== "string" || !raw2.trim() || raw2.includes("\0")) return null;
   const spelled = raw2.trim().replace(/\\/g, "/");
-  const abs = path28.resolve(root, spelled);
-  if (!within2(root, abs) || abs === path28.resolve(root)) return null;
-  return path28.relative(root, abs).split(path28.sep).join("/");
+  const abs = path26.resolve(root, spelled);
+  if (!within2(root, abs) || abs === path26.resolve(root)) return null;
+  return path26.relative(root, abs).split(path26.sep).join("/");
 }
 function isDeniedSegment(segment) {
   const s = segment.toLowerCase();
@@ -41254,35 +40623,35 @@ function isDeniedPath(rel) {
   if (segs.some(isDeniedSegment)) return true;
   return ruleForRelPath(rel.toLowerCase())?.category === "secrets";
 }
-var O_NOFOLLOW = fs27.constants.O_NOFOLLOW ?? 0;
-var O_NONBLOCK = fs27.constants.O_NONBLOCK ?? 0;
+var O_NOFOLLOW = fs25.constants.O_NOFOLLOW ?? 0;
+var O_NONBLOCK = fs25.constants.O_NONBLOCK ?? 0;
 function readConfined(root, rel, limits) {
   if (isDeniedPath(rel)) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let realRoot;
   let realAbs;
   try {
-    realRoot = fs27.realpathSync(root);
+    realRoot = fs25.realpathSync(root);
   } catch {
     return { ok: false, reason: "the project root is unreadable" };
   }
   try {
-    realAbs = fs27.realpathSync(path28.resolve(root, rel));
+    realAbs = fs25.realpathSync(path26.resolve(root, rel));
   } catch {
     return { ok: false, reason: "not on disk" };
   }
   if (!within2(realRoot, realAbs)) return { ok: false, reason: "it resolves outside the project (symlink)" };
-  if (isDeniedPath(path28.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
+  if (isDeniedPath(path26.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let fd;
   try {
-    fd = fs27.openSync(realAbs, fs27.constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    fd = fs25.openSync(realAbs, fs25.constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   } catch {
     return { ok: false, reason: "unreadable" };
   }
   try {
-    const st = fs27.fstatSync(fd);
+    const st = fs25.fstatSync(fd);
     if (!st.isFile()) return { ok: false, reason: "not a regular file" };
     try {
-      const named = fs27.statSync(realAbs);
+      const named = fs25.statSync(realAbs);
       if (named.dev !== st.dev || named.ino !== st.ino) return { ok: false, reason: "it changed while being read" };
     } catch {
       return { ok: false, reason: "it changed while being read" };
@@ -41291,7 +40660,7 @@ function readConfined(root, rel, limits) {
     const buf = Buffer.alloc(st.size);
     let off = 0;
     while (off < st.size) {
-      const n = fs27.readSync(fd, buf, off, st.size - off, off);
+      const n = fs25.readSync(fd, buf, off, st.size - off, off);
       if (n <= 0) break;
       off += n;
     }
@@ -41302,7 +40671,7 @@ function readConfined(root, rel, limits) {
     return { ok: false, reason: "unreadable" };
   } finally {
     try {
-      fs27.closeSync(fd);
+      fs25.closeSync(fd);
     } catch {
     }
   }
@@ -41341,7 +40710,7 @@ function buildSkeletonSnapshot(args) {
   const steps = Array.isArray(args.steps) ? args.steps : [];
   const skelIds = [...new Set(steps.map((s) => s?.skelId).filter((id) => typeof id === "string" && id.length > 0))];
   if (skelIds.length === 0) return { visuals: [], note: "" };
-  const root = path29.resolve(args.root);
+  const root = path27.resolve(args.root);
   const agentVisuals = Array.isArray(args.visuals) ? args.visuals : [];
   const scan = scanSkeletonFences(root, {
     files: planDeclaredFiles({
@@ -41883,13 +41252,13 @@ function childDigest(child) {
 }
 function revisionOperation(projectRoot2, store, operationId, broadcast) {
   const sessionId = store.getSessionId();
-  const dir = path30.join(projectRoot2, ".deeppairing", "sessions", sessionId);
-  const receiptPath = path30.join(dir, `revise-page-${operationId}.json`);
+  const dir = path28.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+  const receiptPath = path28.join(dir, `revise-page-${operationId}.json`);
   const key2 = standaloneOperationKey(projectRoot2, sessionId, "revise_page", operationId);
   const artifactId = `art_${key2}`;
   const commentId = `cmt_${key2}`;
   const save = (receipt) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 384 });
-  const lock = (run) => withFileLock(path30.join(dir, ".standalone-revise-page.lock"), run);
+  const lock = (run) => withFileLock(path28.join(dir, ".standalone-revise-page.lock"), run);
   const read = () => receiptSchema3.parse(readJsonFile(receiptPath));
   function target(parentId) {
     const artifacts = store.getArtifacts();
@@ -42220,8 +41589,6 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
 }
 
 // src/daemon/standalone-closeout.ts
-import fs28 from "node:fs";
-import path31 from "node:path";
 var receiptName = /^(present-options|present-page|revise-page)-([0-9a-f-]+)\.json$/;
 var receiptPrefix = /^(?:present-options|present-page|revise-page)-.*\.json$/;
 var operationIdSchema = external_exports.string().uuid();
@@ -42238,9 +41605,9 @@ var StandaloneCloseoutError = class extends Error {
   code;
 };
 function readCollection(dir, file2, schema, key2) {
-  const stat = fs28.lstatSync(path31.join(dir, file2), { throwIfNoEntry: false });
+  const stat = fs26.lstatSync(path29.join(dir, file2), { throwIfNoEntry: false });
   if (stat && !stat.isFile()) throw new Error("Standalone review collection is not a regular file.");
-  const raw2 = readJsonFile(path31.join(dir, file2));
+  const raw2 = readJsonFile(path29.join(dir, file2));
   if (raw2 === void 0 && !stat) return /* @__PURE__ */ new Map();
   if (!Array.isArray(raw2)) throw new Error("Standalone review has a malformed durable collection.");
   const rows = /* @__PURE__ */ new Map();
@@ -42279,7 +41646,7 @@ function closeoutSnapshot(dir, store) {
     at: external_exports.string().datetime(),
     acknowledged: external_exports.boolean().optional()
   }), (row) => JSON.stringify([row.artifactId, row.visualId]));
-  const rawTraces = readJsonFile(path31.join(dir, "preflight-traces.json"));
+  const rawTraces = readJsonFile(path29.join(dir, "preflight-traces.json"));
   const traces = external_exports.record(external_exports.string(), PreflightTraceSchema).parse(rawTraces === void 0 ? {} : rawTraces);
   for (const [id, trace] of Object.entries(traces)) {
     if (trace.artifactId !== id) throw new Error("Standalone review has a mismatched durable preflight trace.");
@@ -42330,7 +41697,7 @@ function closeoutSnapshot(dir, store) {
 }
 function reconcileReceipts(projectRoot2, dir, store, checkDeadline) {
   const receipts = [];
-  const directory = fs28.opendirSync(dir);
+  const directory = fs26.opendirSync(dir);
   try {
     for (let file2 = directory.readSync(); file2; file2 = directory.readSync()) {
       checkDeadline();
@@ -42377,16 +41744,16 @@ var StandaloneCloseout = class {
     if (!isStandaloneSessionForProject(sessionId, this.projectRoot)) {
       throw new Error("Review does not belong to this standalone project.");
     }
-    const dir = path31.join(this.projectRoot, ".deeppairing", "sessions", sessionId);
-    if (!fs28.lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
+    const dir = path29.join(this.projectRoot, ".deeppairing", "sessions", sessionId);
+    if (!fs26.lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
       throw new Error("Standalone review does not exist.");
     }
     return dir;
   }
   readMarker(dir, sessionId) {
-    const file2 = path31.join(dir, "review-ended.json");
+    const file2 = path29.join(dir, "review-ended.json");
     try {
-      const stat = fs28.lstatSync(file2, { throwIfNoEntry: false });
+      const stat = fs26.lstatSync(file2, { throwIfNoEntry: false });
       if (!stat) return;
       const marker = stat.isFile() && markerSchema.safeParse(readJsonFile(file2));
       if (marker && marker.success && marker.data.sessionId === sessionId) return marker.data;
@@ -42466,12 +41833,12 @@ var StandaloneCloseout = class {
       reconcileReceipts(this.projectRoot, dir, store, checkDeadline);
       store.forceFlush();
       checkDeadline();
-      const committed = withSessionFlushLock(path31.join(dir, ".flush.lock"), () => {
+      const committed = withSessionFlushLock(path29.join(dir, ".flush.lock"), () => {
         const existing = this.readMarker(dir, sessionId);
         if (existing) return existing;
         checkDeadline();
         const committed2 = { version: 1, sessionId, endedAt: (/* @__PURE__ */ new Date()).toISOString() };
-        writeJsonAtomic(path31.join(dir, "review-ended.json"), committed2, 2, { mode: 384 });
+        writeJsonAtomic(path29.join(dir, "review-ended.json"), committed2, 2, { mode: 384 });
         return committed2;
       });
       this.onEnded?.(sessionId);
@@ -42490,13 +41857,1484 @@ var StandaloneCloseout = class {
   }
 };
 
+// src/http/routes.ts
+async function demoLedgerOverlay(sessionId, store) {
+  if (!sessionId?.startsWith("demo_") || !store) return [];
+  try {
+    const memory = await store.getSessionMemory();
+    return memory.rejectedApproaches.map((r) => {
+      const concept = r.concept?.trim() || r.description;
+      const at = r.rejectedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+      const entry = {
+        key: normalizeConceptKey(concept),
+        concept,
+        instances: [
+          {
+            project: "demo",
+            sessionId,
+            verdict: "rejected",
+            reason: r.reason,
+            description: r.description,
+            at
+          }
+        ],
+        firstSeenAt: at,
+        lastSeenAt: at
+      };
+      return { ...entry, stance: deriveStance(entry) };
+    });
+  } catch {
+    return [];
+  }
+}
+function checkProjectHash(c, daemonHash) {
+  if (!daemonHash) return null;
+  const sentHash = c.req.header("X-Project-Hash");
+  if (!sentHash || sentHash !== daemonHash) {
+    return c.json(
+      {
+        // BB10 — message is fallback copy. The browser specializes the
+        // toast on `code` and offers a one-click reload action.
+        error: `Project hash mismatch \u2014 your tab is pointed at a daemon serving a different project. Reload the page to re-bind.`,
+        code: ERROR_CODES.project_hash_mismatch,
+        expected: daemonHash
+      },
+      403
+    );
+  }
+  return null;
+}
+var EMPTY_STATE = {
+  sessionId: null,
+  status: "no_active_session",
+  artifacts: [],
+  comments: [],
+  decisions: [],
+  planReviews: [],
+  autonomyLevel: "supervised",
+  detailDensity: "terse",
+  persona: "auto",
+  rejectedApproaches: [],
+  approvedPatterns: [],
+  // G1 (#198b) — requests ride the empty state so a no-session UI reads a
+  // consistent shape (the composer shows nothing until a session exists).
+  requests: []
+};
+function sessionDirExists(projectRoot2, sessionId) {
+  if (!sessionId || sessionId.includes("/") || sessionId.includes("\\") || sessionId.includes("..")) return false;
+  try {
+    return fs27.existsSync(path30.join(projectRoot2, ".deeppairing", "sessions", sessionId));
+  } catch {
+    return false;
+  }
+}
+function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources, stanceExceptions, standaloneCloseout) {
+  const getStore = typeof storeOrGetter === "function" ? storeOrGetter : () => storeOrGetter;
+  const broadcast = broadcastFn;
+  const log2 = logFn ?? (() => {
+  });
+  const daemonHash = projectRoot2 ? projectHashOf(projectRoot2) : void 0;
+  const app = new Hono2();
+  const MAX_BODY_BYTES = 64 * 1024;
+  app.use("*", async (c, next) => {
+    if (c.req.method === "OPTIONS" || c.req.method === "GET" || c.req.method === "HEAD") {
+      return next();
+    }
+    const lenHeader = c.req.header("content-length");
+    if (lenHeader) {
+      const len = parseInt(lenHeader, 10);
+      if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
+        return c.json(
+          { error: `Request body exceeds ${MAX_BODY_BYTES}-byte cap.`, code: ERROR_CODES.body_too_large },
+          413
+        );
+      }
+    }
+    return next();
+  });
+  app.use("*", async (c, next) => {
+    const host = c.req.header("host");
+    if (host) {
+      const hostname3 = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
+      const isLoopback = hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "::1";
+      if (!isLoopback) {
+        return c.json(
+          { error: "Forbidden host \u2014 the daemon only serves loopback origins.", code: ERROR_CODES.forbidden_host },
+          403
+        );
+      }
+    }
+    return next();
+  });
+  app.use("*", async (c, next) => {
+    if (c.req.method === "OPTIONS") return next();
+    const p = c.req.path;
+    const isBootstrap = c.req.method === "GET" && (!p.startsWith("/api/") || p === "/api/daemon-info" || // MP1 — read-only cross-daemon discovery (project switcher). Returns no
+    // session data (just peer projectRoot/port/hash), so the wrong-store
+    // threat model doesn't apply; and it can't be hash-gated because the
+    // SPA may query it for a project whose hash it doesn't hold yet.
+    p === "/api/projects");
+    const isDemoRun = p === "/api/demo/run";
+    if (isBootstrap || isDemoRun) return next();
+    const hashFail = checkProjectHash(c, daemonHash);
+    if (hashFail) return hashFail;
+    return next();
+  });
+  app.use("*", async (c, next) => {
+    const method = c.req.method;
+    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
+    if (c.req.path === "/api/demo/run") return next();
+    if (authToken) {
+      if (c.req.header("Authorization") !== `Bearer ${authToken}`) {
+        return c.json(
+          { error: "Authorization required for this action.", code: ERROR_CODES.daemon_auth_required },
+          401
+        );
+      }
+    }
+    return next();
+  });
+  app.use("/*", cors({
+    // D5 — vscode-webview:// ONLY (see origin-policy.ts). Loopback-origin
+    // reflection let any local web page read responses cross-origin —
+    // including the served HTML with the injected bearer token.
+    origin: (origin) => corsAllowedOrigin(origin)
+  }));
+  app.onError((err, c) => {
+    if (err instanceof StandaloneCloseoutError) {
+      return c.json({ error: err.message, code: err.code }, 409);
+    }
+    if (isFileLockError(err)) return c.json(lockBusyBody(err), 503);
+    if (isSessionReviewConflictError(err)) {
+      return c.json({
+        error: "session_review_conflict",
+        code: ERROR_CODES.session_review_conflict,
+        message: err.message
+      }, 409);
+    }
+    if (err instanceof SyntaxError) {
+      return c.json({ error: "Invalid JSON" }, 400);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  });
+  async function withReviewWrite(c, store, requestedSid, run) {
+    if (!standaloneCloseout || !projectRoot2) return run(requestedSid);
+    const sessionId = store.getSessionId();
+    if (!isStandaloneSessionForProject(sessionId, projectRoot2)) return run(requestedSid);
+    const release2 = standaloneCloseout.admitWrite(sessionId);
+    if (!release2) {
+      if (standaloneCloseout.state(sessionId).state === "ended") {
+        return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+      }
+      return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+    }
+    try {
+      return await run(sessionId);
+    } finally {
+      release2();
+    }
+  }
+  app.get("/api/state", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json(EMPTY_STATE);
+    return c.json(await store.getFullState());
+  });
+  app.get("/api/requests", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json({ requests: [] });
+    return c.json({ requests: await store.getRequests?.() ?? [] });
+  });
+  app.post("/api/requests", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = CreateRequestBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      if (!store.addRequest) {
+        return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
+      }
+      const request = await store.addRequest({
+        text: parsed.data.text,
+        intent: parsed.data.intent,
+        ...parsed.data.source ? { source: parsed.data.source } : {},
+        ...parsed.data.scope ? { scope: parsed.data.scope } : {}
+      });
+      broadcast({ type: "request_added", request }, sid2);
+      return c.json({ request });
+    });
+  });
+  app.post("/api/comments", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = CommentBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { artifactId, content, target, intent, parentCommentId, suggestion } = parsed.data;
+    const targetArtifactId = target?.artifactId;
+    const idsToOwn = [artifactId, targetArtifactId].filter(
+      (id) => !!id && id !== "__session__"
+    );
+    if (idsToOwn.length > 0) {
+      const arts = await store.getArtifacts();
+      const owns = idsToOwn.every((id) => arts.some((a) => a.id === id));
+      if (!owns) {
+        return c.json(
+          {
+            error: "artifact_not_in_session",
+            code: "artifact_not_in_session",
+            message: "This artifact belongs to a different session than the one this tab is bound to."
+          },
+          404
+        );
+      }
+    }
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      const sendBackLedgerEvents = [];
+      if (target?.sectionId === "decision_revision_requested") {
+        const arts = await store.getArtifacts();
+        const decision = arts.find((a) => a.id === artifactId && a.type === "decision");
+        const dContent = decision?.content;
+        const options = Array.isArray(dContent?.options) ? dContent.options : [];
+        if (decision && options.length > 0) {
+          const reason = content.trim() || void 0;
+          const buffered = (event) => {
+            sendBackLedgerEvents.push(event);
+          };
+          for (const option of options) {
+            await recordRejectedOptionConcept(store, buffered, {
+              option,
+              reason,
+              sourceArtifactId: artifactId
+            });
+          }
+        }
+      }
+      const newId = `cmt_${nanoid3(10)}`;
+      const comment = await store.addComment({
+        id: newId,
+        artifactId,
+        content,
+        author: "human",
+        target,
+        intent,
+        parentCommentId: parentCommentId ?? null,
+        suggestion
+      });
+      const isNew = comment.id === newId;
+      if (isNew) {
+        broadcast({ type: "comment_added", comment }, sid2);
+        broadcast({
+          type: "feedback_received",
+          commentId: comment.id,
+          artifactId,
+          intent: intent ?? "comment"
+        }, sid2);
+      } else {
+        log2(`[comment] DEDUPED \u2014 sid=${sid2 ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} len=${content.length}`);
+      }
+      if (isNew) {
+        for (const event of sendBackLedgerEvents) broadcast(event, sid2);
+      }
+      if (projectRoot2) {
+        const sectionId = target?.sectionId;
+        if (typeof sectionId === "string" && sectionId.startsWith("horizon_check:request:")) {
+          try {
+            recordMetricEvent(projectRoot2, { kind: "horizon_check_requested" });
+          } catch {
+          }
+        }
+      }
+      return c.json({ comment });
+    });
+  });
+  app.post("/api/render-failures", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = RenderFailureBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { artifactId, visualId, error: error51, title } = parsed.data;
+    const arts = await store.getArtifacts();
+    const art = arts.find((a) => a.id === artifactId);
+    if (!art) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    const pageIssues = visualId === PAGE_RENDER_ISSUES_VISUAL_ID;
+    if (pageIssues && art.type !== "page") {
+      return c.json(
+        {
+          error: `visualId ${PAGE_RENDER_ISSUES_VISUAL_ID} is reserved for page artifacts`,
+          code: ERROR_CODES.validation_error,
+          issues: [{ path: "visualId", message: "reserved for page artifacts" }]
+        },
+        400
+      );
+    }
+    if (!store.recordRenderFailure) return c.json({ status: "ignored", artifactId, visualId });
+    await store.recordRenderFailure({ artifactId, visualId, error: error51, title: pageIssues ? art.title || void 0 : title });
+    broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
+    return c.json({ status: "recorded", artifactId, visualId });
+  });
+  app.post("/api/comments/:commentId/mark-resolved", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const commentId = c.req.param("commentId");
+    const existing = await store.getComment(commentId);
+    if (!existing) {
+      return c.json(
+        {
+          error: "comment_not_in_session",
+          code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (existing.intent !== "question" && existing.target.htmlAnchor && existing.target.artifactId) {
+      const art = (await store.getArtifacts()).find((a) => a.id === existing.target.artifactId);
+      if (art?.type === "page") {
+        let answers = false;
+        try {
+          const asks = pageAsksFor(art.id, coercePageContent(art.content).html).filter((q) => q.id);
+          const current = { artifactId: art.id, version: art.version };
+          answers = asks.some((q) => commentAnswersAsk(q, existing, current));
+        } catch {
+          answers = false;
+        }
+        if (answers) {
+          return c.json(
+            {
+              error: "comment_answers_page_ask",
+              code: ERROR_CODES.comment_answers_page_ask,
+              message: "This comment answers one of the page's asks; resolving it would reopen the ask."
+            },
+            409
+          );
+        }
+      }
+    }
+    const resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
+    await store.markCommentHumanResolved(commentId, resolvedAt);
+    const comment = await store.getComment(commentId);
+    if (comment) {
+      broadcast({ type: "comment_updated", comment }, sid);
+    }
+    return c.json({ status: "resolved", commentId, comment: comment ?? null });
+  });
+  app.post("/api/comments/:commentId/mark-unresolved", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const commentId = c.req.param("commentId");
+    if (!await store.getComment(commentId)) {
+      return c.json(
+        {
+          error: "comment_not_in_session",
+          code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    const reopened = await store.markCommentHumanResolved(commentId, null);
+    const comment = await store.getComment(commentId);
+    if (reopened && comment) {
+      broadcast({ type: "comment_updated", comment }, sid);
+    }
+    return c.json({ status: reopened ? "reopened" : "unchanged", commentId, comment: comment ?? null });
+  });
+  app.post("/api/comments/:commentId/suggestion", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const commentId = c.req.param("commentId");
+    const existing = await store.getComment(commentId);
+    if (!existing) {
+      return c.json(
+        {
+          error: "comment_not_in_session",
+          code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (!existing.suggestion || existing.suggestion.state !== "countered") {
+      return c.json(
+        {
+          error: "suggestion_not_countered",
+          code: "suggestion_not_countered",
+          message: "Only a suggestion the agent has countered can be taken or insisted on."
+        },
+        409
+      );
+    }
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = SuggestionResolveBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const comment = await store.updateCommentSuggestion(commentId, {
+      state: parsed.data.action === "insist" ? "insisted" : "applied",
+      resetAcknowledged: true
+    });
+    if (comment) {
+      broadcast({ type: "comment_updated", comment }, sid);
+      broadcast({ type: "feedback_received", commentId, artifactId: comment.target.artifactId, intent: "suggestion" }, sid);
+    }
+    return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
+  });
+  app.route("/", createReviewRoutes({
+    getStore,
+    broadcast,
+    log: log2,
+    updateTaskStatus: async (artifactId, store) => maybeUpdateTaskStatus(null, artifactId, store)
+  }));
+  app.post("/api/decisions/:decisionId/close-out", async (c) => {
+    const decisionId = c.req.param("decisionId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = DecisionCloseOutBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { projectRoot: targetRoot, sessionId: bodySessionId, note } = parsed.data;
+    if (targetRoot && (!projectRoot2 || path30.resolve(targetRoot) !== path30.resolve(projectRoot2))) {
+      return c.json(
+        {
+          error: "cross_project_close_out_unsupported",
+          code: ERROR_CODES.cross_project_close_out_unsupported,
+          message: "This decision belongs to another project. Open that project's companion UI to close it out \u2014 cross-project writes are not supported yet.",
+          projectRoot: targetRoot
+        },
+        400
+      );
+    }
+    const sid = bodySessionId ?? getSessionId(c);
+    let transient = null;
+    if (!getStore(sid) && sid && projectRoot2 && sessionDirExists(projectRoot2, sid)) {
+      try {
+        transient = new FileStore(projectRoot2, sid);
+      } catch (err) {
+        log2(`[close-out] transient store for ${sid} failed: ${err}`);
+      }
+    }
+    const store = getStore(sid) ?? transient;
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const artifacts = await store.getArtifacts();
+    const record3 = await store.getDecision(decisionId);
+    const isDecisionArtifact = (a) => !!a && a.type === "decision";
+    const byRecord = record3?.artifactId ? artifacts.find((a) => a.id === record3.artifactId) : void 0;
+    const artifact = (isDecisionArtifact(byRecord) ? byRecord : void 0) ?? artifacts.find(
+      (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+    );
+    if (!artifact) {
+      return c.json(
+        {
+          error: "decision_not_in_session",
+          code: ERROR_CODES.decision_not_in_session,
+          message: "This decision belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (record3?.response) {
+      return c.json(
+        {
+          error: "decision_already_resolved",
+          code: ERROR_CODES.decision_already_resolved,
+          currentStatus: artifact.status,
+          message: "This decision was already answered \u2014 nothing to close out."
+        },
+        409
+      );
+    }
+    if (isClosedArtifactStatus(artifact.status)) {
+      return c.json({ status: "already_closed", decisionId, artifactId: artifact.id, artifactStatus: artifact.status });
+    }
+    await store.updateArtifactStatus(artifact.id, "obsolete", "ui_dismiss_obsolete");
+    if (note?.trim()) {
+      try {
+        await store.addComment({
+          id: `c_${nanoid3(8)}`,
+          artifactId: artifact.id,
+          content: note.trim(),
+          author: "human",
+          target: { artifactId: artifact.id }
+        });
+      } catch (err) {
+        log2(`[close-out] note comment failed for ${artifact.id}: ${err}`);
+      }
+    }
+    await store.forceFlush();
+    transient?.dispose();
+    clearContextBankCache();
+    broadcast({ type: "artifact_updated", artifactId: artifact.id, status: "obsolete", reason: "ui_dismiss_obsolete" }, sid);
+    log2(`[close-out] decisionId=${decisionId} artifactId=${artifact.id} \u2192 obsolete (no option selected)`);
+    return c.json({ status: "closed_out", decisionId, artifactId: artifact.id, artifactStatus: "obsolete" });
+  });
+  app.get("/api/context-bank", (c) => {
+    try {
+      return c.json(getContextBank({ fresh: c.req.query("fresh") === "1" }));
+    } catch (err) {
+      log2(`[context-bank] read failed, returning empty: ${err}`);
+      return c.json({
+        generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        projects: [],
+        totals: { projects: 0, sessions: 0, openDecisions: 0, needsYou: 0, waitingOnAgent: 0, staleProjects: 0 },
+        staleAfterDays: DEFAULT_STALE_AFTER_DAYS
+      });
+    }
+  });
+  app.post("/api/artifacts/:artifactId/rename", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const artifactId = c.req.param("artifactId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = RenameBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const title = parsed.data.title.trim();
+    if (!(await store.getArtifacts()).some((a) => a.id === artifactId)) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    await store.renameArtifact(artifactId, title);
+    broadcast({ type: "artifact_renamed", artifactId, title }, sid);
+    return c.json({ status: "renamed", artifactId });
+  });
+  app.get("/api/artifacts/:artifactId/comments", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json({ comments: [] });
+    const artifactId = c.req.param("artifactId");
+    return c.json({ comments: await store.getCommentsForArtifact(artifactId) });
+  });
+  app.get("/api/artifacts/:artifactId/preflight-trace", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json({ trace: null });
+    const artifactId = c.req.param("artifactId");
+    if (!store.getPreflightTrace) return c.json({ trace: null });
+    const trace = await store.getPreflightTrace(artifactId);
+    return c.json({ trace: trace ?? null });
+  });
+  app.get("/api/philosophy", async (c) => {
+    const stance = c.req.query("stance");
+    const concept = c.req.query("concept") ?? void 0;
+    const limit = Number(c.req.query("limit") ?? 50);
+    let entries;
+    try {
+      entries = getGlobalStore().query({
+        stance: stance && ["avoid", "prefer", "mixed"].includes(stance) ? stance : void 0,
+        concept,
+        limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 500) : 50
+      });
+    } catch (err) {
+      log2(`[philosophy] query failed, returning empty: ${err}`);
+      entries = [];
+    }
+    const sid = getSessionId(c);
+    if (sid?.startsWith("demo_")) {
+      const realKeys = new Set(entries.map((e) => e.key));
+      const q = concept?.trim().toLowerCase();
+      const overlay = (await demoLedgerOverlay(sid, getStore(sid))).filter(
+        (e) => !realKeys.has(e.key) && (!q || e.key.includes(q) || e.concept.toLowerCase().includes(q)) && (!stance || e.stance === stance)
+      );
+      entries = [...overlay, ...entries];
+    }
+    if (entries.length === 0) return c.json({ entries: [], total: 0 });
+    const summary = entries.map((e) => {
+      const projects = new Set(e.instances.map((i) => i.project));
+      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+      const verdicts = e.instances.reduce(
+        (acc, i) => {
+          acc[i.verdict]++;
+          return acc;
+        },
+        { approved: 0, rejected: 0 }
+      );
+      return {
+        key: e.key,
+        concept: e.concept,
+        stance: e.stance,
+        projectCount: projects.size,
+        projects: Array.from(projects).slice(0, 5),
+        // surface the first few
+        instanceCount: e.instances.length,
+        approved: verdicts.approved,
+        rejected: verdicts.rejected,
+        latestReason,
+        firstSeenAt: e.firstSeenAt,
+        lastSeenAt: e.lastSeenAt
+      };
+    });
+    return c.json({ entries: summary, total: summary.length });
+  });
+  app.post("/api/philosophy/seed", async (c) => {
+    let body;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
+    }
+    const raw2 = String(body?.concept ?? "");
+    const verdict = body?.verdict === "rejected" ? "rejected" : "approved";
+    const reason = body?.reason ? String(body.reason).trim() || void 0 : void 0;
+    const MAX_BODY_BYTES2 = 16 * 1024;
+    const MAX_LINES = 50;
+    if (Buffer.byteLength(raw2, "utf8") > MAX_BODY_BYTES2) {
+      return c.json(
+        {
+          error: `seed body exceeds ${MAX_BODY_BYTES2} bytes \u2014 paste in smaller batches.`,
+          code: ERROR_CODES.validation_error
+        },
+        400
+      );
+    }
+    const lines = raw2.split(/\r?\n/).map((s) => s.trim()).filter((s) => s.length > 0);
+    if (lines.length > MAX_LINES) {
+      return c.json(
+        {
+          error: `seed exceeds ${MAX_LINES} lines (got ${lines.length}) \u2014 paste in smaller batches.`,
+          code: ERROR_CODES.validation_error
+        },
+        400
+      );
+    }
+    const seenInThisPost = /* @__PURE__ */ new Set();
+    const concepts = lines.filter((l) => {
+      const k = l.toLowerCase();
+      if (seenInThisPost.has(k)) return false;
+      seenInThisPost.add(k);
+      return true;
+    });
+    if (concepts.length === 0) {
+      return c.json(
+        { error: "concept is required (paste a rule, idea, or pattern name)", code: ERROR_CODES.validation_error },
+        400
+      );
+    }
+    for (const concept of concepts) {
+      getGlobalStore().recordInstance(concept, {
+        project: "manual",
+        sessionId: "seed",
+        verdict,
+        reason,
+        description: reason ?? concept
+      });
+    }
+    return c.json({
+      status: "seeded",
+      concept: concepts[0],
+      concepts,
+      seededCount: concepts.length,
+      verdict
+    });
+  });
+  app.post("/api/philosophy/remove", async (c) => {
+    let body;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
+    }
+    const rawConcept = body?.concept;
+    const concept = typeof rawConcept === "string" ? rawConcept.trim() : "";
+    if (!concept) {
+      return c.json(
+        { error: "concept is required (the stance to remove)", code: ERROR_CODES.validation_error },
+        400
+      );
+    }
+    let result;
+    try {
+      result = getGlobalStore().removeConcept(concept);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json(
+        { error: `Could not remove the stance: ${msg}`, code: ERROR_CODES.ledger_frozen },
+        409
+      );
+    }
+    if (!result) {
+      return c.json(
+        { error: `No stance recorded for "${concept}".`, code: ERROR_CODES.stance_not_found },
+        404
+      );
+    }
+    log2(
+      `[philosophy/remove] removed "${result.concept}" (${result.instanceCount} instance(s)); backup at ${result.backupPath}`
+    );
+    return c.json({
+      status: "removed",
+      concept: result.concept,
+      instancesRemoved: result.instanceCount,
+      backupPath: result.backupPath
+    });
+  });
+  app.post("/api/philosophy/override", async (c) => {
+    let body;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
+    }
+    if (body?.source === "team") {
+      return c.json(
+        {
+          error: "Team-rule blocks can't be overridden here \u2014 edit .deeppairing/team.json (it's shared and committed).",
+          code: ERROR_CODES.validation_error
+        },
+        400
+      );
+    }
+    const description = typeof body?.description === "string" ? body.description : void 0;
+    const concept = typeof body?.concept === "string" ? body.concept : void 0;
+    if (!description && !concept) {
+      return c.json(
+        { error: "description or concept is required to identify the stance", code: ERROR_CODES.validation_error },
+        400
+      );
+    }
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) {
+      return c.json(
+        { error: "No active session to override against.", code: ERROR_CODES.no_active_session },
+        409
+      );
+    }
+    const result = await store.overrideRejectedApproach({ description, concept });
+    broadcast({ type: "stance_overridden", concept: concept ?? description, retired: result.retired }, sid);
+    return c.json({ status: "overridden", concept: concept ?? description, ...result });
+  });
+  app.get("/api/philosophy/digest", async (c) => {
+    const sinceDays = Math.min(Math.max(Number(c.req.query("sinceDays") ?? 7), 1), 90);
+    const now = Date.now();
+    const fromMs = now - sinceDays * 24 * 60 * 60 * 1e3;
+    const fromIso = new Date(fromMs).toISOString();
+    const toIso = new Date(now).toISOString();
+    let entries;
+    try {
+      entries = getGlobalStore().query({ limit: 500 });
+    } catch (err) {
+      log2(`[philosophy/digest] query failed, returning empty digest: ${err}`);
+      return c.json({
+        window: { sinceDays, fromIso, toIso },
+        totals: { concepts: 0, instances: 0, multiProjectConcepts: 0 },
+        newThisPeriod: [],
+        strengthenedThisPeriod: []
+      });
+    }
+    const digestSid = getSessionId(c);
+    if (digestSid?.startsWith("demo_")) {
+      const realKeys = new Set(entries.map((e) => e.key));
+      const overlay = (await demoLedgerOverlay(digestSid, getStore(digestSid))).filter(
+        (e) => !realKeys.has(e.key)
+      );
+      entries = [...overlay, ...entries];
+    }
+    const realProjects = (insts) => new Set(insts.filter((i) => i.project !== "manual").map((i) => i.project));
+    const totals = {
+      concepts: entries.length,
+      instances: entries.reduce((a, e) => a + e.instances.length, 0),
+      multiProjectConcepts: entries.filter((e) => realProjects(e.instances).size > 1).length
+    };
+    const mapEntry = (e) => {
+      const projects = realProjects(e.instances);
+      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+      return {
+        key: e.key,
+        concept: e.concept,
+        stance: e.stance,
+        projectCount: projects.size,
+        firstSeenAt: e.firstSeenAt,
+        lastSeenAt: e.lastSeenAt,
+        latestReason
+      };
+    };
+    const newThisPeriod = entries.filter((e) => new Date(e.firstSeenAt).getTime() >= fromMs).map(mapEntry);
+    const strengthenedThisPeriod = entries.filter((e) => new Date(e.firstSeenAt).getTime() < fromMs).map((e) => {
+      const newInstancesInPeriod = e.instances.filter((i) => new Date(i.at).getTime() >= fromMs).length;
+      return { ...mapEntry(e), newInstancesInPeriod };
+    }).filter((e) => e.newInstancesInPeriod > 0);
+    return c.json({
+      window: { sinceDays, fromIso, toIso },
+      totals,
+      newThisPeriod,
+      strengthenedThisPeriod
+    });
+  });
+  app.get("/api/ledger/digest", (c) => {
+    if (!projectRoot2) {
+      return c.json({
+        shapedThisProject: 0,
+        nearMissesThisProject: 0,
+        blockedThisProject: 0,
+        sessionsTouched: 0,
+        topCitedStances: [],
+        seededStances: [],
+        globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 }
+      });
+    }
+    let project;
+    let entries;
+    try {
+      project = FileStore.ledgerDigest(projectRoot2);
+      entries = getGlobalStore().query({ limit: 1e4 });
+    } catch (err) {
+      log2(`[ledger/digest] read failed, returning empty digest: ${err}`);
+      return c.json({
+        shapedThisProject: 0,
+        nearMissesThisProject: 0,
+        blockedThisProject: 0,
+        sessionsTouched: 0,
+        topCitedStances: [],
+        seededStances: [],
+        globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 }
+      });
+    }
+    const projects = /* @__PURE__ */ new Set();
+    let multiProjectConcepts = 0;
+    const globalCitationByConcept = /* @__PURE__ */ new Map();
+    const seededRaw = [];
+    for (const e of entries) {
+      let realInstanceCount = 0;
+      let entryProjects = null;
+      for (const inst of e.instances) {
+        if (inst.project === "manual") continue;
+        realInstanceCount++;
+        projects.add(inst.project);
+        if (realInstanceCount === 2 && !entryProjects) {
+          entryProjects = /* @__PURE__ */ new Set();
+          for (const prior of e.instances) {
+            if (prior.project !== "manual") entryProjects.add(prior.project);
+          }
+        } else if (entryProjects) {
+          entryProjects.add(inst.project);
+        }
+      }
+      if (entryProjects && entryProjects.size > 1) multiProjectConcepts++;
+      if (realInstanceCount > 0) globalCitationByConcept.set(e.concept, realInstanceCount);
+      if (isSeededEntry(e)) {
+        seededRaw.push({
+          concept: e.concept,
+          stance: e.stance,
+          citedTimesElsewhere: realInstanceCount
+        });
+      }
+    }
+    const sampleByConcept = /* @__PURE__ */ new Map();
+    for (const s of project.topCitedStances) {
+      if (s.sampleArtifactId) {
+        sampleByConcept.set(s.concept, {
+          sampleArtifactId: s.sampleArtifactId,
+          sampleSessionId: s.sampleSessionId
+        });
+      }
+    }
+    const seededStances = seededRaw.map((s) => {
+      const sample = sampleByConcept.get(s.concept);
+      return {
+        ...s,
+        sampleArtifactId: sample?.sampleArtifactId,
+        sampleSessionId: sample?.sampleSessionId
+      };
+    });
+    const topCitedStancesWithGlobal = project.topCitedStances.map((s) => ({
+      ...s,
+      globalCitationCount: globalCitationByConcept.get(s.concept) ?? s.citationCount
+    }));
+    return c.json({
+      ...project,
+      topCitedStances: topCitedStancesWithGlobal,
+      seededStances,
+      globalLedger: {
+        concepts: entries.length,
+        projects: projects.size,
+        multiProjectConcepts
+      }
+    });
+  });
+  app.get("/api/metrics", (c) => {
+    if (!projectRoot2) return c.json({ error: "projectRoot not configured" }, 400);
+    return c.json(readMetrics(projectRoot2));
+  });
+  app.get("/api/preflight-blocks", (c) => {
+    if (!projectRoot2) return c.json({ blocks: [] });
+    const viewer = getSessionId(c);
+    const blocks = readPreflightBlocks(projectRoot2).filter(
+      (b) => !viewer || b.lane !== "hook" || b.sessionId === "hook" || b.sessionId === viewer
+    );
+    return c.json({ blocks: stanceExceptions ? blocks.map((b) => stanceExceptions.deriveReceipt(b)) : blocks });
+  });
+  if (stanceExceptions) registerStanceExceptionRoutes(app, stanceExceptions);
+  app.get("/api/team-preferences", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json({ preferences: [], exists: false });
+    const preferences = await store.getTeamPreferences?.() ?? [];
+    return c.json({ preferences, exists: preferences.length > 0 });
+  });
+  app.get("/api/export", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const format = c.req.query("format") ?? "full";
+    const state = await store.getFullState();
+    const markdown = formatSessionMarkdown(state, format);
+    return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });
+  });
+  app.get("/api/export.html", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const includeCodeParam = c.req.query("includeCode");
+    const includeCode = includeCodeParam !== "0" && includeCodeParam !== "false";
+    const state = await store.getFullState();
+    const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const secretMatches = scanExportForSecrets(state);
+    const html = await assembleSessionHtml(state, {
+      store,
+      includeCode,
+      projectRoot: projectRoot2 ?? void 0,
+      version: SERVER_VERSION,
+      generatedAt,
+      secretLabels: secretLabelsOf(secretMatches),
+      secretCount: secretCountOf(secretMatches)
+    });
+    const warningHeader = secretWarningHeader(secretMatches);
+    return c.body(html, 200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${htmlExportFileName(state.sessionId, generatedAt)}"`,
+      // Exposed by name so a cross-origin fetch (the project switcher points
+      // the SPA at another daemon's port) can still read it.
+      "Access-Control-Expose-Headers": "Content-Disposition, X-DeepPairing-Secret-Warning",
+      ...warningHeader ? { "X-DeepPairing-Secret-Warning": warningHeader } : {}
+    });
+  });
+  app.post("/api/preferences", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = PreferenceBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    if (parsed.data.autonomyLevel) {
+      await store.setAutonomyLevel(parsed.data.autonomyLevel);
+      broadcast({ type: "preference_changed", autonomyLevel: parsed.data.autonomyLevel }, sid);
+    }
+    if (parsed.data.detailDensity) {
+      await store.setDetailDensity(parsed.data.detailDensity);
+      broadcast({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
+    }
+    if (parsed.data.persona && store.setPersona) {
+      await store.setPersona(parsed.data.persona);
+      broadcast({ type: "preference_changed", persona: parsed.data.persona }, sid);
+    }
+    if (parsed.data.globalLedgerPublish !== void 0) {
+      if (sid?.startsWith("demo_")) {
+        return c.json(
+          {
+            error: "publish_toggle_unsupported",
+            code: ERROR_CODES.publish_toggle_unsupported,
+            message: "This is a demo session \u2014 it never writes to your real project or your cross-project ledger. Open a real session to turn cross-project memory on."
+          },
+          409
+        );
+      }
+      if (!store.setGlobalLedgerPublish) {
+        return c.json(
+          {
+            error: "publish_toggle_unsupported",
+            code: ERROR_CODES.publish_toggle_unsupported,
+            message: "This session's store has no project preferences file to write."
+          },
+          409
+        );
+      }
+      await store.setGlobalLedgerPublish(parsed.data.globalLedgerPublish);
+      broadcast(
+        { type: "preference_changed", globalLedgerPublish: parsed.data.globalLedgerPublish },
+        sid
+      );
+    }
+    return c.json({ status: "updated" });
+  });
+  app.get("/api/files", (c) => {
+    if (authToken) {
+      const auth = c.req.header("Authorization");
+      if (auth !== `Bearer ${authToken}`) {
+        log2(`[files-auth] 401 \u2014 bad/missing Authorization header`);
+        return c.json(
+          { error: "Authorization required to read project files.", code: ERROR_CODES.daemon_auth_required },
+          401
+        );
+      }
+    }
+    const filePath = c.req.query("path");
+    if (!filePath || !projectRoot2) {
+      return c.json({ error: "path parameter required" }, 400);
+    }
+    const resolved = path30.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
+    const resolvedRoot = path30.resolve(projectRoot2);
+    if (!resolved.startsWith(resolvedRoot + path30.sep) && resolved !== resolvedRoot) {
+      return c.json({ error: "Path outside project root" }, 403);
+    }
+    let realResolved;
+    let realRoot;
+    try {
+      realResolved = fs27.realpathSync(resolved);
+      realRoot = fs27.realpathSync(resolvedRoot);
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
+      return c.json({ error: "Cannot read file" }, 500);
+    }
+    if (!realResolved.startsWith(realRoot + path30.sep) && realResolved !== realRoot) {
+      return c.json({ error: "Path outside project root" }, 403);
+    }
+    try {
+      const MAX_FILE_BYTES = 5 * 1024 * 1024;
+      const size = fs27.statSync(realResolved).size;
+      if (size > MAX_FILE_BYTES) {
+        return c.json(
+          { error: `File too large to view (${size} bytes > ${MAX_FILE_BYTES}-byte cap).`, code: ERROR_CODES.body_too_large },
+          413
+        );
+      }
+      const content = fs27.readFileSync(realResolved, "utf-8");
+      return c.json({ content, filePath, lines: content.split("\n").length });
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
+      return c.json({ error: "Cannot read file" }, 500);
+    }
+  });
+  app.get("/api/memory", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json({ rejectedApproaches: [], approvedPatterns: [] });
+    return c.json(await store.getSessionMemory());
+  });
+  app.get("/api/hook-state", (c) => {
+    if (!projectRoot2) return c.json({ version: 1, fires: [] });
+    const statePath = path30.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    if (!fs27.existsSync(statePath)) return c.json({ version: 1, fires: [] });
+    try {
+      const raw2 = JSON.parse(fs27.readFileSync(statePath, "utf-8"));
+      const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25).map((f) => {
+        if (!f || typeof f !== "object") return f;
+        const { gate: _gate, ...summary } = f;
+        void _gate;
+        return summary;
+      }) : [];
+      return c.json({ version: 1, fires });
+    } catch {
+      return c.json({ version: 1, fires: [] });
+    }
+  });
+  app.get("/api/sessions", (c) => {
+    if (!projectRoot2) return c.json({ sessions: [] });
+    const sessions = FileStore.listSessions(projectRoot2);
+    return c.json({ sessions });
+  });
+  app.get("/api/decisions", (c) => {
+    if (!projectRoot2) return c.json({ decisions: [], failedSessions: [] });
+    let live = [];
+    try {
+      live = getLiveDecisionSources?.() ?? [];
+    } catch (err) {
+      log2(`[decisions] live-session snapshot failed, falling back to disk: ${err}`);
+    }
+    try {
+      return c.json(FileStore.listAllDecisions(projectRoot2, live));
+    } catch (err) {
+      log2(`[decisions] read failed, returning empty: ${err}`);
+      return c.json({ decisions: [], failedSessions: [] });
+    }
+  });
+  app.get("/api/features", (c) => {
+    if (!projectRoot2) return c.json({ groups: [], failedSessions: [] });
+    try {
+      const overrides = readFeatureOverrides(projectRoot2);
+      return c.json(FileStore.groupByFeature(projectRoot2, overrides));
+    } catch (err) {
+      log2(`[features] read failed, returning empty: ${err}`);
+      return c.json({ groups: [], failedSessions: [] });
+    }
+  });
+  app.post("/api/features/overrides", async (c) => {
+    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = FeatureOverrideBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    try {
+      if (parsed.data.action === "rename") {
+        setFeatureGroupTitle(projectRoot2, parsed.data.groupKey, parsed.data.title);
+      } else {
+        assignArtifactToFeature(projectRoot2, parsed.data.artifactId, parsed.data.groupKey);
+      }
+    } catch (err) {
+      log2(`[features] override write failed: ${err}`);
+      return c.json({ error: "Could not persist the correction.", code: ERROR_CODES.validation_error }, 500);
+    }
+    const overrides = readFeatureOverrides(projectRoot2);
+    return c.json(FileStore.groupByFeature(projectRoot2, overrides));
+  });
+  app.get("/api/search", (c) => {
+    if (!projectRoot2) return c.json({ results: [] });
+    const q = c.req.query("q") ?? "";
+    if (!q.trim()) return c.json({ results: [] });
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
+    const results = FileStore.searchAll(projectRoot2, q, limit);
+    return c.json({ results });
+  });
+  app.get("/api/sessions/:sessionId", (c) => {
+    const sessionId = c.req.param("sessionId");
+    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      return c.json({ error: "Invalid session ID" }, 400);
+    }
+    try {
+      const state = FileStore.loadSession(projectRoot2, sessionId);
+      return c.json(state);
+    } catch {
+      return c.json({ error: "Session not found" }, 404);
+    }
+  });
+  app.get("/api/sessions/:sessionId/annotations", (c) => {
+    const sessionId = c.req.param("sessionId");
+    if (!projectRoot2) return c.json({ annotations: [] });
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      return c.json({ error: "Invalid session ID" }, 400);
+    }
+    const result = FileStore.readAnnotationsIfSessionExists(projectRoot2, sessionId);
+    if (!result.ok) {
+      return c.json({ error: result.message }, 500);
+    }
+    if (!result.exists) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+    return c.json({ annotations: result.annotations });
+  });
+  app.post("/api/sessions/:sessionId/annotations", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      return c.json({ error: "Invalid session ID" }, 400);
+    }
+    const body = await c.req.json().catch(() => null);
+    const { targetEventId, note, tags } = body ?? {};
+    if (!targetEventId || !note) {
+      return c.json({ error: "targetEventId and note required" }, 400);
+    }
+    const s = new FileStore(projectRoot2, sessionId);
+    const annotation = s.addAnnotation({ targetEventId, note, tags });
+    return c.json({ annotation });
+  });
+  app.post("/api/prompts", async (c) => {
+    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
+    if (authToken) {
+      const auth = c.req.header("Authorization");
+      if (auth !== `Bearer ${authToken}`) {
+        log2(`[prompts-auth] 401 \u2014 bad/missing Authorization header`);
+        return c.json(
+          { error: "Authorization required for prompt save.", code: ERROR_CODES.daemon_auth_required },
+          401
+        );
+      }
+    }
+    const body = await c.req.json().catch(() => null);
+    const content = typeof body?.content === "string" ? body.content : "";
+    if (!content.trim()) return c.json({ error: "content required" }, 400);
+    const sanitize = (s) => String(s ?? "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+    const decisionTag = sanitize(body?.decisionId);
+    const sessionTag = sanitize(body?.sessionId);
+    const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    const filename = [ts, sessionTag, decisionTag].filter(Boolean).join("_") + ".md";
+    const promptsDir = path30.join(projectRoot2, ".deeppairing", "prompts");
+    try {
+      fs27.mkdirSync(promptsDir, { recursive: true });
+      const fullPath = path30.join(promptsDir, filename);
+      const resolved = path30.resolve(fullPath);
+      const resolvedDir = path30.resolve(promptsDir);
+      if (!resolved.startsWith(resolvedDir + path30.sep)) {
+        return c.json({ error: "invalid path" }, 400);
+      }
+      try {
+        const stat = fs27.lstatSync(resolved);
+        if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
+      } catch (err) {
+        if (errorCode(err) !== "ENOENT") throw err;
+      }
+      const realDir = fs27.realpathSync(resolvedDir);
+      const realRoot = fs27.realpathSync(path30.resolve(projectRoot2));
+      if (!realDir.startsWith(realRoot + path30.sep) && realDir !== realRoot) {
+        return c.json({ error: "invalid path" }, 400);
+      }
+      fs27.writeFileSync(resolved, content, "utf-8");
+      const relPath = path30.relative(projectRoot2, resolved);
+      return c.json({ status: "saved", path: resolved, relPath });
+    } catch (err) {
+      return c.json({ error: errorMessage(err, "Save failed") }, 500);
+    }
+  });
+  app.delete("/api/sessions/:sessionId/annotations/:annotationId", (c) => {
+    const sessionId = c.req.param("sessionId");
+    const annotationId = c.req.param("annotationId");
+    if (!projectRoot2) return c.json({ error: "No project root" }, 500);
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      return c.json({ error: "Invalid session ID" }, 400);
+    }
+    const s = new FileStore(projectRoot2, sessionId);
+    const ok = s.deleteAnnotation(annotationId);
+    return c.json({ deleted: ok });
+  });
+  return app;
+}
+
+// src/http/static-ui.ts
+import fs28 from "node:fs";
+import path31 from "node:path";
+var MIME_TYPES = {
+  html: "text/html",
+  js: "application/javascript",
+  css: "text/css",
+  json: "application/json",
+  svg: "image/svg+xml",
+  woff2: "font/woff2",
+  png: "image/png"
+};
+var HASHED_ASSET = /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
+var MERMAID_RENDERER_DOC = "/mermaid-renderer.html";
+function mermaidRendererCsp(host) {
+  const own2 = host && /^[A-Za-z0-9.\-[\]:]+$/.test(host) ? ` http://${host}` : "";
+  return [
+    "default-src 'none'",
+    `script-src 'self'${own2}`,
+    "style-src 'unsafe-inline'",
+    "img-src 'none'",
+    "font-src 'none'",
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "worker-src 'none'",
+    "object-src 'none'",
+    "media-src 'none'",
+    "manifest-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'"
+    // No frame-ancestors: the companion itself may be embedded (the VS Code
+    // webview), and this document holds nothing worth framing protection.
+  ].join("; ");
+}
+function mountStaticUi(app, opts) {
+  const { webDistPath, authToken, projectHash, log: log2 } = opts;
+  if (!fs28.existsSync(webDistPath)) return;
+  const serveInjectedIndex = (indexPath) => {
+    const html = fs28.readFileSync(indexPath, "utf-8");
+    const tokenJson = JSON.stringify(authToken);
+    const hashJson = JSON.stringify(projectHash);
+    const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
+    let injected;
+    if (html.includes("</head>")) {
+      injected = html.replace("</head>", `${injection}</head>`);
+    } else if (/<head\b[^>]*>/i.test(html)) {
+      injected = html.replace(/(<head\b[^>]*>)/i, `$1${injection}`);
+    } else if (/<html\b[^>]*>/i.test(html)) {
+      injected = html.replace(/(<html\b[^>]*>)/i, `$1${injection}`);
+    } else {
+      log2?.(`[token-inject] no <head>/<html> in index.html; serving without token. Bearer routes will 401 until UI is rebuilt.`);
+      injected = html;
+    }
+    return new Response(injected, {
+      headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" }
+    });
+  };
+  app.get("/*", async (c, next) => {
+    if (c.req.path.startsWith("/api/")) return next();
+    const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
+    const fullPath = path31.join(webDistPath, filePath);
+    const resolvedPath = path31.resolve(fullPath);
+    const resolvedBase = path31.resolve(webDistPath);
+    if (!resolvedPath.startsWith(resolvedBase + path31.sep) && resolvedPath !== resolvedBase) {
+      return c.notFound();
+    }
+    if (filePath === MERMAID_RENDERER_DOC) {
+      if (!fs28.existsSync(fullPath)) return c.notFound();
+      return new Response(fs28.readFileSync(fullPath), {
+        headers: {
+          "Content-Type": "text/html",
+          "Cache-Control": "no-cache",
+          "Content-Security-Policy": mermaidRendererCsp(c.req.header("host")),
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer"
+        }
+      });
+    }
+    if (fs28.existsSync(fullPath)) {
+      const ext = path31.extname(filePath).slice(1);
+      if (ext === "html") return serveInjectedIndex(fullPath);
+      const content = fs28.readFileSync(fullPath);
+      const headers = { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" };
+      if (ext === "js" && filePath.startsWith("/assets/")) headers["Access-Control-Allow-Origin"] = "*";
+      if (filePath.startsWith("/assets/") && HASHED_ASSET.test(filePath)) {
+        headers["Cache-Control"] = "public, max-age=31536000, immutable";
+      }
+      return new Response(content, { headers });
+    }
+    const indexPath = path31.join(webDistPath, "index.html");
+    if (fs28.existsSync(indexPath)) {
+      return serveInjectedIndex(indexPath);
+    }
+    return c.notFound();
+  });
+}
+
+// src/daemon/routes.ts
+import fs29 from "node:fs";
+import path32 from "node:path";
+
+// ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/middleware/body-limit/index.js
+var ERROR_MESSAGE = "Payload Too Large";
+var bodyLimit = (options) => {
+  const onError = options.onError || (() => {
+    const res = new Response(ERROR_MESSAGE, {
+      status: 413
+    });
+    throw new HTTPException(413, { res });
+  });
+  const maxSize = options.maxSize;
+  return async function bodyLimit2(c, next) {
+    if (!c.req.raw.body) {
+      return next();
+    }
+    const hasTransferEncoding = c.req.raw.headers.has("transfer-encoding");
+    const hasContentLength = c.req.raw.headers.has("content-length");
+    if (hasContentLength && !hasTransferEncoding) {
+      const contentLength = parseInt(c.req.raw.headers.get("content-length") || "0", 10);
+      return contentLength > maxSize ? onError(c) : next();
+    }
+    let size = 0;
+    const chunks = [];
+    const rawReader = c.req.raw.body.getReader();
+    for (; ; ) {
+      const { done, value } = await rawReader.read();
+      if (done) {
+        break;
+      }
+      size += value.length;
+      if (size > maxSize) {
+        return onError(c);
+      }
+      chunks.push(value);
+    }
+    const requestInit = {
+      body: new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(chunk);
+          }
+          controller.close();
+        }
+      }),
+      duplex: "half"
+    };
+    c.req.raw = new Request(c.req.raw, requestInit);
+    return next();
+  };
+};
+
+// src/http/guards.ts
+var ARTIFACT_CREATE_MAX_BODY_BYTES = 512 * 1024;
+var STANDALONE_PAGE_MAX_BODY_BYTES = 4 * Math.ceil(PAGE_HTML_MAX_BYTES / 3) + 256 * 1024;
+var STANDALONE_PAGE_ROUTE = /^\/api\/internal\/sessions\/[^/]+\/(?:present-page|revise-page)$/;
+function isArtifactCreateRoute(method, pathname) {
+  if (method !== "POST") return false;
+  return STANDALONE_PAGE_ROUTE.test(pathname) || /^\/api\/internal\/sessions\/[^/]+\/(?:artifacts|present-options)$/.test(pathname);
+}
+function projectHashGate(daemonHash) {
+  return async (c, next) => {
+    const sent = c.req.header("X-Project-Hash");
+    if (daemonHash && sent !== daemonHash) {
+      return c.json(
+        { error: "Project hash mismatch \u2014 reload to re-bind.", code: ERROR_CODES.project_hash_mismatch, expected: daemonHash },
+        403
+      );
+    }
+    return next();
+  };
+}
+function isLoopbackHost(host) {
+  if (!host) return true;
+  const hostname3 = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
+  return hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "::1";
+}
+function applyTopLevelGuards(app, opts) {
+  const artifactCreateLimit = bodyLimit({
+    maxSize: ARTIFACT_CREATE_MAX_BODY_BYTES,
+    onError: (c) => c.json(
+      {
+        error: `Request body exceeds the ${ARTIFACT_CREATE_MAX_BODY_BYTES}-byte artifact cap. ` + (c.req.path.endsWith("/present-options") ? "Shorten the options or their visuals, and use a new request ID for the changed input." : "A diff this large is past what one review surface can hold \u2014 split it by area (and keep each part a changeset your pair approves)."),
+        code: ERROR_CODES.body_too_large
+      },
+      413
+    )
+  });
+  const standalonePageLimit = bodyLimit({
+    maxSize: STANDALONE_PAGE_MAX_BODY_BYTES,
+    onError: (c) => c.json(
+      {
+        error: `Request body exceeds the ${STANDALONE_PAGE_MAX_BODY_BYTES}-byte standalone page cap (a ${PAGE_HTML_MAX_BYTES}-byte page plus its metadata). Trim the page, and use a new request ID for the changed input.`,
+        code: ERROR_CODES.body_too_large
+      },
+      413
+    )
+  });
+  const defaultLimit = bodyLimit({
+    maxSize: opts.maxBodyBytes,
+    onError: (c) => c.json(
+      { error: `Request body exceeds ${opts.maxBodyBytes}-byte cap.`, code: ERROR_CODES.body_too_large },
+      413
+    )
+  });
+  app.use("*", (c, next) => {
+    if (!isArtifactCreateRoute(c.req.method, c.req.path)) return defaultLimit(c, next);
+    return (STANDALONE_PAGE_ROUTE.test(c.req.path) ? standalonePageLimit : artifactCreateLimit)(c, next);
+  });
+  app.use("*", async (c, next) => {
+    if (!isLoopbackHost(c.req.header("host"))) {
+      return c.json(
+        { error: "Forbidden host \u2014 the daemon only serves loopback origins.", code: ERROR_CODES.forbidden_host },
+        403
+      );
+    }
+    return next();
+  });
+}
+
 // src/daemon/page-feedback.ts
 var MAX_COMMENTS = 50;
 var MAX_RESPONSE_BYTES = 64 * 1024;
 function pageMetadata({ id, version: version2, status }) {
   return { id, version: version2, status };
 }
-function noteFeedback(comment) {
+function noteFeedback(comment, humanResolvedAt) {
   const { id, content, intent, parentCommentId, followUp, ruleOut } = comment;
   return {
     id,
@@ -42504,7 +43342,10 @@ function noteFeedback(comment) {
     parentCommentId,
     ...intent !== void 0 && { intent },
     ...followUp !== void 0 && { followUp },
-    ...ruleOut !== void 0 && { ruleOut }
+    ...ruleOut !== void 0 && { ruleOut },
+    // #714 — the human resolved it themselves (page review queue); present
+    // only while resolved, so other entries are unchanged.
+    ...humanResolvedAt ? { humanResolvedAt } : {}
   };
 }
 function bytes(value) {
@@ -42543,6 +43384,7 @@ function readPageFeedback(store, artifactId) {
     }
   }
   const pending = store.getCommentsForArtifact(artifactId).filter((comment) => comment.sessionId === sessionId && comment.author === "human" && !comment.acknowledged && comment.id !== reasonComment?.id);
+  const effectiveResolution = effectiveHumanResolution(store.getComments(), artifacts);
   pending.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
   const anchoredCount = pending.filter((comment) => comment.target.htmlAnchor).length;
   const result = {
@@ -42568,7 +43410,7 @@ function readPageFeedback(store, artifactId) {
     if (items === MAX_COMMENTS) break;
     if (comment.content.length > MAX_RESPONSE_BYTES - responseBytes) continue;
     const anchor = comment.target.htmlAnchor;
-    const feedback = noteFeedback(comment);
+    const feedback = noteFeedback(comment, effectiveResolution(comment));
     const lane = anchor ? result.comments : result.notes;
     const item = anchor ? { ...feedback, htmlAnchor: anchor } : feedback;
     const added = bytes(item) + (lane.length ? 1 : 0);
@@ -43063,7 +43905,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           if (signal.aborted) return null;
           const decision = store.getDecision(decisionId);
           const artifacts = decision ? store.getArtifacts() : [];
-          const artifact = decision && artifacts.find((a) => a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
+          const artifact = decision && artifacts.find((a) => a.sessionId === sessionId && a.type === "decision" && a.id === decision.artifactId && a.content?.decisionId === decisionId);
           if (!decision || !artifact) return null;
           let waitStatus;
           if (waitMs !== void 0) {
@@ -43072,12 +43914,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
               waitStatus = "resolved";
             } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
               waitStatus = "closed";
+            } else if (standaloneCloseout?.state(sessionId).state === "ended") {
+              waitStatus = "session_ended";
             } else if (remaining > 0) {
               if (!idleRefreshed) {
                 refreshCompanionLink();
                 idleRefreshed = true;
               }
-              return { wake: store.waitForFeedback(Math.ceil(remaining), signal) };
+              return { wake: store.waitForFeedback(Math.ceil(remaining), signal, "review_end") };
             } else {
               waitStatus = "timed_out";
             }
@@ -43441,8 +44285,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!body || typeof body !== "object") {
       return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
     }
-    const { ids } = body;
-    r.store.acknowledgeComments(Array.isArray(ids) ? ids : []);
+    const { ids, delivered } = body;
+    const snapshots = external_exports.array(external_exports.object({
+      id: external_exports.string(),
+      resolvedAt: external_exports.string().nullable().optional(),
+      token: external_exports.string().uuid().optional()
+    })).optional().safeParse(delivered);
+    if (!snapshots.success) {
+      return c.json({ error: "Invalid delivered comment resolution state", code: ERROR_CODES.validation_error }, 400);
+    }
+    r.store.acknowledgeComments(Array.isArray(ids) ? ids : [], snapshots.data);
     return c.json({ status: "acknowledged" });
   });
   app.get("/api/internal/sessions/:sessionId/artifacts/:artifactId/comments", (c) => {
@@ -43564,9 +44416,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!r.ok) return r.response;
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
-    const { resolvedAt } = parsed.body;
-    r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
-    return c.json({ status: "resolved" });
+    const stamp = external_exports.string().datetime().nullable().optional().safeParse(parsed.body.resolvedAt);
+    if (!stamp.success) {
+      return c.json({ error: "Expected resolvedAt to be an ISO timestamp or null", code: ERROR_CODES.validation_error }, 400);
+    }
+    const resolvedAt = stamp.data;
+    const changed = r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
+    return c.json({ status: resolvedAt === null ? changed ? "reopened" : "unchanged" : "resolved", changed });
   });
   app.post("/api/internal/sessions/:sessionId/decisions", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44305,150 +45161,6 @@ import fs31 from "node:fs";
 import path35 from "node:path";
 import crypto6 from "node:crypto";
 
-// src/mcp/page-anchor-relocate.ts
-var LATIN1_NAMES = "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml".split(" ");
-var NAMED = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  mdash: "\u2014",
-  ndash: "\u2013",
-  hellip: "\u2026",
-  lsquo: "\u2018",
-  rsquo: "\u2019",
-  sbquo: "\u201A",
-  ldquo: "\u201C",
-  rdquo: "\u201D",
-  bdquo: "\u201E",
-  bull: "\u2022",
-  prime: "\u2032",
-  Prime: "\u2033",
-  trade: "\u2122",
-  euro: "\u20AC",
-  larr: "\u2190",
-  uarr: "\u2191",
-  rarr: "\u2192",
-  darr: "\u2193",
-  harr: "\u2194",
-  lArr: "\u21D0",
-  rArr: "\u21D2",
-  hArr: "\u21D4",
-  minus: "\u2212",
-  le: "\u2264",
-  ge: "\u2265",
-  ne: "\u2260",
-  asymp: "\u2248",
-  infin: "\u221E",
-  ensp: "\u2002",
-  emsp: "\u2003",
-  thinsp: "\u2009",
-  zwnj: "\u200C",
-  zwj: "\u200D",
-  OElig: "\u0152",
-  oelig: "\u0153",
-  Scaron: "\u0160",
-  scaron: "\u0161",
-  Yuml: "\u0178",
-  fnof: "\u0192",
-  circ: "\u02C6",
-  tilde: "\u02DC",
-  dagger: "\u2020",
-  Dagger: "\u2021",
-  permil: "\u2030",
-  lsaquo: "\u2039",
-  rsaquo: "\u203A",
-  check: "\u2713",
-  hearts: "\u2665",
-  star: "\u2606"
-};
-LATIN1_NAMES.forEach((n, i) => {
-  NAMED[n] = String.fromCharCode(160 + i);
-});
-function decodeHtmlEntities(s) {
-  let unknownEntity = false;
-  const text = s.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{1,31});?/g, (m, body) => {
-    if (body[0] === "#") {
-      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-      if (!Number.isFinite(code) || code <= 0 || code > 1114111) return "\uFFFD";
-      try {
-        return String.fromCodePoint(code);
-      } catch {
-        return "\uFFFD";
-      }
-    }
-    const hit = NAMED[body] ?? NAMED[body.toLowerCase()];
-    if (hit !== void 0) return hit;
-    if (m.endsWith(";")) unknownEntity = true;
-    return m;
-  });
-  return { text, unknownEntity };
-}
-function core(s) {
-  return s.normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, "");
-}
-function norm(s) {
-  return s.replace(/\s+/g, " ").trim();
-}
-function pageHaystack(html) {
-  const blocks = extractPageTextBlocks(html);
-  const decoded = decodeHtmlEntities(html);
-  const text = decodeHtmlEntities(blocks.join(" "));
-  return {
-    text: core(text.text),
-    raw: core(decoded.text),
-    html: decoded.text,
-    unknownEntity: decoded.unknownEntity || text.unknownEntity,
-    truncated: blocks.length >= PAGE_TEXT_MAX_BLOCKS
-  };
-}
-function present(hay, s) {
-  const c = core(s);
-  if (!c) return null;
-  return hay.text.includes(c) || hay.raw.includes(c);
-}
-function relocateHtmlAnchor(anchor, hay) {
-  const checks = [];
-  const quote = norm(anchor.quote ?? "");
-  checks.push(present(hay, anchor.kind === "text" ? quote : quote.slice(0, 60)));
-  if (anchor.kind === "cell" && anchor.table) {
-    if (anchor.table.row) checks.push(present(hay, anchor.table.row));
-    if (anchor.table.col) checks.push(present(hay, anchor.table.col));
-  }
-  if (anchor.kind === "link" && anchor.href) checks.push(hay.html.includes(anchor.href));
-  if (anchor.kind === "diagram-node" && anchor.nodeId) {
-    if (hay.html.includes(anchor.nodeId)) return "carried";
-  }
-  const known = checks.filter((c) => c !== null);
-  if (known.length === 0) return "unknown";
-  if (known.every(Boolean)) return "carried";
-  if (hay.truncated || hay.unknownEntity) return "unknown";
-  return "orphaned";
-}
-function relocatePageComments(html, comments) {
-  const hay = pageHaystack(html);
-  const out = { carried: [], orphaned: [], orphanedOverflow: 0, unknown: [] };
-  const roots = comments.filter((c) => c.author === "human" && !c.parentCommentId && c.target.htmlAnchor).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  for (const c of roots) {
-    const a = c.target.htmlAnchor;
-    const v2 = relocateHtmlAnchor(a, hay);
-    if (v2 === "carried") out.carried.push(c.id);
-    else if (v2 === "unknown") out.unknown.push(c.id);
-    else if (out.orphaned.length >= PAGE_FILE_WATCH_LIMITS.orphans) out.orphanedOverflow++;
-    else {
-      out.orphaned.push({
-        commentId: c.id,
-        kind: a.kind,
-        quote: a.quote.slice(0, PAGE_FILE_WATCH_LIMITS.quote),
-        locator: a.locator.slice(0, PAGE_FILE_WATCH_LIMITS.locator),
-        ...a.version != null ? { version: a.version } : {}
-      });
-    }
-  }
-  return out;
-}
-
 // src/page-watch-timing.ts
 var PAGE_WATCH_QUIET_MS = 2e3;
 var PAGE_WATCH_MIN_INTERVAL_MS = 1e4;
@@ -44950,7 +45662,10 @@ function createDaemon(deps) {
     projectRoot2,
     (sessionId) => sessions.get(sessionId),
     void 0,
-    (sessionId) => pageWatcher.stopSession(sessionId),
+    (sessionId) => {
+      pageWatcher.stopSession(sessionId);
+      sessions.get(sessionId)?.notifyStandaloneReviewEnded();
+    },
     (sessionId) => pageWatcher.drainQueuedSaves(sessionId)
   );
   const demoRuns = /* @__PURE__ */ new Map();
@@ -45198,7 +45913,8 @@ function createDaemon(deps) {
       }
       return out;
     },
-    stanceExceptions
+    stanceExceptions,
+    standaloneCloseout
   );
   app.route("/", publicRoutes);
   const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "page"]);

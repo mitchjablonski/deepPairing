@@ -32,6 +32,11 @@ import {
   buildChangesMessage,
   isReadyMessage,
   isTogglePointingMessage,
+  acceptFrameKey,
+  acceptKbdCursor,
+  buildModeMessage,
+  isKbdOffMessage,
+  type PageKbdCursor,
   type PageAsk,
   type PageOutlineMessage,
 } from "../../lib/pageAnchorMessages";
@@ -41,7 +46,7 @@ import { usePageAskVersions } from "../../hooks/usePageAskVersions";
 import { usePageLineage, usePageVersionDiff } from "../../hooks/usePageVersionDiff";
 import { PageChangeLine, PageRemovedList } from "./PageChangeSummary";
 import type { ChangeLocator } from "../../lib/pageVersionDiff";
-import { isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
+import { htmlAnchorKindLabel, isPageListedComment, sameHtmlAnchor } from "../../lib/htmlAnchorDisplay";
 import { AnchorContext, PageReviewQueue, type QueueFilterChoice } from "./PageReviewQueue";
 import {
   buildQueue,
@@ -54,6 +59,9 @@ import {
 } from "../../lib/pageReviewQueue";
 import { commentPriorVersion } from "../../stores/artifact";
 import { PageRuleOutControl } from "./PageRuleOutControl";
+import { PageShortcutHelp } from "./PageShortcutHelp";
+import { pageOptsIntoDark } from "../../lib/pageTheme";
+import { resolveTheme, usePreferencesStore } from "../../stores/preferences";
 import { PageRenderIssues } from "./PageRenderIssues";
 import { diagnosticsAgentSummary, diagnosticsWakeKey, hasDiagnostics } from "../../lib/pageDiagnostics";
 import { useRememberedRejections } from "../decision/NeverSuggestControl";
@@ -120,6 +128,27 @@ const NO_MARKS: ChangeLocator[] = [];
 function pointingShortcutLabel(): string {
   const platform = typeof navigator !== "undefined" ? navigator.platform || "" : "";
   return /Mac|iPhone|iPad|iPod/.test(platform) ? "⌘I" : "Ctrl+I";
+}
+
+/** #714 gap 9 — a single-key page-review shortcut (C, ], [) is honoured in
+ *  the companion only when no modifier is held, the reviewer isn't typing and
+ *  no modal dialog is open. */
+export function pageKeyTargetOk(e: Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "target">): boolean {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  const target = e.target as HTMLElement | null;
+  const tag = target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable === true) return false;
+  return !document.querySelector('[aria-modal="true"]');
+}
+
+/** #714 gap 13 — what the live region says for a keyboard-cursor move. */
+export function kbdCursorAnnouncement(c: PageKbdCursor): string {
+  if (c.index < 0 || c.total === 0) return "Comment mode: this page has no blocks to comment on. Press Escape to leave.";
+  const text = c.text.trim();
+  const pins = c.pins.length
+    ? ` Has ${c.pins.length === 1 ? "comment" : "comments"} ${c.pins.map((p) => p + 1).join(", ")}.`
+    : "";
+  return `${c.kind[0]!.toUpperCase()}${c.kind.slice(1)}, ${c.index + 1} of ${c.total}${text ? `: ${text}` : ""}.${pins}`;
 }
 
 /** #714 — Cmd/Ctrl+I (no Alt/Shift): not bound anywhere else in the companion. */
@@ -313,6 +342,31 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     setAskPinStatus(null);
   }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
+  // #714 gap 9 — keyboard comment mode (arrow/Tab between blocks in the
+  // frame, Enter to comment). Only while pointing is on.
+  const [kbd, setKbd] = useState(false);
+  // Off once the page's own scripts run (#725): the cursor's block names are
+  // ignored then (agent script could forge them), so the mode would be silent
+  // for a screen reader while still taking the arrow keys.
+  const kbdOn = kbd && annotate && !readOnly && !running;
+  const kbdOnRef = useRef(kbdOn);
+  kbdOnRef.current = kbdOn;
+  // #714 gap 13 — the expanded (full-window) review, the shortcut popover,
+  // and the screen-reader live region.
+  const [expanded, setExpanded] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  /** Say something in the live region; repeating the same text alternates a
+   *  trailing no-break space so it is announced again. */
+  const announce = useCallback((text: string) => {
+    setAnnouncement((prev) => (prev === text ? `${text}\u00a0` : text));
+  }, []);
+  // #714 gap 13 — the page's own content stays as authored: it renders dark
+  // only when it says it supports dark AND the companion is dark.
+  const themePref = usePreferencesStore((s) => s.theme);
+  const companionDark = resolveTheme(themePref) === "dark";
+  const optsIntoDark = useMemo(() => pageOptsIntoDark(page.html), [page.html]);
+  const pageDark = companionDark && optsIntoDark;
   // #714 gap 12 — the frame's render diagnostics (script errors, assets that
   // didn't load, policy blocks), bound to the frame DOCUMENT that reported
   // them: PrototypeFrame mints an id per srcdoc, injects it into that
@@ -365,7 +419,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // their default action unless Alt/Option is held).
   // `scripts` tells the annotator whether the page's own scripts run (buttons
   // only have an action then).
-  const sendMode = useCallback(() => postToFrame({ dp: "mode", annotate, scripts: running }), [postToFrame, annotate, running]);
+  const sendMode = useCallback(
+    () => postToFrame(buildModeMessage({ annotate, scripts: running, kbd: kbdOn, dark: pageDark })),
+    [postToFrame, annotate, running, kbdOn, pageDark],
+  );
   // Locators only (tag + clipped text + occurrence), each Zod-validated.
   const sendChanges = useCallback(
     () => postToFrame(buildChangesMessage(marks, showChanges && marks.length > 0)),
@@ -380,6 +437,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   pointingRef.current = annotate;
   const runningRef = useRef(running);
   runningRef.current = running;
+  /** #714 gap 9 — what a key forwarded from the frame does (set below). */
+  const frameKeyRef = useRef<(key: "toggle-kbd" | "help" | "next" | "prev" | "escape") => void>(() => {});
   const rootRef = useRef<HTMLDivElement>(null);
   const hintId = useId();
 
@@ -417,6 +476,32 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         // in THIS page's frame. After Run the toggle and the companion-level
         // shortcut still work.
         if (!readOnly && !runningRef.current && frameOwnsFocusRef.current(element)) setAnnotate((a) => !a);
+        return;
+      }
+      // #714 gap 9 — the reviewer left keyboard comment mode inside the page.
+      // Turning it OFF is the safe direction, so it is honoured after Run too.
+      // A no-op unless the mode is on (#725): a page script after Run can't
+      // flood the live region with repeats.
+      if (isKbdOffMessage(event, frame)) {
+        if (!kbdOnRef.current) return;
+        kbdOnRef.current = false;
+        setKbd(false);
+        announce("Comment mode off.");
+        return;
+      }
+      // The keyboard cursor moved: announced in the live region. Display-only,
+      // and ignored after Run (agent script could forge the text).
+      const cursor = acceptKbdCursor(event, frame);
+      if (cursor) {
+        if (!runningRef.current) announce(kbdCursorAnnouncement(cursor));
+        return;
+      }
+      // A single-key shortcut pressed inside the page (only sent before Run;
+      // honoured only from the pre-Run document while the reviewer is in it).
+      const key = acceptFrameKey(event, frame);
+      if (key) {
+        if (runningRef.current || !frameOwnsFocusRef.current(element)) return;
+        frameKeyRef.current(key);
         return;
       }
       const status = acceptPinsStatusReport(event, frame);
@@ -484,7 +569,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [artifact.version, readOnly]);
+  }, [artifact.version, readOnly, announce]);
 
   // #714 — Cmd/Ctrl+I toggles pointing from anywhere in the companion while
   // this page is the selected artifact (and not in an exiting, inert pane).
@@ -528,7 +613,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // it), sending the latest coalesced summary. The pending report carries the
   // frame document it was observed on and is dropped if that document is no
   // longer current. Never from a read-only page (closed, or a replay).
-  const offline = useOfflineReason() !== null;
+  const offlineReason = useOfflineReason();
+  const offline = offlineReason !== null;
   const pendingReportRef = useRef<{ doc: string; id: string; key: string; summary: string; firstAt: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   useEffect(() => () => {
     if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
@@ -638,6 +724,130 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     }
   };
 
+  // #714 gap 9 — step through the visible comments (] / [ and the queue's
+  // ‹ › buttons): highlight the row, move focus to it (Enter opens its
+  // thread), scroll the frame to its pin, and say where you are.
+  const highlightRef = useRef(highlightId);
+  highlightRef.current = highlightId;
+  const stepComment = useCallback(
+    (dir: 1 | -1) => {
+      const list = queueRef.current;
+      const f = filterRef.current;
+      const visible = f === "all" ? list : list.filter((e) => stateFilter(e.state) === f);
+      if (!visible.length) return;
+      const at = visible.findIndex((e) => e.comment.id === highlightRef.current);
+      const next = visible[at < 0 ? (dir === 1 ? 0 : visible.length - 1) : (at + dir + visible.length) % visible.length]!;
+      setHighlightId(next.comment.id);
+      setReveal((r) => ({ nonce: r.nonce + 1, focus: true }));
+      if (!next.missing) postToFrame(wideRef.current ? { dp: "focus", index: next.index } : { dp: "focus", index: next.index, block: "end" });
+      const anchor = next.comment.target.htmlAnchor as HtmlAnchor;
+      const quote = anchor.quote.trim();
+      announce(
+        `Comment ${next.index + 1}, ${visible.indexOf(next) + 1} of ${visible.length}: ${stateLabel(next.state).text}. ` +
+          `${htmlAnchorKindLabel(anchor.kind)}${quote ? ` “${quote.slice(0, 80)}”` : ""}. ${snippet(next.comment.content)}`,
+      );
+    },
+    [postToFrame, announce],
+  );
+
+  /** Keyboard comment mode on/off. Turning it on also turns pointing on and
+   *  moves focus into the frame, where the arrow keys now step blocks. */
+  const toggleKbd = useCallback(() => {
+    if (readOnly || running) return;
+    const next = !(kbd && annotate);
+    setKbd(next);
+    if (next) {
+      setAnnotate(true);
+      iframeRef.current?.focus?.();
+    }
+    announce(
+      next
+        ? "Comment mode on. Arrow keys or Tab move between blocks, Enter comments, Escape leaves."
+        : "Comment mode off.",
+    );
+  }, [readOnly, running, kbd, annotate, announce]);
+  useEffect(() => {
+    if (!annotate || running) setKbd(false);
+  }, [annotate, running]);
+
+  frameKeyRef.current = (key) => {
+    if (key === "toggle-kbd") toggleKbd();
+    else if (key === "help") setHelpOpen((o) => !o);
+    else if (key === "next") stepComment(1);
+    else if (key === "prev") stepComment(-1);
+    else if (key === "escape") {
+      if (helpOpen) setHelpOpen(false);
+      else if (expanded) setExpanded(false);
+    }
+  };
+
+  // #714 gap 9 — C, ] and [ in the companion while this page is selected
+  // (never while typing, never with a modifier, never under a modal).
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented || e.repeat || !pageKeyTargetOk(e)) return;
+      // C with Caps Lock (or Shift) is still C.
+      const k = e.key === "C" ? "c" : e.key;
+      if (k !== "c" && k !== "]" && k !== "[") return;
+      const root = rootRef.current;
+      if (!root || !root.isConnected || root.closest("[inert]")) return;
+      if (useArtifactStore.getState().selectedArtifactId !== artifactIdRef.current) return;
+      if (k === "c") {
+        if (readOnly) return;
+        e.preventDefault();
+        toggleKbd();
+        return;
+      }
+      e.preventDefault();
+      stepComment(k === "]" ? 1 : -1);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [readOnly, toggleKbd, stepComment]);
+
+  // #714 gap 13 — announce a comment you just posted on the page (a new
+  // anchored root after the first render), and the pins this version can't
+  // place once the frame reports them.
+  const seenIds = useRef<{ forId: string; ids: Set<string> } | null>(null);
+  useEffect(() => {
+    const ids = new Set(anchored.map((c) => c.id));
+    const before = seenIds.current?.forId === artifact.id ? seenIds.current.ids : null;
+    seenIds.current = { forId: artifact.id, ids };
+    // A different page (or the first render) is a baseline, not a post.
+    if (!before) return;
+    const fresh = anchored.filter((c) => !before.has(c.id));
+    if (fresh.length === 1) {
+      const i = anchored.indexOf(fresh[0]!);
+      announce(`Comment ${i + 1} posted.`);
+    } else if (fresh.length > 1) announce(`${fresh.length} comments added.`);
+  }, [anchored, announce, artifact.id]);
+  const missingCount = found ? found.filter((f) => !f).length : 0;
+  useEffect(() => {
+    if (missingCount > 0) {
+      announce(`${missingCount} of ${anchored.length} ${anchored.length === 1 ? "comment's spot is" : "comments' spots are"} not on this version.`);
+    }
+    // Only when the count changes, not on every queue re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingCount]);
+
+  /** #714 — Resolve / Reopen a plain comment from the queue, over the
+   *  existing humanResolvedAt resolution. */
+  const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
+  const reopenComment = useArtifactStore((s) => s.reopenComment);
+  const onResolve = useCallback(
+    (commentId: string, resolve: boolean) => {
+      // Offline: the buttons are disabled; never post from here either.
+      if (offlineReason) return;
+      const n = anchored.findIndex((c) => c.id === commentId) + 1;
+      const op = resolve ? markQuestionResolved(commentId) : reopenComment(commentId);
+      void op.then(
+        () => announce(`Comment ${n} ${resolve ? "resolved" : "reopened"}.`),
+        () => {},
+      );
+    },
+    [anchored, markQuestionResolved, reopenComment, announce, offlineReason],
+  );
+
   // #714 gap 4 — per-section badges. The frame says which section each pin
   // and change mark sits in; the companion decides what counts: a comment the
   // reviewer hasn't resolved whose spot is on this version, a change mark from
@@ -694,7 +904,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // full-text hashes (continuity) and child ids (a comment on a child with its
   // own id, also after Run when the frame's reports are frozen).
   const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && anchored.length > 0);
-  const askAnswered = useMemo(() => {
+  // #725 — also which comments answer an ask (no Resolve/Reopen on those).
+  const { answered: askAnswered, answerIds: askAnswerIds } = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
     // The pre-Run reports, only when they describe this page's current pins.
     const scoped = <T extends { forId: string; key: string }>(r: T | null) =>
@@ -704,7 +915,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     const pinsAligned = !!askPins && askPins.length === anchored.length;
     const currentParsed = parsedAsks(artifact.id);
     const earlierAsks = (versionId: string) => (versionId === artifact.id ? undefined : parsedAsks(versionId));
-    return asks.map((ask, k) => {
+    const answerIds = new Set<string>();
+    const answered = asks.map((ask, k) => {
       // Continuity compares the full-text hash from THIS version's parsed HTML.
       const parsed = ask.id ? currentParsed?.find((p) => p.id === ask.id) : undefined;
       const ref = {
@@ -712,7 +924,15 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         ...(parsed?.fullHash ? { fullHash: parsed.fullHash } : {}),
         ...(parsed?.childIds ? { childIds: parsed.childIds } : {}),
       };
-      return anchored.some((c, i) => {
+      let any = false;
+      anchored.forEach((c, i) => {
+        if (answersAsk(c, i)) {
+          any = true;
+          answerIds.add(c.id);
+        }
+      });
+      return any;
+      function answersAsk(c: Comment, i: number): boolean {
         // An earlier version's comment is judged only against its own source
         // version (ask continuity); whether its pin relocates in the current
         // view is irrelevant to it, as it is for check_feedback.
@@ -722,8 +942,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         if (preRunFound && preRunFound[i] === false) return false;
         const insideByFrame = pinsAligned && askPins![i] === k && preRunFound?.[i] === true;
         return commentAnswersAsk(ref, c, current, { insideByFrame });
-      });
+      }
     });
+    return { answered, answerIds };
   }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
@@ -839,6 +1060,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       fromVersion={(c) => commentPriorVersion(storeArtifacts, c, artifact.id)}
       liveStances={liveStances}
       variant={variant}
+      onStep={stepComment}
+      onResolve={readOnly ? undefined : onResolve}
+      askAnswerIds={askAnswerIds}
+      offlineReason={offlineReason}
     />
   );
   const hoverEntry = hover ? queue.find((e) => e.comment.id === hover.id) : undefined;
@@ -990,6 +1215,40 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             : <> could not be recorded: {fileWatch.refused.message}. You are still looking at v{artifact.version}.</>}
         </div>
       )}
+      {/* #714 gap 13 — the review area (toolbar, issues, asks, outline, frame,
+          review column) can expand to fill the window. Same DOM nodes either
+          way: the iframe never remounts (its Run state and scroll survive). */}
+      <div
+        className={expanded ? "fixed inset-0 z-40 overflow-y-auto overflow-x-hidden bg-surface-primary p-2 sm:p-3 space-y-3" : "space-y-3"}
+        role={expanded ? "region" : undefined}
+        aria-label={expanded ? `${artifact.title || "Page"} — expanded review` : undefined}
+        data-testid="page-review-area"
+        data-expanded={expanded ? "true" : "false"}
+        onKeyDown={(e) => {
+          if (!expanded || e.key !== "Escape" || e.defaultPrevented) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setExpanded(false);
+        }}
+      >
+      <div className="flex flex-wrap items-center gap-2 text-2xs text-text-muted" data-testid="page-view-bar">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-pressed={expanded}
+          title={expanded ? "Back to the normal view (Esc)" : "Fill the window with the page and its review"}
+          className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary pointer-coarse:min-h-11"
+          data-testid="page-expand-toggle"
+        >
+          {expanded ? "Collapse" : "Expand"}
+        </button>
+        <PageShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
+        {companionDark && (
+          <span data-testid="page-theme-note">
+            {optsIntoDark ? "The page supports dark mode, so it's shown dark." : "The page is shown as authored (light)."}
+          </span>
+        )}
+      </div>
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-2 text-2xs text-text-muted" data-testid="page-pointing-bar">
           <button
@@ -1009,10 +1268,28 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             {annotate ? "Pointing: on" : "Pointing: off"}
             <kbd className="ml-1 font-mono text-[9px] text-text-muted">{pointingShortcutLabel()}</kbd>
           </button>
+          <button
+            type="button"
+            onClick={toggleKbd}
+            disabled={running}
+            aria-pressed={kbdOn}
+            aria-keyshortcuts="C"
+            title={
+              running
+                ? "Comment mode isn't available once the page's scripts run. Click or select text to comment."
+                : "Comment without a mouse: arrow keys or Tab move between blocks in the page, Enter comments on one, Escape leaves (C)"
+            }
+            className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary pointer-coarse:min-h-11 disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="page-kbd-toggle"
+          >
+            {kbdOn ? "Comment mode: on" : "Comment mode: off"}
+            <kbd className="ml-1 font-mono text-[9px] text-text-muted">C</kbd>
+          </button>
           <span id={hintId} data-testid="page-pointing-hint">
             {annotate
               ? "Click anything on the page, or select text, to comment on that spot. In-page links, summaries, radio/checkbox tabs and form fields still work — Alt/Option-click to comment on one."
               : "Pointing is off: clicks go to the page. Turn it on to comment on a spot."}
+            {kbdOn && " Comment mode: arrow keys or Tab move between blocks, Enter comments, Escape leaves."}
             {running && ` Scripts are running: to switch pointing, use this toggle or press ${pointingShortcutLabel()} outside the page.`}
           </span>
         </div>
@@ -1048,7 +1325,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
               maxBytes={PAGE_HTML_MAX_BYTES}
               staticFirst
               noun="page"
-              frameClassName="w-full h-[70vh] min-h-[420px] rounded border border-border-default bg-white"
+              frameClassName={`w-full ${expanded ? "h-[calc(100dvh-8rem)] min-h-[320px]" : "h-[70vh] min-h-[320px] sm:min-h-[420px]"} rounded border border-border-default ${
+                pageDark ? "bg-surface-secondary [color-scheme:dark]" : "bg-white [color-scheme:light]"
+              }`}
               annotation={PAGE_ANNOTATION}
               iframeRef={iframeRef}
               onRunningChange={onRunningChange}
@@ -1085,6 +1364,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
             {queueEl(wide ? "rail" : "below")}
           </div>
         </div>
+      </div>
+      </div>
+      {/* #714 gap 13 — one polite live region for the page review: keyboard
+          cursor, queue position, posting and resolving, pins not found. */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only" data-testid="page-live-region">
+        {announcement}
       </div>
       <ArtifactStatusActions artifact={artifact} />
     </div>

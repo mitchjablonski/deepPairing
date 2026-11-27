@@ -30,7 +30,7 @@ import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import { isCrossTerminalVerdictFlip, stalePageVerdictSuccessor } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult, RejectedApproachOrigin } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult, RejectedApproachOrigin, CommentResolutionSnapshot } from "./store-interface.js";
 import { isRejectedApproachOrigin, PAGE_RENDER_ISSUES_WAKE_WINDOW_MS } from "./store-interface.js";
 import { PAGE_RENDER_ISSUES_VISUAL_ID, pageRenderIssuesWakeKey, parsePageRenderIssues } from "@deeppairing/shared";
 import { normalizeConceptKey } from "../mcp/preflight-validator.js";
@@ -62,8 +62,14 @@ const RetirementCommentFields = z.object({
   createdAt: z.string().datetime(), acknowledged: z.boolean(),
   answeredByCommentId: z.string().nullable().optional(),
   humanResolvedAt: z.string().datetime().nullable().optional(),
+  humanResolutionToken: z.string().uuid().optional(),
   suggestion: z.object({ state: z.enum(["pending", "countered", "applied", "insisted"]) }).passthrough().optional(),
 }).passthrough();
+// Earlier daemon versions accepted any string for this stamp. Delivery
+// compares the raw value and token, so unrelated rows can still settle.
+const DeliveryCommentFields = RetirementCommentFields.extend({
+  humanResolvedAt: z.string().nullable().optional(),
+});
 
 /** #486 — one cross-project mirror refused by a busy ledger lock, queued in
  *  `.deeppairing/ledger-mirror-pending.json` for replay. */
@@ -474,8 +480,8 @@ export class FileStore implements IStore {
   /** An uncertain attempt must announce its truth once a retry confirms persistence. */
   private unannouncedRetirements = new Map<string, string | undefined>();
 
-  private validateRetirementComments(raw: unknown): Comment[] {
-    if (!Array.isArray(raw) || raw.some((c: unknown) => !RetirementCommentFields.safeParse(c).success) ||
+  private validateRetirementComments(raw: unknown, fields = RetirementCommentFields): Comment[] {
+    if (!Array.isArray(raw) || raw.some((c: unknown) => !fields.safeParse(c).success) ||
       new Set(raw.map((c: Comment) => c.id)).size !== raw.length ||
       raw.some((c: Comment) => c.sessionId !== this.sessionId)) {
       throw Object.assign(new Error("Retirement feedback remains unreadable; original comments were not overwritten."), { code: "ERETIREMENTFEEDBACKUNKNOWN" });
@@ -1451,14 +1457,41 @@ export class FileStore implements IStore {
   }
 
   getUnacknowledgedComments(): Comment[] {
-    return this.comments.filter((c) => !c.acknowledged);
+    return this.comments.filter((c) => !c.acknowledged).map((c) => ({ ...c }));
   }
 
-  acknowledgeComments(ids: string[]): void {
+  acknowledgeComments(ids: string[], delivered?: CommentResolutionSnapshot[]): void {
+    if (delivered !== undefined) {
+      const selected = new Set(ids);
+      const snapshots = new Map(delivered.map((snapshot) => [snapshot.id, snapshot]));
+      this.updateDurableComments((comments) => {
+        for (const comment of comments) {
+          const snapshot = snapshots.get(comment.id);
+          if (snapshot && selected.has(comment.id) && snapshot.resolvedAt === comment.humanResolvedAt &&
+              snapshot.token === comment.humanResolutionToken) {
+            comment.acknowledged = true;
+          }
+        }
+      });
+      return;
+    }
     for (const c of this.comments) {
       if (ids.includes(c.id)) c.acknowledged = true;
     }
     this.scheduleFlush();
+  }
+
+  /** Run guarded settlement against the latest comment state under the same lock
+   * as other writers, and expose the update only after its atomic disk write. */
+  private updateDurableComments<T>(update: (comments: Comment[]) => T): T {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    return withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+      const { merged, filePath, diskBytes } = this.readDurableComments(true, DeliveryCommentFields);
+      const comments = merged.map((comment) => ({ ...comment }));
+      const result = update(comments);
+      this.writeDurableComments(comments, filePath, diskBytes, { clearRetirementBlock: false });
+      return result;
+    });
   }
 
   /** Caller holds the session flush lock. Validate raw input before merging. */
@@ -1471,6 +1504,17 @@ export class FileStore implements IStore {
     if (!Array.isArray(artifacts) || artifacts.some((a) => !ArtifactSchema.safeParse(a).success)) {
       throw new Error("Unreadable page revision artifact history.");
     }
+    const { disk, local, baseline, merged, filePath, diskBytes } = this.readDurableComments(allowBuffered);
+    // Only genuinely new buffered rows may supplement disk. A previously
+    // persisted row that disappeared or changed must fail both checks.
+    const observed = new Set([...baseline, ...disk].map((c) => c.id));
+    const comparable = allowBuffered ? [...disk, ...local.filter((c) => !observed.has(c.id))] : disk;
+    const current = provePageRevisionFeedback(artifacts as Artifact[], comparable, this.sessionId, parentId, proof.commentIds, merged);
+    if (current?.digest !== proof.digest) throw new PageRevisionFeedbackConflictError("Page revision feedback no longer matches its receipt.");
+    return { artifacts: artifacts as Artifact[], merged, filePath, diskBytes };
+  }
+
+  private readDurableComments(allowBuffered: boolean, fields = RetirementCommentFields) {
     const file = "comments.json";
     const filePath = path.join(this.sessionDir(), file);
     let diskBytes: string | undefined;
@@ -1479,7 +1523,7 @@ export class FileStore implements IStore {
       if (errorCode(error) !== "ENOENT" || this.observedRecordFiles.has(file) || !allowBuffered) throw error;
     }
     const validate = (read: () => unknown) => {
-      try { return this.validateRetirementComments(read()); }
+      try { return this.validateRetirementComments(read(), fields); }
       catch (error) {
         // Keep a subsequent ordinary timer flush from salvaging this exact
         // malformed collection before the operator repairs it.
@@ -1490,14 +1534,8 @@ export class FileStore implements IStore {
     const disk = validate(() => JSON.parse(diskBytes ?? "[]"));
     const local = validate(() => this.comments);
     const baseline = JSON.parse(this.recordBaselines[file] ?? "[]") as Comment[];
-    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id));
-    // Only genuinely new buffered rows may supplement disk. A previously
-    // persisted row that disappeared or changed must fail both checks.
-    const observed = new Set([...baseline, ...disk].map((c) => c.id));
-    const comparable = allowBuffered ? [...disk, ...local.filter((c) => !observed.has(c.id))] : disk;
-    const current = provePageRevisionFeedback(artifacts as Artifact[], comparable, this.sessionId, parentId, proof.commentIds, merged);
-    if (current?.digest !== proof.digest) throw new PageRevisionFeedbackConflictError("Page revision feedback no longer matches its receipt.");
-    return { artifacts: artifacts as Artifact[], merged, filePath, diskBytes };
+    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id), fields);
+    return { disk, local, baseline, merged, filePath, diskBytes };
   }
 
   /** Validate the bound selection under the same lock used by disk writers. */
@@ -1511,19 +1549,19 @@ export class FileStore implements IStore {
       }
       // Persist any buffered input before the artifact lane can commit the
       // successor. This is the verified selection with its original ACK bits.
-      this.writePageRevisionComments(merged, filePath, diskBytes);
+      this.writeDurableComments(merged, filePath, diskBytes);
       return create(parent);
     });
   }
 
-  private writePageRevisionComments(comments: Comment[], filePath: string, diskBytes: string | undefined): void {
+  private writeDurableComments(comments: Comment[], filePath: string, diskBytes: string | undefined, { clearRetirementBlock = true } = {}): void {
     const bytes = JSON.stringify(comments, null, 2);
     if (bytes !== diskBytes) writeStringAtomic(filePath, bytes);
     this.comments = comments;
     this.recordBaselines["comments.json"] = JSON.stringify(comments);
     this.observedRecordFiles.add("comments.json");
     delete this.backedUpCorruption[filePath];
-    this.retirementFeedbackBlocked = false;
+    if (clearRetirementBlock) this.retirementFeedbackBlocked = false;
   }
 
   /** Keep the warm read unchanged until the exact acknowledgement is durable. */
@@ -1555,7 +1593,7 @@ export class FileStore implements IStore {
         const stamp = advances ? { addressedIn } : {};
         return comment.acknowledged && !("addressedIn" in stamp) ? comment : { ...comment, acknowledged: true, ...stamp };
       });
-      this.writePageRevisionComments(updated, filePath, diskBytes);
+      this.writeDurableComments(updated, filePath, diskBytes);
       return updated.filter((comment) => selected.has(comment.id));
     });
   }
@@ -1967,12 +2005,24 @@ export class FileStore implements IStore {
     }
   }
 
-  markCommentHumanResolved(commentId: string, resolvedAt?: string): void {
-    const comment = this.comments.find((c) => c.id === commentId);
-    if (comment) {
-      comment.humanResolvedAt = resolvedAt ?? new Date().toISOString();
-      this.scheduleFlush();
-    }
+  markCommentHumanResolved(commentId: string, resolvedAt?: string | null): boolean {
+    let requeued = false;
+    const changed = this.updateDurableComments((comments) => {
+      const comment = comments.find((c) => c.id === commentId);
+      if (!comment || (resolvedAt === null && (!comment.humanResolvedAt || !Number.isFinite(Date.parse(comment.humanResolvedAt))))) return false;
+      // #714 — null withdraws the resolve (Reopen); undefined stamps now.
+      comment.humanResolvedAt = resolvedAt === null ? null : resolvedAt ?? new Date().toISOString();
+      comment.humanResolutionToken = crypto.randomUUID();
+      // #725 — a reopen the agent already drained is re-queued, so its next
+      // check_feedback sees it again (marked REOPENED BY THE HUMAN).
+      if (resolvedAt === null && comment.acknowledged) {
+        comment.acknowledged = false;
+        requeued = true;
+      }
+      return true;
+    });
+    if (requeued) this.notifyFeedbackWaiters();
+    return changed;
   }
 
   // --- Decisions ---
@@ -3387,22 +3437,30 @@ export class FileStore implements IStore {
   // --- Feedback notification (for long-poll) ---
 
   private feedbackWaiters: Array<() => void> = [];
+  private reviewEndWaiters = new Set<() => void>();
 
   /** Register a waiter until feedback arrives, the budget expires, or the caller leaves. */
-  waitForFeedback(timeoutMs = 30000, signal?: AbortSignal): Promise<void> {
+  waitForFeedback(timeoutMs = 30000, signal?: AbortSignal, wakeOn?: "review_end"): Promise<void> {
     if (signal?.aborted) return Promise.resolve();
     return new Promise((resolve) => {
       const finish = () => {
         clearTimeout(timer);
         signal?.removeEventListener("abort", finish);
+        this.reviewEndWaiters.delete(finish);
         const index = this.feedbackWaiters.indexOf(finish);
         if (index !== -1) this.feedbackWaiters.splice(index, 1);
         resolve();
       };
       const timer = setTimeout(finish, timeoutMs);
       this.feedbackWaiters.push(finish);
+      if (wakeOn === "review_end") this.reviewEndWaiters.add(finish);
       signal?.addEventListener("abort", finish, { once: true });
     });
+  }
+
+  /** Exact decision readers recheck under the resolve lock after this wake. */
+  notifyStandaloneReviewEnded(): void {
+    for (const finish of this.reviewEndWaiters) finish();
   }
 
   /** Notify all waiters that feedback has arrived */

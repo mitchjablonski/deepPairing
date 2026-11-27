@@ -6583,7 +6583,7 @@ var require_formats = __commonJS({
     }
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
-      return function time3(str2) {
+      return function time4(str2) {
         const matches = TIME.exec(str2);
         if (!matches)
           return false;
@@ -6629,10 +6629,10 @@ var require_formats = __commonJS({
     }
     var DATE_TIME_SEPARATOR = /t|\s/i;
     function getDateTime(strictTimeZone) {
-      const time3 = getTime(strictTimeZone);
+      const time4 = getTime(strictTimeZone);
       return function date_time(str2) {
         const dateTime = str2.split(DATE_TIME_SEPARATOR);
-        return dateTime.length === 2 && date5(dateTime[0]) && time3(dateTime[1]);
+        return dateTime.length === 2 && date5(dateTime[0]) && time4(dateTime[1]);
       };
     }
     function compareDateTime(dt1, dt2) {
@@ -8440,13 +8440,13 @@ function time(args) {
   return new RegExp(`^${timeSource(args)}$`);
 }
 function datetime(args) {
-  const time3 = timeSource({ precision: args.precision });
+  const time4 = timeSource({ precision: args.precision });
   const opts = ["Z"];
   if (args.local)
     opts.push("");
   if (args.offset)
     opts.push(`([+-](?:[01]\\d|2[0-3]):[0-5]\\d)`);
-  const timeRegex = `${time3}(?:${opts.join("|")})`;
+  const timeRegex = `${time4}(?:${opts.join("|")})`;
   return new RegExp(`^${dateSource}T(?:${timeRegex})$`);
 }
 var string = (params) => {
@@ -22648,6 +22648,8 @@ var CommentSchema = external_exports.object({
    * human-driven; does not touch the agent's `acknowledged` queue.
    */
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  /** Changes on each explicit Resolve/Reopen so stale delivery cannot drain a newer reopen. */
+  humanResolutionToken: external_exports.string().uuid().optional(),
   /**
    * #160 — secret-scanner matches found in this comment's body at create
    * time. A comment with a secret is HUMAN-authored (the risk is a key
@@ -30256,9 +30258,10 @@ ${s.replacementText}${note ? `
     };
   }
   const ruleOutNote = c.ruleOut ? ` \u2192 RULED OUT: recorded as a page-only rejected stance ("${clipProse(c.ruleOut.description, 120)}"). A page whose text still contains it (present_page, a page revise, a watched-file save) is now refused with this reason; take it out of this page. Other tools are not affected.` : "";
+  const resolvedNote = c.humanResolvedAt ? " \u2192 RESOLVED BY THE HUMAN: they marked this done themselves; no change is needed for it unless they reopen it." : c.humanResolvedAt === null ? " \u2192 REOPENED BY THE HUMAN: they had marked this done, then reopened it; it needs your attention again." : "";
   return {
     bucket: "comment",
-    prose: `- ${c.ruleOut ? "\u{1F6AB} " : ""}${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}${ruleOutNote}`,
+    prose: `- ${c.ruleOut ? "\u{1F6AB} " : ""}${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}${ruleOutNote}${resolvedNote}`,
     structured: {
       id: c.id,
       artifactId: c.target.artifactId,
@@ -30267,6 +30270,8 @@ ${s.replacementText}${note ? `
       // #187 — see the question path: present only for a late follow-up.
       ...c.followUp ? { followUp: true } : {},
       ...c.ruleOut ? { ruleOut: { description: c.ruleOut.description } } : {},
+      ...c.humanResolvedAt ? { humanResolvedAt: c.humanResolvedAt } : {},
+      ...c.humanResolvedAt === null ? { reopenedByHuman: true } : {},
       ...commonTargetFields(c, removedLine)
     },
     isFollowUp: !!c.followUp
@@ -31230,6 +31235,50 @@ ${assembled.join("\n")}`;
 // src/mcp/tool-helpers.ts
 import { createHash as createHash3 } from "node:crypto";
 
+// src/store/comment-resolution.ts
+function commentResolutionSnapshot(comment) {
+  return { id: comment.id, resolvedAt: comment.humanResolvedAt, token: comment.humanResolutionToken };
+}
+function time3(value) {
+  if (!value) return void 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : void 0;
+}
+function effectiveHumanResolution(comments, artifacts) {
+  const revisionTimes = new Map(artifacts.map((artifact) => [artifact.id, artifact.createdAt]));
+  const replies = /* @__PURE__ */ new Map();
+  for (const comment of comments) {
+    if (!comment.parentCommentId) continue;
+    const children = replies.get(comment.parentCommentId);
+    if (children) children.push(comment);
+    else replies.set(comment.parentCommentId, [comment]);
+  }
+  return (comment) => {
+    const stamp = comment.humanResolvedAt;
+    if (!stamp) return stamp;
+    const resolvedAt = time3(stamp);
+    const rootAt = time3(comment.createdAt) ?? 0;
+    if (resolvedAt === void 0 || rootAt > resolvedAt) return void 0;
+    const addressed = comment.addressedIn;
+    if (addressed && Number.isInteger(addressed.version) && addressed.version > 0) {
+      const revisionAt = time3(addressed.at) ?? time3(revisionTimes.get(addressed.artifactId)) ?? rootAt;
+      if (revisionAt >= resolvedAt) return void 0;
+    }
+    const seen = /* @__PURE__ */ new Set([comment.id]);
+    const pending = [...replies.get(comment.id) ?? []];
+    while (pending.length) {
+      const reply = pending.pop();
+      if (seen.has(reply.id) || reply.sessionId !== comment.sessionId) continue;
+      seen.add(reply.id);
+      const replyAt = time3(reply.createdAt) ?? rootAt;
+      if (replyAt > resolvedAt || reply.author === "agent" && replyAt === resolvedAt) return void 0;
+      for (const nested of replies.get(reply.id) ?? []) pending.push(nested);
+    }
+    if (comment.answeredByCommentId && !seen.has(comment.answeredByCommentId) && rootAt >= resolvedAt) return void 0;
+    return stamp;
+  };
+}
+
 // src/mcp/elicit.ts
 var ELICIT_APPROVE_SCHEMA = {
   type: "object",
@@ -32055,9 +32104,9 @@ function isObligationBearingComment(c) {
 async function getPassiveFeedback(store, excludeIds = []) {
   const comments = await store.getUnacknowledgedComments();
   if (comments.length === 0) return "";
-  const drainable = comments.filter((c) => !isObligationBearingComment(c));
+  const drainable = comments.filter((c) => c.humanResolvedAt !== null && !isObligationBearingComment(c));
   if (drainable.length === 0) return "";
-  await store.acknowledgeComments(drainable.map((c) => c.id));
+  await store.acknowledgeComments(drainable.map((c) => c.id), drainable.map(commentResolutionSnapshot));
   const exclude = new Set(excludeIds);
   const shown = drainable.filter((c) => !exclude.has(c.id));
   if (shown.length === 0) return "";
@@ -32327,6 +32376,9 @@ var ERROR_CODES = {
   decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #725 — mark-resolved on a plain comment that answers one of a page's
+   *  asks (resolving it would reopen the ask). */
+  comment_answers_page_ask: "comment_answers_page_ask",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
   suggestion_not_countered: "suggestion_not_countered",
   /** #172 — agent tried to counter a suggestion the human INSISTED on (their
@@ -37331,6 +37383,7 @@ function liveReservations(state, now = Date.now()) {
 }
 var PendingAcks = class {
   comments = [];
+  deliveredComments = [];
   decisions = [];
   statusChanges = [];
   renderFailures = [];
@@ -37350,6 +37403,9 @@ var PendingAcks = class {
       }
     };
     if (this.comments.length > 0) await run2(() => store.acknowledgeComments(this.comments));
+    if (this.deliveredComments.length > 0) {
+      await run2(() => store.acknowledgeComments(this.deliveredComments.map((c) => c.id), this.deliveredComments));
+    }
     if (this.decisions.length > 0) await run2(() => store.acknowledgeDecisions(this.decisions));
     if (this.statusChanges.length > 0) await run2(() => store.acknowledgeStatusChanges(this.statusChanges));
     if (this.renderFailures.length > 0) await run2(() => store.acknowledgeRenderFailures?.(this.renderFailures));
@@ -37467,7 +37523,13 @@ function feedbackStoreView(store, opts) {
     if (typeof store.markWorkerStopsDelivered === "function") {
       overrides.markWorkerStopsDelivered = (ids) => void pending.workerStops.push(...ids);
     }
-    overrides.acknowledgeComments = (ids) => void pending.comments.push(...ids);
+    overrides.acknowledgeComments = (ids, delivered) => {
+      if (delivered === void 0) pending.comments.push(...ids);
+      else {
+        const selected = new Set(ids);
+        pending.deliveredComments.push(...delivered.filter((c) => selected.has(c.id)));
+      }
+    };
     overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
     overrides.acknowledgeStatusChanges = (ids) => void pending.statusChanges.push(...ids);
     if (typeof store.acknowledgeFileWatchNotices === "function") {
@@ -37824,7 +37886,7 @@ async function assembleCheckFeedback(ctx, args) {
     }
   }
   const parts = [];
-  const newComments = await store.getUnacknowledgedComments();
+  const newComments = (await store.getUnacknowledgedComments()).map((comment) => ({ ...comment }));
   const newResolved = await store.getResolvedDecisions();
   const postWakeArtifacts = await store.getArtifacts();
   const postWakeRenderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
@@ -37918,8 +37980,12 @@ async function assembleCheckFeedback(ctx, args) {
   const commentOnlyOnClosed = [];
   const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
   const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
+  const ackDeliveredComments = (comments) => store.acknowledgeComments(
+    comments.map((c) => c.id),
+    comments.map(commentResolutionSnapshot)
+  );
   if (sessionMessages.length > 0) {
-    await store.acknowledgeComments(sessionMessages.map((c) => c.id));
+    await ackDeliveredComments(sessionMessages);
     const formatted = sessionMessages.map((c) => `- ${c.content}${commentSecretNote(c)}`).join("\n");
     parts.push(`\u{1F3AF} Human directive:
 ${formatted}
@@ -37935,14 +38001,16 @@ Adjust your approach based on this guidance.`);
     return aIsQ - bIsQ;
   });
   if (artifactCommentsSorted.length > 0) {
-    await store.acknowledgeComments(artifactCommentsSorted.map((c) => c.id));
+    await ackDeliveredComments(artifactCommentsSorted);
+    const effectiveResolution = effectiveHumanResolution(fullState?.comments ?? allComments, fullState?.artifacts ?? postWakeArtifacts);
     const questionLines = [];
     const suggestionLines = [];
     const otherLines = [];
     const artsForTargets = postWakeArtifacts;
     let anyFollowUp = false;
     for (const c of artifactCommentsSorted) {
-      const delivery = deliverComment(c, artsForTargets);
+      const humanResolvedAt = effectiveResolution(c);
+      const delivery = deliverComment(humanResolvedAt === c.humanResolvedAt ? c : { ...c, humanResolvedAt }, artsForTargets);
       if (delivery.isFollowUp) anyFollowUp = true;
       switch (delivery.bucket) {
         case "suggestion":
@@ -40690,8 +40758,12 @@ var RetirementCommentFields = external_exports.object({
   acknowledged: external_exports.boolean(),
   answeredByCommentId: external_exports.string().nullable().optional(),
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  humanResolutionToken: external_exports.string().uuid().optional(),
   suggestion: external_exports.object({ state: external_exports.enum(["pending", "countered", "applied", "insisted"]) }).passthrough().optional()
 }).passthrough();
+var DeliveryCommentFields = RetirementCommentFields.extend({
+  humanResolvedAt: external_exports.string().nullable().optional()
+});
 var MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var ParentSupersededError = class extends Error {
   constructor(parentId, successorId, successorVersion, successorFromFile) {
@@ -44715,8 +44787,8 @@ var DaemonClient = class {
     const data = await this.get("/comments/unacknowledged");
     return data.comments;
   }
-  async acknowledgeComments(ids) {
-    await this.post("/comments/acknowledge", { ids });
+  async acknowledgeComments(ids, delivered) {
+    await this.post("/comments/acknowledge", { ids, delivered });
   }
   async getComment(commentId) {
     const data = await this.get(`/comments/${commentId}`);
@@ -44781,7 +44853,8 @@ var DaemonClient = class {
     return this.get(`/stance-exceptions?fingerprint=${encodeURIComponent(callFingerprint2)}`);
   }
   async markCommentHumanResolved(commentId, resolvedAt) {
-    await this.post(`/comments/${commentId}/mark-resolved`, { resolvedAt });
+    const result = await this.post(`/comments/${commentId}/mark-resolved`, { resolvedAt });
+    return result.changed ?? (resolvedAt !== null && result.status === "resolved");
   }
   // --- Decisions ---
   async recordDecisionRequest(params) {

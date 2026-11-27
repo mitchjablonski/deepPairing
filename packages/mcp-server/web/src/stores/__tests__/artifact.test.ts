@@ -1133,6 +1133,27 @@ describe("#407 review — resolveSuggestion + markQuestionResolved are fenced at
     expect(useArtifactStore.getState().comments).toEqual({});
     expect(toasts()).toHaveLength(0);
   });
+
+  it.each([false, true])("reopenComment reconciles a no-op without replacing a newer socket update (update=%s)", async (socketUpdate) => {
+    await bind();
+    const original = comment("reopen", "a1", { humanResolvedAt: "2026-01-01T00:00:00Z", acknowledged: true });
+    useArtifactStore.getState().addComment(original);
+    const d = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const reopening = useArtifactStore.getState().reopenComment(original.id);
+    expect(useArtifactStore.getState().comments.a1![0]).toMatchObject({ humanResolvedAt: null, acknowledged: false });
+
+    if (socketUpdate) {
+      useArtifactStore.getState().updateComment({ ...original, humanResolvedAt: null, acknowledged: false });
+    }
+    const latest = useArtifactStore.getState().comments.a1![0];
+    d.resolve(ok({ status: "unchanged", comment: { ...original, humanResolvedAt: null, acknowledged: true } }));
+    await reopening;
+
+    const current = useArtifactStore.getState().comments.a1![0];
+    expect(current?.acknowledged).toBe(!socketUpdate);
+    if (socketUpdate) expect(current).toBe(latest);
+  });
 });
 
 describe("#656 historical insertion", () => {
