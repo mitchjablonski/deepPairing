@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import WebSocket from "ws";
 import * as fs from "fs";
 import * as path from "path";
+import { DAEMON_ORIGIN_META, daemonOrigin, webviewHeadTags } from "./webview-csp";
 
 /**
  * Provides the deepPairing companion UI as a VS Code webview sidebar.
@@ -19,6 +20,9 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private ws?: WebSocket;
   private serverPort = 3847;
+  /** #727 — the port read from daemon.json, or null before one is found. Only
+   *  a discovered port is ever allowed as a webview frame source. */
+  private discoveredPort: number | null = null;
   private reconnectAttempt = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   /** Set when the user/VS Code has asked us to disconnect — suppresses auto-reconnect. */
@@ -51,6 +55,11 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.type === "dp:ready") {
         this.disposed = false;
+        // A reloaded webview (e.g. after the daemon moved) asks again while
+        // the socket may already be open: tell it so instead of staying silent.
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          void webviewView.webview.postMessage({ type: "dp:connected" });
+        }
         this.connectToServer(webviewView.webview);
       } else if (msg.type === "dp:disconnect") {
         this.disconnectFromServer();
@@ -89,7 +98,10 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
         }
       } catch { /* skip */ }
     }
-    if (best) this.serverPort = best.port;
+    if (best) {
+      this.serverPort = best.port;
+      this.discoveredPort = best.port;
+    }
   }
 
   private watchDaemonFiles(webview: vscode.Webview): void {
@@ -100,13 +112,14 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
       const pattern = new vscode.RelativePattern(folder, ".deeppairing/daemon.json");
       const watcher = vscode.workspace.createFileSystemWatcher(pattern);
       const onChange = () => {
-        const previousPort = this.serverPort;
+        const previousOrigin = daemonOrigin(this.discoveredPort);
         this.discoverPort();
-        if (this.serverPort !== previousPort) {
-          // Daemon moved — reconnect on the new port.
+        if (daemonOrigin(this.discoveredPort) !== previousOrigin) {
+          // Daemon moved (or appeared). The webview's CSP frame-src and
+          // daemon-origin meta name the old port, so rebuild the document;
+          // its fresh "dp:ready" reconnects on the new port.
           this.disconnectFromServer();
-          this.disposed = false;
-          this.connectToServer(webview);
+          webview.html = this.getHtml(webview);
         }
       };
       watcher.onDidCreate(onChange);
@@ -233,6 +246,7 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${daemonOriginMetaTag(this.discoveredPort)}
   <title>deepPairing</title>
 </head>
 <body>
@@ -255,9 +269,9 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
       html = html.replace(/(href|src)="\.?\/?assets\//g, `$1="${webDistUri}/assets/`);
       html = html.replace(/(href|src)="\//g, `$1="${webDistUri}/`);
 
-      // Add Content-Security-Policy for webview
-      const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src ${webview.cspSource} data:; connect-src ws://localhost:* http://localhost:*;">`;
-      html = html.replace("<head>", `<head>\n${csp}`);
+      // Content-Security-Policy for the webview, plus (#727) frame-src and the
+      // daemon-origin meta for the Mermaid renderer frame, exact port only.
+      html = html.replace("<head>", `<head>\n${webviewHeadTags(webview.cspSource, this.discoveredPort)}`);
 
       return html;
     } catch {
@@ -272,4 +286,10 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
 </html>`;
     }
   }
+}
+
+/** Dev mode has no CSP; it still needs the daemon-origin hint. */
+function daemonOriginMetaTag(port: number | null): string {
+  const origin = daemonOrigin(port);
+  return origin ? `<meta name="${DAEMON_ORIGIN_META}" content="${origin}">` : "";
 }

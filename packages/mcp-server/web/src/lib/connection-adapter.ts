@@ -407,6 +407,18 @@ export class WebSocketAdapter implements ConnectionAdapter {
 }
 
 /**
+ * #727 — may a window `message` be a VS Code host message? Child frames the
+ * companion creates (the Mermaid renderer, page/prototype frames) are all
+ * sandboxed without allow-same-origin, so their messages carry origin "null";
+ * they post to `window.parent` too and must never be taken for host traffic
+ * (a `dp:message` from one would inject a fake daemon event). The extension
+ * host's messages arrive from the webview's own origin.
+ */
+export function isVSCodeHostMessage(event: { origin: string }): boolean {
+  return event.origin !== "null";
+}
+
+/**
  * VS Code webview adapter — communicates via postMessage with the extension host.
  * The extension host bridges to the real WebSocket.
  */
@@ -425,7 +437,9 @@ export class VSCodeAdapter implements ConnectionAdapter {
     if (!this.vscode) return;
 
     window.addEventListener("message", (event) => {
+      if (!isVSCodeHostMessage(event)) return;
       const msg = event.data;
+      if (!msg || typeof msg !== "object") return;
       if (msg.type === "dp:connected") {
         this.connectHandler?.();
         // Forward the initial state

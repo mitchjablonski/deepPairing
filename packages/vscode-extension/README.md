@@ -23,6 +23,14 @@ live VS Code smoke test.
   backoff and its own disposal path. This assessment did not compare either
   against the browser client. Daemon restarts, changed ports, repeated
   reconnects, and replay exit may behave differently here.
+- **Page diagrams need a discovered daemon.** Mermaid blocks in page
+  artifacts render in the daemon's sandboxed renderer frame
+  (`/mermaid-renderer.html`). The webview CSP allows exactly
+  `frame-src http://localhost:<port>` for the port read from
+  `.deeppairing/daemon.json`, and the webview tells the companion that origin
+  through a `deeppairing-daemon-origin` meta tag. With no `daemon.json` the
+  webview allows no frames and diagrams show as source with a note
+  ([#727](https://github.com/mitchjablonski/deepPairing/issues/727)).
 - **No live smoke test.** The package has no test script, and there is no
   documented smoke test that runs the extension inside VS Code. This assessment
   read the source and did not exercise the running extension.

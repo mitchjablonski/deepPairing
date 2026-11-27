@@ -14,14 +14,23 @@
  * behind abandoned work. Otherwise the frame stays warm across pages.
  *
  * Availability. A host that can NEVER load the frame (a non-http(s) page
- * such as the VS Code webview, or `createFrame` throwing) marks the renderer
- * unavailable for the session: every request fails at once with source and
+ * with no daemon origin to load it from, or `createFrame` throwing) marks the
+ * renderer unavailable for the session: every request fails at once with source and
  * an "open the browser companion" note. On http(s) the frame gets its own
  * ready deadline (10 s; cold load is NOT charged to any diagram's render
  * timeout). A miss there is treated like a timeout, not a verdict: the
  * request fails fast for a 30 s backoff, then the next mount retries; after
  * 3 consecutive misses the tab gives up with a "reload to retry" message. The plan-card MermaidDiagram keeps its own renderer
  * and shares no Mermaid state with this one.
+ *
+ * #727 — the VS Code webview. There the companion's document is NOT served by
+ * the daemon: it is the extension's bundled copy at a `vscode-webview:` origin,
+ * so the relative renderer path would resolve inside the webview, not at the
+ * daemon. The extension names the daemon it already trusts in a
+ * `<meta name="deeppairing-daemon-origin">` (and allows exactly that origin in
+ * the webview CSP's `frame-src`); `rendererUrlForHost` accepts only a loopback
+ * `http://host:port` there and points the frame at the daemon's renderer page.
+ * The frame itself is unchanged: same sandbox, same no-network CSP.
  */
 import {
   MERMAID_RENDERER_PATH, MermaidRendererMessageSchema, type MermaidRenderRequest,
@@ -248,7 +257,7 @@ export class MermaidFrameRenderer {
 
 /** The real frame: hidden, laid out off-screen (Mermaid needs layout, so not
  *  display:none), sandboxed without allow-same-origin. */
-export function createSandboxedRendererFrame(): RendererFrame {
+export function createSandboxedRendererFrame(src: string = MERMAID_RENDERER_PATH): RendererFrame {
   const iframe = document.createElement("iframe");
   iframe.setAttribute("sandbox", "allow-scripts");
   iframe.setAttribute("aria-hidden", "true");
@@ -256,7 +265,7 @@ export function createSandboxedRendererFrame(): RendererFrame {
   iframe.setAttribute("title", "Diagram renderer");
   iframe.setAttribute("data-dp-mermaid-renderer", "");
   iframe.style.cssText = "position:fixed;left:-10000px;top:0;width:1200px;height:900px;border:0;visibility:hidden;pointer-events:none";
-  iframe.src = MERMAID_RENDERER_PATH;
+  iframe.src = src;
   document.body.appendChild(iframe);
   const target = iframe.contentWindow;
   if (!target) {
@@ -273,21 +282,48 @@ function listenToWindow(handler: (event: { source: unknown; data: unknown }) => 
 }
 
 /** The renderer page is served by the daemon over http(s). Any other host
- *  (the VS Code webview's `vscode-webview:`, `file:`) can't load it. */
+ *  (the VS Code webview's `vscode-webview:`, `file:`) can't load it from its
+ *  own origin. */
 export function rendererHostSupported(protocol: string | undefined): boolean {
   return protocol === "http:" || protocol === "https:";
 }
 
+/** Meta tag the VS Code extension sets to the daemon origin it trusts. */
+export const DAEMON_ORIGIN_META = "deeppairing-daemon-origin";
+
+/** A loopback daemon origin, exactly `http://<loopback>:<port>` (no path,
+ *  credentials, query or trailing slash). */
+const LOOPBACK_DAEMON_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})$/;
+
+/** Where to load the renderer page from on this host, or null when it can't
+ *  load at all. A daemon-served page (http/https) uses the relative path, as
+ *  before. Any other page (the VS Code webview) needs a daemon origin from
+ *  the embedder, and only a loopback `http://host:port` is accepted. */
+export function rendererUrlForHost(protocol: string | undefined, daemonOrigin: string | null | undefined): string | null {
+  if (rendererHostSupported(protocol)) return MERMAID_RENDERER_PATH;
+  const origin = daemonOrigin?.trim() ?? "";
+  const m = LOOPBACK_DAEMON_ORIGIN.exec(origin);
+  if (!m || Number(m[1]) > 65535) return null;
+  return `${origin}${MERMAID_RENDERER_PATH}`;
+}
+
+function readDaemonOriginMeta(): string | null {
+  if (typeof document === "undefined") return null;
+  return document.querySelector(`meta[name="${DAEMON_ORIGIN_META}"]`)?.getAttribute("content") ?? null;
+}
+
 let shared: MermaidFrameRenderer | null = null;
 
-/** The companion-wide renderer (created on first use). On a non-http(s)
- *  host it starts unavailable: no frame is ever created, no time is spent. */
+/** The companion-wide renderer (created on first use). On a host with no
+ *  renderer URL it starts unavailable: no frame is ever created, no time is
+ *  spent. */
 export function sharedMermaidFrameRenderer(): MermaidFrameRenderer {
   if (!shared) {
+    const src = rendererUrlForHost(typeof location === "undefined" ? undefined : location.protocol, readDaemonOriginMeta());
     shared = new MermaidFrameRenderer({
-      createFrame: createSandboxedRendererFrame,
+      createFrame: () => createSandboxedRendererFrame(src ?? MERMAID_RENDERER_PATH),
       listen: listenToWindow,
-      unavailable: !rendererHostSupported(typeof location === "undefined" ? undefined : location.protocol),
+      unavailable: src === null,
     });
   }
   return shared;
