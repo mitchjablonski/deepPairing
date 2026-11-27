@@ -21,6 +21,7 @@ import { createDaemon, type Daemon } from "../create-daemon.js";
 import { FileStore } from "../../store/file-store.js";
 import { reviseStandalonePage } from "../standalone-revise-page.js";
 import { provePageRevisionFeedback } from "../../store/page-revision-feedback.js";
+import { deriveCommentState } from "../../../web/src/lib/pageReviewQueue.js";
 
 const b64 = (html: string | Buffer) => Buffer.from(html).toString("base64");
 const page = (html: string, extra: Record<string, unknown> = {}) => ({ title: "Replay backend", htmlBase64: b64(html), ...extra });
@@ -258,6 +259,58 @@ describe("standalone page verdict and notes", () => {
 });
 
 describe("authenticated standalone page revision", () => {
+  it("advances addressedIn when a later revision re-addresses a reopened thread, never rolling it back", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const first = await (await f.present(daemon, randomUUID(), page("<p>First draft</p>"))).json();
+      const v1 = first.structuredContent.artifactId as string;
+      const store = daemon.sessions.get(f.sessionId)!;
+      const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+      store.addComment({ id: "cmt_root", artifactId: v1, author: "human", content: "Clarify the intro", target: anchored });
+      await tick();
+      const v2Op = randomUUID();
+      const second = await (await f.revise(daemon, v2Op, v1, "<p>Second draft</p>", "Read feedback", ["cmt_root"])).json();
+      const v2 = second.structuredContent.artifactId as string;
+      const v2Row = store.getArtifacts().find((a) => a.id === v2)!;
+      expect(store.getComment("cmt_root")?.addressedIn).toEqual({ artifactId: v2, version: 2, at: v2Row.createdAt });
+      await tick();
+      store.addComment({
+        id: "cmt_reply", artifactId: v2, author: "human", content: "Still unclear", parentCommentId: "cmt_root",
+        target: { artifactId: v1 },
+      });
+      const state = () => deriveCommentState(store.getComment("cmt_root")!, [store.getComment("cmt_reply")!], false);
+      expect(state()).toMatchObject({ kind: "open", reopened: true });
+      await tick();
+      const v3Op = randomUUID();
+      const third = await (await f.revise(daemon, v3Op, v2, "<p>Third draft</p>", "Read feedback", ["cmt_root"])).json();
+      const v3 = third.structuredContent.artifactId as string;
+      const v3Row = store.getArtifacts().find((a) => a.id === v3)!;
+      const v3Stamp = { artifactId: v3, version: 3, at: v3Row.createdAt };
+      expect(store.getComment("cmt_root")?.addressedIn).toEqual(v3Stamp);
+      expect(state()).toEqual({ kind: "addressed", via: "revision", version: 3 });
+      const diskStamp = () => JSON.parse(fs.readFileSync(path.join(f.root, ".deeppairing", "sessions", f.sessionId, "comments.json"), "utf8"))
+        .find((c: { id: string }) => c.id === "cmt_root").addressedIn;
+      expect(diskStamp()).toEqual(v3Stamp);
+      // Same-receipt retry is idempotent.
+      expect(await (await f.revise(daemon, v3Op, v2, "<p>Third draft</p>", "Read feedback", ["cmt_root"])).json())
+        .toMatchObject({ structuredContent: { artifactId: v3, replayed: true } });
+      const prove = (parentId: string) => provePageRevisionFeedback(store.getArtifacts(), store.getComments(), f.sessionId, parentId, ["cmt_root"])!;
+      store.acknowledgePageRevisionFeedback(v2, prove(v2), () => {});
+      expect(store.getComment("cmt_root")?.addressedIn).toEqual(v3Stamp);
+      // Replay and recovery of the OLDER v2 receipt never roll the stamp back.
+      expect(await (await f.revise(daemon, v2Op, v1, "<p>Second draft</p>", "Read feedback", ["cmt_root"])).json())
+        .toMatchObject({ structuredContent: { artifactId: v2, replayed: true } });
+      store.acknowledgePageRevisionFeedback(v1, prove(v1), () => {});
+      expect(store.getComment("cmt_root")?.addressedIn).toEqual(v3Stamp);
+      expect(diskStamp()).toEqual(v3Stamp);
+      expect(state()).toEqual({ kind: "addressed", via: "revision", version: 3 });
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("acknowledges only selected ordinary comments from the exact direct lineage", async () => {
     const f = fixture();
     try {
