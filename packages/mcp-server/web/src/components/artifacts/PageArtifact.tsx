@@ -21,7 +21,7 @@ import {
   type PinStateValue,
   acceptAsksMessage,
   acceptChangesStatus,
-  acceptDiagnosticsMessage,
+  acceptDiagnosticsReport,
   type PageDiagnostics,
   acceptOutlineActive,
   acceptOutlineMessage,
@@ -29,6 +29,7 @@ import {
   askAnchor,
   buildChangesMessage,
   isReadyMessage,
+  readyDoc,
   isTogglePointingMessage,
   type PageAsk,
   type PageOutlineMessage,
@@ -307,14 +308,15 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
   // #714 gap 12 — the frame's render diagnostics (script errors, assets that
-  // didn't load, policy blocks), bound to the frame generation they were
-  // observed on. A new generation is any change of what the frame shows: the
-  // artifact, its version, its html (a same-artifact revision can replace the
-  // frame without a new id) or Run. A clean frame posts nothing, so an old
-  // report must not outlive its frame (banner) or be posted under the new one.
-  const frameGenRef = useRef(0);
-  const [diagState, setDiagState] = useState<{ gen: number; diag: PageDiagnostics } | null>(null);
-  const diagnostics = diagState && diagState.gen === frameGenRef.current ? diagState.diag : null;
+  // didn't load, policy blocks), bound to the frame DOCUMENT that reported
+  // them: the annotator draws an instance id per document and announces it in
+  // its ready. srcDoc updates can reuse the iframe's WindowProxy, so the
+  // source check alone would let an old document's queued report through
+  // after a revision; the id doesn't. A revision that leaves the document
+  // live (a version-only change, unchanged srcdoc) keeps its report.
+  const frameDocRef = useRef<string | null>(null);
+  const [diagState, setDiagState] = useState<{ doc: string; id: string; diag: PageDiagnostics } | null>(null);
+  const diagnostics = diagState && diagState.doc === frameDocRef.current && diagState.id === artifact.id ? diagState.diag : null;
 
   // #714 gap 2 — what changed since the previous version: a block diff of the
   // two versions' PARSED text (DOMParser, inert; nothing runs), highlighted in
@@ -394,6 +396,13 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         setFrameFocusNonce((n) => n + 1);
         return;
       }
+      // A new frame document announced itself: reports from any other
+      // document (an old one's queued messages) are no longer current.
+      const doc = readyDoc(event, frame);
+      if (doc !== null && doc !== frameDocRef.current) {
+        frameDocRef.current = doc;
+        setDiagState(null);
+      }
       if (isReadyMessage(event, frame)) {
         sendersRef.current.sendMode();
         sendersRef.current.sendPins();
@@ -464,9 +473,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       // #714 gap 12 — render diagnostics are accepted after Run too (that is
       // when script errors happen). Display-only: a passive banner (text) and
       // a bounded note to the agent about its own page; never an action.
-      const diag = acceptDiagnosticsMessage(event, frame);
+      const diag = acceptDiagnosticsReport(event, frame);
       if (diag) {
-        setDiagState({ gen: frameGenRef.current, diag });
+        if (diag.doc === frameDocRef.current) setDiagState({ doc: diag.doc, id: artifactIdRef.current, diag: diag.diagnostics });
         return;
       }
       const changeStatus = acceptChangesStatus(event, frame);
@@ -512,20 +521,28 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     setChangesFound(null);
     setHover(null);
   }, [running]);
-  // A new frame generation: diagnostics (and any pending report) from the old
-  // frame are dropped. Bumped in a layout effect so a report from the new frame
-  // can never be tagged with the old generation.
+  // The frame's document is actually being replaced (a different iframe
+  // element, as at Run, or a changed srcdoc): no document is current until the
+  // new one's ready, so the old document's late reports are dropped and its
+  // report (banner, pending post) goes with it. Checked after every commit,
+  // against what the frame really shows, never inferred from artifact fields.
+  const lastFrameRef = useRef<{ el: HTMLIFrameElement | null; src: string | null } | undefined>(undefined);
   useLayoutEffect(() => {
-    frameGenRef.current += 1;
+    const el = iframeRef.current;
+    const src = el ? el.getAttribute("srcdoc") : null;
+    const last = lastFrameRef.current;
+    if (last && last.el === el && last.src === src) return;
+    lastFrameRef.current = { el, src };
+    frameDocRef.current = null;
     setDiagState(null);
-  }, [artifact.id, artifact.version, page.html, running]);
+  });
   // #714 gap 12 — tell the agent (check_feedback) on the render-failure lane,
   // under the page's reserved visual id, once the report settles: a trailing
   // delay, bounded from the first observation (recurring errors can't starve
   // it), sending the latest coalesced summary. The pending report carries the
-  // generation it was observed on and is dropped if the frame changed. Never
-  // from a read-only page (closed, or a replay).
-  const pendingReportRef = useRef<{ gen: number; id: string; key: string; summary: string; firstAt: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  // frame document it was observed on and is dropped if that document is no
+  // longer current. Never from a read-only page (closed, or a replay).
+  const pendingReportRef = useRef<{ doc: string; id: string; key: string; summary: string; firstAt: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   useEffect(() => () => {
     if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
     pendingReportRef.current = null;
@@ -535,10 +552,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
       pendingReportRef.current = null;
     };
-    // Only a report observed on the CURRENT frame generation (this render's
-    // version/Run may already be a newer frame than the report's).
-    if (readOnly || !diagState || diagState.gen !== frameGenRef.current || !hasDiagnostics(diagState.diag)) return drop();
-    const gen = diagState.gen;
+    // Only a report from the CURRENT frame document, for this artifact.
+    if (readOnly || !diagState || diagState.doc !== frameDocRef.current || diagState.id !== artifact.id || !hasDiagnostics(diagState.diag)) return drop();
+    const doc = diagState.doc;
     const summary = diagnosticsAgentSummary(diagState.diag, { version: artifact.version, running });
     if (!summary) return drop();
     const id = artifact.id;
@@ -547,18 +563,18 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     if (last && last.key === key && (last.text === summary || Date.now() - last.at < RENDER_ISSUES_COUNT_REPOST_MS)) return drop();
     const prev = pendingReportRef.current;
     const now = Date.now();
-    const firstAt = prev && prev.gen === gen && prev.id === id ? prev.firstAt : now;
+    const firstAt = prev && prev.doc === doc && prev.id === id ? prev.firstAt : now;
     drop();
     const fire = () => {
       const p = pendingReportRef.current;
       pendingReportRef.current = null;
-      if (!p || p.gen !== frameGenRef.current) return;
+      if (!p || p.doc !== frameDocRef.current || p.id !== artifactIdRef.current) return;
       reportedRenderIssues[p.id] = { key: p.key, text: p.summary, at: Date.now() };
       // No title: the daemon names the page from its own record.
       void useArtifactStore.getState().reportRenderFailure(p.id, PAGE_RENDER_ISSUES_VISUAL_ID, p.summary);
     };
     const delay = Math.max(0, Math.min(RENDER_ISSUES_REPORT_DELAY_MS, firstAt + RENDER_ISSUES_REPORT_MAX_WAIT_MS - now));
-    pendingReportRef.current = { gen, id, key, summary, firstAt, timer: setTimeout(fire, delay) };
+    pendingReportRef.current = { doc, id, key, summary, firstAt, timer: setTimeout(fire, delay) };
   }, [diagState, readOnly, running, artifact.id, artifact.version]);
   useEffect(() => {
     setHighlightId(null);

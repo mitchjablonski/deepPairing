@@ -539,6 +539,7 @@ export {
   PAGE_RENDER_ISSUES_LIMITS,
   pageErrorClass,
   formatPageRenderIssues,
+  pageRenderIssueKeyRank,
   parsePageRenderIssues,
   pageRenderIssuesWakeKey,
   describePageRenderIssues,

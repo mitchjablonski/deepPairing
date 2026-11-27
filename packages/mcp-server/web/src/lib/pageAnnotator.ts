@@ -811,6 +811,23 @@ function own(el) {
   return false;
 }
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
+/** #714 gap 12 — this document's instance id, drawn once at boot and put on
+ *  ready and diagnostics: srcDoc updates can reuse the frame's WindowProxy,
+ *  so the parent tells an old document's late report from the new
+ *  document's by this id, not by the message source. */
+var docId = (function () {
+  var hex = "", i;
+  try {
+    var c = window.crypto || (typeof crypto !== "undefined" ? crypto : null);
+    var a = new Uint8Array(16);
+    c.getRandomValues(a);
+    for (i = 0; i < a.length; i++) hex += (a[i] < 16 ? "0" : "") + a[i].toString(16);
+  } catch (e) {
+    hex = "";
+    for (i = 0; i < 32; i++) hex += Math.floor(Math.random() * 16).toString(16);
+  }
+  return hex;
+})();
 function important(el, styles) {
   for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) el.style.setProperty(k, styles[k], "important");
 }
@@ -1580,9 +1597,12 @@ function diagSample(list, v) {
   var t = redactDiag(v);
   if (t && list.length < DIAG.samples && list.indexOf(t) === -1) list.push(t);
 }
+/** Every distinct key is kept (keys come from finite allowlists, so this is
+ *  bounded); the DIAG.keys cap is applied at report time, in canonical order
+ *  (see canonKeys), so the retained keys never depend on discovery order. */
 function diagKey(list, key) {
   for (var i = 0; i < list.length; i++) if (list[i].key === key) { list[i].count = diagBump(list[i].count); return; }
-  if (list.length < DIAG.keys) list.push({ key: key, count: 1 });
+  list.push({ key: key, count: 1 });
 }
 function diagHas(el, attr) {
   if (attr === "xlink:href") return !!(el.getAttributeNS && el.getAttributeNS(XLINK, "href") !== null);
@@ -1633,14 +1653,23 @@ function onDiagCsp(e) {
   diagKey(diag.blocked, d);
   scheduleDiag();
 }
-function copyKeys(list) { var out = []; for (var i = 0; i < list.length; i++) out.push({ key: list[i].key, count: list[i].count }); return out; }
+/** The first DIAG.keys keys in canonical order: allowlist position, the
+ *  catch-all ("Error" is listed; "other resource" / "other" are not) last.
+ *  Must rank as the shared pageRenderIssueKeyRank does. */
+function canonKeys(list, allow) {
+  var out = [];
+  for (var i = 0; i < list.length; i++) out.push({ key: list[i].key, count: list[i].count });
+  function rank(k) { var r = allow.indexOf(k); return r === -1 ? allow.length : r; }
+  out.sort(function (a, b) { return rank(a.key) - rank(b.key); });
+  return out.slice(0, DIAG.keys);
+}
 function reportDiag() {
   diagPending = 0;
   if (!diag.script && !diag.rejection && !diag.resources.length && !diag.blocked.length) return;
-  var msg = { dp: "diagnostics",
-    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: copyKeys(diag.scriptClasses) },
-    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice(), classes: copyKeys(diag.rejectionClasses) },
-    resources: copyKeys(diag.resources), blocked: copyKeys(diag.blocked) };
+  var msg = { dp: "diagnostics", doc: docId,
+    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: canonKeys(diag.scriptClasses, ERROR_CLASSES) },
+    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice(), classes: canonKeys(diag.rejectionClasses, ERROR_CLASSES) },
+    resources: canonKeys(diag.resources, RESOURCE_KEYS), blocked: canonKeys(diag.blocked, CSP_DIRECTIVES) };
   var json = JSON.stringify(msg);
   if (json !== lastDiagJson) { lastDiagJson = json; post(msg); }
 }
@@ -1650,7 +1679,7 @@ function scheduleDiag() {
 }
 function onReady() {
   if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
-  post({ dp: "ready" });
+  post({ dp: "ready", doc: docId });
   reportOutline();
   reportDiag();
 }

@@ -79,6 +79,17 @@ export function pageErrorClass(name: unknown): string {
   return isPageErrorClass(name) ? name : "Error";
 }
 
+/** The canonical position of a key within its kind: its index in the kind's
+ *  allowlist, the catch-all ("other resource" / "other") last. Caps keep the
+ *  lowest-ranked keys, so the retained subset never depends on discovery
+ *  order. The annotator ranks the same way from its copies (parity test). */
+export function pageRenderIssueKeyRank(kind: PageRenderIssueKind, key: string): number {
+  const list: readonly string[] = kind === "script" || kind === "rejection" ? PAGE_ERROR_CLASSES
+    : kind === "resource" ? PAGE_RESOURCE_KEYS : PAGE_CSP_DIRECTIVES;
+  const i = list.indexOf(key);
+  return i === -1 ? list.length : i;
+}
+
 function validKey(kind: PageRenderIssueKind, key: string): boolean {
   if (kind === "script" || kind === "rejection") return isPageErrorClass(key);
   if (kind === "resource") return isPageResourceKey(key);
@@ -93,8 +104,11 @@ function validKey(kind: PageRenderIssueKind, key: string): boolean {
 export function formatPageRenderIssues(p: PageRenderIssues): string | null {
   if (!Number.isInteger(p.version) || p.version < 1 || p.version > PAGE_RENDER_ISSUES_MAX_VERSION) return null;
   const merged: PageRenderIssueItem[] = [];
-  const perKind: Record<string, number> = {};
   for (const kind of PAGE_RENDER_ISSUE_KINDS) {
+    // Every distinct key of this kind first (the allowlists are finite, so
+    // this is bounded), then the canonical order, then the per-kind cap: the
+    // same keys always retain the same subset, whatever order they arrived in.
+    const ofKind: PageRenderIssueItem[] = [];
     for (const raw of p.items) {
       // A key outside its allowlist is mapped ("Error", "other resource",
       // "other"), never dropped.
@@ -103,12 +117,12 @@ export function formatPageRenderIssues(p: PageRenderIssues): string | null {
       const it = { ...raw, key };
       if (it.kind !== kind || !validKey(kind, it.key) || !Number.isInteger(it.count) || it.count < 1) continue;
       const count = Math.min(it.count, PAGE_RENDER_ISSUES_LIMITS.maxCount);
-      const same = merged.find((m) => m.kind === kind && m.key === it.key);
+      const same = ofKind.find((m) => m.key === it.key);
       if (same) { same.count = Math.min(same.count + count, PAGE_RENDER_ISSUES_LIMITS.maxCount); continue; }
-      if ((perKind[kind] ?? 0) >= PAGE_RENDER_ISSUES_LIMITS.perKind) continue;
-      perKind[kind] = (perKind[kind] ?? 0) + 1;
-      merged.push({ kind, key: it.key, count });
+      ofKind.push({ kind, key: it.key, count });
     }
+    ofKind.sort((a, b) => pageRenderIssueKeyRank(kind, a.key) - pageRenderIssueKeyRank(kind, b.key));
+    merged.push(...ofKind.slice(0, PAGE_RENDER_ISSUES_LIMITS.perKind));
   }
   if (merged.length === 0) return null;
   const head = `v${p.version} ${p.running ? "scripts-on" : "scripts-off"} | `;

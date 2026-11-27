@@ -1546,6 +1546,26 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
     document.dispatchEvent(ev);
   };
 
+  it("REVIEW: ready and every diagnostics report carry this document's instance id, distinct per document", () => {
+    if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+    const ready = posted.find((m) => m?.dp === "ready");
+    expect(ready.doc).toMatch(/^[0-9a-f]{32}$/);
+    scriptError("TypeError: x");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics().at(-1).doc).toBe(ready.doc);
+    // Another document (a reload): another id.
+    posted.length = 0;
+    const second = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+    try {
+      if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+      const again = posted.find((m) => m?.dp === "ready");
+      expect(again.doc).toMatch(/^[0-9a-f]{32}$/);
+      expect(again.doc).not.toBe(ready.doc);
+    } finally {
+      second();
+    }
+  });
+
   it("posts nothing on a clean page", () => {
     vi.advanceTimersByTime(1000);
     expect(diagnostics()).toEqual([]);
@@ -1611,6 +1631,19 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
     expect(d.blocked).toHaveLength(8);
   });
 
+  it("REVIEW: past the key cap the retained keys are canonical (allowlist order), not the first discovered", () => {
+    // Discovered in reverse allowlist order, more than the 8-key cap.
+    for (const dir of [...PAGE_CSP_DIRECTIVES.slice(0, 12)].reverse()) cspViolation(dir);
+    for (const cls of [...PAGE_ERROR_CLASSES.slice(0, 12)].reverse()) {
+      window.dispatchEvent(new ErrorEvent("error", { message: "x", error: { name: cls } }));
+    }
+    cspViolation("not-a-directive");
+    vi.advanceTimersByTime(300);
+    const d = diagnostics().at(-1);
+    expect(d.blocked.map((b: { key: string }) => b.key)).toEqual(PAGE_CSP_DIRECTIVES.slice(0, 8));
+    expect(d.scriptErrors.classes.map((c: { key: string }) => c.key)).toEqual(PAGE_ERROR_CLASSES.slice(0, 8));
+  });
+
   it("maps a resource outside the allowlist to 'other resource' and an unknown directive to 'other'; xlink:href is 'href'", () => {
     document.body.insertAdjacentHTML("beforeend", '<custom-el id="c" src="x"></custom-el><svg><image id="si" xlink:href="a.png"/></svg>');
     document.getElementById("si")!.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "a.png");
@@ -1620,7 +1653,8 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
     vi.advanceTimersByTime(300);
     const d = diagnostics().at(-1);
     expect(d.resources).toEqual([{ key: "image href", count: 1 }]);
-    expect(d.blocked).toEqual([{ key: "other", count: 1 }, { key: "img-src", count: 1 }]);
+    // Canonical order: allowlist position, the catch-all last.
+    expect(d.blocked).toEqual([{ key: "img-src", count: 1 }, { key: "other", count: 1 }]);
   });
 
   it("names an unparseable directive 'other', ignores our own nodes, and coalesces bursts into one report per change", () => {

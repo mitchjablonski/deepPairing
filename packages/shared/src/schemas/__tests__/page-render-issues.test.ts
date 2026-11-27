@@ -101,6 +101,29 @@ describe("page render issues grammar", () => {
     expect(truncated).toBeGreaterThan(0);
   });
 
+  it("REVIEW: the retained subset is canonical: the same keys in reversed discovery order give the identical summary and wake key", () => {
+    const items = [
+      ...PAGE_ERROR_CLASSES.slice(0, 12).map((key, n) => ({ kind: "script" as const, key, count: n + 1 })),
+      ...PAGE_ERROR_CLASSES.slice(4, 16).map((key) => ({ kind: "rejection" as const, key, count: 2 })),
+      ...PAGE_RESOURCE_KEYS.slice(0, 12).map((key) => ({ kind: "resource" as const, key, count: 3 })),
+      { kind: "resource" as const, key: "other resource", count: 1 },
+      ...PAGE_CSP_DIRECTIVES.slice(0, 12).map((key) => ({ kind: "blocked" as const, key, count: 4 })),
+    ];
+    // Per-kind cap only (few kinds), then the wire cap too (all kinds).
+    for (const list of [items.filter((i) => i.kind === "blocked"), items]) {
+      const fwd = formatPageRenderIssues({ version: 3, running: true, items: list });
+      const rev = formatPageRenderIssues({ version: 3, running: true, items: [...list].reverse() });
+      expect(fwd).not.toBeNull();
+      expect(rev).toBe(fwd);
+      expect(pageRenderIssuesWakeKey(parsePageRenderIssues(rev)!)).toBe(pageRenderIssuesWakeKey(parsePageRenderIssues(fwd)!));
+    }
+    // Canonical = allowlist order within each kind; the catch-all goes last.
+    const blocked = parsePageRenderIssues(formatPageRenderIssues({ version: 1, running: false, items: [
+      { kind: "blocked", key: "other", count: 1 }, { kind: "blocked", key: "img-src", count: 1 }, { kind: "blocked", key: "default-src", count: 1 },
+    ] }))!;
+    expect(blocked.items.map((i) => i.key)).toEqual(["default-src", "img-src", "other"]);
+  });
+
   it("resource keys and directives come from fixed allowlists: forged tokens map to 'other resource' / 'other' and parse refuses them raw", () => {
     expect(pageResourceKey("img src")).toBe("img src");
     expect(pageResourceKey("hunter2-correct-horse-battery src")).toBe("other resource");
