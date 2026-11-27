@@ -30256,9 +30256,10 @@ ${s.replacementText}${note ? `
     };
   }
   const ruleOutNote = c.ruleOut ? ` \u2192 RULED OUT: recorded as a page-only rejected stance ("${clipProse(c.ruleOut.description, 120)}"). A page whose text still contains it (present_page, a page revise, a watched-file save) is now refused with this reason; take it out of this page. Other tools are not affected.` : "";
+  const resolvedNote = c.humanResolvedAt ? " \u2192 RESOLVED BY THE HUMAN: they marked this done themselves; no change is needed for it unless they reopen it." : c.humanResolvedAt === null ? " \u2192 REOPENED BY THE HUMAN: they had marked this done, then reopened it; it needs your attention again." : "";
   return {
     bucket: "comment",
-    prose: `- ${c.ruleOut ? "\u{1F6AB} " : ""}${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}${ruleOutNote}`,
+    prose: `- ${c.ruleOut ? "\u{1F6AB} " : ""}${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}${ruleOutNote}${resolvedNote}`,
     structured: {
       id: c.id,
       artifactId: c.target.artifactId,
@@ -30267,6 +30268,8 @@ ${s.replacementText}${note ? `
       // #187 — see the question path: present only for a late follow-up.
       ...c.followUp ? { followUp: true } : {},
       ...c.ruleOut ? { ruleOut: { description: c.ruleOut.description } } : {},
+      ...c.humanResolvedAt ? { humanResolvedAt: c.humanResolvedAt } : {},
+      ...c.humanResolvedAt === null ? { reopenedByHuman: true } : {},
       ...commonTargetFields(c, removedLine)
     },
     isFollowUp: !!c.followUp
@@ -32327,6 +32330,9 @@ var ERROR_CODES = {
   decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #725 — mark-resolved on a plain comment that answers one of a page's
+   *  asks (resolving it would reopen the ask). */
+  comment_answers_page_ask: "comment_answers_page_ask",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
   suggestion_not_countered: "suggestion_not_countered",
   /** #172 — agent tried to counter a suggestion the human INSISTED on (their
