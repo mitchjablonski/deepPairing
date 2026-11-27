@@ -32392,6 +32392,9 @@ var ERROR_CODES = {
   suggestion_response_required: "suggestion_response_required",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
+  /** A path-scoped browser write named a standalone review with no session
+   *  directory (#711): answered 404 before End admission, nothing created. */
+  session_not_found: "session_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
    *  (H1-5 write-refusal surfaced as a structured route error). */
   ledger_frozen: "ledger_frozen",
