@@ -37480,7 +37480,8 @@ function createReviewRoutes({
   getStore,
   broadcast,
   log: log2,
-  updateTaskStatus
+  updateTaskStatus,
+  withReviewWrite = (_c, _store, sid, run) => run(sid)
 }) {
   const app = new Hono2();
   app.post("/api/decisions/:decisionId", async (c) => {
@@ -37507,7 +37508,7 @@ function createReviewRoutes({
         404
       );
     }
-    return withDecisionResolveLock(store, async () => {
+    return withReviewWrite(c, store, sid, (sid2) => withDecisionResolveLock(store, async () => {
       const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
       let committed = false;
       try {
@@ -37519,14 +37520,14 @@ function createReviewRoutes({
           await store.forceFlush();
           const late = await store.takeResolutionAnnouncement(decisionId);
           if (late) {
-            broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid);
+            broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid2);
           }
         }
         if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
         if (outcome.kind === "conflict") {
           const body = staleResolveBody(outcome, decisionId);
           log2(`[decision] REFUSED stale resolve on ${decisionId}: ${String(body.message)}`);
-          if (outcome.artifactId) broadcast({ type: "artifact_updated", artifactId: outcome.artifactId, status: outcome.currentStatus }, sid);
+          if (outcome.artifactId) broadcast({ type: "artifact_updated", artifactId: outcome.artifactId, status: outcome.currentStatus }, sid2);
           return c.json(body, 409);
         }
         if (outcome.kind === "invalid_option") {
@@ -37555,7 +37556,7 @@ function createReviewRoutes({
             log2(
               `[decision] REFUSED resolve on ${targetArtifactId}: ${fallbackArtifact.status} \u2192 approved (reason=ui_decision_resolve) \u2014 verdict already final at ${at}`
             );
-            broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+            broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid2);
             return c.json(
               {
                 error: "verdict_already_final",
@@ -37590,12 +37591,12 @@ function createReviewRoutes({
           artifactId: ann?.artifactId ?? targetArtifactId,
           optionId: ann?.optionId ?? optionId,
           reasoning: ann ? ann.reasoning : reasoning
-        }, sid);
+        }, sid2);
         return c.json({ status: "resolved", decisionId });
       } finally {
         if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
       }
-    });
+    }));
   });
   app.post("/api/decisions/:decisionId/options/:optionId/never-suggest", async (c) => {
     const sid = getSessionId(c);
@@ -42019,8 +42020,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   async function withReviewWrite(c, store, requestedSid, run) {
     if (!standaloneCloseout || !projectRoot2) return run(requestedSid);
-    const sessionId = store.getSessionId();
-    if (!isStandaloneSessionForProject(sessionId, projectRoot2)) return run(requestedSid);
+    const sessionId = store?.getSessionId() ?? requestedSid;
+    if (!sessionId || !isStandaloneSessionForProject(sessionId, projectRoot2)) return run(requestedSid);
     const release2 = standaloneCloseout.admitWrite(sessionId);
     if (!release2) {
       if (standaloneCloseout.state(sessionId).state === "ended") {
@@ -42228,13 +42229,15 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         }
       }
     }
-    const resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
-    await store.markCommentHumanResolved(commentId, resolvedAt);
-    const comment = await store.getComment(commentId);
-    if (comment) {
-      broadcast({ type: "comment_updated", comment }, sid);
-    }
-    return c.json({ status: "resolved", commentId, comment: comment ?? null });
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      const resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
+      await store.markCommentHumanResolved(commentId, resolvedAt);
+      const comment = await store.getComment(commentId);
+      if (comment) {
+        broadcast({ type: "comment_updated", comment }, sid2);
+      }
+      return c.json({ status: "resolved", commentId, comment: comment ?? null });
+    });
   });
   app.post("/api/comments/:commentId/mark-unresolved", async (c) => {
     const sid = getSessionId(c);
@@ -42251,12 +42254,14 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         404
       );
     }
-    const reopened = await store.markCommentHumanResolved(commentId, null);
-    const comment = await store.getComment(commentId);
-    if (reopened && comment) {
-      broadcast({ type: "comment_updated", comment }, sid);
-    }
-    return c.json({ status: reopened ? "reopened" : "unchanged", commentId, comment: comment ?? null });
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      const reopened = await store.markCommentHumanResolved(commentId, null);
+      const comment = await store.getComment(commentId);
+      if (reopened && comment) {
+        broadcast({ type: "comment_updated", comment }, sid2);
+      }
+      return c.json({ status: reopened ? "reopened" : "unchanged", commentId, comment: comment ?? null });
+    });
   });
   app.post("/api/comments/:commentId/suggestion", async (c) => {
     const sid = getSessionId(c);
@@ -42288,20 +42293,23 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = SuggestionResolveBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const comment = await store.updateCommentSuggestion(commentId, {
-      state: parsed.data.action === "insist" ? "insisted" : "applied",
-      resetAcknowledged: true
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      const comment = await store.updateCommentSuggestion(commentId, {
+        state: parsed.data.action === "insist" ? "insisted" : "applied",
+        resetAcknowledged: true
+      });
+      if (comment) {
+        broadcast({ type: "comment_updated", comment }, sid2);
+        broadcast({ type: "feedback_received", commentId, artifactId: comment.target.artifactId, intent: "suggestion" }, sid2);
+      }
+      return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
     });
-    if (comment) {
-      broadcast({ type: "comment_updated", comment }, sid);
-      broadcast({ type: "feedback_received", commentId, artifactId: comment.target.artifactId, intent: "suggestion" }, sid);
-    }
-    return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
   });
   app.route("/", createReviewRoutes({
     getStore,
     broadcast,
     log: log2,
+    withReviewWrite,
     updateTaskStatus: async (artifactId, store) => maybeUpdateTaskStatus(null, artifactId, store)
   }));
   app.post("/api/decisions/:decisionId/close-out", async (c) => {
@@ -42323,67 +42331,77 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       );
     }
     const sid = bodySessionId ?? getSessionId(c);
-    let transient = null;
-    if (!getStore(sid) && sid && projectRoot2 && sessionDirExists(projectRoot2, sid)) {
-      try {
-        transient = new FileStore(projectRoot2, sid);
-      } catch (err) {
-        log2(`[close-out] transient store for ${sid} failed: ${err}`);
+    const live = getStore(sid);
+    const cold = !live && sid && projectRoot2 && sessionDirExists(projectRoot2, sid) ? { projectRoot: projectRoot2, sid } : null;
+    if (!live && !cold) return c.json(NO_SESSION_RESPONSE, 409);
+    return withReviewWrite(c, live, sid, async (sid2) => {
+      let transient = null;
+      if (cold) {
+        try {
+          transient = new FileStore(cold.projectRoot, cold.sid);
+        } catch (err) {
+          log2(`[close-out] transient store for ${cold.sid} failed: ${err}`);
+        }
       }
-    }
-    const store = getStore(sid) ?? transient;
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const artifacts = await store.getArtifacts();
-    const record3 = await store.getDecision(decisionId);
-    const isDecisionArtifact = (a) => !!a && a.type === "decision";
-    const byRecord = record3?.artifactId ? artifacts.find((a) => a.id === record3.artifactId) : void 0;
-    const artifact = (isDecisionArtifact(byRecord) ? byRecord : void 0) ?? artifacts.find(
-      (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
-    );
-    if (!artifact) {
-      return c.json(
-        {
-          error: "decision_not_in_session",
-          code: ERROR_CODES.decision_not_in_session,
-          message: "This decision belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    if (record3?.response) {
-      return c.json(
-        {
-          error: "decision_already_resolved",
-          code: ERROR_CODES.decision_already_resolved,
-          currentStatus: artifact.status,
-          message: "This decision was already answered \u2014 nothing to close out."
-        },
-        409
-      );
-    }
-    if (isClosedArtifactStatus(artifact.status)) {
-      return c.json({ status: "already_closed", decisionId, artifactId: artifact.id, artifactStatus: artifact.status });
-    }
-    await store.updateArtifactStatus(artifact.id, "obsolete", "ui_dismiss_obsolete");
-    if (note?.trim()) {
+      const store = live ?? transient;
+      if (!store) return c.json(NO_SESSION_RESPONSE, 409);
       try {
-        await store.addComment({
-          id: `c_${nanoid3(8)}`,
-          artifactId: artifact.id,
-          content: note.trim(),
-          author: "human",
-          target: { artifactId: artifact.id }
+        return await withDecisionResolveLock(store, async () => {
+          const artifacts = await store.getArtifacts();
+          const record3 = await store.getDecision(decisionId);
+          const isDecisionArtifact = (a) => !!a && a.type === "decision";
+          const byRecord = record3?.artifactId ? artifacts.find((a) => a.id === record3.artifactId) : void 0;
+          const artifact = (isDecisionArtifact(byRecord) ? byRecord : void 0) ?? artifacts.find(
+            (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+          );
+          if (!artifact) {
+            return c.json(
+              {
+                error: "decision_not_in_session",
+                code: ERROR_CODES.decision_not_in_session,
+                message: "This decision belongs to a different session than the one this tab is bound to."
+              },
+              404
+            );
+          }
+          if (record3?.response) {
+            return c.json(
+              {
+                error: "decision_already_resolved",
+                code: ERROR_CODES.decision_already_resolved,
+                currentStatus: artifact.status,
+                message: "This decision was already answered \u2014 nothing to close out."
+              },
+              409
+            );
+          }
+          if (isClosedArtifactStatus(artifact.status)) {
+            return c.json({ status: "already_closed", decisionId, artifactId: artifact.id, artifactStatus: artifact.status });
+          }
+          await store.updateArtifactStatus(artifact.id, "obsolete", "ui_dismiss_obsolete");
+          if (note?.trim()) {
+            try {
+              await store.addComment({
+                id: `c_${nanoid3(8)}`,
+                artifactId: artifact.id,
+                content: note.trim(),
+                author: "human",
+                target: { artifactId: artifact.id }
+              });
+            } catch (err) {
+              log2(`[close-out] note comment failed for ${artifact.id}: ${err}`);
+            }
+          }
+          await store.forceFlush();
+          clearContextBankCache();
+          broadcast({ type: "artifact_updated", artifactId: artifact.id, status: "obsolete", reason: "ui_dismiss_obsolete" }, sid2);
+          log2(`[close-out] decisionId=${decisionId} artifactId=${artifact.id} \u2192 obsolete (no option selected)`);
+          return c.json({ status: "closed_out", decisionId, artifactId: artifact.id, artifactStatus: "obsolete" });
         });
-      } catch (err) {
-        log2(`[close-out] note comment failed for ${artifact.id}: ${err}`);
+      } finally {
+        transient?.dispose();
       }
-    }
-    await store.forceFlush();
-    transient?.dispose();
-    clearContextBankCache();
-    broadcast({ type: "artifact_updated", artifactId: artifact.id, status: "obsolete", reason: "ui_dismiss_obsolete" }, sid);
-    log2(`[close-out] decisionId=${decisionId} artifactId=${artifact.id} \u2192 obsolete (no option selected)`);
-    return c.json({ status: "closed_out", decisionId, artifactId: artifact.id, artifactStatus: "obsolete" });
+    });
   });
   app.get("/api/context-bank", (c) => {
     try {
@@ -42418,9 +42436,11 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         404
       );
     }
-    await store.renameArtifact(artifactId, title);
-    broadcast({ type: "artifact_renamed", artifactId, title }, sid);
-    return c.json({ status: "renamed", artifactId });
+    return withReviewWrite(c, store, sid, async (sid2) => {
+      await store.renameArtifact(artifactId, title);
+      broadcast({ type: "artifact_renamed", artifactId, title }, sid2);
+      return c.json({ status: "renamed", artifactId });
+    });
   });
   app.get("/api/artifacts/:artifactId/comments", async (c) => {
     const store = getStore(getSessionId(c));
@@ -45664,8 +45684,8 @@ function createDaemon(deps) {
     (sessionId) => sessions.get(sessionId),
     void 0,
     (sessionId) => {
-      pageWatcher.stopSession(sessionId);
       sessions.get(sessionId)?.notifyStandaloneReviewEnded();
+      pageWatcher.stopSession(sessionId);
     },
     (sessionId) => pageWatcher.drainQueuedSaves(sessionId)
   );
