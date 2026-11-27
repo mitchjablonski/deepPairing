@@ -76,6 +76,31 @@ describe("page render issues grammar", () => {
     expect(pageRenderIssuesWakeKey(a)).not.toBe(pageRenderIssuesWakeKey(c));
   });
 
+  it("REVIEW: near the length cap the included subset depends only on the keys, never on count, version or run-state width", () => {
+    const all = [
+      ...PAGE_ERROR_CLASSES.slice(0, 8).map((key) => ({ kind: "script" as const, key })),
+      ...PAGE_ERROR_CLASSES.slice(8, 16).map((key) => ({ kind: "rejection" as const, key })),
+      ...PAGE_RESOURCE_KEYS.slice(0, 8).map((key) => ({ kind: "resource" as const, key })),
+      ...PAGE_CSP_DIRECTIVES.slice(0, 8).map((key) => ({ kind: "blocked" as const, key })),
+    ];
+    const wake = (version: number, running: boolean, items: { kind: any; key: string; count: number }[]) => {
+      const text = formatPageRenderIssues({ version, running, items });
+      expect(text).not.toBeNull();
+      expect(text!.length).toBeLessThanOrEqual(500);
+      return pageRenderIssuesWakeKey(parsePageRenderIssues(text)!);
+    };
+    let truncated = 0;
+    for (let k = 1; k <= all.length; k++) {
+      const items = all.slice(0, k);
+      const small = wake(1, true, items.map((i) => ({ ...i, count: 1 })));
+      if (small.split("\n").length < k) truncated++;
+      // Every count gaining digits, and the version and run-state at their widest.
+      expect(wake(1, true, items.map((i, n) => ({ ...i, count: n === 0 ? 10 : 1 })))).toBe(small);
+      expect(wake(999_999, false, items.map((i) => ({ ...i, count: 9999 })))).toBe(small);
+    }
+    expect(truncated).toBeGreaterThan(0);
+  });
+
   it("resource keys and directives come from fixed allowlists: forged tokens map to 'other resource' / 'other' and parse refuses them raw", () => {
     expect(pageResourceKey("img src")).toBe("img src");
     expect(pageResourceKey("hunter2-correct-horse-battery src")).toBe("other resource");

@@ -1479,9 +1479,27 @@ describe("annotator core — section context and element affixes (#714 gap 10)",
     const core = ctxCore();
     const cards = document.querySelectorAll("div");
     // Card A: locator +1, prefix "X" +2 = 3. Card B: prefix "X" +2, section b +1 = 3.
-    const hit = core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "X", section: { id: "b" } });
-    expect(hit?.el).toBe(cards[0]);
+    // Without a saved section the matching-context locator takes the tie.
     expect(core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card" })?.el).toBe(cards[0]);
+  });
+
+  it("REVIEW: after a section reorder the stale locator loses the tie to the candidate in the saved section", () => {
+    // v1: the card was in section "a", first on the page. v2: the sections swapped
+    // places with the same heading text and the same surrounding text, so the old
+    // locator now points at section b's card. Both cards score 5 (locator+prefix+
+    // suffix vs prefix+suffix+section); the saved section must decide, not the locator.
+    document.body.innerHTML =
+      '<h2 id="b">X</h2><div>Card</div><p>end</p><h2 id="a">X</h2><div>Card</div><p>end</p>';
+    const core = ctxCore();
+    const cards = document.querySelectorAll("div");
+    const anchor = { kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "X", suffix: "end", section: { id: "a" } };
+    expect(core.findAnchor(anchor)?.el).toBe(cards[1]);
+    // The locator still wins when it IS in the saved section.
+    expect(core.findAnchor({ ...anchor, section: { id: "b" } })?.el).toBe(cards[0]);
+    // Two in-section candidates tied with a stale locator: not found, never a guess.
+    document.body.innerHTML =
+      '<h2 id="b">X</h2><div>Card</div><p>end</p><h2 id="a">X</h2><div>Card</div><p>end</p><h3>X</h3><section id="a"><div>Card</div></section><p>end</p>';
+    expect(core.findAnchor(anchor)).toBeNull();
   });
 
   it("REVIEW: a moved element is not found rather than pinned on the element now at its old locator", () => {

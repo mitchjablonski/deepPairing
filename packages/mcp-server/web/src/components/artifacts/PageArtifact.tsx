@@ -105,6 +105,10 @@ const reportedRenderIssues: Record<string, { key: string; text: string; at: numb
 const RENDER_ISSUES_COUNT_REPOST_MS = 60_000;
 /** How long a frame's diagnostics must hold still before they're reported. */
 const RENDER_ISSUES_REPORT_DELAY_MS = 1500;
+/** The longest a report waits from its first observation: a page whose errors
+ *  keep recurring faster than the settle delay still reports (the latest
+ *  coalesced counts) instead of resetting the timer forever. */
+const RENDER_ISSUES_REPORT_MAX_WAIT_MS = 5000;
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
 const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
@@ -303,8 +307,14 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   }, [artifact.id]);
   const [annotate, setAnnotate] = useState(true);
   // #714 gap 12 — the frame's render diagnostics (script errors, assets that
-  // didn't load, policy blocks). Per frame mount: Run remounts the frame.
-  const [diagnostics, setDiagnostics] = useState<PageDiagnostics | null>(null);
+  // didn't load, policy blocks), bound to the frame generation they were
+  // observed on. A new generation is any change of what the frame shows: the
+  // artifact, its version, its html (a same-artifact revision can replace the
+  // frame without a new id) or Run. A clean frame posts nothing, so an old
+  // report must not outlive its frame (banner) or be posted under the new one.
+  const frameGenRef = useRef(0);
+  const [diagState, setDiagState] = useState<{ gen: number; diag: PageDiagnostics } | null>(null);
+  const diagnostics = diagState && diagState.gen === frameGenRef.current ? diagState.diag : null;
 
   // #714 gap 2 — what changed since the previous version: a block diff of the
   // two versions' PARSED text (DOMParser, inert; nothing runs), highlighted in
@@ -456,7 +466,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       // a bounded note to the agent about its own page; never an action.
       const diag = acceptDiagnosticsMessage(event, frame);
       if (diag) {
-        setDiagnostics(diag);
+        setDiagState({ gen: frameGenRef.current, diag });
         return;
       }
       const changeStatus = acceptChangesStatus(event, frame);
@@ -501,29 +511,55 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     setFound(null);
     setChangesFound(null);
     setHover(null);
-    setDiagnostics(null);
   }, [running]);
-  useEffect(() => {
-    setDiagnostics(null);
-  }, [artifact.id]);
+  // A new frame generation: diagnostics (and any pending report) from the old
+  // frame are dropped. Bumped in a layout effect so a report from the new frame
+  // can never be tagged with the old generation.
+  useLayoutEffect(() => {
+    frameGenRef.current += 1;
+    setDiagState(null);
+  }, [artifact.id, artifact.version, page.html, running]);
   // #714 gap 12 — tell the agent (check_feedback) on the render-failure lane,
-  // under the page's reserved visual id, once the report settles. Never from a
-  // read-only page (closed, or a replay).
+  // under the page's reserved visual id, once the report settles: a trailing
+  // delay, bounded from the first observation (recurring errors can't starve
+  // it), sending the latest coalesced summary. The pending report carries the
+  // generation it was observed on and is dropped if the frame changed. Never
+  // from a read-only page (closed, or a replay).
+  const pendingReportRef = useRef<{ gen: number; id: string; key: string; summary: string; firstAt: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  useEffect(() => () => {
+    if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
+    pendingReportRef.current = null;
+  }, []);
   useEffect(() => {
-    if (readOnly || !hasDiagnostics(diagnostics)) return;
-    const summary = diagnosticsAgentSummary(diagnostics, { version: artifact.version, running });
-    if (!summary) return;
+    const drop = () => {
+      if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
+      pendingReportRef.current = null;
+    };
+    // Only a report observed on the CURRENT frame generation (this render's
+    // version/Run may already be a newer frame than the report's).
+    if (readOnly || !diagState || diagState.gen !== frameGenRef.current || !hasDiagnostics(diagState.diag)) return drop();
+    const gen = diagState.gen;
+    const summary = diagnosticsAgentSummary(diagState.diag, { version: artifact.version, running });
+    if (!summary) return drop();
     const id = artifact.id;
     const key = diagnosticsWakeKey(summary);
     const last = reportedRenderIssues[id];
-    if (last && last.key === key && (last.text === summary || Date.now() - last.at < RENDER_ISSUES_COUNT_REPOST_MS)) return;
-    const t = setTimeout(() => {
-      reportedRenderIssues[id] = { key, text: summary, at: Date.now() };
+    if (last && last.key === key && (last.text === summary || Date.now() - last.at < RENDER_ISSUES_COUNT_REPOST_MS)) return drop();
+    const prev = pendingReportRef.current;
+    const now = Date.now();
+    const firstAt = prev && prev.gen === gen && prev.id === id ? prev.firstAt : now;
+    drop();
+    const fire = () => {
+      const p = pendingReportRef.current;
+      pendingReportRef.current = null;
+      if (!p || p.gen !== frameGenRef.current) return;
+      reportedRenderIssues[p.id] = { key: p.key, text: p.summary, at: Date.now() };
       // No title: the daemon names the page from its own record.
-      void useArtifactStore.getState().reportRenderFailure(id, PAGE_RENDER_ISSUES_VISUAL_ID, summary);
-    }, RENDER_ISSUES_REPORT_DELAY_MS);
-    return () => clearTimeout(t);
-  }, [diagnostics, readOnly, running, artifact.id, artifact.version]);
+      void useArtifactStore.getState().reportRenderFailure(p.id, PAGE_RENDER_ISSUES_VISUAL_ID, p.summary);
+    };
+    const delay = Math.max(0, Math.min(RENDER_ISSUES_REPORT_DELAY_MS, firstAt + RENDER_ISSUES_REPORT_MAX_WAIT_MS - now));
+    pendingReportRef.current = { gen, id, key, summary, firstAt, timer: setTimeout(fire, delay) };
+  }, [diagState, readOnly, running, artifact.id, artifact.version]);
   useEffect(() => {
     setHighlightId(null);
     setHover(null);

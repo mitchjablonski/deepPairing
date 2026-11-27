@@ -542,7 +542,7 @@ function findAnchor(a) {
     var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator, heads);
     if (sc >= 0) {
       out.push({ el: cands[i].el, range: null, score: sc, fromLocator: cands[i].fromLocator,
-        ctx: cands[i].fromLocator ? contextMatches(a, cands[i].el, bodyIndex) : false });
+        ctx: contextMatches(a, cands[i].el, bodyIndex), sec: heads ? sectionBonus(a, cands[i].el, heads) > 0 : false });
     }
   }
   return pickBest(out);
@@ -559,7 +559,11 @@ function contextMatches(a, el, bodyIndex) {
  *  wins only if its surrounding text also matches the saved prefix/suffix
  *  (#714 gap 10: "found where it was, in the same context"); otherwise a tie
  *  is "not found", never a guess (an element that merely moved into the old
- *  locator's place must not take the pin). */
+ *  locator's place must not take the pin). A locator element outside the
+ *  saved section loses that tie-break when a tied candidate sits in the saved
+ *  section (sections reordered: the old locator now points into the other
+ *  one); the single in-section candidate whose context also matches wins,
+ *  and several are still "not found". */
 function pickBest(list) {
   var best = null, tied = false, i;
   for (i = 0; i < list.length; i++) {
@@ -567,8 +571,15 @@ function pickBest(list) {
     else if (list[i].score === best.score) tied = true;
   }
   if (best && tied) {
-    var loc = null;
-    for (i = 0; i < list.length; i++) if (list[i].score === best.score && list[i].fromLocator && list[i].ctx) loc = list[i];
+    var loc = null, inSec = [];
+    for (i = 0; i < list.length; i++) {
+      if (list[i].score !== best.score) continue;
+      if (list[i].fromLocator && list[i].ctx) loc = list[i];
+      if (list[i].sec) inSec.push(list[i]);
+    }
+    if (loc && !loc.sec && inSec.length) {
+      return inSec.length === 1 && inSec[0].ctx ? { el: inSec[0].el, range: inSec[0].range } : null;
+    }
     if (loc) return { el: loc.el, range: loc.range };
   }
   return best && !tied ? { el: best.el, range: best.range } : null;

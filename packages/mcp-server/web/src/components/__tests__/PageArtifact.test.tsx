@@ -1750,4 +1750,71 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
     expect(JSON.parse(body).error).toBe("v1 scripts-off | script Error=1");
     expect(body).not.toMatch(/hunter2|IGNORE/);
   });
+
+  it("REVIEW: a same-artifact revision that replaces the frame drops the old banner and its pending report", () => {
+    vi.useFakeTimers();
+    try {
+      const art = { ...pageArtifact, id: "art_page_rev" };
+      useArtifactStore.getState().addArtifact(art);
+      const { rerender } = render(<PageArtifact artifact={art} />);
+      let win = fakeFrameWindow();
+      fromFrame(win, DIAG);
+      expect(screen.getByTestId("page-render-issues")).toBeInTheDocument();
+      // Same id, same version, new html (a clean revision): the frame is replaced
+      // and posts nothing, so the old report must not survive or be posted.
+      const clean = { ...art, content: { ...(art.content as Record<string, unknown>), html: "<p>Clean revision</p>" } } as Artifact;
+      rerender(<PageArtifact artifact={clean} />);
+      expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(renderFailurePosts()).toHaveLength(0);
+      // A version bump without new html is a new generation too.
+      win = fakeFrameWindow();
+      fromFrame(win, DIAG);
+      expect(screen.getByTestId("page-render-issues")).toBeInTheDocument();
+      rerender(<PageArtifact artifact={{ ...clean, version: 2 }} />);
+      expect(screen.queryByTestId("page-render-issues")).not.toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(renderFailurePosts()).toHaveLength(0);
+      // A report from the new frame is posted under the new version.
+      win = fakeFrameWindow();
+      fromFrame(win, DIAG);
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      const posts = renderFailurePosts();
+      expect(posts).toHaveLength(1);
+      expect(JSON.parse(String((posts[0]![1] as RequestInit).body)).error).toMatch(/^v2 /);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REVIEW: count-only snapshots recurring faster than the settle delay still report within the max wait, with the latest count", () => {
+    vi.useFakeTimers();
+    try {
+      const art = { ...pageArtifact, id: "art_page_recur" };
+      useArtifactStore.getState().addArtifact(art);
+      render(<PageArtifact artifact={art} />);
+      const win = fakeFrameWindow();
+      const snap = (n: number) =>
+        fromFrame(win, { ...DIAG, scriptErrors: { count: n, samples: [], classes: [{ key: "TypeError", count: n }] }, resources: [], blocked: [] });
+      // A new snapshot every second, forever: a plain trailing debounce never fires.
+      for (let n = 1; n <= 5; n++) {
+        snap(n);
+        act(() => {
+          vi.advanceTimersByTime(1000);
+        });
+      }
+      const posts = renderFailurePosts();
+      expect(posts).toHaveLength(1);
+      // Sent at 5s from the first observation, carrying the latest coalesced count.
+      expect(JSON.parse(String((posts[0]![1] as RequestInit).body)).error).toBe("v1 scripts-off | script TypeError=5");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
