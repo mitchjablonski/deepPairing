@@ -49,6 +49,7 @@ import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
 import { pageAsksFor } from "../mcp/page-asks.js";
 import { corsAllowedOrigin } from "./origin-policy.js";
 import { createReviewRoutes } from "./review-routes.js";
+import { withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { getSessionId, NO_SESSION_RESPONSE, readJsonValue } from "./route-helpers.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { StandaloneCloseoutError, type StandaloneCloseout } from "../daemon/standalone-closeout.js";
@@ -417,11 +418,12 @@ export function createHttpRoutes(
   });
 
   async function withReviewWrite(
-    c: Context, store: IStore, requestedSid: string | undefined, run: (sid: string | undefined) => Promise<Response>,
+    c: Context, store: Pick<IStore, "getSessionId"> | null, requestedSid: string | undefined,
+    run: (sid: string | undefined) => Promise<Response>,
   ): Promise<Response> {
     if (!standaloneCloseout || !projectRoot) return run(requestedSid);
-    const sessionId = store.getSessionId();
-    if (!isStandaloneSessionForProject(sessionId, projectRoot)) return run(requestedSid);
+    const sessionId = store?.getSessionId() ?? requestedSid;
+    if (!sessionId || !isStandaloneSessionForProject(sessionId, projectRoot)) return run(requestedSid);
     const release = standaloneCloseout.admitWrite(sessionId);
     if (!release) {
       if (standaloneCloseout.state(sessionId).state === "ended") {
@@ -715,13 +717,15 @@ export function createHttpRoutes(
         }
       }
     }
-    const resolvedAt = new Date().toISOString();
-    await store.markCommentHumanResolved(commentId, resolvedAt);
-    const comment = await store.getComment(commentId);
-    if (comment) {
-      broadcast({ type: "comment_updated", comment }, sid);
-    }
-    return c.json({ status: "resolved", commentId, comment: comment ?? null });
+    return withReviewWrite(c, store, sid, async (sid) => {
+      const resolvedAt = new Date().toISOString();
+      await store.markCommentHumanResolved(commentId, resolvedAt);
+      const comment = await store.getComment(commentId);
+      if (comment) {
+        broadcast({ type: "comment_updated", comment }, sid);
+      }
+      return c.json({ status: "resolved", commentId, comment: comment ?? null });
+    });
   });
 
   // #714 — withdraw the human's own resolve (Reopen on the page review
@@ -739,12 +743,14 @@ export function createHttpRoutes(
         404,
       );
     }
-    const reopened = await store.markCommentHumanResolved(commentId, null);
-    const comment = await store.getComment(commentId);
-    if (reopened && comment) {
-      broadcast({ type: "comment_updated", comment }, sid);
-    }
-    return c.json({ status: reopened ? "reopened" : "unchanged", commentId, comment: comment ?? null });
+    return withReviewWrite(c, store, sid, async (sid) => {
+      const reopened = await store.markCommentHumanResolved(commentId, null);
+      const comment = await store.getComment(commentId);
+      if (reopened && comment) {
+        broadcast({ type: "comment_updated", comment }, sid);
+      }
+      return c.json({ status: reopened ? "reopened" : "unchanged", commentId, comment: comment ?? null });
+    });
   });
 
   // #172 — the human resolves a COUNTERED suggestion from the companion UI.
@@ -780,16 +786,18 @@ export function createHttpRoutes(
     const parsed = SuggestionResolveBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
 
-    const comment = await store.updateCommentSuggestion(commentId, {
-      state: parsed.data.action === "insist" ? "insisted" : "applied",
-      resetAcknowledged: true,
+    return withReviewWrite(c, store, sid, async (sid) => {
+      const comment = await store.updateCommentSuggestion(commentId, {
+        state: parsed.data.action === "insist" ? "insisted" : "applied",
+        resetAcknowledged: true,
+      });
+      if (comment) {
+        broadcast({ type: "comment_updated", comment }, sid);
+        // The human just acted — wake the agent's poll (mirrors comment-create).
+        broadcast({ type: "feedback_received", commentId, artifactId: comment.target.artifactId, intent: "suggestion" }, sid);
+      }
+      return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
     });
-    if (comment) {
-      broadcast({ type: "comment_updated", comment }, sid);
-      // The human just acted — wake the agent's poll (mirrors comment-create).
-      broadcast({ type: "feedback_received", commentId, artifactId: comment.target.artifactId, intent: "suggestion" }, sid);
-    }
-    return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
   });
 
   // Current-session review writes are isolated behind a narrow store capability.
@@ -798,6 +806,7 @@ export function createHttpRoutes(
     getStore,
     broadcast,
     log,
+    withReviewWrite,
     updateTaskStatus: async (artifactId, store) =>
       maybeUpdateTaskStatus(null, artifactId, store),
   }));
@@ -856,85 +865,93 @@ export function createHttpRoutes(
     }
 
     const sid = bodySessionId ?? getSessionId(c);
-    // Prefer the LIVE store (a session the daemon owns must never be written
-    // through a second FileStore instance); fall back to a transient read+write
-    // store for a DEAD session that only exists on disk — which is where most
-    // of the stale decisions live (one rolling session per project, long since
-    // unregistered).
-    let transient: FileStore | null = null;
-    if (!getStore(sid) && sid && projectRoot && sessionDirExists(projectRoot, sid)) {
-      try {
-        transient = new FileStore(projectRoot, sid);
-      } catch (err) {
-        log(`[close-out] transient store for ${sid} failed: ${err}`);
+    const live = getStore(sid);
+    // Admit an existing cold target before constructing its transient store.
+    // Keep the current session lookup and the body-selected target distinct.
+    const cold = !live && sid && projectRoot && sessionDirExists(projectRoot, sid) ? { projectRoot, sid } : null;
+    if (!live && !cold) return c.json(NO_SESSION_RESPONSE, 409);
+
+    return withReviewWrite(c, live, sid, async (sid) => {
+      let transient: FileStore | null = null;
+      if (cold) {
+        try {
+          transient = new FileStore(cold.projectRoot, cold.sid);
+        } catch (err) {
+          log(`[close-out] transient store for ${cold.sid} failed: ${err}`);
+        }
       }
-    }
-    const store: IStore | null = getStore(sid) ?? transient;
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-
-    const artifacts = await store.getArtifacts();
-    const record = await store.getDecision(decisionId);
-    // BOTH lookup paths must assert `type === "decision"`. Pre-review only the
-    // fallback did, so a decision RECORD whose artifactId pointed at a
-    // non-decision artifact (a stale/mis-set reference — records and artifacts
-    // are written by different processes over the same files, see X6) let a
-    // triage click flip a PLAN to `obsolete` and return 200. A close-out must
-    // never be able to retire an artifact that is not the decision card.
-    const isDecisionArtifact = (a: Artifact | undefined): a is Artifact =>
-      !!a && a.type === "decision";
-    const byRecord = record?.artifactId ? artifacts.find((a) => a.id === record.artifactId) : undefined;
-    const artifact =
-      (isDecisionArtifact(byRecord) ? byRecord : undefined) ??
-      artifacts.find(
-        (a) =>
-          a.type === "decision" &&
-          ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
-      );
-    if (!artifact) {
-      return c.json(
-        { error: "decision_not_in_session", code: ERROR_CODES.decision_not_in_session,
-          message: "This decision belongs to a different session than the one this tab is bound to." },
-        404,
-      );
-    }
-
-    // Never overwrite a REAL answer. A resolved decision is history, not a queue
-    // item, and the triage view should not have offered this in the first place.
-    if (record?.response) {
-      return c.json(
-        { error: "decision_already_resolved", code: ERROR_CODES.decision_already_resolved,
-          currentStatus: artifact.status,
-          message: "This decision was already answered — nothing to close out." },
-        409,
-      );
-    }
-    // Idempotent: a double-click (or a second tab) must not append a second
-    // status-history entry.
-    if (isClosedArtifactStatus(artifact.status)) {
-      return c.json({ status: "already_closed", decisionId, artifactId: artifact.id, artifactStatus: artifact.status });
-    }
-
-    await store.updateArtifactStatus(artifact.id, "obsolete", "ui_dismiss_obsolete");
-    if (note?.trim()) {
+      const store = live ?? transient;
+      if (!store) return c.json(NO_SESSION_RESPONSE, 409);
       try {
-        await store.addComment({
-          id: `c_${nanoid(8)}`,
-          artifactId: artifact.id,
-          content: note.trim(),
-          author: "human",
-          target: { artifactId: artifact.id },
+        // A warm resolve and close-out inspect and settle under the same lock.
+        return await withDecisionResolveLock(store, async () => {
+          const artifacts = await store.getArtifacts();
+          const record = await store.getDecision(decisionId);
+          // BOTH lookup paths must assert `type === "decision"`. Pre-review only the
+          // fallback did, so a decision RECORD whose artifactId pointed at a
+          // non-decision artifact (a stale/mis-set reference — records and artifacts
+          // are written by different processes over the same files, see X6) let a
+          // triage click flip a PLAN to `obsolete` and return 200. A close-out must
+          // never be able to retire an artifact that is not the decision card.
+          const isDecisionArtifact = (a: Artifact | undefined): a is Artifact =>
+            !!a && a.type === "decision";
+          const byRecord = record?.artifactId ? artifacts.find((a) => a.id === record.artifactId) : undefined;
+          const artifact =
+            (isDecisionArtifact(byRecord) ? byRecord : undefined) ??
+            artifacts.find(
+              (a) =>
+                a.type === "decision" &&
+                ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
+            );
+          if (!artifact) {
+            return c.json(
+              { error: "decision_not_in_session", code: ERROR_CODES.decision_not_in_session,
+                message: "This decision belongs to a different session than the one this tab is bound to." },
+              404,
+            );
+          }
+
+          // Never overwrite a REAL answer. A resolved decision is history, not a queue
+          // item, and the triage view should not have offered this in the first place.
+          if (record?.response) {
+            return c.json(
+              { error: "decision_already_resolved", code: ERROR_CODES.decision_already_resolved,
+                currentStatus: artifact.status,
+                message: "This decision was already answered — nothing to close out." },
+              409,
+            );
+          }
+          // Idempotent: a double-click (or a second tab) must not append a second
+          // status-history entry.
+          if (isClosedArtifactStatus(artifact.status)) {
+            return c.json({ status: "already_closed", decisionId, artifactId: artifact.id, artifactStatus: artifact.status });
+          }
+
+          await store.updateArtifactStatus(artifact.id, "obsolete", "ui_dismiss_obsolete");
+          if (note?.trim()) {
+            try {
+              await store.addComment({
+                id: `c_${nanoid(8)}`,
+                artifactId: artifact.id,
+                content: note.trim(),
+                author: "human",
+                target: { artifactId: artifact.id },
+              });
+            } catch (err) {
+              // The close-out already landed; a failed note must not undo it or 500.
+              log(`[close-out] note comment failed for ${artifact.id}: ${err}`);
+            }
+          }
+          await store.forceFlush();
+          clearContextBankCache();
+          broadcast({ type: "artifact_updated", artifactId: artifact.id, status: "obsolete", reason: "ui_dismiss_obsolete" }, sid);
+          log(`[close-out] decisionId=${decisionId} artifactId=${artifact.id} → obsolete (no option selected)`);
+          return c.json({ status: "closed_out", decisionId, artifactId: artifact.id, artifactStatus: "obsolete" });
         });
-      } catch (err) {
-        // The close-out already landed; a failed note must not undo it or 500.
-        log(`[close-out] note comment failed for ${artifact.id}: ${err}`);
+      } finally {
+        transient?.dispose();
       }
-    }
-    await store.forceFlush();
-    transient?.dispose();
-    clearContextBankCache();
-    broadcast({ type: "artifact_updated", artifactId: artifact.id, status: "obsolete", reason: "ui_dismiss_obsolete" }, sid);
-    log(`[close-out] decisionId=${decisionId} artifactId=${artifact.id} → obsolete (no option selected)`);
-    return c.json({ status: "closed_out", decisionId, artifactId: artifact.id, artifactStatus: "obsolete" });
+    });
   });
 
   /**
@@ -989,9 +1006,11 @@ export function createHttpRoutes(
         404,
       );
     }
-    await store.renameArtifact(artifactId, title);
-    broadcast({ type: "artifact_renamed", artifactId, title }, sid);
-    return c.json({ status: "renamed", artifactId });
+    return withReviewWrite(c, store, sid, async (sid) => {
+      await store.renameArtifact(artifactId, title);
+      broadcast({ type: "artifact_renamed", artifactId, title }, sid);
+      return c.json({ status: "renamed", artifactId });
+    });
   });
 
 

@@ -266,8 +266,8 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   const activeSessions = new Set<string>();
   const standaloneCloseout: StandaloneCloseout = new StandaloneCloseout(projectRoot, (sessionId) => sessions.get(sessionId),
     undefined, (sessionId) => {
-      pageWatcher.stopSession(sessionId);
       sessions.get(sessionId)?.notifyStandaloneReviewEnded();
+      pageWatcher.stopSession(sessionId);
     }, (sessionId) => pageWatcher.drainQueuedSaves(sessionId));
   const demoRuns = new Map<string, () => void>();
   // #470 — active allowances live ONLY here (O1). A restart ends every grant:
