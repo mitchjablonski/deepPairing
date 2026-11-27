@@ -240,6 +240,7 @@ export class PageWatcher {
     for (const entry of entries) this.checkSignature(entry);
     const drains = entries.filter((entry) => entry.dirty || entry.processing || entry.draining).map((entry) => {
       const generation = entry.gen;
+      const signature = entry.lastSig;
       const checkGeneration = () => {
         if (entry.gen !== generation || entry.dirty) {
           throw new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
@@ -252,9 +253,12 @@ export class PageWatcher {
       entry.draining = Promise.resolve().then(async () => {
         await entry.processing;
         if (entry.stopped) return;
-        const queued = entry.dirty;
-        entry.dirty = false;
         try {
+          // Another eventless save may have landed during the wait. Mark
+          // that save dirty before reading so it cannot pass as pre-cut work.
+          this.checkSignature(entry, signature);
+          const queued = entry.dirty;
+          entry.dirty = false;
           checkGeneration();
           if (queued) await this.processAdmitted(entry);
           checkGeneration();
@@ -350,9 +354,10 @@ export class PageWatcher {
     if (this.entries.get(k) === entry) this.entries.delete(k);
   }
 
-  private checkSignature(entry: Entry): void {
+  private checkSignature(entry: Entry, previous = entry.lastSig): void {
     const signature = this.sig(entry.absPath);
-    if (signature !== entry.lastSig) this.onChange(entry, signature);
+    // A watcher event may already have recorded this signature and bumped gen.
+    if (signature !== previous && signature !== entry.lastSig) this.onChange(entry, signature);
   }
 
   private onChange(entry: Entry, signature?: string): void {

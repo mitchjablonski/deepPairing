@@ -545,6 +545,47 @@ describe("page file watch — a save landing during the gate check (Codex review
     }
   });
 
+  it("End rejects a silent post-cut save before reading queued work after an earlier gate", async () => {
+    watcher.dispose();
+    const held = heldFirstGate();
+    watcher = makeWatcher({ gate: held.gate, pollIntervalMs: 60_000, statSig: (file) => String(fs.statSync(file).size) });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>Earlier save held in the gate</p>");
+    await vi.advanceTimersByTimeAsync(PAGE_WATCH_QUIET_MS);
+    expect(held.pending()).toBe(true);
+
+    disk("<p>Pre-cut silent save</p>");
+    const end = watcher.drainQueuedSaves(SID);
+    disk("<p>Post-cut silent save with different size</p>");
+    const retry = expect(end).rejects.toMatchObject({ code: "session_save_pending" });
+    held.release();
+    await retry;
+    expect(pages()).toHaveLength(1);
+
+    await watcher.drainQueuedSaves(SID);
+    expect(liveTip()).toMatchObject({
+      version: 2, parentId: v1.id, content: { html: "<p>Post-cut silent save with different size</p>" },
+    });
+  });
+
+  it("End accepts unchanged work already drained by earlier processing", async () => {
+    watcher.dispose();
+    const held = heldFirstGate();
+    watcher = makeWatcher({ gate: held.gate, pollIntervalMs: 60_000, statSig: (file) => String(fs.statSync(file).size) });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>Save held in the gate</p>");
+    await vi.advanceTimersByTimeAsync(PAGE_WATCH_QUIET_MS);
+    expect(held.pending()).toBe(true);
+
+    const end = watcher.drainQueuedSaves(SID);
+    held.release();
+    await end;
+    expect(pages()).toHaveLength(2);
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Save held in the gate</p>" } });
+  });
+
   it("stat-poll path: B on disk before the next tick — A records nothing, B gets its own quiet period", async () => {
     watcher.dispose();
     const held = heldFirstGate();
