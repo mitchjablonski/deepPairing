@@ -25493,7 +25493,7 @@ var PAGE_STRUCTURE_RULES = [
   `Mark each thing your pair must decide with ${PAGE_DECISION_ATTR} and each question with ${PAGE_QUESTION_ATTR}, and give both an id.`,
   "Give other key elements (tables, rows, diagrams) stable ids too.",
   "Use a table for any comparison.",
-  "Draw diagrams as inline SVG, or paste pre-rendered SVG. Mermaid source is not rendered for you."
+  'Draw diagrams as Mermaid source in <pre class="mermaid"> (the companion renders it to SVG) or as inline SVG.'
 ];
 var PAGE_CONSTRAINT_RULES = [
   "No network. Scripts, stylesheets, fonts and images from a URL (CDNs included) are blocked. Inline styles and scripts as <style>/<script>, and images and fonts as data: URIs. Video, audio, iframes and objects won't load at all.",
@@ -25540,7 +25540,7 @@ var PAGE_SKELETON_HTML = `<!doctype html>
 </section>
 </body>
 </html>`;
-var PAGE_AUTHORING_TOOL_NOTE = `Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline styles and scripts, and images and fonts as data: URIs; video, audio, iframes and objects won't load). Its scripts run only when your pair clicks Run, so the page must read well without them. Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, inline SVG diagrams (Mermaid source is not rendered), <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.`;
+var PAGE_AUTHORING_TOOL_NOTE = `Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline styles and scripts, and images and fonts as data: URIs; video, audio, iframes and objects won't load). Its scripts run only when your pair clicks Run, so the page must read well without them. Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, diagrams as Mermaid source in <pre class="mermaid"> (the companion renders it) or inline SVG, <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.`;
 
 // ../../node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@4.4.3/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
 function isZ4Schema(s) {
@@ -39895,18 +39895,52 @@ function externalSrcsetCount(value) {
 function stripCssComments(css) {
   let out = "";
   let i = 0;
-  while (i < css.length) {
-    const open = css.indexOf("/*", i);
-    if (open === -1) {
-      out += css.slice(i);
-      break;
+  let from = 0;
+  const n = css.length;
+  while (i < n) {
+    const c = css.charCodeAt(i);
+    if (c === 47 && css.charCodeAt(i + 1) === 42) {
+      out += css.slice(from, i) + " ";
+      const close = css.indexOf("*/", i + 2);
+      if (close === -1) return out;
+      i = close + 2;
+      from = i;
+    } else if (c === 34 || c === 39) {
+      i++;
+      while (i < n) {
+        const d = css.charCodeAt(i);
+        if (d === 92) {
+          i += 2;
+          continue;
+        }
+        i++;
+        if (d === c || d === 10) break;
+      }
+    } else if (c === 40 && i >= 3 && css.slice(i - 3, i).toLowerCase() === "url") {
+      let j = i + 1;
+      while (j < n && isSpace2(css.charCodeAt(j))) j++;
+      const q = css.charCodeAt(j);
+      if (q === 34 || q === 39) {
+        i = j;
+        continue;
+      }
+      while (j < n) {
+        const d = css.charCodeAt(j);
+        if (d === 92) {
+          j += 2;
+          continue;
+        }
+        j++;
+        if (d === 41) break;
+      }
+      i = j;
+    } else if (c === 92) {
+      i += 2;
+    } else {
+      i++;
     }
-    out += css.slice(i, open) + " ";
-    const close = css.indexOf("*/", open + 2);
-    if (close === -1) break;
-    i = close + 2;
   }
-  return out;
+  return out + css.slice(from, Math.min(i, n));
 }
 function externalCssRefs(rawCss) {
   const lower = stripCssComments(rawCss).toLowerCase();

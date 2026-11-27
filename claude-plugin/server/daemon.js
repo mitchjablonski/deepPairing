@@ -38256,6 +38256,29 @@ var MIME_TYPES = {
   woff2: "font/woff2",
   png: "image/png"
 };
+var HASHED_ASSET = /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
+var MERMAID_RENDERER_DOC = "/mermaid-renderer.html";
+function mermaidRendererCsp(host) {
+  const own2 = host && /^[A-Za-z0-9.\-[\]:]+$/.test(host) ? ` http://${host}` : "";
+  return [
+    "default-src 'none'",
+    `script-src 'self'${own2}`,
+    "style-src 'unsafe-inline'",
+    "img-src 'none'",
+    "font-src 'none'",
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "worker-src 'none'",
+    "object-src 'none'",
+    "media-src 'none'",
+    "manifest-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'"
+    // No frame-ancestors: the companion itself may be embedded (the VS Code
+    // webview), and this document holds nothing worth framing protection.
+  ].join("; ");
+}
 function mountStaticUi(app, opts) {
   const { webDistPath, authToken, projectHash, log: log2 } = opts;
   if (!fs23.existsSync(webDistPath)) return;
@@ -38288,13 +38311,28 @@ function mountStaticUi(app, opts) {
     if (!resolvedPath.startsWith(resolvedBase + path22.sep) && resolvedPath !== resolvedBase) {
       return c.notFound();
     }
+    if (filePath === MERMAID_RENDERER_DOC) {
+      if (!fs23.existsSync(fullPath)) return c.notFound();
+      return new Response(fs23.readFileSync(fullPath), {
+        headers: {
+          "Content-Type": "text/html",
+          "Cache-Control": "no-cache",
+          "Content-Security-Policy": mermaidRendererCsp(c.req.header("host")),
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer"
+        }
+      });
+    }
     if (fs23.existsSync(fullPath)) {
       const ext = path22.extname(filePath).slice(1);
       if (ext === "html") return serveInjectedIndex(fullPath);
       const content = fs23.readFileSync(fullPath);
-      return new Response(content, {
-        headers: { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" }
-      });
+      const headers = { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" };
+      if (ext === "js" && filePath.startsWith("/assets/")) headers["Access-Control-Allow-Origin"] = "*";
+      if (filePath.startsWith("/assets/") && HASHED_ASSET.test(filePath)) {
+        headers["Cache-Control"] = "public, max-age=31536000, immutable";
+      }
+      return new Response(content, { headers });
     }
     const indexPath = path22.join(webDistPath, "index.html");
     if (fs23.existsSync(indexPath)) {
@@ -40078,18 +40116,52 @@ function externalSrcsetCount(value) {
 function stripCssComments(css) {
   let out = "";
   let i = 0;
-  while (i < css.length) {
-    const open = css.indexOf("/*", i);
-    if (open === -1) {
-      out += css.slice(i);
-      break;
+  let from = 0;
+  const n = css.length;
+  while (i < n) {
+    const c = css.charCodeAt(i);
+    if (c === 47 && css.charCodeAt(i + 1) === 42) {
+      out += css.slice(from, i) + " ";
+      const close = css.indexOf("*/", i + 2);
+      if (close === -1) return out;
+      i = close + 2;
+      from = i;
+    } else if (c === 34 || c === 39) {
+      i++;
+      while (i < n) {
+        const d = css.charCodeAt(i);
+        if (d === 92) {
+          i += 2;
+          continue;
+        }
+        i++;
+        if (d === c || d === 10) break;
+      }
+    } else if (c === 40 && i >= 3 && css.slice(i - 3, i).toLowerCase() === "url") {
+      let j = i + 1;
+      while (j < n && isSpace(css.charCodeAt(j))) j++;
+      const q = css.charCodeAt(j);
+      if (q === 34 || q === 39) {
+        i = j;
+        continue;
+      }
+      while (j < n) {
+        const d = css.charCodeAt(j);
+        if (d === 92) {
+          j += 2;
+          continue;
+        }
+        j++;
+        if (d === 41) break;
+      }
+      i = j;
+    } else if (c === 92) {
+      i += 2;
+    } else {
+      i++;
     }
-    out += css.slice(i, open) + " ";
-    const close = css.indexOf("*/", open + 2);
-    if (close === -1) break;
-    i = close + 2;
   }
-  return out;
+  return out + css.slice(from, Math.min(i, n));
 }
 function externalCssRefs(rawCss) {
   const lower = stripCssComments(rawCss).toLowerCase();
