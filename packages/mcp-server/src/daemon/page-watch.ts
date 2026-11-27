@@ -234,9 +234,11 @@ export class PageWatcher {
 
   /** Bypass quiet/rate timers only for work already observed at the cut. */
   async drainQueuedSaves(sessionId: string): Promise<void> {
-    const drains = [...this.entries.values()].filter((entry) =>
-      entry.sessionId === sessionId && (entry.dirty || entry.processing || entry.draining),
-    ).map((entry) => {
+    const entries = [...this.entries.values()].filter((entry) => entry.sessionId === sessionId);
+    // A filesystem that missed the watch event might not have polled this
+    // save yet. Observe signatures before fixing the generation for End.
+    for (const entry of entries) this.checkSignature(entry);
+    const drains = entries.filter((entry) => entry.dirty || entry.processing || entry.draining).map((entry) => {
       const generation = entry.gen;
       const checkGeneration = () => {
         if (entry.gen !== generation || entry.dirty) {
@@ -333,12 +335,7 @@ export class PageWatcher {
     entry.dirty = true;
     this.arm(entry, this.quietMs);
     if (this.pollMs > 0) {
-      entry.poll = setInterval(() => {
-        const sig = this.sig(entry.absPath);
-        if (sig === entry.lastSig) return;
-        entry.lastSig = sig;
-        this.onChange(entry);
-      }, this.pollMs);
+      entry.poll = setInterval(() => this.checkSignature(entry), this.pollMs);
       entry.poll.unref?.();
     }
   }
@@ -353,9 +350,14 @@ export class PageWatcher {
     if (this.entries.get(k) === entry) this.entries.delete(k);
   }
 
-  private onChange(entry: Entry): void {
+  private checkSignature(entry: Entry): void {
+    const signature = this.sig(entry.absPath);
+    if (signature !== entry.lastSig) this.onChange(entry, signature);
+  }
+
+  private onChange(entry: Entry, signature?: string): void {
     if (entry.stopped) return;
-    entry.lastSig = this.sig(entry.absPath);
+    entry.lastSig = signature ?? this.sig(entry.absPath);
     entry.dirty = true;
     entry.gen++;
     // A read in flight reschedules itself when it finishes (dirty).

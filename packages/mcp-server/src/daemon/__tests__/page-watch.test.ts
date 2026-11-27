@@ -12,7 +12,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileWatch, type Artifact } from "@deeppairing/shared";
 import { FileStore, ParentSupersededError } from "../../store/file-store.js";
-import { PageWatcher, type PageDirWatcher, type PageWatchDeps } from "../page-watch.js";
+import { PAGE_WATCH_QUIET_MS, PageWatcher, type PageDirWatcher, type PageWatchDeps } from "../page-watch.js";
 import { preflightRejectedApproaches } from "../../mcp/tool-helpers.js";
 import { createHttpRoutes } from "../../http/routes.js";
 import { withHash } from "../../http/__tests__/routes.harness.js";
@@ -27,10 +27,10 @@ let live: boolean;
 let fakeWatchers: Array<{ dir: string; fire: (name: string | null) => void; closed: boolean }>;
 let watcher: PageWatcher;
 
-function makeWatcher(opts: { pollIntervalMs?: number; gate?: PageWatchDeps["gate"]; statSig?: PageWatchDeps["statSig"] } = {}): PageWatcher {
+function makeWatcher(opts: Partial<Pick<PageWatchDeps, "pollIntervalMs" | "gate" | "statSig" | "getStore">> = {}): PageWatcher {
   return new PageWatcher({
     projectRoot: root,
-    getStore: (sid) => (sid === SID ? store : undefined),
+    getStore: opts.getStore ?? ((sid) => (sid === SID ? store : undefined)),
     broadcast: (_sid, e) => void events.push(e),
     isSessionLive: () => live,
     watch: (dir, listener) => {
@@ -505,6 +505,45 @@ describe("page file watch — a save landing during the gate check (Codex review
   // Stat-poll-only path (WSL /mnt/c: fs.watch never fires). Save B is already
   // on disk when A's gate returns, BEFORE the next poll tick could bump gen.
   const disk = (html: string) => fs.writeFileSync(path.join(root, "docs/page.html"), html);
+
+  it("End drains a changed signature before the first poll, without sweeping another session", async () => {
+    const siblingId = "sess_sibling";
+    const sibling = new FileStore(root, siblingId);
+    const signature = vi.fn((file: string) => String(fs.statSync(file).size));
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: signature,
+      getStore: (sessionId) => sessionId === SID ? store : sessionId === siblingId ? sibling : undefined,
+    });
+    try {
+      const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+      const siblingPath = path.join(root, "docs/sibling.html");
+      fs.writeFileSync(siblingPath, "<p>Sibling</p>");
+      sibling.createArtifact({
+        id: "sibling_page", type: "page", title: "Sibling",
+        content: { title: "Sibling", html: "<p>Sibling</p>", sourcePath: "docs/sibling.html" },
+      });
+      watcher.sync(SID);
+      watcher.sync(siblingId);
+      await settle(PAGE_WATCH_QUIET_MS); // finish both unchanged startup reads
+      signature.mockClear();
+
+      const saved = "<p>Changed before the first poll</p>";
+      disk(saved); // no directory notification and the poll timer has not fired
+      fs.writeFileSync(siblingPath, "<p>Sibling also has an unseen save</p>");
+      expect(pages()).toHaveLength(1);
+
+      await watcher.drainQueuedSaves(SID);
+
+      expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: saved } });
+      expect(sibling.getArtifacts()).toHaveLength(1);
+      expect(signature.mock.calls.map(([file]) => file)).not.toContain(siblingPath);
+    } finally {
+      watcher.stopSession(siblingId);
+      sibling.dispose();
+    }
+  });
 
   it("stat-poll path: B on disk before the next tick — A records nothing, B gets its own quiet period", async () => {
     watcher.dispose();
