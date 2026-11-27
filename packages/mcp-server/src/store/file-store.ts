@@ -1967,6 +1967,12 @@ export class FileStore implements IStore {
     if (comment) {
       // #714 — null withdraws the resolve (Reopen); undefined stamps now.
       comment.humanResolvedAt = resolvedAt === null ? null : resolvedAt ?? new Date().toISOString();
+      // #725 — a reopen the agent already drained is re-queued, so its next
+      // check_feedback sees it again (marked REOPENED BY THE HUMAN).
+      if (resolvedAt === null && comment.acknowledged) {
+        comment.acknowledged = false;
+        this.notifyFeedbackWaiters();
+      }
       this.scheduleFlush();
     }
   }

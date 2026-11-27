@@ -593,9 +593,13 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
   // #714 — the human resolved this plain comment themselves (Resolve on the
   // page review queue, the same humanResolvedAt stamp as "Mark resolved").
   // Spread only when set: every other comment is byte-for-byte unchanged.
+  // #725 — an explicit null is a WITHDRAWN resolve (Reopen): the comment
+  // was re-queued, so say why it is back.
   const resolvedNote = c.humanResolvedAt
     ? " → RESOLVED BY THE HUMAN: they marked this done themselves; no change is needed for it unless they reopen it."
-    : "";
+    : c.humanResolvedAt === null
+      ? " → REOPENED BY THE HUMAN: they had marked this done, then reopened it; it needs your attention again."
+      : "";
   return {
     bucket: "comment",
     prose: `- ${c.ruleOut ? "🚫 " : ""}${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}${ruleOutNote}${resolvedNote}`,
@@ -608,6 +612,7 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
       ...(c.followUp ? { followUp: true as const } : {}),
       ...(c.ruleOut ? { ruleOut: { description: c.ruleOut.description } } : {}),
       ...(c.humanResolvedAt ? { humanResolvedAt: c.humanResolvedAt } : {}),
+      ...(c.humanResolvedAt === null ? { reopenedByHuman: true as const } : {}),
       ...commonTargetFields(c, removedLine),
     },
     isFollowUp: !!c.followUp,

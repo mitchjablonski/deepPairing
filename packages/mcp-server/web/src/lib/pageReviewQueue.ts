@@ -205,15 +205,18 @@ export function queueCounts(entries: readonly QueueEntry[]): Record<QueueFilter,
  *    back to open, "Undo resolve" when the agent had already answered or
  *    addressed it (replying in its thread is how you reopen that).
  * Plain comments only: an Ask is a question the agent owes an answer to,
- * resolved through its own "Mark resolved".
+ * resolved through its own "Mark resolved". Never on your answer to one of
+ * the page's asks (`answersAsk`, #725): a resolved comment stops answering
+ * the ask, so resolving it would reopen the ask while telling the agent
+ * "no change needed" in the same breath.
  */
 export type ResolveAction =
   | { kind: "resolve"; label: "Resolve"; title: string }
   | { kind: "reopen"; label: "Reopen" | "Undo resolve"; title: string };
 
-export function resolveAction(entry: QueueEntry): ResolveAction | null {
+export function resolveAction(entry: QueueEntry, opts: { answersAsk?: boolean } = {}): ResolveAction | null {
   const c = entry.comment;
-  if (c.author !== "human" || c.parentCommentId || c.intent === "question") return null;
+  if (c.author !== "human" || c.parentCommentId || c.intent === "question" || opts.answersAsk) return null;
   if (entry.state.kind === "addressed" && entry.state.via === "resolved") {
     const back = entry.withoutResolve;
     if (back && back.kind === "addressed") {

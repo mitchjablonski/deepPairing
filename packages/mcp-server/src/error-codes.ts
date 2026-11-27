@@ -78,6 +78,9 @@ export const ERROR_CODES = {
   decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #725 — mark-resolved on a plain comment that answers one of a page's
+   *  asks (resolving it would reopen the ask). */
+  comment_answers_page_ask: "comment_answers_page_ask",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
   suggestion_not_countered: "suggestion_not_countered",
   /** #172 — agent tried to counter a suggestion the human INSISTED on (their

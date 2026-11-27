@@ -21,3 +21,13 @@ describe("pageOptsIntoDark", () => {
     "<style>:root { color-scheme: light; }</style>",
   ])("stays as authored: %s", (html) => expect(pageOptsIntoDark(html)).toBe(false));
 });
+
+describe("pageOptsIntoDark — only styles count (#725 review)", () => {
+  it.each([
+    "<pre>@media (prefers-color-scheme: dark) { body { background: #000 } }</pre>",
+    "<p>Use light-dark(#111, #eee) for colours.</p>",
+    "<code>color-scheme: dark</code>",
+    "<style>/* nothing */</style><pre><style>:root{color-scheme:dark}</style></pre>",
+    "<script>const css = 'prefers-color-scheme: dark';</script>",
+  ])("prose and samples don't opt in: %s", (html) => expect(pageOptsIntoDark(html)).toBe(false));
+});

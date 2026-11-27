@@ -1813,15 +1813,17 @@ describe("PageArtifact — keyboard, touch, polish and resolve (#714 gaps 9+13)"
     expect(live()).not.toMatch(/forged/);
   });
 
-  it("kbd-off from the frame turns the mode off, even after Run; a forged toggle after Run is ignored", async () => {
+  it("kbd-off from the frame turns the mode off once; after Run a forged toggle is ignored", async () => {
     render(<PageArtifact artifact={pageArtifact} />);
-    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
-    const win = fakeFrameWindow();
-    fromFrame(win, { dp: "key", key: "toggle-kbd" });
-    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "false");
+    let win = fakeFrameWindow();
     await userEvent.click(screen.getByTestId("page-kbd-toggle"));
     expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "true");
     fromFrame(win, { dp: "kbd-off" });
+    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "false");
+    expect(live()).toBe("Comment mode off.");
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    win = fakeFrameWindow();
+    fromFrame(win, { dp: "key", key: "toggle-kbd" });
     expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -1937,5 +1939,77 @@ describe("PageArtifact — keyboard, touch, polish and resolve (#714 gaps 9+13)"
     render(<PageArtifact artifact={pageArtifact} />);
     act(() => { useArtifactStore.getState().addComment(human("cmt_5")); });
     expect(live()).toBe("Comment 1 posted.");
+  });
+});
+
+describe("PageArtifact — #725 review fixes", () => {
+  const human = (id: string, anchor: Record<string, unknown>, extra: Partial<Comment> = {}): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id, htmlAnchor: anchor as any },
+    parentCommentId: null,
+    author: "human",
+    content: `note ${id}`,
+    acknowledged: false,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, Number(id.replace(/\D/g, "")) || 0)).toISOString(),
+    ...extra,
+  });
+  const live = () => screen.getByTestId("page-live-region").textContent ?? "";
+
+  it("P1 — no Resolve or Reopen on a comment that answers a data-dp-question ask", () => {
+    const askPage: Artifact = {
+      ...pageArtifact,
+      id: "art_page_ask",
+      content: { title: "Ask", html: '<div id="q1" data-dp-question>Which DB?</div><p id="other">Other text</p>' },
+    };
+    useArtifactStore.getState().addArtifact(askPage);
+    const on = (id: string, locator: string, quote: string) => ({ ...human(id, { kind: "element", locator, quote }), target: { artifactId: askPage.id, htmlAnchor: { kind: "element", locator, quote } as any } });
+    useArtifactStore.getState().addComment(on("cmt_1", "#q1", "Which DB?"));
+    useArtifactStore.getState().addComment(on("cmt_2", "#other", "Other text"));
+    render(<PageArtifact artifact={askPage} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "asks", asks: [{ kind: "question", id: "q1", text: "Which DB?", locator: "#q1" }], pinAsks: [] });
+    const rows = screen.getAllByTestId("page-annotation");
+    const rowOf = (id: string) => rows.find((r) => r.getAttribute("data-comment-id") === id)!.closest("li")!;
+    expect(within(rowOf("cmt_1")).queryByTestId("page-annotation-resolve")).toBeNull();
+    expect(within(rowOf("cmt_1")).queryByTestId("page-annotation-reopen")).toBeNull();
+    expect(within(rowOf("cmt_2")).getByTestId("page-annotation-resolve")).toBeInTheDocument();
+  });
+
+  it("P2 — after Reopen a comment the agent had seen reads Open, not Seen by agent", async () => {
+    useArtifactStore.getState().addComment(human("cmt_1", { kind: "element", locator: "h1", quote: "Cache invalidation" }, {
+      acknowledged: true, humanResolvedAt: "2026-01-02T00:00:00.000Z",
+    }));
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByTestId("page-annotation-reopen"));
+    expect(screen.getAllByTestId("page-annotation-state")[0]).toHaveTextContent(/^Open$/);
+  });
+
+  it("P2 — kbd-off while the mode is already off changes nothing and announces nothing", () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "kbd-off" });
+    fromFrame(win, { dp: "kbd-off" });
+    expect(live()).toBe("");
+  });
+
+  it("P3 — comment mode is off and its toggle disabled once the page's scripts run", async () => {
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByTestId("page-kbd-toggle"));
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    const toggle = screen.getByTestId("page-kbd-toggle");
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "ready" });
+    const mode = win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "mode").at(-1);
+    expect(mode).toMatchObject({ kbd: false, scripts: true });
+  });
+
+  it("P3 — C toggles comment mode with Caps Lock on", () => {
+    useArtifactStore.setState({ selectedArtifactId: pageArtifact.id });
+    render(<PageArtifact artifact={pageArtifact} />);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "C", bubbles: true })); });
+    expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "true");
   });
 });

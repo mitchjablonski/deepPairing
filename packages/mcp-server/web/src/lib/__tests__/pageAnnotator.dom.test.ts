@@ -1834,4 +1834,49 @@ describe("annotator main — keyboard comment mode and touch (#714 gap 9)", () =
     expect(badge.style.getPropertyValue("border")).toMatch(/^13px solid/);
     expect(badge.style.getPropertyValue("left")).toBe("-46px");
   });
+
+  it("#725 — stops the keyup and keypress of a handled key too", () => {
+    const seen: string[] = [];
+    const page = (e: Event) => { seen.push(`${e.type}:${(e as KeyboardEvent).key}`); };
+    for (const t of ["keyup", "keypress"]) document.addEventListener(t, page);
+    mode({ kbd: true });
+    key("ArrowDown");
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowDown", bubbles: true, cancelable: true }));
+    key("Enter");
+    document.body.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true, cancelable: true }));
+    // An unhandled key's keyup still reaches the page.
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "x", bubbles: true, cancelable: true }));
+    for (const t of ["keyup", "keypress"]) document.removeEventListener(t, page);
+    expect(seen).toEqual(["keyup:x"]);
+  });
+
+  it("#725 — C with Caps Lock forwards toggle-kbd too", () => {
+    key("C");
+    expect(posted.filter((m) => m?.dp === "key").map((m) => m.key)).toEqual(["toggle-kbd"]);
+  });
+
+  it("#725 — the touch Comment button sits outside every aria-hidden node", () => {
+    vi.useFakeTimers();
+    try {
+      const p = document.querySelector(".intro")!;
+      const down = new Event("pointerdown", { bubbles: true, cancelable: true });
+      Object.defineProperty(down, "pointerType", { value: "touch" });
+      p.dispatchEvent(down);
+      const range = document.createRange();
+      range.setStart(p.firstChild!, 8);
+      range.setEnd(p.firstChild!, 16);
+      (range as any).getBoundingClientRect = () => ({ left: 10, top: 10, right: 60, bottom: 24, width: 50, height: 14 });
+      vi.spyOn(window, "getSelection").mockReturnValue({
+        isCollapsed: false, rangeCount: 1, getRangeAt: () => range, removeAllRanges() {},
+      } as unknown as Selection);
+      document.dispatchEvent(new Event("selectionchange"));
+      vi.advanceTimersByTime(400);
+      const btn = document.querySelector("dp-annotator-selbtn") as HTMLElement;
+      expect(btn).not.toBeNull();
+      expect(btn.closest('[aria-hidden="true"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

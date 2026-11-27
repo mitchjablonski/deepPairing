@@ -334,7 +334,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // #714 gap 9 — keyboard comment mode (arrow/Tab between blocks in the
   // frame, Enter to comment). Only while pointing is on.
   const [kbd, setKbd] = useState(false);
-  const kbdOn = kbd && annotate && !readOnly;
+  // Off once the page's own scripts run (#725): the cursor's block names are
+  // ignored then (agent script could forge them), so the mode would be silent
+  // for a screen reader while still taking the arrow keys.
+  const kbdOn = kbd && annotate && !readOnly && !running;
+  const kbdOnRef = useRef(kbdOn);
+  kbdOnRef.current = kbdOn;
   // #714 gap 13 — the expanded (full-window) review, the shortcut popover,
   // and the screen-reader live region.
   const [expanded, setExpanded] = useState(false);
@@ -455,7 +460,11 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       }
       // #714 gap 9 — the reviewer left keyboard comment mode inside the page.
       // Turning it OFF is the safe direction, so it is honoured after Run too.
+      // A no-op unless the mode is on (#725): a page script after Run can't
+      // flood the live region with repeats.
       if (isKbdOffMessage(event, frame)) {
+        if (!kbdOnRef.current) return;
+        kbdOnRef.current = false;
         setKbd(false);
         announce("Comment mode off.");
         return;
@@ -689,7 +698,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   /** Keyboard comment mode on/off. Turning it on also turns pointing on and
    *  moves focus into the frame, where the arrow keys now step blocks. */
   const toggleKbd = useCallback(() => {
-    if (readOnly) return;
+    if (readOnly || running) return;
     const next = !(kbd && annotate);
     setKbd(next);
     if (next) {
@@ -701,10 +710,10 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         ? "Comment mode on. Arrow keys or Tab move between blocks, Enter comments, Escape leaves."
         : "Comment mode off.",
     );
-  }, [readOnly, kbd, annotate, announce]);
+  }, [readOnly, running, kbd, annotate, announce]);
   useEffect(() => {
-    if (!annotate) setKbd(false);
-  }, [annotate]);
+    if (!annotate || running) setKbd(false);
+  }, [annotate, running]);
 
   frameKeyRef.current = (key) => {
     if (key === "toggle-kbd") toggleKbd();
@@ -722,18 +731,20 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.defaultPrevented || e.repeat || !pageKeyTargetOk(e)) return;
-      if (e.key !== "c" && e.key !== "]" && e.key !== "[") return;
+      // C with Caps Lock (or Shift) is still C.
+      const k = e.key === "C" ? "c" : e.key;
+      if (k !== "c" && k !== "]" && k !== "[") return;
       const root = rootRef.current;
       if (!root || !root.isConnected || root.closest("[inert]")) return;
       if (useArtifactStore.getState().selectedArtifactId !== artifactIdRef.current) return;
-      if (e.key === "c") {
+      if (k === "c") {
         if (readOnly) return;
         e.preventDefault();
         toggleKbd();
         return;
       }
       e.preventDefault();
-      stepComment(e.key === "]" ? 1 : -1);
+      stepComment(k === "]" ? 1 : -1);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -836,7 +847,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // full-text hashes (continuity) and child ids (a comment on a child with its
   // own id, also after Run when the frame's reports are frozen).
   const parsedAsks = usePageAskVersions(askVersions, asks.length > 0 && anchored.length > 0);
-  const askAnswered = useMemo(() => {
+  // #725 — also which comments answer an ask (no Resolve/Reopen on those).
+  const { answered: askAnswered, answerIds: askAnswerIds } = useMemo(() => {
     const current = { artifactId: artifact.id, version: artifact.version };
     // The pre-Run reports, only when they describe this page's current pins.
     const scoped = <T extends { forId: string; key: string }>(r: T | null) =>
@@ -846,7 +858,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     const pinsAligned = !!askPins && askPins.length === anchored.length;
     const currentParsed = parsedAsks(artifact.id);
     const earlierAsks = (versionId: string) => (versionId === artifact.id ? undefined : parsedAsks(versionId));
-    return asks.map((ask, k) => {
+    const answerIds = new Set<string>();
+    const answered = asks.map((ask, k) => {
       // Continuity compares the full-text hash from THIS version's parsed HTML.
       const parsed = ask.id ? currentParsed?.find((p) => p.id === ask.id) : undefined;
       const ref = {
@@ -854,7 +867,15 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         ...(parsed?.fullHash ? { fullHash: parsed.fullHash } : {}),
         ...(parsed?.childIds ? { childIds: parsed.childIds } : {}),
       };
-      return anchored.some((c, i) => {
+      let any = false;
+      anchored.forEach((c, i) => {
+        if (answersAsk(c, i)) {
+          any = true;
+          answerIds.add(c.id);
+        }
+      });
+      return any;
+      function answersAsk(c: Comment, i: number): boolean {
         // An earlier version's comment is judged only against its own source
         // version (ask continuity); whether its pin relocates in the current
         // view is irrelevant to it, as it is for check_feedback.
@@ -864,8 +885,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         if (preRunFound && preRunFound[i] === false) return false;
         const insideByFrame = pinsAligned && askPins![i] === k && preRunFound?.[i] === true;
         return commentAnswersAsk(ref, c, current, { insideByFrame });
-      });
+      }
     });
+    return { answered, answerIds };
   }, [asks, anchored, pinsKey, pinAsks, askPinStatus, artifact.id, artifact.version, parsedAsks]);
   const jumpToAsk = (index: number) => {
     const ask = asks[index];
@@ -983,6 +1005,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       variant={variant}
       onStep={stepComment}
       onResolve={readOnly ? undefined : onResolve}
+      askAnswerIds={askAnswerIds}
     />
   );
   const hoverEntry = hover ? queue.find((e) => e.comment.id === hover.id) : undefined;
@@ -1190,10 +1213,15 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
           <button
             type="button"
             onClick={toggleKbd}
+            disabled={running}
             aria-pressed={kbdOn}
             aria-keyshortcuts="C"
-            title="Comment without a mouse: arrow keys or Tab move between blocks in the page, Enter comments on one, Escape leaves (C)"
-            className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary pointer-coarse:min-h-11"
+            title={
+              running
+                ? "Comment mode isn't available once the page's scripts run. Click or select text to comment."
+                : "Comment without a mouse: arrow keys or Tab move between blocks in the page, Enter comments on one, Escape leaves (C)"
+            }
+            className="px-1.5 py-0.5 rounded border border-border-default hover:bg-surface-elevated text-text-secondary pointer-coarse:min-h-11 disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="page-kbd-toggle"
           >
             {kbdOn ? "Comment mode: on" : "Comment mode: off"}

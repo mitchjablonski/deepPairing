@@ -46,6 +46,7 @@ import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { readPreflightBlocks } from "../store/preflight-block-log.js";
 import { registerStanceExceptionRoutes, type StanceExceptionRegistry } from "../daemon/stance-exceptions.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
+import { pageAsksFor } from "../mcp/page-asks.js";
 import { corsAllowedOrigin } from "./origin-policy.js";
 import { createReviewRoutes } from "./review-routes.js";
 import { getSessionId, NO_SESSION_RESPONSE, readJsonValue } from "./route-helpers.js";
@@ -59,7 +60,7 @@ import { CommentBodySchema,
   CreateRequestBodySchema,
   DecisionCloseOutBodySchema,
   formatZodIssues,
-  normalizeConceptKey, errorMessage, errorCode, isClosedArtifactStatus } from "@deeppairing/shared";
+  normalizeConceptKey, errorMessage, errorCode, isClosedArtifactStatus, commentAnswersAsk, coercePageContent } from "@deeppairing/shared";
 
 /**
  * Demo-ledger isolation — demo sessions (`demo_` prefix, minted only by
@@ -654,12 +655,35 @@ export function createHttpRoutes(
     // unknown comment (owned by another session) used to no-op and return
     // 200 {comment: null}; the optimistic stamp then resurrected the
     // question into the waiting set on reload. Fail loudly.
-    if (!(await store.getComment(commentId))) {
+    const existing = await store.getComment(commentId);
+    if (!existing) {
       return c.json(
         { error: "comment_not_in_session", code: "comment_not_in_session",
           message: "This comment belongs to a different session than the one this tab is bound to." },
         404,
       );
+    }
+    // #725 — a plain comment that answers one of its page's asks is not
+    // resolvable: a resolved comment stops answering the ask, so the ask
+    // would read as owed again while the answer is delivered as "done".
+    // (An Ask on that spot keeps its own Mark resolved.)
+    if (existing.intent !== "question" && existing.target.htmlAnchor && existing.target.artifactId) {
+      const art = (await store.getArtifacts()).find((a) => a.id === existing.target.artifactId);
+      if (art?.type === "page") {
+        let answers = false;
+        try {
+          const asks = pageAsksFor(art.id, coercePageContent(art.content).html).filter((q) => q.id);
+          const current = { artifactId: art.id, version: art.version };
+          answers = asks.some((q) => commentAnswersAsk(q, existing, current));
+        } catch { answers = false; }
+        if (answers) {
+          return c.json(
+            { error: "comment_answers_page_ask", code: ERROR_CODES.comment_answers_page_ask,
+              message: "This comment answers one of the page's asks; resolving it would reopen the ask." },
+            409,
+          );
+        }
+      }
     }
     const resolvedAt = new Date().toISOString();
     await store.markCommentHumanResolved(commentId, resolvedAt);

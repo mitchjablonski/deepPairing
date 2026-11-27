@@ -529,7 +529,9 @@ export interface IStore {
    * agent's `acknowledged` queue — this is a human-side "I'm done waiting"
    * signal so the "waiting on human" indicator stops counting it.
    * #714 — `null` withdraws the human's resolve (Reopen from the page review
-   * queue): the field is set to null, so a broadcast clears it everywhere.
+   * queue): the field is set to null, so a broadcast clears it everywhere,
+   * and a comment the agent already drained is re-queued (acknowledged →
+   * false) so check_feedback delivers it again.
    */
   markCommentHumanResolved(commentId: string, resolvedAt?: string | null): MaybePromise<void>;
   getComment(commentId: string): MaybePromise<Comment | undefined>;

@@ -137,6 +137,36 @@ describe("HTTP Routes", () => {
     expect((await missing.json()).code).toBe("comment_not_in_session");
   });
 
+  it("#725 — mark-unresolved re-queues a comment the agent already drained (acknowledged → false)", async () => {
+    const local = withHash(createHttpRoutes(store, tmpDir, () => {}), tmpDir);
+    store.addComment({ id: "c2", artifactId: "art_1", content: "Tighten this", author: "human" });
+    store.markCommentHumanResolved("c2", "2026-01-02T00:00:00.000Z");
+    store.acknowledgeComments(["c2"]);
+    expect(store.getUnacknowledgedComments().some((c) => c.id === "c2")).toBe(false);
+    const res = await local.request(`/api/comments/c2/mark-unresolved`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).comment.acknowledged).toBe(false);
+    expect(store.getUnacknowledgedComments().some((c) => c.id === "c2")).toBe(true);
+  });
+
+  it("#725 — mark-resolved refuses a plain comment that answers a page ask (409), still resolves an Ask on it", async () => {
+    const local = withHash(createHttpRoutes(store, tmpDir, () => {}), tmpDir);
+    store.createArtifact({ id: "pg_ask", type: "page", title: "P", content: { title: "P", html: '<div id="q1" data-dp-question>Which DB?</div>' } });
+    const htmlAnchor = { kind: "element" as const, locator: "#q1", quote: "Which DB?" };
+    store.addComment({ id: "ans", artifactId: "pg_ask", content: "Postgres", author: "human", target: { artifactId: "pg_ask", htmlAnchor } });
+    store.addComment({ id: "askq", artifactId: "pg_ask", content: "Why ask?", author: "human", intent: "question", target: { artifactId: "pg_ask", htmlAnchor } });
+    const post = (id: string) => local.request(`/api/comments/${id}/mark-resolved`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+    });
+    const refused = await post("ans");
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).code).toBe("comment_answers_page_ask");
+    expect(store.getComment("ans")?.humanResolvedAt).toBeFalsy();
+    expect((await post("askq")).status).toBe(200);
+  });
+
   it("POST /api/artifacts/:id/status rejects invalid status", async () => {
     const res = await app.request("/api/artifacts/art_1/status", {
       method: "POST",

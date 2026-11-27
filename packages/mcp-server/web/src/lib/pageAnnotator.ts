@@ -1039,6 +1039,10 @@ function onMove(e) {
 /** The pointer left the frame: drop any pin preview. */
 function onOut(e) { if (!e.relatedTarget && hoverPin !== null) setHoverPin(null, null); }
 function onKey(e) {
+  // #725 — the keyup/keypress of a key we handled is ours too, so the page's
+  // listeners never see half a keystroke.
+  if (e.type !== "keydown" && swallowedKey(e)) return;
+  if (e.type === "keypress") return;
   if (e.type === "keydown" && onKbdKey(e)) return;
   if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "i" || e.key === "I")) {
     // The companion's pointing shortcut, forwarded: while the reviewer is in
@@ -1154,6 +1158,23 @@ function kbdComment() {
  *  next / previous comment in the review queue, Escape (leave the expanded
  *  view). The parent decides what each may do. */
 var FRAME_KEYS = { c: "toggle-kbd", "?": "help", "]": "next", "[": "prev", Escape: "escape" };
+/** Keys whose keydown we handled, until their keyup. */
+var swallowed = {};
+function stopKey(e) {
+  e.preventDefault();
+  if (e.stopImmediatePropagation) e.stopImmediatePropagation(); else e.stopPropagation();
+}
+function swallowedKey(e) {
+  var k = String(e.key);
+  if (!Object.prototype.hasOwnProperty.call(swallowed, k)) return false;
+  if (e.type === "keyup") delete swallowed[k];
+  stopKey(e);
+  return true;
+}
+function frameKey(k) {
+  // C with Caps Lock (or Shift) is still C.
+  return k === "C" ? "c" : k;
+}
 /** True when the key was ours (handled and stopped). */
 function onKbdKey(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return false;
@@ -1176,14 +1197,16 @@ function onKbdKey(e) {
     else if (k === "Escape") { setKbd(false); post({ dp: "kbd-off" }); }
     else handled = false;
     if (handled) {
-      e.preventDefault();
-      if (e.stopImmediatePropagation) e.stopImmediatePropagation(); else e.stopPropagation();
+      swallowed[String(k)] = true;
+      stopKey(e);
       return true;
     }
   }
-  if (scripts || e.repeat || !Object.prototype.hasOwnProperty.call(FRAME_KEYS, k)) return false;
+  var fk = frameKey(k);
+  if (scripts || e.repeat || !Object.prototype.hasOwnProperty.call(FRAME_KEYS, fk)) return false;
   e.preventDefault();
-  post({ dp: "key", key: FRAME_KEYS[k] });
+  swallowed[String(k)] = true;
+  post({ dp: "key", key: FRAME_KEYS[fk] });
   return true;
 }
 
@@ -1240,7 +1263,8 @@ function checkSelection() {
     selBtn.setAttribute("aria-label", "Comment on the selected text");
     selBtn.textContent = "Comment";
   }
-  if (!selBtn.isConnected) ensureLayer().appendChild(selBtn);
+  // Outside our aria-hidden layer, so a screen reader can reach it.
+  if (!selBtn.isConnected) (document.documentElement || document.body).appendChild(selBtn);
   selAnchor = a;
   var sx = window.scrollX || window.pageXOffset || 0, sy = window.scrollY || window.pageYOffset || 0;
   var vw = window.innerWidth || 0;
@@ -1248,7 +1272,7 @@ function checkSelection() {
   important(selBtn, { position: "absolute", display: "block", "box-sizing": "border-box", left: (left + sx) + "px",
     top: (r.bottom + sy + 8) + "px", "min-width": "44px", "min-height": "44px", padding: "0 16px", margin: "0",
     "border-radius": "22px", border: "0", background: dark ? "#93c5fd" : "#1d4ed8", color: dark ? "#0b1220" : "#fff",
-    font: "600 15px/44px system-ui, sans-serif", "pointer-events": "auto", cursor: "pointer",
+    font: "600 15px/44px system-ui, sans-serif", "pointer-events": "auto", cursor: "pointer", "z-index": "2147483647",
     "box-shadow": "0 2px 8px rgba(0,0,0,0.35)", "user-select": "none", "-webkit-user-select": "none" });
 }
 function samePins(a, b) {
@@ -1954,6 +1978,7 @@ window.addEventListener("pointerdown", onPointerDown, true);
 document.addEventListener("selectionchange", onSelectionChange);
 window.addEventListener("keydown", onKey, true);
 window.addEventListener("keyup", onKey, true);
+window.addEventListener("keypress", onKey, true);
 window.addEventListener("message", onMessage);
 window.addEventListener("resize", onResize);
 window.addEventListener("scroll", onScroll, true);
@@ -1974,6 +1999,8 @@ return function uninstall() {
   if (selPending) clearTimeout(selPending);
   window.removeEventListener("keydown", onKey, true);
   window.removeEventListener("keyup", onKey, true);
+  window.removeEventListener("keypress", onKey, true);
+  if (selBtn && selBtn.parentNode) selBtn.parentNode.removeChild(selBtn);
   window.removeEventListener("message", onMessage);
   window.removeEventListener("resize", onResize);
   window.removeEventListener("scroll", onScroll, true);

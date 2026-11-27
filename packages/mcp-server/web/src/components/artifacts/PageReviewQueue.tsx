@@ -110,6 +110,8 @@ export interface PageReviewQueueProps {
   /** #714 — the reviewer's own Resolve / Reopen on a plain comment (omitted
    *  on a read-only page → no buttons). */
   onResolve?: (commentId: string, resolve: boolean) => void;
+  /** #725 — comments that answer one of the page's asks: no Resolve/Reopen. */
+  askAnswerIds?: ReadonlySet<string>;
 }
 
 export function PageReviewQueue({
@@ -126,6 +128,7 @@ export function PageReviewQueue({
   variant,
   onStep,
   onResolve,
+  askAnswerIds,
 }: PageReviewQueueProps) {
   const listRef = useRef<HTMLOListElement>(null);
   const idBase = useId();
@@ -212,7 +215,7 @@ export function PageReviewQueue({
             const chip = stateLabel(state);
             const highlighted = c.id === highlightId;
             const from = fromVersion(c);
-            const action = onResolve ? resolveAction(entry) : null;
+            const action = onResolve ? resolveAction(entry, { answersAsk: askAnswerIds?.has(c.id) === true }) : null;
             return (
               <li key={c.id} className="flex gap-1 items-stretch">
                 <span className="sr-only" id={`${idBase}-state-${i}`}>

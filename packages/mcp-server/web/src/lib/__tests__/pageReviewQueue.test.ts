@@ -154,4 +154,9 @@ describe("resolveAction (#714 resolve from the queue)", () => {
     expect(resolveAction(entryFor({ ...base, intent: "question" } as Comment))).toBeNull();
     expect(resolveAction(entryFor({ ...base, author: "agent" } as Comment))).toBeNull();
   });
+
+  it("#725 P1 — no action on a comment that answers a page ask", () => {
+    expect(resolveAction(entryFor(base), { answersAsk: true })).toBeNull();
+    expect(resolveAction(entryFor({ ...base, humanResolvedAt: "2026-01-02T00:00:00.000Z" } as Comment), { answersAsk: true })).toBeNull();
+  });
 });

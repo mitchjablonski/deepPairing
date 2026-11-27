@@ -186,3 +186,19 @@ describe("check_feedback — a page comment the human resolved themselves (#714)
     expect(openLine).not.toContain("RESOLVED");
   });
 });
+
+describe("check_feedback — a page comment the human reopened (#725)", () => {
+  it("re-delivers it marked REOPENED BY THE HUMAN", async () => {
+    const id = await presentPage();
+    const anchor = { kind: "element" as const, locator: "h1", quote: "Cache invalidation", version: 1 };
+    await store.addComment({ id: "cmt_re", artifactId: id, content: "rename this heading", author: "human", target: { artifactId: id, htmlAnchor: anchor } });
+    store.markCommentHumanResolved("cmt_re", "2026-11-26T10:00:00.000Z");
+    await callTool("check_feedback");
+    store.markCommentHumanResolved("cmt_re", null);
+    const res = await callTool("check_feedback");
+    const line = (res.text as string).split("\n").find((l) => l.includes("rename this heading"))!;
+    expect(line).toContain("REOPENED BY THE HUMAN");
+    expect(line).not.toContain("RESOLVED BY THE HUMAN");
+    expect((res.structuredContent as any).comments.find((x: any) => x.id === "cmt_re").reopenedByHuman).toBe(true);
+  });
+});

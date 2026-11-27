@@ -1559,13 +1559,16 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const routeTo = owner ?? tabSessionAtCall();
     if (isForeignSession(owner)) await guardForeignOwner("Reopening a comment", owner);
     const prior = existing?.humanResolvedAt;
+    const priorAck = existing?.acknowledged;
     if (!prior) return;
     // null (not a deleted key): the WS comment_updated merge keeps any key
     // the update omits, so only an explicit null clears it everywhere.
     if (storeGeneration === generationAtSubmit) set((state) => {
       const nextComments: Record<string, Comment[]> = {};
       for (const [key, list] of Object.entries(state.comments)) {
-        nextComments[key] = list.map((c) => (c.id === commentId ? { ...c, humanResolvedAt: null } : c));
+        // #725 — the server re-queues a drained comment on reopen
+        // (acknowledged → false); mirror it so the row never reads "seen".
+        nextComments[key] = list.map((c) => (c.id === commentId ? { ...c, humanResolvedAt: null, acknowledged: false } : c));
       }
       return { comments: nextComments };
     });
@@ -1581,7 +1584,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       set((state) => {
         const nextComments: Record<string, Comment[]> = {};
         for (const [key, list] of Object.entries(state.comments)) {
-          nextComments[key] = list.map((c) => (c.id === commentId && c.humanResolvedAt == null ? { ...c, humanResolvedAt: prior } : c));
+          nextComments[key] = list.map((c) =>
+            c.id === commentId && c.humanResolvedAt == null ? { ...c, humanResolvedAt: prior, acknowledged: priorAck ?? c.acknowledged } : c,
+          );
         }
         return { comments: nextComments };
       });
