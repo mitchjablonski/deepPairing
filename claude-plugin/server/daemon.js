@@ -4362,8 +4362,8 @@ var serve = (options, listeningListener) => {
 
 // src/daemon/index.ts
 import crypto7 from "node:crypto";
-import fs32 from "node:fs";
-import path36 from "node:path";
+import fs33 from "node:fs";
+import path37 from "node:path";
 
 // src/hooks/stance-allow-ask.ts
 var STANCE_ALLOW_ASK_REASON = "The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.";
@@ -5246,10 +5246,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path37) {
-  if (!path37)
+function getElementAtPath(obj2, path38) {
+  if (!path38)
     return obj2;
-  return path37.reduce((acc, key2) => acc?.[key2], obj2);
+  return path38.reduce((acc, key2) => acc?.[key2], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -5658,11 +5658,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path37, issues) {
+function prefixIssues(path38, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path37);
+    iss.path.unshift(path38);
     return iss;
   });
 }
@@ -5809,16 +5809,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path37 = []) => {
+  const processError = (error52, path38 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path37, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path38, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path37, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path38, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path37, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path38, ...issue2.path]);
       } else {
-        const fullpath = [...path37, ...issue2.path];
+        const fullpath = [...path38, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -5845,17 +5845,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path37 = []) => {
+  const processError = (error52, path38 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path37, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path38, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path37, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path38, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path37, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path38, ...issue2.path]);
       } else {
-        const fullpath = [...path37, ...issue2.path];
+        const fullpath = [...path38, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -5887,8 +5887,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path37 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path37) {
+  const path38 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path38) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -18580,13 +18580,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path37 = ref.slice(1).split("/").filter(Boolean);
-  if (path37.length === 0) {
+  const path38 = ref.slice(1).split("/").filter(Boolean);
+  if (path38.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path37[0] === defsKey) {
-    const key2 = path37[1];
+  if (path38[0] === defsKey) {
+    const key2 = path38[1];
     if (!key2 || !ctx.defs[key2]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -24309,26 +24309,26 @@ var handleParsingNestedValues = (form, key2, value) => {
 };
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/utils/url.js
-var splitPath = (path37) => {
-  const paths = path37.split("/");
+var splitPath = (path38) => {
+  const paths = path38.split("/");
   if (paths[0] === "") {
     paths.shift();
   }
   return paths;
 };
 var splitRoutingPath = (routePath) => {
-  const { groups, path: path37 } = extractGroupsFromPath(routePath);
-  const paths = splitPath(path37);
+  const { groups, path: path38 } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path38);
   return replaceGroupMarks(paths, groups);
 };
-var extractGroupsFromPath = (path37) => {
+var extractGroupsFromPath = (path38) => {
   const groups = [];
-  path37 = path37.replace(/\{[^}]+\}/g, (match2, index) => {
+  path38 = path38.replace(/\{[^}]+\}/g, (match2, index) => {
     const mark = `@${index}`;
     groups.push([mark, match2]);
     return mark;
   });
-  return { groups, path: path37 };
+  return { groups, path: path38 };
 };
 var replaceGroupMarks = (paths, groups) => {
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -24385,8 +24385,8 @@ var getPath = (request) => {
       const queryIndex = url2.indexOf("?", i);
       const hashIndex = url2.indexOf("#", i);
       const end = queryIndex === -1 ? hashIndex === -1 ? void 0 : hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
-      const path37 = url2.slice(start, end);
-      return tryDecodeURI(path37.includes("%25") ? path37.replace(/%25/g, "%2525") : path37);
+      const path38 = url2.slice(start, end);
+      return tryDecodeURI(path38.includes("%25") ? path38.replace(/%25/g, "%2525") : path38);
     } else if (charCode === 63 || charCode === 35) {
       break;
     }
@@ -24403,11 +24403,11 @@ var mergePath = (base, sub, ...rest) => {
   }
   return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
 };
-var checkOptionalParameter = (path37) => {
-  if (path37.charCodeAt(path37.length - 1) !== 63 || !path37.includes(":")) {
+var checkOptionalParameter = (path38) => {
+  if (path38.charCodeAt(path38.length - 1) !== 63 || !path38.includes(":")) {
     return null;
   }
-  const segments = path37.split("/");
+  const segments = path38.split("/");
   const results = [];
   let basePath = "";
   segments.forEach((segment) => {
@@ -24548,9 +24548,9 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path37 = "/", matchResult = [[]]) {
+  constructor(request, path38 = "/", matchResult = [[]]) {
     this.raw = request;
-    this.path = path37;
+    this.path = path38;
     this.#matchResult = matchResult;
     this.#validatedData = {};
   }
@@ -25302,8 +25302,8 @@ var Hono = class _Hono {
         return this;
       };
     });
-    this.on = (method, path37, ...handlers) => {
-      for (const p of [path37].flat()) {
+    this.on = (method, path38, ...handlers) => {
+      for (const p of [path38].flat()) {
         this.#path = p;
         for (const m of [method].flat()) {
           handlers.map((handler) => {
@@ -25360,8 +25360,8 @@ var Hono = class _Hono {
    * app.route("/api", app2) // GET /api/user
    * ```
    */
-  route(path37, app) {
-    const subApp = this.basePath(path37);
+  route(path38, app) {
+    const subApp = this.basePath(path38);
     app.routes.map((r) => {
       let handler;
       if (app.errorHandler === errorHandler) {
@@ -25387,9 +25387,9 @@ var Hono = class _Hono {
    * const api = new Hono().basePath('/api')
    * ```
    */
-  basePath(path37) {
+  basePath(path38) {
     const subApp = this.#clone();
-    subApp._basePath = mergePath(this._basePath, path37);
+    subApp._basePath = mergePath(this._basePath, path38);
     return subApp;
   }
   /**
@@ -25463,7 +25463,7 @@ var Hono = class _Hono {
    * })
    * ```
    */
-  mount(path37, applicationHandler, options) {
+  mount(path38, applicationHandler, options) {
     let replaceRequest;
     let optionHandler;
     if (options) {
@@ -25490,7 +25490,7 @@ var Hono = class _Hono {
       return [c.env, executionContext];
     };
     replaceRequest ||= (() => {
-      const mergedPath = mergePath(this._basePath, path37);
+      const mergedPath = mergePath(this._basePath, path38);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
       return (request) => {
         const url2 = new URL(request.url);
@@ -25505,19 +25505,19 @@ var Hono = class _Hono {
       }
       await next();
     };
-    this.#addRoute(METHOD_NAME_ALL, mergePath(path37, "*"), handler);
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path38, "*"), handler);
     return this;
   }
-  #addRoute(method, path37, handler, baseRoutePath) {
+  #addRoute(method, path38, handler, baseRoutePath) {
     method = method.toUpperCase();
-    path37 = mergePath(this._basePath, path37);
+    path38 = mergePath(this._basePath, path38);
     const r = {
       basePath: baseRoutePath !== void 0 ? mergePath(this._basePath, baseRoutePath) : this._basePath,
-      path: path37,
+      path: path38,
       method,
       handler
     };
-    this.router.add(method, path37, [handler, r]);
+    this.router.add(method, path38, [handler, r]);
     this.routes.push(r);
   }
   #handleError(err, c) {
@@ -25530,10 +25530,10 @@ var Hono = class _Hono {
     if (method === "HEAD") {
       return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
     }
-    const path37 = this.getPath(request, { env });
-    const matchResult = this.router.match(method, path37);
+    const path38 = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path38);
     const c = new Context(request, {
-      path: path37,
+      path: path38,
       matchResult,
       env,
       executionCtx,
@@ -25633,7 +25633,7 @@ var Hono = class _Hono {
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
-function match(method, path37) {
+function match(method, path38) {
   const matchers = this.buildAllMatchers();
   const match2 = ((method2, path210) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
@@ -25649,7 +25649,7 @@ function match(method, path37) {
     return [matcher[1][index], match3];
   });
   this.match = match2;
-  return match2(method, path37);
+  return match2(method, path38);
 }
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/node.js
@@ -25764,12 +25764,12 @@ var Node = class _Node {
 var Trie = class {
   #context = { varIndex: 0 };
   #root = new Node();
-  insert(path37, index, pathErrorCheckOnly) {
+  insert(path38, index, pathErrorCheckOnly) {
     const paramAssoc = [];
     const groups = [];
     for (let i = 0; ; ) {
       let replaced = false;
-      path37 = path37.replace(/\{[^}]+\}/g, (m) => {
+      path38 = path38.replace(/\{[^}]+\}/g, (m) => {
         const mark = `@\\${i}`;
         groups[i] = [mark, m];
         i++;
@@ -25780,7 +25780,7 @@ var Trie = class {
         break;
       }
     }
-    const tokens = path37.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    const tokens = path38.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const [mark] = groups[i];
       for (let j = tokens.length - 1; j >= 0; j--) {
@@ -25819,9 +25819,9 @@ var Trie = class {
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/router.js
 var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
 var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
-function buildWildcardRegExp(path37) {
-  return wildcardRegExpCache[path37] ??= new RegExp(
-    path37 === "*" ? "" : `^${path37.replace(
+function buildWildcardRegExp(path38) {
+  return wildcardRegExpCache[path38] ??= new RegExp(
+    path38 === "*" ? "" : `^${path38.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -25843,17 +25843,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path37, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path38, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path37] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path38] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path37, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path38, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path37) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path38) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -25887,12 +25887,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path37) {
+function findMiddleware(middleware, path38) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path37)) {
+    if (buildWildcardRegExp(k).test(path38)) {
       return [...middleware[k]];
     }
   }
@@ -25906,7 +25906,7 @@ var RegExpRouter = class {
     this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
     this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
   }
-  add(method, path37, handler) {
+  add(method, path38, handler) {
     const middleware = this.#middleware;
     const routes = this.#routes;
     if (!middleware || !routes) {
@@ -25921,18 +25921,18 @@ var RegExpRouter = class {
         });
       });
     }
-    if (path37 === "/*") {
-      path37 = "*";
+    if (path38 === "/*") {
+      path38 = "*";
     }
-    const paramCount = (path37.match(/\/:/g) || []).length;
-    if (/\*$/.test(path37)) {
-      const re = buildWildcardRegExp(path37);
+    const paramCount = (path38.match(/\/:/g) || []).length;
+    if (/\*$/.test(path38)) {
+      const re = buildWildcardRegExp(path38);
       if (method === METHOD_NAME_ALL) {
         Object.keys(middleware).forEach((m) => {
-          middleware[m][path37] ||= findMiddleware(middleware[m], path37) || findMiddleware(middleware[METHOD_NAME_ALL], path37) || [];
+          middleware[m][path38] ||= findMiddleware(middleware[m], path38) || findMiddleware(middleware[METHOD_NAME_ALL], path38) || [];
         });
       } else {
-        middleware[method][path37] ||= findMiddleware(middleware[method], path37) || findMiddleware(middleware[METHOD_NAME_ALL], path37) || [];
+        middleware[method][path38] ||= findMiddleware(middleware[method], path38) || findMiddleware(middleware[METHOD_NAME_ALL], path38) || [];
       }
       Object.keys(middleware).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
@@ -25950,7 +25950,7 @@ var RegExpRouter = class {
       });
       return;
     }
-    const paths = checkOptionalParameter(path37) || [path37];
+    const paths = checkOptionalParameter(path38) || [path38];
     for (let i = 0, len = paths.length; i < len; i++) {
       const path210 = paths[i];
       Object.keys(routes).forEach((m) => {
@@ -25977,13 +25977,13 @@ var RegExpRouter = class {
     const routes = [];
     let hasOwnRoute = method === METHOD_NAME_ALL;
     [this.#middleware, this.#routes].forEach((r) => {
-      const ownRoute = r[method] ? Object.keys(r[method]).map((path37) => [path37, r[method][path37]]) : [];
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path38) => [path38, r[method][path38]]) : [];
       if (ownRoute.length !== 0) {
         hasOwnRoute ||= true;
         routes.push(...ownRoute);
       } else if (method !== METHOD_NAME_ALL) {
         routes.push(
-          ...Object.keys(r[METHOD_NAME_ALL]).map((path37) => [path37, r[METHOD_NAME_ALL][path37]])
+          ...Object.keys(r[METHOD_NAME_ALL]).map((path38) => [path38, r[METHOD_NAME_ALL][path38]])
         );
       }
     });
@@ -26003,13 +26003,13 @@ var SmartRouter = class {
   constructor(init) {
     this.#routers = init.routers;
   }
-  add(method, path37, handler) {
+  add(method, path38, handler) {
     if (!this.#routes) {
       throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
     }
-    this.#routes.push([method, path37, handler]);
+    this.#routes.push([method, path38, handler]);
   }
-  match(method, path37) {
+  match(method, path38) {
     if (!this.#routes) {
       throw new Error("Fatal error");
     }
@@ -26024,7 +26024,7 @@ var SmartRouter = class {
         for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
           router.add(...routes[i2]);
         }
-        res = router.match(method, path37);
+        res = router.match(method, path38);
       } catch (e) {
         if (e instanceof UnsupportedPathError) {
           continue;
@@ -26074,10 +26074,10 @@ var Node2 = class _Node2 {
     }
     this.#patterns = [];
   }
-  insert(method, path37, handler) {
+  insert(method, path38, handler) {
     this.#order = ++this.#order;
     let curNode = this;
-    const parts = splitRoutingPath(path37);
+    const parts = splitRoutingPath(path38);
     const possibleKeys = [];
     for (let i = 0, len = parts.length; i < len; i++) {
       const p = parts[i];
@@ -26126,12 +26126,12 @@ var Node2 = class _Node2 {
       }
     }
   }
-  search(method, path37) {
+  search(method, path38) {
     const handlerSets = [];
     this.#params = emptyParams;
     const curNode = this;
     let curNodes = [curNode];
-    const parts = splitPath(path37);
+    const parts = splitPath(path38);
     const curNodesQueue = [];
     const len = parts.length;
     let partOffsets = null;
@@ -26173,13 +26173,13 @@ var Node2 = class _Node2 {
           if (matcher instanceof RegExp) {
             if (partOffsets === null) {
               partOffsets = new Array(len);
-              let offset = path37[0] === "/" ? 1 : 0;
+              let offset = path38[0] === "/" ? 1 : 0;
               for (let p = 0; p < len; p++) {
                 partOffsets[p] = offset;
                 offset += parts[p].length + 1;
               }
             }
-            const restPathString = path37.substring(partOffsets[i]);
+            const restPathString = path38.substring(partOffsets[i]);
             const m = matcher.exec(restPathString);
             if (m) {
               params[name] = m[0];
@@ -26232,18 +26232,18 @@ var TrieRouter = class {
   constructor() {
     this.#node = new Node2();
   }
-  add(method, path37, handler) {
-    const results = checkOptionalParameter(path37);
+  add(method, path38, handler) {
+    const results = checkOptionalParameter(path38);
     if (results) {
       for (let i = 0, len = results.length; i < len; i++) {
         this.#node.insert(method, results[i], handler);
       }
       return;
     }
-    this.#node.insert(method, path37, handler);
+    this.#node.insert(method, path38, handler);
   }
-  match(method, path37) {
-    return this.#node.search(method, path37);
+  match(method, path38) {
+    return this.#node.search(method, path38);
   }
 };
 
@@ -26356,8 +26356,8 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/daemon/create-daemon.ts
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-import fs31 from "node:fs";
-import path35 from "node:path";
+import fs32 from "node:fs";
+import path36 from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes as randomBytes4 } from "node:crypto";
 
@@ -26403,6 +26403,10 @@ var ERROR_CODES = {
   parent_superseded: "parent_superseded",
   /** A review verdict raced a change to the artifact content being reviewed. */
   session_review_conflict: "session_review_conflict",
+  session_closing: "session_closing",
+  session_ended: "session_ended",
+  session_marker_invalid: "session_marker_invalid",
+  session_save_pending: "session_save_pending",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
@@ -33432,7 +33436,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path37 = sanitizePath(file2.path, projectRoot2);
+  const path38 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -33449,7 +33453,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path37)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path38)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -33568,9 +33572,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path37 = sanitizePath(e.filePath, projectRoot2);
+    const path38 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path37 ? `<p class="anchor"><code>${esc2(path37 + range)}</code></p>` : "";
+    let anchor = path38 ? `<p class="anchor"><code>${esc2(path38 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -33727,9 +33731,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path37 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path38 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path37)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path38)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -38358,8 +38362,8 @@ function mountStaticUi(app, opts) {
 }
 
 // src/daemon/routes.ts
-import fs28 from "node:fs";
-import path31 from "node:path";
+import fs29 from "node:fs";
+import path32 from "node:path";
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/middleware/body-limit/index.js
 var ERROR_MESSAGE = "Payload Too Large";
@@ -38688,7 +38692,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path37, v: v2 }) => `- ${path37}: ${v2.message}`);
+  const lines = shown.map(({ path: path38, v: v2 }) => `- ${path38}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function styleBlock(score, lines, rest) {
@@ -38833,9 +38837,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path37) {
+function receivedSize(input, path38) {
   let cur = input;
-  for (const seg of path37) {
+  for (const seg of path38) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -38858,8 +38862,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path37) {
-  return path37.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path38) {
+  return path38.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw2 = err.issues;
@@ -38885,9 +38889,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path37 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path38 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path37}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path38}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -40015,6 +40019,15 @@ function optionsOperation(projectRoot2, store, operationId, broadcast) {
   }
   return { artifactId, decisionId, receiptPath, save, lock, readReceipt, recover };
 }
+function planStandaloneOptionsRecovery(projectRoot2, store, operationId, broadcast, snapshot) {
+  const operation = optionsOperation(projectRoot2, store, operationId, broadcast);
+  const receipt = operation.readReceipt();
+  const found = operation.recover(receipt, false, true, snapshot);
+  if (!found || receipt.committed) return;
+  return () => {
+    operation.lock(() => operation.recover(operation.readReceipt(), false, true));
+  };
+}
 async function presentStandaloneOptions(projectRoot2, store, operationId, args, port, broadcast) {
   const { artifactId, decisionId, receiptPath, save, lock, readReceipt, recover } = optionsOperation(projectRoot2, store, operationId, broadcast);
   const fingerprint = callFingerprint("present_options", args);
@@ -40693,6 +40706,15 @@ function pageOperation(projectRoot2, store, operationId) {
     return recover(receipt, true);
   }
   return { artifactId, receiptPath, save, lock, readReceipt, recover };
+}
+function planStandalonePageRecovery(projectRoot2, store, operationId, snapshot) {
+  const operation = pageOperation(projectRoot2, store, operationId);
+  const receipt = operation.readReceipt();
+  const found = operation.recover(receipt, false, true, snapshot);
+  if (!found || receipt.committed) return;
+  return () => {
+    operation.lock(() => operation.recover(operation.readReceipt(), false, true));
+  };
 }
 async function presentStandalonePage(projectRoot2, store, operationId, input, port, broadcast) {
   if (input.path !== void 0 && !isClientRelativePath(input.path)) {
@@ -41862,6 +41884,13 @@ function revisionOperation(projectRoot2, store, operationId, broadcast) {
   }
   return { artifactId, receiptPath, save, lock, read, target, recover, reconcile };
 }
+function planStandalonePageRevisionRecovery(projectRoot2, store, operationId, broadcast, snapshot) {
+  const operation = revisionOperation(projectRoot2, store, operationId, broadcast);
+  if (!operation.reconcile(snapshot)) return;
+  return () => {
+    operation.lock(operation.reconcile);
+  };
+}
 async function reviseStandalonePage(projectRoot2, store, operationId, input, broadcast) {
   const sessionId = store.getSessionId();
   const { artifactId: parentId, reason, html } = input;
@@ -41993,6 +42022,277 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
   }
   return result;
 }
+
+// src/daemon/standalone-closeout.ts
+import fs28 from "node:fs";
+import path31 from "node:path";
+var receiptName = /^(present-options|present-page|revise-page)-([0-9a-f-]+)\.json$/;
+var receiptPrefix = /^(?:present-options|present-page|revise-page)-.*\.json$/;
+var operationIdSchema = external_exports.string().uuid();
+var markerSchema = external_exports.object({
+  version: external_exports.literal(1),
+  sessionId: external_exports.string(),
+  endedAt: external_exports.string().datetime()
+}).strict();
+var StandaloneCloseoutError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+  code;
+};
+function readCollection(dir, file2, schema, key2) {
+  const stat = fs28.lstatSync(path31.join(dir, file2), { throwIfNoEntry: false });
+  if (stat && !stat.isFile()) throw new Error("Standalone review collection is not a regular file.");
+  const raw2 = readJsonFile(path31.join(dir, file2));
+  if (raw2 === void 0 && !stat) return /* @__PURE__ */ new Map();
+  if (!Array.isArray(raw2)) throw new Error("Standalone review has a malformed durable collection.");
+  const rows = /* @__PURE__ */ new Map();
+  for (const row of raw2) {
+    if (!schema.safeParse(row).success) throw new Error("Standalone review has a malformed durable record.");
+    const id = key2(row);
+    if (!id || rows.has(id)) throw new Error("Standalone review history contains duplicate or missing durable record identities.");
+    rows.set(id, row);
+  }
+  return rows;
+}
+function closeoutSnapshot(dir, store) {
+  const sessionId = store.getSessionId();
+  const artifacts = readCollection(dir, "artifacts.json", ArtifactSchema, (row) => row.id);
+  const comments = readCollection(dir, "comments.json", CommentSchema, (row) => row.id);
+  const decisions = readCollection(dir, "decisions.json", DecisionRequestSchema.extend({
+    artifactId: external_exports.string(),
+    createdAt: external_exports.string().datetime(),
+    resolvedAt: external_exports.string().datetime().optional(),
+    acknowledged: external_exports.boolean().optional(),
+    response: DecisionResponseSchema.optional()
+  }), (row) => row.decisionId);
+  readCollection(dir, "requests.json", RequestSchema, (row) => row.id);
+  readCollection(dir, "plan-reviews.json", external_exports.object({
+    artifactId: external_exports.string(),
+    createdAt: external_exports.string().datetime(),
+    resolvedAt: external_exports.string().datetime().optional(),
+    verdict: external_exports.enum(["approved", "revised", "rejected"]).optional(),
+    feedback: external_exports.string().optional()
+  }), (row) => row.artifactId);
+  readCollection(dir, "render-failures.json", external_exports.object({
+    artifactId: external_exports.string(),
+    visualId: external_exports.string(),
+    error: external_exports.string(),
+    title: external_exports.string().optional(),
+    at: external_exports.string().datetime(),
+    acknowledged: external_exports.boolean().optional()
+  }), (row) => JSON.stringify([row.artifactId, row.visualId]));
+  const rawTraces = readJsonFile(path31.join(dir, "preflight-traces.json"));
+  const traces = external_exports.record(external_exports.string(), PreflightTraceSchema).parse(rawTraces === void 0 ? {} : rawTraces);
+  for (const [id, trace] of Object.entries(traces)) {
+    if (trace.artifactId !== id) throw new Error("Standalone review has a mismatched durable preflight trace.");
+  }
+  const byParent = /* @__PURE__ */ new Map();
+  const addChild = (index, parentId, id) => {
+    if (parentId === null) return;
+    const children = index.get(parentId);
+    if (children) children.push(id);
+    else index.set(parentId, [id]);
+  };
+  for (const row of artifacts.values()) {
+    if (row.sessionId !== sessionId) throw new Error("Standalone review contains a foreign artifact.");
+    addChild(byParent, row.parentId, row.id);
+  }
+  for (const row of comments.values()) {
+    if (row.sessionId !== sessionId) throw new Error("Standalone review contains a foreign comment.");
+  }
+  for (const row of decisions.values()) {
+    const linked = artifacts.get(row.artifactId);
+    if (linked?.type !== "decision" || linked.content?.decisionId !== row.decisionId) {
+      throw new Error("Standalone review contains an unowned or mismatched decision.");
+    }
+  }
+  const warmArtifacts = new Map(store.getArtifacts().map((row) => [row.id, row]));
+  const warmParents = /* @__PURE__ */ new Map();
+  for (const row of warmArtifacts.values()) addChild(warmParents, row.parentId, row.id);
+  const warmComments = new Map(store.getComments().map((row) => [row.id, row]));
+  return {
+    record(file2, key2, id) {
+      if (file2 === "comments.json") return comments.get(id);
+      if (file2 === "decisions.json") return decisions.get(id);
+      if (file2 !== "artifacts.json") throw new Error("Unknown standalone closeout collection.");
+      if (key2 === "id") return artifacts.get(id);
+      const children = byParent.get(id) ?? [];
+      if (children.length > 1) throw new Error("Standalone review history has conflicting successors.");
+      return children[0] ? artifacts.get(children[0]) : void 0;
+    },
+    artifact: (id) => warmArtifacts.get(id),
+    comment: (id) => warmComments.get(id),
+    hasOtherChild: (parentId, childId) => (warmParents.get(parentId) ?? []).some((id) => id !== childId),
+    trace: (id) => traces[id],
+    verifyFeedback(parentId, proof) {
+      const current = provePageRevisionFeedback([...artifacts.values()], [...comments.values()], sessionId, parentId, proof.commentIds, store.getComments());
+      if (current?.digest !== proof.digest) throw new Error("Standalone revision feedback no longer matches its receipt.");
+    }
+  };
+}
+function reconcileReceipts(projectRoot2, dir, store, checkDeadline) {
+  const receipts = [];
+  const directory = fs28.opendirSync(dir);
+  try {
+    for (let file2 = directory.readSync(); file2; file2 = directory.readSync()) {
+      checkDeadline();
+      if (!receiptPrefix.test(file2.name)) continue;
+      const match2 = receiptName.exec(file2.name);
+      if (!file2.isFile() || !match2?.[1] || !operationIdSchema.safeParse(match2[2]).success) {
+        throw new Error("Standalone review has a malformed operation receipt name.");
+      }
+      receipts.push({ kind: match2[1], operationId: match2[2] });
+    }
+  } finally {
+    directory.closeSync();
+  }
+  const snapshot = closeoutSnapshot(dir, store);
+  const quiet = () => {
+  };
+  const repairs = [];
+  receipts.sort((a, b) => a.kind.localeCompare(b.kind) || a.operationId.localeCompare(b.operationId));
+  for (const { kind, operationId } of receipts) {
+    checkDeadline();
+    const repair = kind === "present-options" ? planStandaloneOptionsRecovery(projectRoot2, store, operationId, quiet, snapshot) : kind === "present-page" ? planStandalonePageRecovery(projectRoot2, store, operationId, snapshot) : planStandalonePageRevisionRecovery(projectRoot2, store, operationId, quiet, snapshot);
+    if (repair) repairs.push(repair);
+  }
+  for (const repair of repairs) {
+    checkDeadline();
+    repair();
+  }
+}
+var StandaloneCloseout = class {
+  constructor(projectRoot2, getStore, timeoutMs = 5e3, onEnded, drainWatchedSaves) {
+    this.projectRoot = projectRoot2;
+    this.getStore = getStore;
+    this.timeoutMs = timeoutMs;
+    this.onEnded = onEnded;
+    this.drainWatchedSaves = drainWatchedSaves;
+  }
+  projectRoot;
+  getStore;
+  timeoutMs;
+  onEnded;
+  drainWatchedSaves;
+  entries = /* @__PURE__ */ new Map();
+  directory(sessionId) {
+    if (!isStandaloneSessionForProject(sessionId, this.projectRoot)) {
+      throw new Error("Review does not belong to this standalone project.");
+    }
+    const dir = path31.join(this.projectRoot, ".deeppairing", "sessions", sessionId);
+    if (!fs28.lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
+      throw new Error("Standalone review does not exist.");
+    }
+    return dir;
+  }
+  readMarker(dir, sessionId) {
+    const file2 = path31.join(dir, "review-ended.json");
+    try {
+      const stat = fs28.lstatSync(file2, { throwIfNoEntry: false });
+      if (!stat) return;
+      const marker = stat.isFile() && markerSchema.safeParse(readJsonFile(file2));
+      if (marker && marker.success && marker.data.sessionId === sessionId) return marker.data;
+    } catch {
+    }
+    throw new StandaloneCloseoutError(
+      ERROR_CODES.session_marker_invalid,
+      "The standalone review's End marker cannot be verified. Review its session files before retrying."
+    );
+  }
+  state(sessionId) {
+    const marker = this.readMarker(this.directory(sessionId), sessionId);
+    if (marker) return { state: "ended", endedAt: marker.endedAt };
+    return { state: this.entries.get(sessionId)?.close ? "closing" : "open" };
+  }
+  /** Release in a finally block after the operation settles, even on abort. */
+  admitWrite(sessionId) {
+    if (this.state(sessionId).state !== "open") return;
+    const entry = this.entry(sessionId);
+    entry.writers++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (--entry.writers) return;
+      entry.drained?.();
+      if (!entry.close) this.entries.delete(sessionId);
+    };
+  }
+  /** A save arriving during a failed closeout still needs its turn. Waiting
+   * for the attempt here does not itself count as an admitted writer. */
+  async admitWatchedWrite(sessionId) {
+    for (; ; ) {
+      const closing = this.entries.get(sessionId)?.close;
+      if (!closing) return this.admitWrite(sessionId);
+      try {
+        await closing;
+      } catch {
+      }
+    }
+  }
+  entry(sessionId) {
+    const current = this.entries.get(sessionId);
+    if (current) return current;
+    const created = { writers: 0 };
+    this.entries.set(sessionId, created);
+    return created;
+  }
+  async end(sessionId) {
+    const dir = this.directory(sessionId);
+    const marker = this.readMarker(dir, sessionId);
+    if (marker) return marker;
+    const store = this.getStore(sessionId);
+    if (store?.getSessionId() !== sessionId || store.projectRoot !== this.projectRoot) {
+      throw new Error("Resume this standalone review in its project before ending it.");
+    }
+    const entry = this.entry(sessionId);
+    if (entry.close) return entry.close;
+    const deadline = performance.now() + this.timeoutMs;
+    const checkDeadline = () => {
+      if (performance.now() >= deadline) throw new Error("Standalone closeout timed out; retry End review.");
+    };
+    const releaseWatchDrain = this.drainWatchedSaves && this.admitWrite(sessionId);
+    let watchDrainError;
+    entry.close = Promise.resolve().then(async () => {
+      if (entry.writers) {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("Standalone writes are still settling; retry End review.")), Math.max(0, deadline - performance.now()));
+          entry.drained = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+      }
+      if (watchDrainError) throw watchDrainError;
+      checkDeadline();
+      reconcileReceipts(this.projectRoot, dir, store, checkDeadline);
+      store.forceFlush();
+      checkDeadline();
+      const committed = withSessionFlushLock(path31.join(dir, ".flush.lock"), () => {
+        const existing = this.readMarker(dir, sessionId);
+        if (existing) return existing;
+        checkDeadline();
+        const committed2 = { version: 1, sessionId, endedAt: (/* @__PURE__ */ new Date()).toISOString() };
+        writeJsonAtomic(path31.join(dir, "review-ended.json"), committed2, 2, { mode: 384 });
+        return committed2;
+      });
+      this.onEnded?.(sessionId);
+      return committed;
+    }).finally(() => {
+      entry.close = void 0;
+      entry.drained = void 0;
+      if (!entry.writers) this.entries.delete(sessionId);
+    });
+    if (releaseWatchDrain) {
+      void this.drainWatchedSaves(sessionId).catch((error51) => {
+        watchDrainError = error51;
+      }).finally(releaseWatchDrain);
+    }
+    return entry.close;
+  }
+};
 
 // src/daemon/page-feedback.ts
 var MAX_COMMENTS = 50;
@@ -42313,11 +42613,14 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
   });
   return app;
 }
-function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions, stanceExceptions, refreshCompanionLink, onSessionLifecycle) {
+function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions, stanceExceptions, refreshCompanionLink, onSessionLifecycle, standaloneCloseout) {
   const log2 = logFn ?? (() => {
   });
   const app = new Hono2();
   app.onError((error51, c) => {
+    if (error51 instanceof StandaloneCloseoutError) {
+      return c.json({ error: error51.message, code: error51.code }, 409);
+    }
     if (isFileLockError(error51)) return lockBusyRouteError(log2, c, error51);
     if (isSessionReviewConflictError(error51)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
@@ -42343,18 +42646,19 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   }
   const lastActivityBroadcastAt = /* @__PURE__ */ new Map();
   const AGENT_ACTIVITY_THROTTLE_MS = 5e3;
-  app.use("/api/internal/sessions/*", async (c, next) => {
-    await next();
-    if (c.res.status >= 400 || c.req.method === "POST" && /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback)$/.test(c.req.path)) return;
-    const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
-    const sid = m?.[1];
-    if (!sid) return;
+  function noteActivity(sid) {
     const now = Date.now();
     const meta3 = sessionMeta.get(sid);
     if (meta3) meta3.lastActivity = new Date(now).toISOString();
     if (now - (lastActivityBroadcastAt.get(sid) ?? 0) < AGENT_ACTIVITY_THROTTLE_MS) return;
     lastActivityBroadcastAt.set(sid, now);
     broadcast(sid, { type: "agent_activity", at: new Date(now).toISOString() });
+  }
+  app.use("/api/internal/sessions/*", async (c, next) => {
+    await next();
+    if (c.res.status >= 400 || c.req.method === "POST" && /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback|present-options|present-page|revise-page)$/.test(c.req.path)) return;
+    const sid = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/)?.[1];
+    if (sid) noteActivity(sid);
   });
   function requireStore(c, sessionId) {
     const store = sessions.get(sessionId);
@@ -42389,7 +42693,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   }
   if (authToken && daemonProjectRoot && refreshCompanionLink) {
     let reviewDir2 = function(sessionId) {
-      return path31.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+      return path32.join(projectRoot2, ".deeppairing", "sessions", sessionId);
     }, requireWarmStandaloneStore2 = function(c, expectedProjectRoot, sessionId, command) {
       if (expectedProjectRoot !== projectRoot2 || !isStandaloneSessionForProject(sessionId, projectRoot2)) {
         return { ok: false, response: c.json({
@@ -42397,7 +42701,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           code: ERROR_CODES.project_mismatch
         }, 403) };
       }
-      if (!fs28.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+      if (!fs29.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
         return { ok: false, response: c.json({
           error: "Standalone session does not exist in this project.",
           code: ERROR_CODES.session_not_registered
@@ -42414,6 +42718,22 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     };
     var reviewDir = reviewDir2, requireWarmStandaloneStore = requireWarmStandaloneStore2;
     const projectRoot2 = daemonProjectRoot;
+    async function withStandaloneWrite(c, sessionId, run) {
+      const release2 = standaloneCloseout?.admitWrite(sessionId);
+      if (standaloneCloseout && !release2) {
+        if (standaloneCloseout.state(sessionId).state === "ended") {
+          return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+        }
+        return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+      }
+      try {
+        const response = await run();
+        if (response.status < 400) noteActivity(sessionId);
+        return response;
+      } finally {
+        release2?.();
+      }
+    }
     app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
       const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
       if (!parsed.ok) return parsed.res;
@@ -42422,13 +42742,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
       }
       const dir = reviewDir2(sessionId);
-      const existing = fs28.lstatSync(dir, { throwIfNoEntry: false });
+      const existing = fs29.lstatSync(dir, { throwIfNoEntry: false });
       if (parsed.data.mode === "resume" && !existing?.isDirectory()) {
         return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
       }
       if (parsed.data.mode === "open" && (existing || sessions.has(sessionId))) {
         return c.json({ error: "Standalone session already exists. Resume it instead." }, 409);
       }
+      if (parsed.data.mode === "resume") standaloneCloseout?.state(sessionId);
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
       try {
@@ -42444,20 +42765,22 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
       }
-      if (!fs28.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+      if (!fs29.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
         return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
       }
-      const store = sessions.get(sessionId) ?? installSession(sessionId, {});
-      const port = refreshCompanionLink();
-      const result = await presentStandaloneOptions(
-        daemonProjectRoot,
-        store,
-        parsed.data.operationId,
-        parsed.data.args,
-        port,
-        (event) => broadcast(sessionId, event)
-      );
-      return c.json(result);
+      return withStandaloneWrite(c, sessionId, async () => {
+        const store = sessions.get(sessionId) ?? installSession(sessionId, {});
+        const port = refreshCompanionLink();
+        const result = await presentStandaloneOptions(
+          daemonProjectRoot,
+          store,
+          parsed.data.operationId,
+          parsed.data.args,
+          port,
+          (event) => broadcast(sessionId, event)
+        );
+        return c.json(result);
+      });
     });
     app.post("/api/internal/sessions/:sessionId/present-page", async (c) => {
       const parsed = await parseJsonBody(c, PresentStandalonePageBody);
@@ -42466,7 +42789,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
       }
-      if (!fs28.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+      if (!fs29.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
         return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
       }
       const { htmlBase64, ...rest } = parsed.data.args;
@@ -42481,21 +42804,23 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         }
         html = bytes2.toString("utf8");
       }
-      const store = sessions.get(sessionId) ?? installSession(sessionId, {});
-      const port = refreshCompanionLink();
-      try {
-        onSessionLifecycle?.(sessionId, "registered");
-      } catch {
-      }
-      const result = await presentStandalonePage(
-        daemonProjectRoot,
-        store,
-        parsed.data.operationId,
-        { ...rest, ...html !== void 0 ? { html } : {} },
-        port,
-        (event) => broadcast(sessionId, event)
-      );
-      return c.json(result);
+      return withStandaloneWrite(c, sessionId, async () => {
+        const store = sessions.get(sessionId) ?? installSession(sessionId, {});
+        const port = refreshCompanionLink();
+        try {
+          onSessionLifecycle?.(sessionId, "registered");
+        } catch {
+        }
+        const result = await presentStandalonePage(
+          daemonProjectRoot,
+          store,
+          parsed.data.operationId,
+          { ...rest, ...html !== void 0 ? { html } : {} },
+          port,
+          (event) => broadcast(sessionId, event)
+        );
+        return c.json(result);
+      });
     });
     app.post("/api/internal/sessions/:sessionId/revise-page", async (c) => {
       const parsed = await parseJsonBody(c, ReviseStandalonePageBody);
@@ -42515,14 +42840,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       if (Buffer.from(html, "utf8").toString("base64") !== htmlBase64) {
         return c.json({ error: "The page must be valid UTF-8 HTML encoded as canonical base64." }, 400);
       }
-      const result = await reviseStandalonePage(
-        projectRoot2,
-        lookup.store,
-        operationId,
-        { artifactId, html, reason, ackCommentIds },
-        (event) => broadcast(sessionId, event)
-      );
-      return c.json(result);
+      return withStandaloneWrite(c, sessionId, async () => {
+        const result = await reviseStandalonePage(
+          projectRoot2,
+          lookup.store,
+          operationId,
+          { artifactId, html, reason, ackCommentIds },
+          (event) => broadcast(sessionId, event)
+        );
+        return c.json(result);
+      });
     });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
       const signal = c.req.raw.signal;
@@ -43606,29 +43933,29 @@ async function sendPing(url2, payload) {
 }
 
 // src/daemon/token.ts
-import fs29 from "node:fs";
+import fs30 from "node:fs";
 import os5 from "node:os";
-import path32 from "node:path";
+import path33 from "node:path";
 function fsHonorsPosixMode(dir) {
   let probe = null;
   try {
-    fs29.mkdirSync(dir, { recursive: true });
-    probe = path32.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
-    const fd = fs29.openSync(probe, "w", 384);
-    fs29.closeSync(fd);
+    fs30.mkdirSync(dir, { recursive: true });
+    probe = path33.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
+    const fd = fs30.openSync(probe, "w", 384);
+    fs30.closeSync(fd);
     try {
-      fs29.chmodSync(probe, 384);
+      fs30.chmodSync(probe, 384);
     } catch {
       return false;
     }
-    const mode = fs29.statSync(probe).mode & 511;
+    const mode = fs30.statSync(probe).mode & 511;
     return (mode & 63) === 0;
   } catch {
     return false;
   } finally {
     if (probe) {
       try {
-        fs29.unlinkSync(probe);
+        fs30.unlinkSync(probe);
       } catch {
       }
     }
@@ -43640,53 +43967,53 @@ function tokenPlacement(opts) {
 }
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path32.isAbsolute(xdg)) {
+  if (xdg && path33.isAbsolute(xdg)) {
     try {
-      if (fs29.statSync(xdg).isDirectory()) return path32.join(xdg, "deeppairing");
+      if (fs30.statSync(xdg).isDirectory()) return path33.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path32.join(os5.tmpdir(), "deeppairing");
+  return path33.join(os5.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path32.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path33.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function writeTokenSidecar(projectRoot2, payload) {
   const file2 = tokenSidecarPath(projectRoot2);
-  const dir = path32.dirname(file2);
-  fs29.mkdirSync(dir, { recursive: true, mode: 448 });
+  const dir = path33.dirname(file2);
+  fs30.mkdirSync(dir, { recursive: true, mode: 448 });
   try {
-    fs29.chmodSync(dir, 448);
+    fs30.chmodSync(dir, 448);
   } catch {
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   try {
-    const dstat = fs29.lstatSync(dir);
+    const dstat = fs30.lstatSync(dir);
     if (dstat.isSymbolicLink() || uid !== void 0 && dstat.uid !== uid) {
       return { path: file2, mode: dstat.mode & 511, honored: false, refused: true };
     }
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
-  const O_NOFOLLOW2 = fs29.constants.O_NOFOLLOW ?? 0;
+  const O_NOFOLLOW2 = fs30.constants.O_NOFOLLOW ?? 0;
   let fd;
   try {
-    fd = fs29.openSync(file2, fs29.constants.O_WRONLY | fs29.constants.O_CREAT | fs29.constants.O_TRUNC | O_NOFOLLOW2, 384);
+    fd = fs30.openSync(file2, fs30.constants.O_WRONLY | fs30.constants.O_CREAT | fs30.constants.O_TRUNC | O_NOFOLLOW2, 384);
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
   try {
-    fs29.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
+    fs30.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
   } finally {
-    fs29.closeSync(fd);
+    fs30.closeSync(fd);
   }
   try {
-    fs29.chmodSync(file2, 384);
+    fs30.chmodSync(file2, 384);
   } catch {
   }
   let mode = 511;
   try {
-    mode = fs29.statSync(file2).mode & 511;
+    mode = fs30.statSync(file2).mode & 511;
   } catch {
   }
   return { path: file2, mode, honored: (mode & 63) === 0 };
@@ -43694,15 +44021,15 @@ function writeTokenSidecar(projectRoot2, payload) {
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs29.existsSync(file2)) return null;
-    return JSON.parse(fs29.readFileSync(file2, "utf-8"));
+    if (!fs30.existsSync(file2)) return null;
+    return JSON.parse(fs30.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 function unlinkTokenSidecar(projectRoot2) {
   try {
-    fs29.unlinkSync(tokenSidecarPath(projectRoot2));
+    fs30.unlinkSync(tokenSidecarPath(projectRoot2));
   } catch {
   }
 }
@@ -43754,9 +44081,9 @@ function shouldAutoOpenBrowser(env) {
 }
 
 // src/daemon/lifecycle.ts
-import path33 from "node:path";
+import path34 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-var __thisDir2 = path33.dirname(fileURLToPath3(import.meta.url));
+var __thisDir2 = path34.dirname(fileURLToPath3(import.meta.url));
 async function probeDaemonIdentity(port, timeoutMs = 1500) {
   try {
     const controller = new AbortController();
@@ -43778,8 +44105,8 @@ async function probeDaemonIdentity(port, timeoutMs = 1500) {
 }
 
 // src/daemon/page-watch.ts
-import fs30 from "node:fs";
-import path34 from "node:path";
+import fs31 from "node:fs";
+import path35 from "node:path";
 import crypto6 from "node:crypto";
 
 // src/mcp/page-anchor-relocate.ts
@@ -43934,7 +44261,7 @@ var PAGE_WATCH_MIN_INTERVAL_MS = 1e4;
 var PAGE_WATCH_POLL_MS = 1e3;
 function statSig(p) {
   try {
-    const st = fs30.statSync(p);
+    const st = fs31.statSync(p);
     return `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
   } catch {
     return "missing";
@@ -43966,7 +44293,7 @@ var PageWatcher = class {
     this.deps = deps;
     let real = deps.projectRoot;
     try {
-      real = fs30.realpathSync(deps.projectRoot);
+      real = fs31.realpathSync(deps.projectRoot);
     } catch {
     }
     this.rootReal = real;
@@ -44000,9 +44327,9 @@ var PageWatcher = class {
   /** Resolves once no read/record is in flight for the session's watches. */
   async idle(sessionId) {
     for (; ; ) {
-      const busy = [...this.entries.values()].filter((e) => (!sessionId || e.sessionId === sessionId) && e.processing);
+      const busy = [...this.entries.values()].filter((e) => !sessionId || e.sessionId === sessionId).map((e) => e.draining ?? e.processing).filter((work) => work !== null);
       if (busy.length === 0) return;
-      await Promise.all(busy.map((e) => e.processing));
+      await Promise.allSettled(busy);
     }
   }
   /** Reconcile the watched set with the session's live file-backed pages. */
@@ -44037,6 +44364,45 @@ var PageWatcher = class {
   stopSession(sessionId) {
     for (const e of [...this.entries.values()]) if (e.sessionId === sessionId) this.stop(e);
   }
+  /** Bypass quiet/rate timers only for work already observed at the cut. */
+  async drainQueuedSaves(sessionId) {
+    const drains = [...this.entries.values()].filter(
+      (entry) => entry.sessionId === sessionId && (entry.dirty || entry.processing || entry.draining)
+    ).map((entry) => {
+      const generation = entry.gen;
+      const checkGeneration = () => {
+        if (entry.gen !== generation || entry.dirty) {
+          throw new StandaloneCloseoutError(
+            ERROR_CODES.session_save_pending,
+            "A watched save changed while the standalone review was closing. Let it settle, then retry End review."
+          );
+        }
+      };
+      if (entry.draining) return entry.draining.then(checkGeneration);
+      if (entry.quiet) clearTimeout(entry.quiet);
+      entry.quiet = null;
+      entry.draining = Promise.resolve().then(async () => {
+        await entry.processing;
+        if (entry.stopped) return;
+        const queued = entry.dirty;
+        entry.dirty = false;
+        try {
+          checkGeneration();
+          if (queued) await this.processAdmitted(entry);
+          checkGeneration();
+        } catch (error51) {
+          entry.dirty = true;
+          throw error51;
+        }
+      }).finally(() => {
+        entry.draining = null;
+        if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
+      });
+      return entry.draining;
+    });
+    const failed = (await Promise.allSettled(drains)).find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
   dispose() {
     this.disposed = true;
     for (const e of [...this.entries.values()]) this.stop(e);
@@ -44049,8 +44415,8 @@ var PageWatcher = class {
   }
   start(sessionId, a) {
     const sourcePath = sourceOf(a);
-    if (!sourcePath || path34.isAbsolute(sourcePath) || sourcePath.split(/[\\/]/).includes("..")) return;
-    const absPath = path34.resolve(this.rootReal, sourcePath);
+    if (!sourcePath || path35.isAbsolute(sourcePath) || sourcePath.split(/[\\/]/).includes("..")) return;
+    const absPath = path35.resolve(this.rootReal, sourcePath);
     const entry = {
       sessionId,
       artifactId: a.id,
@@ -44064,13 +44430,14 @@ var PageWatcher = class {
       dirty: false,
       gen: 0,
       processing: null,
+      draining: null,
       stopped: false
     };
     this.entries.set(this.key(sessionId, a.id), entry);
-    const dir = path34.dirname(absPath);
-    const base = path34.basename(absPath);
+    const dir = path35.dirname(absPath);
+    const base = path35.basename(absPath);
     try {
-      const watchFn = this.deps.watch ?? ((d, l) => fs30.watch(d, l));
+      const watchFn = this.deps.watch ?? ((d, l) => fs31.watch(d, l));
       const w = watchFn(dir, (_event, filename) => {
         const name = filename == null ? null : String(filename);
         if (name === null || name === base) this.onChange(entry);
@@ -44122,7 +44489,7 @@ var PageWatcher = class {
     entry.lastSig = this.sig(entry.absPath);
     entry.dirty = true;
     entry.gen++;
-    if (entry.processing) return;
+    if (entry.processing || entry.draining) return;
     this.arm(entry, this.quietMs);
   }
   arm(entry, ms) {
@@ -44132,19 +44499,34 @@ var PageWatcher = class {
   }
   fire(entry) {
     entry.quiet = null;
-    if (entry.stopped) return;
+    if (entry.stopped || entry.draining) return;
     const wait = entry.lastRecordAt ? entry.lastRecordAt + this.minIntervalMs - Date.now() : 0;
     if (wait > 0) {
       this.arm(entry, wait);
       return;
     }
     entry.dirty = false;
-    entry.processing = this.process(entry).catch((err) => this.log(`could not record ${entry.sourcePath}: ${String(err?.message ?? err)}`)).finally(() => {
+    entry.processing = this.process(entry).catch((err) => {
+      if (entry.draining) entry.dirty = true;
+      this.log(`could not record ${entry.sourcePath}: ${String(err?.message ?? err)}`);
+    }).finally(() => {
       entry.processing = null;
-      if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
+      if (entry.dirty && !entry.stopped && !entry.draining) this.arm(entry, this.quietMs);
     });
   }
   async process(entry) {
+    const generation = entry.gen;
+    const admission = this.deps.admitWatchedWrite?.(entry.sessionId);
+    const release2 = admission ? await admission : void 0;
+    if (admission && !release2) return;
+    try {
+      if (entry.stopped || this.disposed || entry.gen !== generation) return;
+      await this.processAdmitted(entry);
+    } finally {
+      release2?.();
+    }
+  }
+  async processAdmitted(entry) {
     const store = this.deps.getStore(entry.sessionId);
     if (!store) return;
     const startGen = entry.gen;
@@ -44159,7 +44541,7 @@ var PageWatcher = class {
       return;
     }
     try {
-      fs30.lstatSync(entry.absPath);
+      fs31.lstatSync(entry.absPath);
     } catch {
       return;
     }
@@ -44211,7 +44593,7 @@ var PageWatcher = class {
       this.refuse(store, entry, cur, { cause: "gate", message, digest, ...concept ? { concept } : {} });
       return;
     }
-    this.record(store, entry, cur, content, pre.trace);
+    await this.record(store, entry, cur, content, pre.trace);
   }
   /** Has the file moved on from the snapshot this read saw? Decided by the
    *  content (and resolved path), never by the stat: an mtime-only touch is
@@ -44245,7 +44627,7 @@ var PageWatcher = class {
     const updated = store.getArtifacts().find((a) => a.id === cur.id);
     if (updated) this.deps.broadcast(entry.sessionId, { type: "artifact_content_updated", artifact: updated });
   }
-  record(store, entry, cur, content, trace) {
+  async record(store, entry, cur, content, trace) {
     if (entry.stopped || this.disposed) return;
     const newId = `art_${nanoid3(10)}`;
     let created;
@@ -44301,13 +44683,17 @@ var PageWatcher = class {
     this.rekey(entry, newId);
     this.log(`recorded ${newId} (v${cur.version + 1}) from ${entry.sourcePath}; ${rel.orphaned.length + rel.orphanedOverflow} comment(s) orphaned`);
     const bc = (event) => this.deps.broadcast(entry.sessionId, event);
-    void persistPreflightTrace(store, bc, created, "page_watch", trace).catch(() => void 0);
-    const fresh = store.getArtifacts().find((a) => a.id === newId) ?? created;
-    bc({ type: "artifact_created", artifact: fresh });
-    bc({ type: "artifact_updated", artifactId: cur.id, status: "superseded" });
-    const secrets = fresh.secretWarnings ?? [];
-    if (secrets.length > 0) {
-      bc({ type: "secret_warning", artifactId: newId, patterns: secrets.map((m) => m.pattern), labels: secrets.map((m) => m.label) });
+    const traceRecorded = persistPreflightTrace(store, bc, created, "page_watch", trace).catch(() => void 0);
+    try {
+      const fresh = store.getArtifacts().find((a) => a.id === newId) ?? created;
+      bc({ type: "artifact_created", artifact: fresh });
+      bc({ type: "artifact_updated", artifactId: cur.id, status: "superseded" });
+      const secrets = fresh.secretWarnings ?? [];
+      if (secrets.length > 0) {
+        bc({ type: "secret_warning", artifactId: newId, patterns: secrets.map((m) => m.pattern), labels: secrets.map((m) => m.label) });
+      }
+    } finally {
+      await traceRecorded;
     }
   }
 };
@@ -44348,7 +44734,7 @@ function createDaemon(deps) {
     env = process.env,
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
-    watch = (dir, listener) => fs31.watch(dir, listener),
+    watch = (dir, listener) => fs32.watch(dir, listener),
     heartbeatIntervalMs = 3e4,
     hooksPollIntervalMs = 750,
     stanceExceptionClock,
@@ -44358,12 +44744,19 @@ function createDaemon(deps) {
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
-  const dpDir2 = path35.join(projectRoot2, ".deeppairing");
-  const daemonInfoFile = path35.join(dpDir2, "daemon.json");
+  const dpDir2 = path36.join(projectRoot2, ".deeppairing");
+  const daemonInfoFile = path36.join(dpDir2, "daemon.json");
   const instanceId = randomBytes4(12).toString("hex");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
+  const standaloneCloseout = new StandaloneCloseout(
+    projectRoot2,
+    (sessionId) => sessions.get(sessionId),
+    void 0,
+    (sessionId) => pageWatcher.stopSession(sessionId),
+    (sessionId) => pageWatcher.drainQueuedSaves(sessionId)
+  );
   const demoRuns = /* @__PURE__ */ new Map();
   const stanceExceptions = new StanceExceptionRegistry({
     instanceId,
@@ -44380,8 +44773,17 @@ function createDaemon(deps) {
     getStore: (sessionId) => sessions.get(sessionId),
     broadcast: (sessionId, event) => broadcast(sessionId, event),
     // #679 — a standalone (CLI) review has no wrapper lease; its pages are
-    // watched while the daemon holds the session, like a live wrapper's.
-    isSessionLive: (sessionId) => activeSessions.has(sessionId) || isStandaloneSessionForProject(sessionId, projectRoot2) && sessions.has(sessionId),
+    // watched while the daemon holds the session and its review has not ended.
+    isSessionLive: (sessionId) => {
+      if (!isStandaloneSessionForProject(sessionId, projectRoot2)) return activeSessions.has(sessionId);
+      try {
+        return sessions.has(sessionId) && standaloneCloseout.state(sessionId).state !== "ended";
+      } catch (error51) {
+        log2(`[page-watch] session ineligible: ${errorMessage(error51)}`);
+        return false;
+      }
+    },
+    admitWatchedWrite: (sessionId) => isStandaloneSessionForProject(sessionId, projectRoot2) ? standaloneCloseout.admitWatchedWrite(sessionId) : void 0,
     log: log2,
     ...pageWatchOverrides ?? {}
   });
@@ -44554,7 +44956,8 @@ function createDaemon(deps) {
     (sessionId, event) => {
       if (event === "registered") schedulePageWatchSync(sessionId);
       else pageWatcher.sync(sessionId);
-    }
+    },
+    standaloneCloseout
   );
   app.route("/", daemonRoutes);
   const publicRoutes = createHttpRoutes(
@@ -44690,11 +45093,11 @@ function createDaemon(deps) {
     return c.json({ status: "evicting", pid: process.pid });
   });
   app.get("/api/skill-status", (c) => {
-    const claudeMdPath = path35.join(projectRoot2, "CLAUDE.md");
+    const claudeMdPath = path36.join(projectRoot2, "CLAUDE.md");
     let claudeMdHasMarker = false;
     try {
-      if (fs31.existsSync(claudeMdPath)) {
-        claudeMdHasMarker = fs31.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+      if (fs32.existsSync(claudeMdPath)) {
+        claudeMdHasMarker = fs32.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
       }
     } catch {
     }
@@ -44730,17 +45133,17 @@ function createDaemon(deps) {
       return c.json({ error: "Demo requests must come from the companion UI." }, 403);
     }
     const MAX_DEMO_SESSIONS = 5;
-    const sessionRoot = path35.resolve(dpDir2, "sessions");
-    const diskIds = fs31.existsSync(sessionRoot) ? fs31.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
+    const sessionRoot = path36.resolve(dpDir2, "sessions");
+    const diskIds = fs32.existsSync(sessionRoot) ? fs32.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
     const demoIds = [.../* @__PURE__ */ new Set([...diskIds, ...Array.from(sessions.keys()).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id))])].sort();
     while (demoIds.length >= MAX_DEMO_SESSIONS) {
       const oldest = demoIds.shift();
       demoRuns.get(oldest)?.();
       demoRuns.delete(oldest);
       sessions.get(oldest)?.dispose();
-      const demoDir = path35.resolve(sessionRoot, oldest);
-      if (path35.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
-      fs31.rmSync(demoDir, { recursive: true, force: true });
+      const demoDir = path36.resolve(sessionRoot, oldest);
+      if (path36.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
+      fs32.rmSync(demoDir, { recursive: true, force: true });
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
@@ -44758,10 +45161,10 @@ function createDaemon(deps) {
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
   app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2, { epoch: revisionEpoch, counts: sessionRevisions }));
-  const __thisDir3 = path35.dirname(fileURLToPath4(import.meta.url));
-  const monorepoWebDist = path35.join(__thisDir3, "../../dist/web");
-  const webDistCandidates = [monorepoWebDist, path35.join(__thisDir3, "web")];
-  const webDistPath = webDistCandidates.find((p) => fs31.existsSync(p)) ?? monorepoWebDist;
+  const __thisDir3 = path36.dirname(fileURLToPath4(import.meta.url));
+  const monorepoWebDist = path36.join(__thisDir3, "../../dist/web");
+  const webDistCandidates = [monorepoWebDist, path36.join(__thisDir3, "web")];
+  const webDistPath = webDistCandidates.find((p) => fs32.existsSync(p)) ?? monorepoWebDist;
   mountStaticUi(app, {
     webDistPath,
     authToken: daemonAuthToken2,
@@ -44781,8 +45184,8 @@ function createDaemon(deps) {
       }
     }
     try {
-      const info = JSON.parse(fs31.readFileSync(daemonInfoFile, "utf-8"));
-      if (info?.pid === process.pid && info?.instanceId === instanceId) fs31.unlinkSync(daemonInfoFile);
+      const info = JSON.parse(fs32.readFileSync(daemonInfoFile, "utf-8"));
+      if (info?.pid === process.pid && info?.instanceId === instanceId) fs32.unlinkSync(daemonInfoFile);
     } catch {
     }
     try {
@@ -44806,7 +45209,7 @@ function createDaemon(deps) {
   function writeDaemonInfo(port) {
     const discovery = { pid: process.pid, instanceId, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
     try {
-      fs31.mkdirSync(dpDir2, { recursive: true });
+      fs32.mkdirSync(dpDir2, { recursive: true });
       if (resolveTokenPlacement() === "in-repo") {
         writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken2 });
         return;
@@ -45054,11 +45457,11 @@ function createDaemon(deps) {
         gateFiresSeen.delete(oldest);
       }
     };
-    const hooksStatePath = path35.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const hooksStatePath = path36.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
-        if (!fs31.existsSync(hooksStatePath)) return;
-        const raw2 = JSON.parse(fs31.readFileSync(hooksStatePath, "utf-8"));
+        if (!fs32.existsSync(hooksStatePath)) return;
+        const raw2 = JSON.parse(fs32.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           if (f?.gate && typeof f.id === "string" && !gateFiresSeen.has(f.id)) {
@@ -45108,8 +45511,8 @@ function createDaemon(deps) {
       }
     };
     try {
-      if (fs31.existsSync(hooksStatePath)) {
-        const raw2 = JSON.parse(fs31.readFileSync(hooksStatePath, "utf-8"));
+      if (fs32.existsSync(hooksStatePath)) {
+        const raw2 = JSON.parse(fs32.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           if (f?.gate && typeof f.id === "string") noteGateSeen(f.id);
@@ -45120,10 +45523,10 @@ function createDaemon(deps) {
     } catch {
     }
     try {
-      const hooksDir = path35.dirname(hooksStatePath);
-      fs31.mkdirSync(hooksDir, { recursive: true });
+      const hooksDir = path36.dirname(hooksStatePath);
+      fs32.mkdirSync(hooksDir, { recursive: true });
       const watcher = watch(hooksDir, (_event, filename) => {
-        if (filename === "hooks-state.json" || filename === path35.basename(hooksStatePath)) {
+        if (filename === "hooks-state.json" || filename === path36.basename(hooksStatePath)) {
           broadcastNewFires();
         }
       });
@@ -45135,13 +45538,13 @@ function createDaemon(deps) {
     if (hooksPollIntervalMs > 0 && !hooksPollTimer) {
       let lastStat = "";
       try {
-        const st = fs31.statSync(hooksStatePath);
+        const st = fs32.statSync(hooksStatePath);
         lastStat = `${st.mtimeMs}:${st.size}`;
       } catch {
       }
       hooksPollTimer = setInterval(() => {
         try {
-          const st = fs31.statSync(hooksStatePath);
+          const st = fs32.statSync(hooksStatePath);
           const sig = `${st.mtimeMs}:${st.size}`;
           if (sig === lastStat) return;
           lastStat = sig;
@@ -45193,11 +45596,11 @@ function createDaemon(deps) {
     const pingDecision = decidePing(env);
     if (pingDecision.shouldSend) {
       pingTimer = setTimeout(() => {
-        const claudeMdPath = path35.join(projectRoot2, "CLAUDE.md");
+        const claudeMdPath = path36.join(projectRoot2, "CLAUDE.md");
         let claudeMdHasMarker = false;
         try {
-          if (fs31.existsSync(claudeMdPath)) {
-            claudeMdHasMarker = fs31.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          if (fs32.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs32.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
           }
         } catch {
         }
@@ -45290,28 +45693,29 @@ function createDaemon(deps) {
     scheduleInstallHealthPing,
     cleanup,
     dispose,
-    pageWatcher
+    pageWatcher,
+    standaloneCloseout
   };
 }
 
 // src/daemon/index.ts
 var MAX_PORT_ATTEMPTS = 10;
 var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? canonicalProjectDir(process.cwd()).projectRoot;
-var dpDir = path36.join(projectRoot, ".deeppairing");
-var logFile = path36.join(dpDir, "daemon.log");
+var dpDir = path37.join(projectRoot, ".deeppairing");
+var logFile = path37.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
 var daemonAuthToken = crypto7.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
   try {
-    const stat = fs32.statSync(logFile);
+    const stat = fs33.statSync(logFile);
     if (stat.size < LOG_MAX_BYTES) return;
     for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
       const dst = `${logFile}.${i}`;
       try {
-        if (fs32.existsSync(src)) fs32.renameSync(src, dst);
+        if (fs33.existsSync(src)) fs33.renameSync(src, dst);
       } catch {
       }
     }
@@ -45322,9 +45726,9 @@ function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [daemon] ${msg}
 `;
   try {
-    fs32.mkdirSync(path36.dirname(logFile), { recursive: true });
+    fs33.mkdirSync(path37.dirname(logFile), { recursive: true });
     maybeRotateLog();
-    fs32.appendFileSync(logFile, line);
+    fs33.appendFileSync(logFile, line);
   } catch {
   }
 }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ArtifactSchema, CommentSchema, DecisionRequestSchema, DecisionResponseSchema, PreflightTraceSchema, RequestSchema } from "@deeppairing/shared";
 import { z } from "zod";
+import { ERROR_CODES } from "../error-codes.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import type { FileStore } from "../store/file-store.js";
@@ -22,6 +23,12 @@ const markerSchema = z.object({
 }).strict();
 type EndMarker = z.infer<typeof markerSchema>;
 export type StandaloneReviewState = { state: "open" | "closing" } | { state: "ended"; endedAt: string };
+
+export class StandaloneCloseoutError extends Error {
+  constructor(readonly code: typeof ERROR_CODES.session_marker_invalid | typeof ERROR_CODES.session_save_pending, message: string) {
+    super(message);
+  }
+}
 
 type Entry = {
   writers: number;
@@ -150,7 +157,7 @@ function reconcileReceipts(projectRoot: string, dir: string, store: FileStore, c
 }
 
 /** Internal coordinator. Only the daemon's verified exact session lookup should
- * supply stores. Public routes and watcher eligibility join this in slice 2. */
+ * supply stores. The daemon does not expose End until all writers are covered. */
 export class StandaloneCloseout {
   private readonly entries = new Map<string, Entry>();
 
@@ -158,6 +165,8 @@ export class StandaloneCloseout {
     private readonly projectRoot: string,
     private readonly getStore: (sessionId: string) => FileStore | undefined,
     private readonly timeoutMs = 5_000,
+    private readonly onEnded?: (sessionId: string) => void,
+    private readonly drainWatchedSaves?: (sessionId: string) => Promise<void>,
   ) {}
 
   private directory(sessionId: string): string {
@@ -173,12 +182,14 @@ export class StandaloneCloseout {
 
   private readMarker(dir: string, sessionId: string): EndMarker | undefined {
     const file = path.join(dir, "review-ended.json");
-    const stat = fs.lstatSync(file, { throwIfNoEntry: false });
-    if (!stat) return;
-    if (!stat.isFile()) throw new Error("Standalone closeout marker is not a regular file.");
-    const marker = markerSchema.parse(readJsonFile(file));
-    if (marker.sessionId !== sessionId) throw new Error("Standalone closeout marker belongs to a different review.");
-    return marker;
+    try {
+      const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+      if (!stat) return;
+      const marker = stat.isFile() && markerSchema.safeParse(readJsonFile(file));
+      if (marker && marker.success && marker.data.sessionId === sessionId) return marker.data;
+    } catch { /* Unreadable markers also fail closed. */ }
+    throw new StandaloneCloseoutError(ERROR_CODES.session_marker_invalid,
+      "The standalone review's End marker cannot be verified. Review its session files before retrying.");
   }
 
   state(sessionId: string): StandaloneReviewState {
@@ -200,6 +211,16 @@ export class StandaloneCloseout {
       entry.drained?.();
       if (!entry.close) this.entries.delete(sessionId);
     };
+  }
+
+  /** A save arriving during a failed closeout still needs its turn. Waiting
+   * for the attempt here does not itself count as an admitted writer. */
+  async admitWatchedWrite(sessionId: string): Promise<(() => void) | undefined> {
+    for (;;) {
+      const closing = this.entries.get(sessionId)?.close;
+      if (!closing) return this.admitWrite(sessionId);
+      try { await closing; } catch { /* retry admission after a failed close */ }
+    }
   }
 
   private entry(sessionId: string): Entry {
@@ -224,6 +245,10 @@ export class StandaloneCloseout {
     const checkDeadline = () => {
       if (performance.now() >= deadline) throw new Error("Standalone closeout timed out; retry End review.");
     };
+    // Reserve the already-observed saves synchronously at the admission cut.
+    // A timed-out drain still owns its permit until it actually settles.
+    const releaseWatchDrain = this.drainWatchedSaves && this.admitWrite(sessionId);
+    let watchDrainError: unknown;
     entry.close = Promise.resolve().then(async () => {
       if (entry.writers) {
         await new Promise<void>((resolve, reject) => {
@@ -234,13 +259,14 @@ export class StandaloneCloseout {
           };
         });
       }
+      if (watchDrainError) throw watchDrainError;
       checkDeadline();
       reconcileReceipts(this.projectRoot, dir, store, checkDeadline);
       store.forceFlush();
       checkDeadline();
       // The session is drained. Take the existing flush lock only for this
       // final synchronous check/write, never across an await.
-      return withSessionFlushLock(path.join(dir, ".flush.lock"), () => {
+      const committed = withSessionFlushLock(path.join(dir, ".flush.lock"), () => {
         const existing = this.readMarker(dir, sessionId);
         if (existing) return existing;
         checkDeadline();
@@ -248,11 +274,18 @@ export class StandaloneCloseout {
         writeJsonAtomic(path.join(dir, "review-ended.json"), committed, 2, { mode: 0o600 });
         return committed;
       });
+      this.onEnded?.(sessionId);
+      return committed;
     }).finally(() => {
       entry.close = undefined;
       entry.drained = undefined;
       if (!entry.writers) this.entries.delete(sessionId);
     });
+    if (releaseWatchDrain) {
+      void this.drainWatchedSaves!(sessionId)
+        .catch((error: unknown) => { watchDrainError = error; })
+        .finally(releaseWatchDrain);
+    }
     return entry.close;
   }
 }
