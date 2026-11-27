@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type Ref } from "react";
+import { resolveTheme, usePreferencesStore } from "../stores/preferences";
 
 /**
  * Renders an agent-authored HTML/CSS/JS prototype in a hardened sandbox.
@@ -102,6 +103,16 @@ export interface FrameAnnotation {
   /** Returns the cleaned markup plus the page's safe `<html>`/`<body>`
    *  presentation attributes, which go on our wrapper elements. */
   sanitize: (html: string) => { html: string; htmlAttrs?: Record<string, string>; bodyAttrs?: Record<string, string> };
+  /** #714 gap 11 — an async parent-side pass over the agent HTML before the
+   *  srcdoc is built (Mermaid blocks rendered to sanitized SVG). `needed` is a
+   *  cheap synchronous gate; `run` never rejects and resolves to the HTML to
+   *  frame (both the before-Run and the Run document use it). */
+  prepare?: FramePrepare;
+}
+
+export interface FramePrepare {
+  needed: (html: string) => boolean;
+  run: (html: string, theme: "light" | "dark") => Promise<string>;
 }
 
 export interface PrototypeFrameProps {
@@ -149,6 +160,47 @@ export function PrototypeFrame({
   const scripted = staticFirst && hasScripts(html);
   const annotating = staticFirst && !!annotation;
 
+  // #714 gap 11 — render the page's Mermaid blocks in the parent before the
+  // frame gets its srcdoc. Until the first result for this HTML lands, a
+  // placeholder stands in (so the frame loads once, not twice); a theme flip
+  // keeps the current frame up until the re-themed render is ready. Once the
+  // human has chosen Run the theme is pinned to the one at Run, so a theme
+  // flip never reloads a running page (it re-themes on the next mount).
+  // Run also FREEZES the prepared document on screen at that moment: a render
+  // still in flight (say, for a theme flipped just before Run) may resolve
+  // later, but it only updates `prepared` (the before-Run document), never the
+  // running frame's srcdoc, which would reload the page and re-run its
+  // scripts. The frozen copy is keyed to `html`: a new page while running is
+  // prepared afresh (in the pinned run theme) and frames once ready.
+  const appTheme = resolveTheme(usePreferencesStore((s) => s.theme));
+  const [runTheme, setRunTheme] = useState<"light" | "dark" | null>(null);
+  const theme = running && runTheme ? runTheme : appTheme;
+  const prepare = annotation?.prepare;
+  // `needed` may parse the page (a DOMParser pass), so once per html.
+  const prepNeeded = useMemo(
+    () => !!(staticFirst && !tooBig && prepare?.needed(html)),
+    [staticFirst, tooBig, prepare, html],
+  );
+  const prep = prepNeeded && prepare ? prepare : null;
+  const [prepared, setPrepared] = useState<{ html: string; out: string } | null>(null);
+  useEffect(() => {
+    if (!prep) return;
+    let live = true;
+    prep.run(html, theme).then(
+      (out) => { if (live) setPrepared({ html, out }); },
+      () => { if (live) setPrepared({ html, out: html }); },
+    );
+    return () => { live = false; };
+  }, [prep, html, theme]);
+  const preparedHtml: string | null = prep ? (prepared?.html === html ? prepared.out : null) : html;
+  const [runFrozen, setRunFrozen] = useState<{ html: string; out: string } | null>(null);
+  const frameHtml: string | null = running && runFrozen?.html === html ? runFrozen.out : preparedHtml;
+  const startRun = () => {
+    setRunTheme(appTheme);
+    setRunFrozen(preparedHtml !== null ? { html, out: preparedHtml } : null);
+    setRunning(true);
+  };
+
   useEffect(() => {
     onRunningChange?.(running);
   }, [running, onRunningChange]);
@@ -157,19 +209,22 @@ export function PrototypeFrame({
   // annotator first, and a nonce CSP so only the annotator can run. Memoized
   // so a re-render doesn't hand the iframe a new srcdoc (which would reload it).
   const staticDoc = useMemo(() => {
-    if (!staticFirst || tooBig) return "";
-    if (!annotation) return wrapHtml(html);
-    const clean = annotation.sanitize(html);
+    if (!staticFirst || tooBig || preparedHtml === null) return "";
+    if (!annotation) return wrapHtml(preparedHtml);
+    const clean = annotation.sanitize(preparedHtml);
     return wrapHtml(clean.html, {
       headScript: annotation.script,
       nonce: makeNonce(),
       htmlAttrs: clean.htmlAttrs,
       bodyAttrs: clean.bodyAttrs,
     });
-  }, [html, staticFirst, tooBig, annotation]);
+  }, [preparedHtml, staticFirst, tooBig, annotation]);
   const runDoc = useMemo(
-    () => (running ? wrapHtml(html, annotating && annotation ? { headScript: annotation.script } : {}) : ""),
-    [html, running, annotating, annotation],
+    () =>
+      running && frameHtml !== null
+        ? wrapHtml(frameHtml, annotating && annotation ? { headScript: annotation.script } : {})
+        : "",
+    [frameHtml, running, annotating, annotation],
   );
 
   if (!html.trim()) {
@@ -194,6 +249,14 @@ export function PrototypeFrame({
         // read-only — a live per-option prototype is not staticPreview.
         <div className="w-full rounded border border-dashed border-border-default bg-surface-elevated p-3 text-center text-2xs text-text-muted">
           Prototype (preview) — open the live version to run it.
+        </div>
+      ) : frameHtml === null ? (
+        <div
+          className={`${frameClassName} flex items-center justify-center text-2xs text-text-muted`}
+          data-testid="frame-diagrams-rendering"
+          role="status"
+        >
+          Rendering diagrams…
         </div>
       ) : running ? (
         <iframe
@@ -221,7 +284,7 @@ export function PrototypeFrame({
           />
           {scripted && (
             <button
-              onClick={() => setRunning(true)}
+              onClick={startRun}
               className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-2 text-center
                          text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
             >
@@ -231,7 +294,7 @@ export function PrototypeFrame({
         </div>
       ) : (
         <button
-          onClick={() => setRunning(true)}
+          onClick={startRun}
           className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-4 text-center
                      text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
         >

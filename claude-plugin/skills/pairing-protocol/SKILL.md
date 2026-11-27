@@ -527,8 +527,9 @@ Words to the agent:
   data: URIs (video, audio, iframes and objects won't load). Scripts run
   only when your pair clicks Run, so the page must read without them. Keep it
   under 2 MiB. Make it skimmable: a TL;DR block first, then
-  `<section id="...">` with an `<h2>` each, tables for comparisons, inline SVG
-  diagrams (Mermaid source is not rendered), `<details>` for depth, and each
+  `<section id="...">` with an `<h2>` each, tables for comparisons, diagrams
+  as Mermaid source in `<pre class="mermaid">` (the companion renders it) or
+  inline SVG, `<details>` for depth, and each
   ask in an element marked `data-dp-decision` or `data-dp-question` with an
   id. The result lists non-blocking warnings (external assets, no headings, a
   long page without section ids); fix them in the next version. For in-page

@@ -2,7 +2,7 @@
  * #714 gap 6 — the present-time page lint. Pure function, real inputs.
  */
 import { describe, expect, it } from "vitest";
-import { lintPage, formatPageLintWarnings, PAGE_LINT_LONG_PAGE_BYTES } from "../page-lint.js";
+import { lintPage, formatPageLintWarnings, stripCssComments, PAGE_LINT_LONG_PAGE_BYTES } from "../page-lint.js";
 import { PAGE_SKELETON_HTML } from "../../page-authoring.js";
 
 const codes = (html: string) => lintPage(html).map((w) => w.code);
@@ -122,6 +122,92 @@ describe("lintPage", () => {
   it("formats warnings as a non-blocking text block, empty when clean", () => {
     expect(formatPageLintWarnings([])).toBe("");
     expect(formatPageLintWarnings(lintPage("<p>x</p>"))).toContain("Page warnings (non-blocking; the page was presented)");
+  });
+
+  // #716 review P3 — a "/*" inside a CSS string is literal text, not a
+  // comment opener, so it cannot hide the rest of the stylesheet.
+  it.each([
+    ['<style>a::before{content:"/*"} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ["<style>a::before{content:'/*'} b{background:url(https://x/a.png)}</style>", "CSS url() in <style>"],
+    ['<style>a::before{content:"\\"/*"} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ["<style>a::before{content:'it\\'s /*'} b{background:url(https://x/a.png)}</style>", "CSS url() in <style>"],
+    ['<style>a{background:url(data:x/*y)} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ['<style>a::before{content:"/*"} @import "https://x/a.css";</style>', "CSS @import in <style>"],
+    [`<div style='content:"/*";background:url(https://x/a.png)'>x</div>`, "CSS url() in a style attribute"],
+  ])("a /* inside a CSS string or url() does not hide a later external asset: %s", (asset, source) => {
+    const warnings = lintPage(clean(asset));
+    expect(warnings.map((w) => w.code)).toEqual(["external_asset"]);
+    expect(warnings[0]!.sources).toEqual([{ source, count: 1 }]);
+  });
+
+  // #721 review P3 — one CSS tokenizer drives both comment and reference
+  // detection: quoted examples are text, `url(` is a whole ident token, and a
+  // string ends at any CSS newline (LF, CR, CRLF, FF).
+  it.each([
+    ['<style>a::before{content:"see url(https://x/a.png)"}</style>'],
+    ["<style>a::before{content:'url(//x/a.png)'}</style>"],
+    ['<style>a::before{content:"@import \'https://x/a.css\'"}</style>'],
+    [`<div style='content:"url(https://x/a.png)"'>x</div>`],
+    ["<style>a{background:myurl(https://x/a.png)}</style>"],
+    ["<style>a{--x:--url(https://x/a.png)}</style>"],
+    ["<style>a{b:#url(https://x/a.png)}</style>"],
+    // A CR / CRLF / FF ends the string (bad-string), so the `/*` after it opens
+    // a real comment that runs to the end and hides the url().
+    ['<style>a{content:"x\r/*"} b{background:url(https://x/a.png)}</style>'],
+    ['<style>a{content:"x\r\n/*"} b{background:url(https://x/a.png)}</style>'],
+    ['<style>a{content:"x\f/*"} b{background:url(https://x/a.png)}</style>'],
+  ])("quoted text, non-url idents and CSS newlines never miscount: %s", (asset) => {
+    expect(lintPage(clean(asset))).toEqual([]);
+  });
+
+  it.each([
+    ['<style>a{background:URL( "https://x/a.png" )}</style>', "CSS url() in <style>"],
+    ["<style>a{background:u\\72l(https://x/a.png)}</style>", "CSS url() in <style>"],
+    ['<style>a{content:"x\r} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ['<style>a{content:"x\f} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ['<style>a{content:"a\\\r\nb"} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ['<style>@import url("https://x/a.css");</style>', "CSS @import in <style>"],
+    ['<style>@import "https://x/a.css";</style>', "CSS @import in <style>"],
+    ["<style>a{b:x}url(https://x/a.png)</style>", "CSS url() in <style>"],
+    // `@imports` is not `@import`: its url() is a plain url() reference.
+    ["<style>@imports url(https://x/a.css);</style>", "CSS url() in <style>"],
+  ])("a real url()/@import still counts once: %s", (asset, source) => {
+    const warnings = lintPage(clean(asset));
+    expect(warnings.map((w) => w.code)).toEqual(["external_asset"]);
+    expect(warnings[0]!.sources).toEqual([{ source, count: 1 }]);
+  });
+
+  it("stripCssComments keeps strings intact and still strips real comments", () => {
+    expect(stripCssComments('a{content:"/* x */"}/* gone */b{}')).toBe('a{content:"/* x */"} b{}');
+    expect(stripCssComments("a{content:'\\'/*'}/*c*/b{}")).toBe("a{content:'\\'/*'} b{}");
+    // An escaped quote outside a string does not open one.
+    expect(stripCssComments('a\\"b/*c*/d')).toBe('a\\"b d');
+    // A string ends at an unescaped newline (CSS bad-string), so a later comment still strips.
+    expect(stripCssComments('a{content:"x\n/*c*/b}')).toBe('a{content:"x\n b}');
+    // A real comment hides a url() inside it.
+    expect(lintPage(clean("<style>/* url(https://x/a.png) */ b{}</style>"))).toEqual([]);
+    // An unterminated comment runs to the end; an unterminated string too.
+    expect(stripCssComments("a/* b url(x)")).toBe("a ");
+    expect(stripCssComments('a"b/* c')).toBe('a"b/* c');
+  });
+
+  it("the string-aware comment stripper stays linear on hostile quote/escape/comment soup", () => {
+    const size = 2 * 1024 * 1024;
+    const hostile = [
+      '"/*'.repeat(size / 3),
+      "'\\".repeat(size / 2),
+      '\\"'.repeat(size / 2),
+      '"\n/*'.repeat(size / 4),
+      "url(/*".repeat(size / 6),
+      'url("'.repeat(size / 5),
+      "/*\"".repeat(size / 3),
+    ];
+    for (const css of hostile) {
+      const start = performance.now();
+      stripCssComments(css);
+      lintPage(`<style>${css}</style><div style="${css.slice(0, 64 * 1024).replace(/"/g, "'")}">x</div>`);
+      expect(performance.now() - start, css.slice(0, 12)).toBeLessThan(2_000);
+    }
   });
 
   it("stays linear on hostile 2 MB inputs (ReDoS guard)", () => {
