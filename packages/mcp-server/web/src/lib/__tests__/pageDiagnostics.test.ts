@@ -20,6 +20,7 @@ const otherFrame = { name: "other-frame" } as unknown as Window;
 
 const report = {
   dp: "diagnostics",
+  doc: "0123456789abcdef",
   scriptErrors: { count: 2, samples: ["TypeError: x is undefined"], classes: [{ key: "TypeError", count: 2 }] },
   rejections: { count: 0, samples: [], classes: [] },
   resources: [{ key: "img src", count: 3 }],
@@ -28,8 +29,27 @@ const report = {
 
 describe("acceptDiagnosticsMessage", () => {
   it("accepts a valid report from this frame (without the dp tag)", () => {
-    const { dp: _dp, ...rest } = report;
+    const { dp: _dp, doc: _doc, ...rest } = report;
     expect(acceptDiagnosticsMessage({ source: frame, data: report }, frame)).toEqual(rest);
+  });
+
+  it("REVIEW: keys come back in canonical order whatever order the frame listed them in", () => {
+    const fwd = {
+      ...report,
+      scriptErrors: { count: 3, samples: [], classes: [{ key: "TypeError", count: 1 }, { key: "RangeError", count: 2 }] },
+      resources: [{ key: "img src", count: 1 }, { key: "video src", count: 1 }, { key: "made up", count: 1 }],
+      blocked: [{ key: "default-src", count: 1 }, { key: "img-src", count: 2 }],
+    };
+    const rev = {
+      ...fwd,
+      scriptErrors: { ...fwd.scriptErrors, classes: [...fwd.scriptErrors.classes].reverse() },
+      resources: [...fwd.resources].reverse(),
+      blocked: [...fwd.blocked].reverse(),
+    };
+    const a = acceptDiagnosticsMessage({ source: frame, data: fwd }, frame)!;
+    expect(acceptDiagnosticsMessage({ source: frame, data: rev }, frame)).toEqual(a);
+    expect(a.resources.map((r) => r.key)).toEqual(["img src", "video src", "other resource"]);
+    expect(a.scriptErrors.classes.map((c) => c.key)).toEqual(["TypeError", "RangeError"]);
   });
 
   it("ignores a spoofed source: another frame, null, or no mounted frame", () => {
@@ -60,10 +80,10 @@ describe("acceptDiagnosticsMessage", () => {
       },
       frame,
     )!;
-    expect(r.resources).toEqual([{ key: "other resource", count: 3 }, { key: "img src", count: 1 }]);
-    expect(r.blocked).toEqual([{ key: "other", count: 2 }, { key: "img-src", count: 2 }]);
+    expect(r.resources).toEqual([{ key: "img src", count: 1 }, { key: "other resource", count: 3 }]);
+    expect(r.blocked).toEqual([{ key: "img-src", count: 2 }, { key: "other", count: 2 }]);
     const summary = diagnosticsAgentSummary(r, { version: 1, running: true })!;
-    expect(summary).toBe("v1 scripts-on | script TypeError=2; resource other resource=3; resource img src=1; blocked other=2; blocked img-src=2");
+    expect(summary).toBe("v1 scripts-on | script TypeError=2; resource img src=1; resource other resource=3; blocked img-src=2; blocked other=2");
     expect(summary).not.toMatch(/hunter2|horse|ignore|x\.test/);
   });
 
@@ -91,7 +111,7 @@ const d = (patch: Partial<PageDiagnostics>): PageDiagnostics => ({
 
 describe("diagnostics wording", () => {
   it("headline: script errors and broken images; element-paired CSP blocks are not double counted", () => {
-    const { dp: _dp, ...rest } = report;
+    const { dp: _dp, doc: _doc, ...rest } = report;
     expect(diagnosticsHeadline(rest as PageDiagnostics)).toBe("2 script errors and 3 images that didn't load");
     expect(diagnosticsHeadline(d({ rejections: { count: 1, samples: [], classes: [] }, blocked: [{ key: "connect-src", count: 2 }] }))).toBe(
       "1 script error and 2 blocked requests",
@@ -134,7 +154,7 @@ describe("diagnostics wording", () => {
       }),
       { version: 2, running: true },
     );
-    expect(s).toBe("v2 scripts-on | script TypeError=1; script Error=1; resource img src=3; blocked img-src=3");
+    expect(s).toBe("v2 scripts-on | script Error=1; script TypeError=1; resource img src=3; blocked img-src=3");
     expect(s).not.toMatch(/hunter2|IGNORE/);
     expect(diagnosticsAgentSummary(d({ resources: [{ key: "img src", count: 1 }] }), { version: 1, running: false })).toBe(
       "v1 scripts-off | resource img src=1",

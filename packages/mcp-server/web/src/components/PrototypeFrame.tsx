@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type Ref } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { resolveTheme, usePreferencesStore } from "../stores/preferences";
 
 /**
  * Renders an agent-authored HTML/CSS/JS prototype in a hardened sandbox.
@@ -99,9 +100,24 @@ export function wrapHtml(
  *  component, which prototype visuals also use, carries neither by default. */
 export interface FrameAnnotation {
   script: string;
+  /** #714 gap 12 — optional: the script for one frame document, given the id
+   *  minted for that srcdoc. The id is also set on the iframe as
+   *  `data-dp-doc` (parent DOM only; the opaque-origin frame can't read it),
+   *  so the renderer can accept messages from exactly that document. */
+  scriptFor?: (doc: string) => string;
   /** Returns the cleaned markup plus the page's safe `<html>`/`<body>`
    *  presentation attributes, which go on our wrapper elements. */
   sanitize: (html: string) => { html: string; htmlAttrs?: Record<string, string>; bodyAttrs?: Record<string, string> };
+  /** #714 gap 11 — an async parent-side pass over the agent HTML before the
+   *  srcdoc is built (Mermaid blocks rendered to sanitized SVG). `needed` is a
+   *  cheap synchronous gate; `run` never rejects and resolves to the HTML to
+   *  frame (both the before-Run and the Run document use it). */
+  prepare?: FramePrepare;
+}
+
+export interface FramePrepare {
+  needed: (html: string) => boolean;
+  run: (html: string, theme: "light" | "dark") => Promise<string>;
 }
 
 export interface PrototypeFrameProps {
@@ -128,6 +144,12 @@ export interface PrototypeFrameProps {
   iframeRef?: Ref<HTMLIFrameElement>;
   /** Told when the human chooses Run (the frame remounts). */
   onRunningChange?: (running: boolean) => void;
+  /** #714 gap 12 — told the document id of the srcdoc now displayed (null
+   *  when none) whenever it changes, including changes made here without a
+   *  parent render (a Mermaid prepare landing, a theme flip, a new page while
+   *  running). Called from a layout effect in the commit that sets the new
+   *  srcdoc, so before that document can post anything. */
+  onDocChange?: (doc: string | null) => void;
 }
 
 export function PrototypeFrame({
@@ -140,6 +162,7 @@ export function PrototypeFrame({
   annotation,
   iframeRef,
   onRunningChange,
+  onDocChange,
 }: PrototypeFrameProps) {
   const [running, setRunning] = useState(false);
   const [showSource, setShowSource] = useState(false);
@@ -149,6 +172,47 @@ export function PrototypeFrame({
   const scripted = staticFirst && hasScripts(html);
   const annotating = staticFirst && !!annotation;
 
+  // #714 gap 11 — render the page's Mermaid blocks in the parent before the
+  // frame gets its srcdoc. Until the first result for this HTML lands, a
+  // placeholder stands in (so the frame loads once, not twice); a theme flip
+  // keeps the current frame up until the re-themed render is ready. Once the
+  // human has chosen Run the theme is pinned to the one at Run, so a theme
+  // flip never reloads a running page (it re-themes on the next mount).
+  // Run also FREEZES the prepared document on screen at that moment: a render
+  // still in flight (say, for a theme flipped just before Run) may resolve
+  // later, but it only updates `prepared` (the before-Run document), never the
+  // running frame's srcdoc, which would reload the page and re-run its
+  // scripts. The frozen copy is keyed to `html`: a new page while running is
+  // prepared afresh (in the pinned run theme) and frames once ready.
+  const appTheme = resolveTheme(usePreferencesStore((s) => s.theme));
+  const [runTheme, setRunTheme] = useState<"light" | "dark" | null>(null);
+  const theme = running && runTheme ? runTheme : appTheme;
+  const prepare = annotation?.prepare;
+  // `needed` may parse the page (a DOMParser pass), so once per html.
+  const prepNeeded = useMemo(
+    () => !!(staticFirst && !tooBig && prepare?.needed(html)),
+    [staticFirst, tooBig, prepare, html],
+  );
+  const prep = prepNeeded && prepare ? prepare : null;
+  const [prepared, setPrepared] = useState<{ html: string; out: string } | null>(null);
+  useEffect(() => {
+    if (!prep) return;
+    let live = true;
+    prep.run(html, theme).then(
+      (out) => { if (live) setPrepared({ html, out }); },
+      () => { if (live) setPrepared({ html, out: html }); },
+    );
+    return () => { live = false; };
+  }, [prep, html, theme]);
+  const preparedHtml: string | null = prep ? (prepared?.html === html ? prepared.out : null) : html;
+  const [runFrozen, setRunFrozen] = useState<{ html: string; out: string } | null>(null);
+  const frameHtml: string | null = running && runFrozen?.html === html ? runFrozen.out : preparedHtml;
+  const startRun = () => {
+    setRunTheme(appTheme);
+    setRunFrozen(preparedHtml !== null ? { html, out: preparedHtml } : null);
+    setRunning(true);
+  };
+
   useEffect(() => {
     onRunningChange?.(running);
   }, [running, onRunningChange]);
@@ -156,21 +220,41 @@ export function PrototypeFrame({
   // #680 slice 2 — the before-Run document: sanitised agent markup, our
   // annotator first, and a nonce CSP so only the annotator can run. Memoized
   // so a re-render doesn't hand the iframe a new srcdoc (which would reload it).
-  const staticDoc = useMemo(() => {
-    if (!staticFirst || tooBig) return "";
-    if (!annotation) return wrapHtml(html);
-    const clean = annotation.sanitize(html);
-    return wrapHtml(clean.html, {
-      headScript: annotation.script,
-      nonce: makeNonce(),
-      htmlAttrs: clean.htmlAttrs,
-      bodyAttrs: clean.bodyAttrs,
-    });
-  }, [html, staticFirst, tooBig, annotation]);
-  const runDoc = useMemo(
-    () => (running ? wrapHtml(html, annotating && annotation ? { headScript: annotation.script } : {}) : ""),
-    [html, running, annotating, annotation],
-  );
+  // #714 gap 12 — each annotated srcdoc gets its own document id (with
+  // scriptFor), minted in the same memo as the srcdoc it names: a new srcdoc,
+  // a new id; the same srcdoc, the same id. The Run document is built from
+  // `frameHtml`, which stays the frozen copy while running, so a late theme
+  // render (it only changes `prepared`) neither rebuilds the running srcdoc
+  // nor mints a new id for it.
+  const staticFrame = useMemo((): { src: string; doc?: string } => {
+    if (!staticFirst || tooBig || preparedHtml === null) return { src: "" };
+    if (!annotation) return { src: wrapHtml(preparedHtml) };
+    const clean = annotation.sanitize(preparedHtml);
+    const doc = annotation.scriptFor ? makeNonce() : undefined;
+    return {
+      doc,
+      src: wrapHtml(clean.html, {
+        headScript: doc && annotation.scriptFor ? annotation.scriptFor(doc) : annotation.script,
+        nonce: makeNonce(),
+        htmlAttrs: clean.htmlAttrs,
+        bodyAttrs: clean.bodyAttrs,
+      }),
+    };
+  }, [preparedHtml, staticFirst, tooBig, annotation]);
+  const staticDoc = staticFrame.src;
+  const runFrame = useMemo((): { src: string; doc?: string } => {
+    if (!running || frameHtml === null) return { src: "" };
+    if (!(annotating && annotation)) return { src: wrapHtml(frameHtml, {}) };
+    const doc = annotation.scriptFor ? makeNonce() : undefined;
+    return { doc, src: wrapHtml(frameHtml, { headScript: doc && annotation.scriptFor ? annotation.scriptFor(doc) : annotation.script }) };
+  }, [frameHtml, running, annotating, annotation]);
+  const runDoc = runFrame.src;
+  const shownDoc = (running ? runFrame.doc : staticFrame.doc) ?? null;
+  const onDocChangeRef = useRef(onDocChange);
+  onDocChangeRef.current = onDocChange;
+  useLayoutEffect(() => {
+    onDocChangeRef.current?.(shownDoc);
+  }, [shownDoc]);
 
   if (!html.trim()) {
     return <div className="text-2xs text-text-muted">No {noun} HTML provided.</div>;
@@ -195,12 +279,21 @@ export function PrototypeFrame({
         <div className="w-full rounded border border-dashed border-border-default bg-surface-elevated p-3 text-center text-2xs text-text-muted">
           Prototype (preview) — open the live version to run it.
         </div>
+      ) : frameHtml === null ? (
+        <div
+          className={`${frameClassName} flex items-center justify-center text-2xs text-text-muted`}
+          data-testid="frame-diagrams-rendering"
+          role="status"
+        >
+          Rendering diagrams…
+        </div>
       ) : running ? (
         <iframe
           // No `allow-same-origin` — opaque origin, no parent/cookie/storage access.
           ref={iframeRef}
           sandbox="allow-scripts"
           srcDoc={runDoc}
+          data-dp-doc={runFrame.doc}
           title={`Sandboxed ${noun}`}
           className={frameClassName}
         />
@@ -216,12 +309,13 @@ export function PrototypeFrame({
             // anything else. Never `allow-same-origin` in either mode.
             sandbox={annotating ? "allow-scripts" : ""}
             srcDoc={staticDoc}
+            data-dp-doc={staticFrame.doc}
             title={`Sandboxed ${noun} (scripts paused)`}
             className={frameClassName}
           />
           {scripted && (
             <button
-              onClick={() => setRunning(true)}
+              onClick={startRun}
               className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-2 text-center
                          text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
             >
@@ -231,7 +325,7 @@ export function PrototypeFrame({
         </div>
       ) : (
         <button
-          onClick={() => setRunning(true)}
+          onClick={startRun}
           className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-4 text-center
                      text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
         >

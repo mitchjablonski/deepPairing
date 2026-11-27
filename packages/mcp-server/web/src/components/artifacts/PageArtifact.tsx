@@ -7,11 +7,13 @@ import { PrototypeFrame, type FrameAnnotation } from "../PrototypeFrame";
 import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { useChainComments } from "../../hooks/useChainComments";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { useReplayStore } from "../../stores/replay";
 import { useArtifactStore } from "../../stores/artifact";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
-import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
+import { ANNOTATOR_SCRIPT, annotatorScript } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
+import { PAGE_MERMAID_PREPARE } from "../../lib/pageMermaid";
 import {
   acceptAnchorMessage,
   acceptPinClick,
@@ -21,7 +23,7 @@ import {
   type PinStateValue,
   acceptAsksMessage,
   acceptChangesStatus,
-  acceptDiagnosticsMessage,
+  acceptDiagnosticsReport,
   type PageDiagnostics,
   acceptOutlineActive,
   acceptOutlineMessage,
@@ -113,9 +115,13 @@ const reportedRenderIssues: Record<string, { key: string; text: string; at: numb
 const RENDER_ISSUES_COUNT_REPOST_MS = 60_000;
 /** How long a frame's diagnostics must hold still before they're reported. */
 const RENDER_ISSUES_REPORT_DELAY_MS = 1500;
+/** The longest a report waits from its first observation: a page whose errors
+ *  keep recurring faster than the settle delay still reports (the latest
+ *  coalesced counts) instead of resetting the timer forever. */
+const RENDER_ISSUES_REPORT_MAX_WAIT_MS = 5000;
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
-const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
+const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, scriptFor: annotatorScript, sanitize: sanitizePageHtml, prepare: PAGE_MERMAID_PREPARE };
 const NO_MARKS: ChangeLocator[] = [];
 
 /** #714 — the pointing toggle's shortcut, as shown on this platform. */
@@ -269,7 +275,12 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   }, []);
   const frameOwnsFocusRef = useRef(frameOwnsFocus);
   frameOwnsFocusRef.current = frameOwnsFocus;
-  const [found, setFound] = useState<boolean[] | null>(null);
+  // The frame's last found report, bound to the artifact and pin list it was
+  // computed from: positional flags are used only while both still match, so
+  // a delayed report after a delete / insert / reorder (or for another page)
+  // can't mark the wrong comment Orphaned. Unmatched = not yet checked.
+  const [foundReport, setFoundReport] = useState<{ forId: string; key: string; found: boolean[] } | null>(null);
+  const found = foundReport && foundReport.forId === artifact.id && foundReport.key === pinsKey ? foundReport.found : null;
   const [running, setRunning] = useState(false);
   // #714 gaps 7+8 — the review queue and the composer beside its anchor.
   const queue = useMemo(
@@ -357,8 +368,17 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const optsIntoDark = useMemo(() => pageOptsIntoDark(page.html), [page.html]);
   const pageDark = companionDark && optsIntoDark;
   // #714 gap 12 — the frame's render diagnostics (script errors, assets that
-  // didn't load, policy blocks). Per frame mount: Run remounts the frame.
-  const [diagnostics, setDiagnostics] = useState<PageDiagnostics | null>(null);
+  // didn't load, policy blocks), bound to the frame DOCUMENT that reported
+  // them: PrototypeFrame mints an id per srcdoc, injects it into that
+  // document's annotator and sets it on the iframe (data-dp-doc). Only
+  // reports naming the id of the srcdoc the frame shows NOW are accepted.
+  // srcDoc updates can reuse the iframe's WindowProxy, so the source check
+  // alone would let an old document's queued ready or report through after a
+  // revision; the expected id doesn't. A revision that leaves the document
+  // live (a version-only change, unchanged srcdoc) keeps its report.
+  const frameDocRef = useRef<string | null>(null);
+  const [diagState, setDiagState] = useState<{ doc: string; id: string; diag: PageDiagnostics } | null>(null);
+  const diagnostics = diagState && diagState.doc === frameDocRef.current && diagState.id === artifact.id ? diagState.diag : null;
 
   // #714 gap 2 — what changed since the previous version: a block diff of the
   // two versions' PARSED text (DOMParser, inert; nothing runs), highlighted in
@@ -486,7 +506,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       }
       const status = acceptPinsStatusReport(event, frame);
       if (status) {
-        setFound(status.found);
+        setFoundReport({ forId: artifactIdRef.current, key: status.key ?? "", found: status.found });
         if (!runningRef.current) setAskPinStatus({ forId: artifactIdRef.current, key: status.key ?? "", found: status.found });
         return;
       }
@@ -539,9 +559,9 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       // #714 gap 12 — render diagnostics are accepted after Run too (that is
       // when script errors happen). Display-only: a passive banner (text) and
       // a bounded note to the agent about its own page; never an action.
-      const diag = acceptDiagnosticsMessage(event, frame);
+      const diag = acceptDiagnosticsReport(event, frame);
       if (diag) {
-        setDiagnostics(diag);
+        if (diag.doc === frameDocRef.current) setDiagState({ doc: diag.doc, id: artifactIdRef.current, diag: diag.diagnostics });
         return;
       }
       const changeStatus = acceptChangesStatus(event, frame);
@@ -583,32 +603,66 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   }, [sendChanges]);
   // A remounted frame (Run) reports fresh pin status after its "ready".
   useEffect(() => {
-    setFound(null);
+    setFoundReport(null);
     setChangesFound(null);
     setHover(null);
-    setDiagnostics(null);
   }, [running]);
-  useEffect(() => {
-    setDiagnostics(null);
-  }, [artifact.id]);
   // #714 gap 12 — tell the agent (check_feedback) on the render-failure lane,
-  // under the page's reserved visual id, once the report settles. Never from a
-  // read-only page (closed, or a replay).
+  // under the page's reserved visual id, once the report settles: a trailing
+  // delay, bounded from the first observation (recurring errors can't starve
+  // it), sending the latest coalesced summary. The pending report carries the
+  // frame document it was observed on and is dropped if that document is no
+  // longer current. Never from a read-only page (closed, or a replay).
+  const offline = useOfflineReason() !== null;
+  const pendingReportRef = useRef<{ doc: string; id: string; key: string; summary: string; firstAt: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  useEffect(() => () => {
+    if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
+    pendingReportRef.current = null;
+  }, []);
+  // The document the frame shows now: PrototypeFrame reports the id minted
+  // for its current srcdoc whenever it changes (a new srcdoc or iframe, as at
+  // Run, a Mermaid prepare landing or a theme flip, even without a render
+  // here), from the commit that sets that srcdoc, so before the document can
+  // post. The old document's report (banner, pending post) is dropped and its
+  // late messages no longer match.
+  const onDocChange = useCallback((doc: string | null) => {
+    if (doc === frameDocRef.current) return;
+    frameDocRef.current = doc;
+    if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
+    pendingReportRef.current = null;
+    setDiagState(null);
+  }, []);
   useEffect(() => {
-    if (readOnly || !hasDiagnostics(diagnostics)) return;
-    const summary = diagnosticsAgentSummary(diagnostics, { version: artifact.version, running });
-    if (!summary) return;
+    const drop = () => {
+      if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
+      pendingReportRef.current = null;
+    };
+    // Only a report from the CURRENT frame document, for this artifact.
+    // Offline: hold the report (the latch below stays unset) and re-run on reconnect.
+    if (offline) return drop();
+    if (readOnly || !diagState || diagState.doc !== frameDocRef.current || diagState.id !== artifact.id || !hasDiagnostics(diagState.diag)) return drop();
+    const doc = diagState.doc;
+    const summary = diagnosticsAgentSummary(diagState.diag, { version: artifact.version, running });
+    if (!summary) return drop();
     const id = artifact.id;
     const key = diagnosticsWakeKey(summary);
     const last = reportedRenderIssues[id];
-    if (last && last.key === key && (last.text === summary || Date.now() - last.at < RENDER_ISSUES_COUNT_REPOST_MS)) return;
-    const t = setTimeout(() => {
-      reportedRenderIssues[id] = { key, text: summary, at: Date.now() };
+    if (last && last.key === key && (last.text === summary || Date.now() - last.at < RENDER_ISSUES_COUNT_REPOST_MS)) return drop();
+    const prev = pendingReportRef.current;
+    const now = Date.now();
+    const firstAt = prev && prev.doc === doc && prev.id === id ? prev.firstAt : now;
+    drop();
+    const fire = () => {
+      const p = pendingReportRef.current;
+      pendingReportRef.current = null;
+      if (!p || p.doc !== frameDocRef.current || p.id !== artifactIdRef.current) return;
+      reportedRenderIssues[p.id] = { key: p.key, text: p.summary, at: Date.now() };
       // No title: the daemon names the page from its own record.
-      void useArtifactStore.getState().reportRenderFailure(id, PAGE_RENDER_ISSUES_VISUAL_ID, summary);
-    }, RENDER_ISSUES_REPORT_DELAY_MS);
-    return () => clearTimeout(t);
-  }, [diagnostics, readOnly, running, artifact.id, artifact.version]);
+      void useArtifactStore.getState().reportRenderFailure(p.id, PAGE_RENDER_ISSUES_VISUAL_ID, p.summary);
+    };
+    const delay = Math.max(0, Math.min(RENDER_ISSUES_REPORT_DELAY_MS, firstAt + RENDER_ISSUES_REPORT_MAX_WAIT_MS - now));
+    pendingReportRef.current = { doc, id, key, summary, firstAt, timer: setTimeout(fire, delay) };
+  }, [diagState, readOnly, running, artifact.id, artifact.version, offline]);
   useEffect(() => {
     setHighlightId(null);
     setHover(null);
@@ -1273,6 +1327,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
               annotation={PAGE_ANNOTATION}
               iframeRef={iframeRef}
               onRunningChange={onRunningChange}
+              onDocChange={onDocChange}
             />
             {hoverEntry && (
               <div

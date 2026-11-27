@@ -8,6 +8,8 @@ import { readPageSource } from "../mcp/tools/present-page.js";
 import { validateRevisePageInput } from "../mcp/validate-tool-input.js";
 import { artifactProposal } from "../mcp/artifact-preflight.js";
 import { preflightRejectedApproaches, persistPreflightTrace } from "../mcp/tool-helpers.js";
+import { ERROR_CODES } from "../error-codes.js";
+import { StandaloneCloseoutError } from "./standalone-closeout.js";
 import { relocatePageComments } from "../mcp/page-anchor-relocate.js";
 
 /**
@@ -66,8 +68,10 @@ export interface PageWatchDeps {
   projectRoot: string;
   getStore: (sessionId: string) => FileStore | undefined;
   broadcast: (sessionId: string, event: unknown) => void;
-  /** A session is watched only while its wrapper is registered. */
+  /** Whether a wrapper or standalone review can own a watch. */
   isSessionLive?: (sessionId: string) => boolean;
+  /** Standalone saves acquire a permit before any effects. */
+  admitWatchedWrite?: (sessionId: string) => Promise<(() => void) | undefined> | undefined;
   log?: (msg: string) => void;
   /** Directory watcher. Default fs.watch; tests pass a fake they can fire. */
   watch?: (dir: string, listener: (event: string, filename: string | Buffer | null) => void) => PageDirWatcher;
@@ -100,6 +104,7 @@ interface Entry {
    *  current describes a save that has since been overwritten. */
   gen: number;
   processing: Promise<void> | null;
+  draining: Promise<void> | null;
   stopped: boolean;
 }
 
@@ -179,9 +184,12 @@ export class PageWatcher {
   /** Resolves once no read/record is in flight for the session's watches. */
   async idle(sessionId?: string): Promise<void> {
     for (;;) {
-      const busy = [...this.entries.values()].filter((e) => (!sessionId || e.sessionId === sessionId) && e.processing);
+      const busy = [...this.entries.values()]
+        .filter((e) => !sessionId || e.sessionId === sessionId)
+        .map((e) => e.draining ?? e.processing)
+        .filter((work) => work !== null);
       if (busy.length === 0) return;
-      await Promise.all(busy.map((e) => e.processing));
+      await Promise.allSettled(busy);
     }
   }
 
@@ -224,6 +232,45 @@ export class PageWatcher {
     for (const e of [...this.entries.values()]) if (e.sessionId === sessionId) this.stop(e);
   }
 
+  /** Bypass quiet/rate timers only for work already observed at the cut. */
+  async drainQueuedSaves(sessionId: string): Promise<void> {
+    const drains = [...this.entries.values()].filter((entry) =>
+      entry.sessionId === sessionId && (entry.dirty || entry.processing || entry.draining),
+    ).map((entry) => {
+      const generation = entry.gen;
+      const checkGeneration = () => {
+        if (entry.gen !== generation || entry.dirty) {
+          throw new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
+            "A watched save changed while the standalone review was closing. Let it settle, then retry End review.");
+        }
+      };
+      if (entry.draining) return entry.draining.then(checkGeneration);
+      if (entry.quiet) clearTimeout(entry.quiet);
+      entry.quiet = null;
+      entry.draining = Promise.resolve().then(async () => {
+        await entry.processing;
+        if (entry.stopped) return;
+        const queued = entry.dirty;
+        entry.dirty = false;
+        try {
+          checkGeneration();
+          if (queued) await this.processAdmitted(entry);
+          checkGeneration();
+        } catch (error) {
+          entry.dirty = true;
+          throw error;
+        }
+      }).finally(() => {
+        entry.draining = null;
+        if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
+      });
+      return entry.draining;
+    });
+    // Keep the reservation until every entry settles, even if one failed.
+    const failed = (await Promise.allSettled(drains)).find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
+
   dispose(): void {
     this.disposed = true;
     for (const e of [...this.entries.values()]) this.stop(e);
@@ -257,6 +304,7 @@ export class PageWatcher {
       dirty: false,
       gen: 0,
       processing: null,
+      draining: null,
       stopped: false,
     };
     this.entries.set(this.key(sessionId, a.id), entry);
@@ -311,7 +359,7 @@ export class PageWatcher {
     entry.dirty = true;
     entry.gen++;
     // A read in flight reschedules itself when it finishes (dirty).
-    if (entry.processing) return;
+    if (entry.processing || entry.draining) return;
     this.arm(entry, this.quietMs);
   }
 
@@ -323,7 +371,7 @@ export class PageWatcher {
 
   private fire(entry: Entry): void {
     entry.quiet = null;
-    if (entry.stopped) return;
+    if (entry.stopped || entry.draining) return;
     const wait = entry.lastRecordAt ? entry.lastRecordAt + this.minIntervalMs - Date.now() : 0;
     if (wait > 0) {
       this.arm(entry, wait);
@@ -331,14 +379,30 @@ export class PageWatcher {
     }
     entry.dirty = false;
     entry.processing = this.process(entry)
-      .catch((err) => this.log(`could not record ${entry.sourcePath}: ${String((err as Error)?.message ?? err)}`))
+      .catch((err) => {
+        if (entry.draining) entry.dirty = true;
+        this.log(`could not record ${entry.sourcePath}: ${String((err as Error)?.message ?? err)}`);
+      })
       .finally(() => {
         entry.processing = null;
-        if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
+        if (entry.dirty && !entry.stopped && !entry.draining) this.arm(entry, this.quietMs);
       });
   }
 
   private async process(entry: Entry): Promise<void> {
+    const generation = entry.gen;
+    const admission = this.deps.admitWatchedWrite?.(entry.sessionId);
+    const release = admission ? await admission : undefined;
+    if (admission && !release) return;
+    try {
+      if (entry.stopped || this.disposed || entry.gen !== generation) return;
+      await this.processAdmitted(entry);
+    } finally {
+      release?.();
+    }
+  }
+
+  private async processAdmitted(entry: Entry): Promise<void> {
     const store = this.deps.getStore(entry.sessionId);
     if (!store) return;
     // Codex review — the snapshot this read is about. A save that lands while
@@ -434,7 +498,7 @@ export class PageWatcher {
       return;
     }
 
-    this.record(store, entry, cur, content, pre.trace);
+    await this.record(store, entry, cur, content, pre.trace);
   }
 
   /** Has the file moved on from the snapshot this read saw? Decided by the
@@ -475,7 +539,7 @@ export class PageWatcher {
     if (updated) this.deps.broadcast(entry.sessionId, { type: "artifact_content_updated", artifact: updated });
   }
 
-  private record(store: FileStore, entry: Entry, cur: Artifact, content: Record<string, unknown>, trace: Parameters<typeof persistPreflightTrace>[4]): void {
+  private async record(store: FileStore, entry: Entry, cur: Artifact, content: Record<string, unknown>, trace: Parameters<typeof persistPreflightTrace>[4]): Promise<void> {
     if (entry.stopped || this.disposed) return;
     const newId = `art_${nanoid(10)}`;
     let created: Artifact;
@@ -536,13 +600,17 @@ export class PageWatcher {
     this.log(`recorded ${newId} (v${cur.version + 1}) from ${entry.sourcePath}; ${rel.orphaned.length + rel.orphanedOverflow} comment(s) orphaned`);
 
     const bc = (event: unknown) => this.deps.broadcast(entry.sessionId, event);
-    void persistPreflightTrace(store, bc, created, "page_watch", trace).catch(() => undefined);
-    const fresh = store.getArtifacts().find((a) => a.id === newId) ?? created;
-    bc({ type: "artifact_created", artifact: fresh });
-    bc({ type: "artifact_updated", artifactId: cur.id, status: "superseded" });
-    const secrets = fresh.secretWarnings ?? [];
-    if (secrets.length > 0) {
-      bc({ type: "secret_warning", artifactId: newId, patterns: secrets.map((m) => m.pattern), labels: secrets.map((m) => m.label) });
+    const traceRecorded = persistPreflightTrace(store, bc, created, "page_watch", trace).catch(() => undefined);
+    try {
+      const fresh = store.getArtifacts().find((a) => a.id === newId) ?? created;
+      bc({ type: "artifact_created", artifact: fresh });
+      bc({ type: "artifact_updated", artifactId: cur.id, status: "superseded" });
+      const secrets = fresh.secretWarnings ?? [];
+      if (secrets.length > 0) {
+        bc({ type: "secret_warning", artifactId: newId, patterns: secrets.map((m) => m.pattern), labels: secrets.map((m) => m.label) });
+      }
+    } finally {
+      await traceRecorded;
     }
   }
 }

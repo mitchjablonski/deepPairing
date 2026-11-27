@@ -284,7 +284,8 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     const question = "Where is the recovery procedure documented?";
     await composer.getByLabel("Comment on the selected spot").fill(question);
     await composer.getByRole("button", { name: "Ask", exact: true }).click();
-    await expect(composer.getByText(question, { exact: true })).toBeVisible();
+    // The posted thread message, not the draft textarea that still holds the text while send settles.
+    await expect(composer.getByText(question, { exact: true }).and(page.locator(":not(textarea)"))).toBeVisible();
 
     const rejectedText = "Keep a local replay file.";
     const rejectedReason = "A replay file can unexpectedly fill the disk.";
@@ -385,6 +386,22 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
       isError: true, code: "parent_superseded", currentArtifactId: revised.artifactId, currentVersion: 2,
     });
 
+    // #714 gap 11 — a <pre class="mermaid"> block is rendered to SVG by the
+    // companion's ISOLATED renderer frame (real Mermaid in a real browser:
+    // opaque-origin sandbox + no-network CSP), with Mermaid's node ids kept
+    // for the annotator's diagram-node anchor (Mermaid 11 nodes carry no
+    // data-id; the annotator reads the `-flowchart-<id>-N` id).
+    const mermaidFile = path.join(root, "mermaid-page.html");
+    await fs.writeFile(mermaidFile, '<h1>Flow</h1><pre class="mermaid">flowchart LR\n  Start[Start here] --&gt; Done[Done]</pre>');
+    const mermaidPage = JSON.parse((await run(project, "present", "page", "--session-id", resumed.sessionId,
+      "--request-id", randomUUID(), "--file", mermaidFile, "--title", "Mermaid page")).stdout);
+    await page.locator(`button[data-artifact-item="${mermaidPage.artifactId}"]`).click();
+    const mermaidFrame = page.locator(`[data-dp-pane][data-artifact-id="${mermaidPage.artifactId}"]:not([inert])`)
+      .getByTestId("page-artifact").frameLocator("iframe");
+    await expect(mermaidFrame.locator('[data-dp-mermaid="rendered"] svg g.node[id$="-flowchart-Start-0"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('iframe[data-dp-mermaid-renderer][sandbox="allow-scripts"]')).toHaveCount(1);
+    await expect(mermaidFrame.locator("pre.mermaid")).toHaveCount(0);
+    await expect(mermaidFrame.locator("[data-dp-mermaid-note]")).toHaveCount(0);
     await page.goto("about:blank");
     await stopProjectDaemon(project);
     await receipt("resume", resumed.sessionId);

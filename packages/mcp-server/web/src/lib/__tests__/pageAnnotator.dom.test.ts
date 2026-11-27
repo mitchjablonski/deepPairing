@@ -438,10 +438,88 @@ describe("annotator main — event wiring", () => {
     expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
   });
 
-  it("the badge sits fully outside the anchored element's top-left corner", () => {
-    window.dispatchEvent(pinsMsg());
-    expect(badges()[0]!.style.getPropertyValue("left")).toBe("-20px");
-    expect(badges()[0]!.style.getPropertyValue("top")).toBe("-20px");
+  /** Real-ish geometry: every page element has `anchor`'s box; a badge's box
+   *  follows its pin's and its own left/top (so placement is measurable);
+   *  `under(x, y)` is what the page has at a point. */
+  function geometry(anchor: { left: number; top: number; width: number; height: number }, under: (x: number, y: number) => Element) {
+    (document as any).elementsFromPoint = (x: number, y: number) => [under(x, y)];
+    const box = (left: number, top: number, width: number, height: number) =>
+      ({ x: left, y: top, left, top, width, height, right: left + width, bottom: top + height, toJSON: () => ({}) }) as DOMRect;
+    return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.localName === "dp-annotator-badge") {
+        const pin = this.parentElement as HTMLElement;
+        const px = (el: HTMLElement, k: string) => parseFloat(el.style.getPropertyValue(k)) || 0;
+        return box(px(pin, "left") + px(this, "left"), px(pin, "top") + px(this, "top"), 18, 18);
+      }
+      return box(anchor.left, anchor.top, anchor.width, anchor.height);
+    });
+  }
+  const badgeBox = () => badges()[0]!.getBoundingClientRect();
+  const onePin = () => window.dispatchEvent(new MessageEvent("message", {
+    data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }], states: ["open"], ids: ["c_a"] },
+    source: window,
+  }));
+
+  it("the badge sits fully outside the anchored element's top-left corner when that is on screen", () => {
+    const rect = geometry({ left: 100, top: 100, width: 300, height: 40 }, () => document.body);
+    try {
+      window.dispatchEvent(pinsMsg());
+      expect(badges()[0]!.style.getPropertyValue("left")).toBe("-20px");
+      expect(badges()[0]!.style.getPropertyValue("top")).toBe("-20px");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it.each([
+    ["a full-bleed anchor at x=0", { left: 0, top: 100, width: 1024, height: 40 }],
+    ["an anchor at the common 8px margin", { left: 8, top: 100, width: 200, height: 40 }],
+    ["an anchor flush with the right edge", { left: 824, top: 100, width: 200, height: 40 }],
+    ["an anchor at the document's top edge", { left: 0, top: 0, width: 1024, height: 40 }],
+  ])("the badge stays fully on screen (and live over plain text) for %s", (_label, anchor) => {
+    const rect = geometry(anchor, () => document.body);
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("an edge badge skips a spot over a native control for one clear of it", () => {
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"field\">");
+    const field = document.getElementById("field")!;
+    // A control just right of the anchor: the outside-right spot is taken.
+    const rect = geometry({ left: 8, top: 100, width: 200, height: 40 }, (x) => (x >= 200 ? field : document.body));
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThan(200);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("when every on-screen spot covers a native control, the badge stays visible but inert", () => {
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"field\">");
+    const field = document.getElementById("field")!;
+    const rect = geometry({ left: 0, top: 100, width: 300, height: 40 }, () => field);
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+      badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    } finally {
+      rect.mockRestore();
+    }
   });
 
   it("without hit-testing (no elementsFromPoint) every badge stays inert: what lies under it is unknown", () => {
@@ -1479,9 +1557,27 @@ describe("annotator core — section context and element affixes (#714 gap 10)",
     const core = ctxCore();
     const cards = document.querySelectorAll("div");
     // Card A: locator +1, prefix "X" +2 = 3. Card B: prefix "X" +2, section b +1 = 3.
-    const hit = core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "X", section: { id: "b" } });
-    expect(hit?.el).toBe(cards[0]);
+    // Without a saved section the matching-context locator takes the tie.
     expect(core.findAnchor({ kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card" })?.el).toBe(cards[0]);
+  });
+
+  it("REVIEW: after a section reorder the stale locator loses the tie to the candidate in the saved section", () => {
+    // v1: the card was in section "a", first on the page. v2: the sections swapped
+    // places with the same heading text and the same surrounding text, so the old
+    // locator now points at section b's card. Both cards score 5 (locator+prefix+
+    // suffix vs prefix+suffix+section); the saved section must decide, not the locator.
+    document.body.innerHTML =
+      '<h2 id="b">X</h2><div>Card</div><p>end</p><h2 id="a">X</h2><div>Card</div><p>end</p>';
+    const core = ctxCore();
+    const cards = document.querySelectorAll("div");
+    const anchor = { kind: "element", locator: "body > div:nth-of-type(1)", quote: "Card", prefix: "X", suffix: "end", section: { id: "a" } };
+    expect(core.findAnchor(anchor)?.el).toBe(cards[1]);
+    // The locator still wins when it IS in the saved section.
+    expect(core.findAnchor({ ...anchor, section: { id: "b" } })?.el).toBe(cards[0]);
+    // Two in-section candidates tied with a stale locator: not found, never a guess.
+    document.body.innerHTML =
+      '<h2 id="b">X</h2><div>Card</div><p>end</p><h2 id="a">X</h2><div>Card</div><p>end</p><h3>X</h3><section id="a"><div>Card</div></section><p>end</p>';
+    expect(core.findAnchor(anchor)).toBeNull();
   });
 
   it("REVIEW: a moved element is not found rather than pinned on the element now at its old locator", () => {
@@ -1527,6 +1623,57 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
     Object.defineProperty(ev, "effectiveDirective", { value: directive });
     document.dispatchEvent(ev);
   };
+
+  it("REVIEW: ready and every diagnostics report carry this document's instance id, distinct per document", () => {
+    if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+    const ready = posted.find((m) => m?.dp === "ready");
+    expect(ready.doc).toMatch(/^[0-9a-f]{32}$/);
+    scriptError("TypeError: x");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics().at(-1).doc).toBe(ready.doc);
+    // Another document (a reload): another id.
+    posted.length = 0;
+    const second = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+    try {
+      if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+      const again = posted.find((m) => m?.dp === "ready");
+      expect(again.doc).toMatch(/^[0-9a-f]{32}$/);
+      expect(again.doc).not.toBe(ready.doc);
+    } finally {
+      second();
+    }
+  });
+
+  it("REVIEW: a one-off error before ready is held until ready, then sent as the full snapshot right after it", () => {
+    uninstall();
+    posted.length = 0;
+    Object.defineProperty(document, "readyState", { get: () => "loading", configurable: true });
+    try {
+      uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore()) as () => void;
+      scriptError("TypeError: early");
+      vi.advanceTimersByTime(1000);
+      // Nothing is published before ready (the parent has nothing to bind it to).
+      expect(posted.filter((m) => m?.dp === "ready" || m?.dp === "diagnostics")).toEqual([]);
+      window.dispatchEvent(new Event("load"));
+      const seq = posted.filter((m) => m?.dp === "ready" || m?.dp === "diagnostics").map((m) => m.dp);
+      expect(seq).toEqual(["ready", "diagnostics"]);
+      expect(diagnostics()[0].scriptErrors.count).toBe(1);
+    } finally {
+      delete (document as any).readyState;
+    }
+  });
+
+  it("REVIEW: an injected document id is used on ready and diagnostics", () => {
+    uninstall();
+    posted.length = 0;
+    const doc = "00112233445566778899aabbccddeeff";
+    uninstall = new Function("document", "window", "parent", "core", "DP_DOC", ANNOTATOR_MAIN_SOURCE)(document, window, window, makeCore(), doc) as () => void;
+    if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
+    expect(posted.find((m) => m?.dp === "ready").doc).toBe(doc);
+    scriptError("TypeError: x");
+    vi.advanceTimersByTime(300);
+    expect(diagnostics().at(-1).doc).toBe(doc);
+  });
 
   it("posts nothing on a clean page", () => {
     vi.advanceTimersByTime(1000);
@@ -1593,6 +1740,19 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
     expect(d.blocked).toHaveLength(8);
   });
 
+  it("REVIEW: past the key cap the retained keys are canonical (allowlist order), not the first discovered", () => {
+    // Discovered in reverse allowlist order, more than the 8-key cap.
+    for (const dir of [...PAGE_CSP_DIRECTIVES.slice(0, 12)].reverse()) cspViolation(dir);
+    for (const cls of [...PAGE_ERROR_CLASSES.slice(0, 12)].reverse()) {
+      window.dispatchEvent(new ErrorEvent("error", { message: "x", error: { name: cls } }));
+    }
+    cspViolation("not-a-directive");
+    vi.advanceTimersByTime(300);
+    const d = diagnostics().at(-1);
+    expect(d.blocked.map((b: { key: string }) => b.key)).toEqual(PAGE_CSP_DIRECTIVES.slice(0, 8));
+    expect(d.scriptErrors.classes.map((c: { key: string }) => c.key)).toEqual(PAGE_ERROR_CLASSES.slice(0, 8));
+  });
+
   it("maps a resource outside the allowlist to 'other resource' and an unknown directive to 'other'; xlink:href is 'href'", () => {
     document.body.insertAdjacentHTML("beforeend", '<custom-el id="c" src="x"></custom-el><svg><image id="si" xlink:href="a.png"/></svg>');
     document.getElementById("si")!.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "a.png");
@@ -1602,7 +1762,8 @@ describe("annotator main — render diagnostics (#714 gap 12)", () => {
     vi.advanceTimersByTime(300);
     const d = diagnostics().at(-1);
     expect(d.resources).toEqual([{ key: "image href", count: 1 }]);
-    expect(d.blocked).toEqual([{ key: "other", count: 1 }, { key: "img-src", count: 1 }]);
+    // Canonical order: allowlist position, the catch-all last.
+    expect(d.blocked).toEqual([{ key: "img-src", count: 1 }, { key: "other", count: 1 }]);
   });
 
   it("names an unparseable directive 'other', ignores our own nodes, and coalesces bursts into one report per change", () => {
@@ -1826,6 +1987,9 @@ describe("annotator main — keyboard comment mode and touch (#714 gap 9)", () =
     const down = new Event("pointerdown", { bubbles: true });
     Object.defineProperty(down, "pointerType", { value: "touch" });
     document.body.dispatchEvent(down);
+    // Away from the viewport edges, so the outside-top-left spot fits.
+    const title = document.getElementById("title")!;
+    title.getBoundingClientRect = () => ({ left: 100, top: 100, right: 150, bottom: 120, width: 50, height: 20, x: 100, y: 100, toJSON() {} }) as DOMRect;
     window.dispatchEvent(new MessageEvent("message", {
       data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }], ids: ["c1"] },
       source: window,

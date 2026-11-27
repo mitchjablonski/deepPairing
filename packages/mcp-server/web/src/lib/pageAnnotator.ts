@@ -542,7 +542,7 @@ function findAnchor(a) {
     var sc = support(a, cands[i].el, bodyIndex, cands[i].fromLocator, heads);
     if (sc >= 0) {
       out.push({ el: cands[i].el, range: null, score: sc, fromLocator: cands[i].fromLocator,
-        ctx: cands[i].fromLocator ? contextMatches(a, cands[i].el, bodyIndex) : false });
+        ctx: contextMatches(a, cands[i].el, bodyIndex), sec: heads ? sectionBonus(a, cands[i].el, heads) > 0 : false });
     }
   }
   return pickBest(out);
@@ -559,7 +559,11 @@ function contextMatches(a, el, bodyIndex) {
  *  wins only if its surrounding text also matches the saved prefix/suffix
  *  (#714 gap 10: "found where it was, in the same context"); otherwise a tie
  *  is "not found", never a guess (an element that merely moved into the old
- *  locator's place must not take the pin). */
+ *  locator's place must not take the pin). A locator element outside the
+ *  saved section loses that tie-break when a tied candidate sits in the saved
+ *  section (sections reordered: the old locator now points into the other
+ *  one); the single in-section candidate whose context also matches wins,
+ *  and several are still "not found". */
 function pickBest(list) {
   var best = null, tied = false, i;
   for (i = 0; i < list.length; i++) {
@@ -567,8 +571,15 @@ function pickBest(list) {
     else if (list[i].score === best.score) tied = true;
   }
   if (best && tied) {
-    var loc = null;
-    for (i = 0; i < list.length; i++) if (list[i].score === best.score && list[i].fromLocator && list[i].ctx) loc = list[i];
+    var loc = null, inSec = [];
+    for (i = 0; i < list.length; i++) {
+      if (list[i].score !== best.score) continue;
+      if (list[i].fromLocator && list[i].ctx) loc = list[i];
+      if (list[i].sec) inSec.push(list[i]);
+    }
+    if (loc && !loc.sec && inSec.length) {
+      return inSec.length === 1 && inSec[0].ctx ? { el: inSec[0].el, range: inSec[0].range } : null;
+    }
     if (loc) return { el: loc.el, range: loc.range };
   }
   return best && !tied ? { el: best.el, range: best.range } : null;
@@ -871,6 +882,28 @@ function own(el) {
   return false;
 }
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
+/** #714 gap 12 — this document's instance id, put on ready and diagnostics:
+ *  srcDoc updates can reuse the frame's WindowProxy, so the parent tells an
+ *  old document's late messages from the new document's by this id, not by
+ *  the message source. The companion mints it per srcdoc and injects it
+ *  (DP_DOC, a parameter of our wrapper, so page script can't read it from a
+ *  global) and accepts only the id it injected into the CURRENT srcdoc: an
+ *  old document's queued ready can never claim the new one. Without an
+ *  injected id (a harness), a random one. */
+var docId = (function () {
+  if (typeof DP_DOC === "string" && /^[0-9a-f]{16,64}$/.test(DP_DOC)) return DP_DOC;
+  var hex = "", i;
+  try {
+    var c = window.crypto || (typeof crypto !== "undefined" ? crypto : null);
+    var a = new Uint8Array(16);
+    c.getRandomValues(a);
+    for (i = 0; i < a.length; i++) hex += (a[i] < 16 ? "0" : "") + a[i].toString(16);
+  } catch (e) {
+    hex = "";
+    for (i = 0; i < 32; i++) hex += Math.floor(Math.random() * 16).toString(16);
+  }
+  return hex;
+})();
 function important(el, styles) {
   for (var k in styles) if (Object.prototype.hasOwnProperty.call(styles, k)) el.style.setProperty(k, styles[k], "important");
 }
@@ -1333,6 +1366,46 @@ function badgeCoversNative(badge) {
   for (var i = 0; i < pts.length; i++) if (nativeUnder(pageElAt(pts[i][0], pts[i][1]))) return true;
   return false;
 }
+/** Badge spots, in the pin box's coordinates (the box is the anchor +2px on
+ *  every side): outside top-left (preferred: never on the element itself),
+ *  outside top-right, then inside the anchor's top-left / top-right corners. */
+function badgeSpots(r, bw, hit) {
+  var w = r.width + 4, out = -(20 + 2 * (hit || 0));
+  return [[out, out], [w + 2, out], [4, 4], [w - 4 - bw, 4]];
+}
+/** Place the badge on the first spot that is fully inside the viewport
+ *  horizontally (and not above the document's top) AND clear of native
+ *  controls; else the first spot that is on screen (it stays inert); else
+ *  clamp it to the viewport edge. Returns badgeCoversNative() for the spot
+ *  chosen, so a badge over a control is never live. */
+function placeBadge(badge, r, hit) {
+  // #714 gap 9 — hit is the touch hit-area border on each side.
+  var bw = Math.max(18 + 2 * (hit || 0), badge.offsetWidth || 0);
+  var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var sy = window.scrollY || window.pageYOffset || 0;
+  var spots = badgeSpots(r, bw, hit), fallback = null;
+  function fits(s) {
+    var x = r.left - 2 + s[0], y = r.top - 2 + s[1];
+    return x >= 0 && (!vw || x + bw <= vw) && y + sy >= 0;
+  }
+  function put(s) { important(badge, { left: s[0] + "px", top: s[1] + "px" }); }
+  for (var i = 0; i < spots.length; i++) {
+    if (!fits(spots[i])) continue;
+    put(spots[i]);
+    if (!badgeCoversNative(badge)) return false;
+    if (!fallback) fallback = spots[i];
+  }
+  if (!fallback) {
+    // Nothing fits (e.g. an anchor scrolled partly out horizontally): clamp
+    // the outside-top-left spot into the viewport and the document.
+    var o = 22 + 2 * (hit || 0);
+    var x = Math.min(Math.max(r.left - o, 0), vw ? Math.max(vw - bw, 0) : Infinity);
+    var y = Math.max(r.top - o, -sy);
+    fallback = [x - (r.left - 2), y - (r.top - 2)];
+  }
+  put(fallback);
+  return badgeCoversNative(badge);
+}
 function setModHeld(v) {
   if (v === modHeld) return;
   modHeld = v;
@@ -1389,9 +1462,10 @@ function drawPins() {
     badge.textContent = String(j + 1);
     var id = pinIds[j];
     if (id && badgeIds) badgeIds.set(badge, id);
-    // Fully OUTSIDE the anchored element's top-left corner (the pin box is
-    // the element +2px; the 18px badge ends 2px before it), so it never sits
-    // on the element's own interactive area.
+    // Preferably fully OUTSIDE the anchored element's top-left corner (the
+    // pin box is the element +2px; the 18px badge ends 2px before it), so it
+    // never sits on the element's own interactive area; placeBadge() moves it
+    // to a viewport-visible spot clear of native controls when that's off-screen.
     // #714 gap 9 — on a touch screen the badge keeps its 18px look but takes
     // a 44px hit area (a transparent border; the background stops at it).
     var hit = coarse() ? 13 : 0, off = -(20 + 2 * hit);
@@ -1402,7 +1476,7 @@ function drawPins() {
       "pointer-events": "none", cursor: "default" });
     pin.appendChild(badge);
     l.appendChild(pin);
-    var ok = !!id && !!badgeIds && !!badgeOk && !badgeCoversNative(badge);
+    var ok = !!id && !!badgeIds && !!badgeOk && !placeBadge(badge, r, hit);
     if (badgeOk) badgeOk.set(badge, ok);
     var live = ok && badgesLive();
     if (live) important(badge, { "pointer-events": "auto", cursor: "pointer" });
@@ -1895,6 +1969,9 @@ function errClass(name, message) {
   return m && knownClass(m[1]) ? m[1] : "Error";
 }
 var diagSeen = typeof WeakSet === "function" ? new WeakSet() : null, diagPending = 0, lastDiagJson = "";
+/** Nothing is published before ready: until then the parent may not know
+ *  this document, and a report it dropped would be deduped away for good. */
+var readySent = false;
 function redactDiag(v) {
   var t = core.norm(v);
   t = t.replace(/\b(?:data|blob):[^\s"'<>()]*/gi, "[data URI]");
@@ -1907,9 +1984,12 @@ function diagSample(list, v) {
   var t = redactDiag(v);
   if (t && list.length < DIAG.samples && list.indexOf(t) === -1) list.push(t);
 }
+/** Every distinct key is kept (keys come from finite allowlists, so this is
+ *  bounded); the DIAG.keys cap is applied at report time, in canonical order
+ *  (see canonKeys), so the retained keys never depend on discovery order. */
 function diagKey(list, key) {
   for (var i = 0; i < list.length; i++) if (list[i].key === key) { list[i].count = diagBump(list[i].count); return; }
-  if (list.length < DIAG.keys) list.push({ key: key, count: 1 });
+  list.push({ key: key, count: 1 });
 }
 function diagHas(el, attr) {
   if (attr === "xlink:href") return !!(el.getAttributeNS && el.getAttributeNS(XLINK, "href") !== null);
@@ -1960,14 +2040,24 @@ function onDiagCsp(e) {
   diagKey(diag.blocked, d);
   scheduleDiag();
 }
-function copyKeys(list) { var out = []; for (var i = 0; i < list.length; i++) out.push({ key: list[i].key, count: list[i].count }); return out; }
+/** The first DIAG.keys keys in canonical order: allowlist position, the
+ *  catch-all ("Error" is listed; "other resource" / "other" are not) last.
+ *  Must rank as the shared pageRenderIssueKeyRank does. */
+function canonKeys(list, allow) {
+  var out = [];
+  for (var i = 0; i < list.length; i++) out.push({ key: list[i].key, count: list[i].count });
+  function rank(k) { var r = allow.indexOf(k); return r === -1 ? allow.length : r; }
+  out.sort(function (a, b) { return rank(a.key) - rank(b.key); });
+  return out.slice(0, DIAG.keys);
+}
 function reportDiag() {
   diagPending = 0;
+  if (!readySent) return;
   if (!diag.script && !diag.rejection && !diag.resources.length && !diag.blocked.length) return;
-  var msg = { dp: "diagnostics",
-    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: copyKeys(diag.scriptClasses) },
-    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice(), classes: copyKeys(diag.rejectionClasses) },
-    resources: copyKeys(diag.resources), blocked: copyKeys(diag.blocked) };
+  var msg = { dp: "diagnostics", doc: docId,
+    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: canonKeys(diag.scriptClasses, ERROR_CLASSES) },
+    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice(), classes: canonKeys(diag.rejectionClasses, ERROR_CLASSES) },
+    resources: canonKeys(diag.resources, RESOURCE_KEYS), blocked: canonKeys(diag.blocked, CSP_DIRECTIVES) };
   var json = JSON.stringify(msg);
   if (json !== lastDiagJson) { lastDiagJson = json; post(msg); }
 }
@@ -1977,7 +2067,12 @@ function scheduleDiag() {
 }
 function onReady() {
   if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
-  post({ dp: "ready" });
+  post({ dp: "ready", doc: docId });
+  // Ready opens publication: the full current snapshot follows at once,
+  // never suppressed by a dedupe from before ready.
+  readySent = true;
+  lastDiagJson = "";
+  if (diagPending) { clearTimeout(diagPending); diagPending = 0; }
   reportOutline();
   reportDiag();
 }
@@ -2036,9 +2131,18 @@ return function uninstall() {
 `;
 
 /** The script inlined first into the frame document. */
-export const ANNOTATOR_SCRIPT =
-  "(function(){try{var core=(function(document,window){" +
-  ANNOTATOR_CORE_SOURCE +
-  "\n})(document,window);(function(document,window,parent,core){" +
-  ANNOTATOR_MAIN_SOURCE +
-  "\n})(document,window,window.parent,core);}catch(e){}})();";
+/** The annotator script for one frame document. `doc` is the id the
+ *  companion minted for that srcdoc (#714 gap 12): it rides into the main
+ *  source as the DP_DOC parameter, never a global. Only a hex id is ever
+ *  embedded; anything else is dropped (the annotator then draws its own). */
+export function annotatorScript(doc?: string): string {
+  const id = typeof doc === "string" && /^[0-9a-f]{16,64}$/.test(doc) ? JSON.stringify(doc) : "undefined";
+  return (
+    "(function(){try{var core=(function(document,window){" +
+    ANNOTATOR_CORE_SOURCE +
+    "\n})(document,window);(function(document,window,parent,core,DP_DOC){" +
+    ANNOTATOR_MAIN_SOURCE +
+    "\n})(document,window,window.parent,core," + id + ");}catch(e){}})();"
+  );
+}
+export const ANNOTATOR_SCRIPT = annotatorScript();

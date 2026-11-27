@@ -1547,7 +1547,12 @@ export class FileStore implements IStore {
         : undefined;
       const updated = merged.map((comment) => {
         if (!selected.has(comment.id)) return comment;
-        const stamp = addressedIn && !comment.addressedIn ? { addressedIn } : {};
+        // Keep the NEWEST addressing revision: a later revision that explicitly
+        // re-addresses a reopened thread advances the stamp, while a same-receipt
+        // retry (equal version) or recovery of an older receipt never rolls it back.
+        // Page lineage versions are strictly increasing, so version order is lineage order.
+        const advances = addressedIn && (!comment.addressedIn || addressedIn.version > comment.addressedIn.version);
+        const stamp = advances ? { addressedIn } : {};
         return comment.acknowledged && !("addressedIn" in stamp) ? comment : { ...comment, acknowledged: true, ...stamp };
       });
       this.writePageRevisionComments(updated, filePath, diskBytes);

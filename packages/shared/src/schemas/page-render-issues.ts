@@ -72,8 +72,22 @@ export interface PageRenderIssues {
 /** Bounds: per kind, total length (the lane's 500-character cap). */
 export const PAGE_RENDER_ISSUES_LIMITS = { perKind: 8, maxCount: 9999, maxLength: 500 } as const;
 
+/** The largest version the grammar carries (HEAD_RE: at most six digits). */
+const PAGE_RENDER_ISSUES_MAX_VERSION = 999_999;
+
 export function pageErrorClass(name: unknown): string {
   return isPageErrorClass(name) ? name : "Error";
+}
+
+/** The canonical position of a key within its kind: its index in the kind's
+ *  allowlist, the catch-all ("other resource" / "other") last. Caps keep the
+ *  lowest-ranked keys, so the retained subset never depends on discovery
+ *  order. The annotator ranks the same way from its copies (parity test). */
+export function pageRenderIssueKeyRank(kind: PageRenderIssueKind, key: string): number {
+  const list: readonly string[] = kind === "script" || kind === "rejection" ? PAGE_ERROR_CLASSES
+    : kind === "resource" ? PAGE_RESOURCE_KEYS : PAGE_CSP_DIRECTIVES;
+  const i = list.indexOf(key);
+  return i === -1 ? list.length : i;
 }
 
 function validKey(kind: PageRenderIssueKind, key: string): boolean {
@@ -88,10 +102,13 @@ function validKey(kind: PageRenderIssueKind, key: string): boolean {
  * within the length cap. Returns null when nothing valid remains.
  */
 export function formatPageRenderIssues(p: PageRenderIssues): string | null {
-  if (!Number.isInteger(p.version) || p.version < 1 || p.version > 999_999) return null;
+  if (!Number.isInteger(p.version) || p.version < 1 || p.version > PAGE_RENDER_ISSUES_MAX_VERSION) return null;
   const merged: PageRenderIssueItem[] = [];
-  const perKind: Record<string, number> = {};
   for (const kind of PAGE_RENDER_ISSUE_KINDS) {
+    // Every distinct key of this kind first (the allowlists are finite, so
+    // this is bounded), then the canonical order, then the per-kind cap: the
+    // same keys always retain the same subset, whatever order they arrived in.
+    const ofKind: PageRenderIssueItem[] = [];
     for (const raw of p.items) {
       // A key outside its allowlist is mapped ("Error", "other resource",
       // "other"), never dropped.
@@ -100,21 +117,29 @@ export function formatPageRenderIssues(p: PageRenderIssues): string | null {
       const it = { ...raw, key };
       if (it.kind !== kind || !validKey(kind, it.key) || !Number.isInteger(it.count) || it.count < 1) continue;
       const count = Math.min(it.count, PAGE_RENDER_ISSUES_LIMITS.maxCount);
-      const same = merged.find((m) => m.kind === kind && m.key === it.key);
+      const same = ofKind.find((m) => m.key === it.key);
       if (same) { same.count = Math.min(same.count + count, PAGE_RENDER_ISSUES_LIMITS.maxCount); continue; }
-      if ((perKind[kind] ?? 0) >= PAGE_RENDER_ISSUES_LIMITS.perKind) continue;
-      perKind[kind] = (perKind[kind] ?? 0) + 1;
-      merged.push({ kind, key: it.key, count });
+      ofKind.push({ kind, key: it.key, count });
     }
+    ofKind.sort((a, b) => pageRenderIssueKeyRank(kind, a.key) - pageRenderIssueKeyRank(kind, b.key));
+    merged.push(...ofKind.slice(0, PAGE_RENDER_ISSUES_LIMITS.perKind));
   }
   if (merged.length === 0) return null;
   const head = `v${p.version} ${p.running ? "scripts-on" : "scripts-off"} | `;
-  let body = "";
+  // Which items fit is decided at the WIDEST encoding (largest version, the
+  // longer run state, every count at the cap), so the included subset, and
+  // with it the wake key, depends only on the kinds and keys: a count gaining
+  // a digit near the cap can never push a trailing item out and re-arm an
+  // acknowledged report. The actual text is no longer than that bound.
+  const widestHead = `v${PAGE_RENDER_ISSUES_MAX_VERSION} scripts-off | `.length;
+  const widestCount = String(PAGE_RENDER_ISSUES_LIMITS.maxCount).length;
+  let budget = widestHead, body = "";
   for (const m of merged) {
+    const widest = `${m.kind} ${m.key}=`.length + widestCount + (body ? 2 : 0);
+    if (budget + widest > PAGE_RENDER_ISSUES_LIMITS.maxLength) break;
+    budget += widest;
     const item = `${m.kind} ${m.key}=${m.count}`;
-    const next = body ? `${body}; ${item}` : item;
-    if (head.length + next.length > PAGE_RENDER_ISSUES_LIMITS.maxLength) break;
-    body = next;
+    body = body ? `${body}; ${item}` : item;
   }
   return body ? head + body : null;
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, pageDirective, pageErrorClass, pageResourceKey, type HtmlAnchor } from "@deeppairing/shared";
+import { HTML_ANCHOR_LIMITS, HtmlAnchorSchema, PAGE_ASK_LIMITS, pageDirective, pageErrorClass, pageRenderIssueKeyRank, pageResourceKey, type HtmlAnchor, type PageRenderIssueKind } from "@deeppairing/shared";
 import { LOCATOR_TEXT_MAX, MAX_CHANGE_MARKS } from "./pageVersionDiff";
 
 /**
@@ -66,6 +66,13 @@ export function isReadyMessage(event: FrameMessage, frame: Window | null | undef
   const d = fromFrame(event, frame);
   return !!d && d.dp === "ready";
 }
+
+/** #714 gap 12 — the per-document id PrototypeFrame mints for each srcdoc
+ *  and injects into that document's annotator, which puts it on its ready
+ *  and diagnostics messages. srcDoc updates can reuse the iframe's
+ *  WindowProxy, so the source check alone can't tell an old document's
+ *  queued messages from the new document's: the expected id can. */
+export const FrameDocSchema = z.string().regex(/^[0-9a-f]{16,64}$/);
 
 /** #714 — `{dp:"toggle-pointing"}` from this frame: the reviewer pressed the
  *  pointing shortcut while focus was inside the page. It can only flip the
@@ -301,6 +308,7 @@ const DirectiveKeySchema = z.string().min(1).max(64).transform((v) => pageDirect
 export const PageDiagnosticsMessageSchema = z
   .object({
     dp: z.literal("diagnostics"),
+    doc: FrameDocSchema,
     scriptErrors: DiagMessagesSchema,
     rejections: DiagMessagesSchema,
     resources: z.array(z.object({ key: ResourceKeySchema, count: DiagCountSchema.min(1) }).strict()).max(PAGE_DIAGNOSTICS_LIMITS.keys),
@@ -308,7 +316,7 @@ export const PageDiagnosticsMessageSchema = z
   })
   .strict();
 export type PageDiagnosticsMessage = z.infer<typeof PageDiagnosticsMessageSchema>;
-export type PageDiagnostics = Omit<PageDiagnosticsMessage, "dp">;
+export type PageDiagnostics = Omit<PageDiagnosticsMessage, "dp" | "doc">;
 
 /** A valid `{dp:"diagnostics"}` from this frame → the report; else null.
  *  DISPLAY-ONLY, and the one frame report still accepted after Run (that is
@@ -317,28 +325,43 @@ export type PageDiagnostics = Omit<PageDiagnosticsMessage, "dp">;
  *  closed page-issues grammar (never the samples). It never opens
  *  the composer, changes a filter, focuses anything, or posts a comment. */
 export function acceptDiagnosticsMessage(event: FrameMessage, frame: Window | null | undefined): PageDiagnostics | null {
+  return acceptDiagnosticsReport(event, frame)?.diagnostics ?? null;
+}
+
+/** acceptDiagnosticsMessage plus the frame document the report came from:
+ *  the parent accepts it only while that document is the current one. */
+export function acceptDiagnosticsReport(
+  event: FrameMessage,
+  frame: Window | null | undefined,
+): { doc: string; diagnostics: PageDiagnostics } | null {
   const d = fromFrame(event, frame);
   if (!d || d.dp !== "diagnostics") return null;
   const parsed = PageDiagnosticsMessageSchema.safeParse(d);
   if (!parsed.success) return null;
-  const { dp: _dp, ...rest } = parsed.data;
+  const { dp: _dp, doc, ...rest } = parsed.data;
+  return { doc, diagnostics: canonicalDiagnostics(rest) };
+}
+
+function canonicalDiagnostics(rest: PageDiagnostics): PageDiagnostics {
   // Keys mapped onto an allowlist can collide ("other resource"): merge them.
+  // Then canonical order (allowlist position, catch-all last), as the
+  // annotator and the shared grammar use, so the same keys read the same.
   return {
-    scriptErrors: { ...rest.scriptErrors, classes: mergeKeys(rest.scriptErrors.classes) },
-    rejections: { ...rest.rejections, classes: mergeKeys(rest.rejections.classes) },
-    resources: mergeKeys(rest.resources),
-    blocked: mergeKeys(rest.blocked),
+    scriptErrors: { ...rest.scriptErrors, classes: mergeKeys(rest.scriptErrors.classes, "script") },
+    rejections: { ...rest.rejections, classes: mergeKeys(rest.rejections.classes, "rejection") },
+    resources: mergeKeys(rest.resources, "resource"),
+    blocked: mergeKeys(rest.blocked, "blocked"),
   };
 }
 
-function mergeKeys(list: ReadonlyArray<{ key: string; count: number }>): Array<{ key: string; count: number }> {
+function mergeKeys(list: ReadonlyArray<{ key: string; count: number }>, kind: PageRenderIssueKind): Array<{ key: string; count: number }> {
   const out: Array<{ key: string; count: number }> = [];
   for (const x of list) {
     const same = out.find((o) => o.key === x.key);
     if (same) same.count = Math.min(same.count + x.count, PAGE_DIAGNOSTICS_LIMITS.max);
     else out.push({ key: x.key, count: x.count });
   }
-  return out;
+  return out.sort((a, b) => pageRenderIssueKeyRank(kind, a.key) - pageRenderIssueKeyRank(kind, b.key));
 }
 
 // --- #714 gap 9: keyboard commenting ---------------------------------------------
