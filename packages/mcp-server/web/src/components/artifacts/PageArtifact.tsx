@@ -12,6 +12,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { ANNOTATOR_SCRIPT } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
+import { PAGE_MERMAID_PREPARE } from "../../lib/pageMermaid";
 import {
   acceptAnchorMessage,
   acceptAsksMessage,
@@ -38,7 +39,7 @@ import { useRememberedRejections } from "../decision/NeverSuggestControl";
 import { askTextHash, commentAnswersAsk, isEarlierVersionComment, pageRuleOutKey } from "@deeppairing/shared";
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
-const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml };
+const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, sanitize: sanitizePageHtml, prepare: PAGE_MERMAID_PREPARE };
 const NO_MARKS: ChangeLocator[] = [];
 
 /** #714 — the pointing toggle's shortcut, as shown on this platform. */

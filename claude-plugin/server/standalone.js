@@ -25493,7 +25493,7 @@ var PAGE_STRUCTURE_RULES = [
   `Mark each thing your pair must decide with ${PAGE_DECISION_ATTR} and each question with ${PAGE_QUESTION_ATTR}, and give both an id.`,
   "Give other key elements (tables, rows, diagrams) stable ids too.",
   "Use a table for any comparison.",
-  "Draw diagrams as inline SVG, or paste pre-rendered SVG. Mermaid source is not rendered for you."
+  'Draw diagrams as Mermaid source in <pre class="mermaid"> (the companion renders it to SVG) or as inline SVG.'
 ];
 var PAGE_CONSTRAINT_RULES = [
   "No network. Scripts, stylesheets, fonts and images from a URL (CDNs included) are blocked. Inline styles and scripts as <style>/<script>, and images and fonts as data: URIs. Video, audio, iframes and objects won't load at all.",
@@ -25540,7 +25540,7 @@ var PAGE_SKELETON_HTML = `<!doctype html>
 </section>
 </body>
 </html>`;
-var PAGE_AUTHORING_TOOL_NOTE = `Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline styles and scripts, and images and fonts as data: URIs; video, audio, iframes and objects won't load). Its scripts run only when your pair clicks Run, so the page must read well without them. Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, inline SVG diagrams (Mermaid source is not rendered), <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.`;
+var PAGE_AUTHORING_TOOL_NOTE = `Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline styles and scripts, and images and fonts as data: URIs; video, audio, iframes and objects won't load). Its scripts run only when your pair clicks Run, so the page must read well without them. Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, diagrams as Mermaid source in <pre class="mermaid"> (the companion renders it) or inline SVG, <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.`;
 
 // ../../node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@4.4.3/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
 function isZ4Schema(s) {
@@ -39892,46 +39892,149 @@ function externalSrcsetCount(value) {
   }
   return count2;
 }
-function stripCssComments(css) {
-  let out = "";
-  let i = 0;
-  while (i < css.length) {
-    const open = css.indexOf("/*", i);
-    if (open === -1) {
-      out += css.slice(i);
-      break;
-    }
-    out += css.slice(i, open) + " ";
-    const close = css.indexOf("*/", open + 2);
-    if (close === -1) break;
-    i = close + 2;
-  }
-  return out;
+function isCssNewline(c) {
+  return c === 10 || c === 13 || c === 12;
 }
-function externalCssRefs(rawCss) {
-  const lower = stripCssComments(rawCss).toLowerCase();
+function isHexDigit(c) {
+  return c >= 48 && c <= 57 || c >= 97 && c <= 102 || c >= 65 && c <= 70;
+}
+function isNameChar(c) {
+  return isAlpha(c) || c >= 48 && c <= 57 || c === 95 || c === 45 || c >= 128;
+}
+function isEscapeAt(css, i) {
+  return css.charCodeAt(i) === 92 && i + 1 < css.length && !isCssNewline(css.charCodeAt(i + 1));
+}
+function consumeEscape(css, i) {
+  let j = i + 1;
+  if (isHexDigit(css.charCodeAt(j))) {
+    const hexStart = j;
+    while (j < css.length && j - hexStart < 6 && isHexDigit(css.charCodeAt(j))) j++;
+    const cp = parseInt(css.slice(hexStart, j), 16);
+    if (css.charCodeAt(j) === 13 && css.charCodeAt(j + 1) === 10) j += 2;
+    else if (isSpace2(css.charCodeAt(j))) j++;
+    const ok = cp > 0 && cp <= 1114111 && !(cp >= 55296 && cp <= 57343);
+    return [ok ? String.fromCodePoint(cp) : "\uFFFD", j];
+  }
+  return [css[j] ?? "", j + 1];
+}
+function consumeName(css, i) {
+  let name = "";
+  while (i < css.length) {
+    const c = css.charCodeAt(i);
+    if (isNameChar(c)) {
+      name += css[i];
+      i++;
+    } else if (isEscapeAt(css, i)) {
+      const [d, j] = consumeEscape(css, i);
+      name += d;
+      i = j;
+    } else break;
+  }
+  return [name, i];
+}
+function consumeString(css, i) {
+  const quote = css.charCodeAt(i);
+  let value = "";
+  i++;
+  while (i < css.length) {
+    const d = css.charCodeAt(i);
+    if (d === quote) return [value, i + 1];
+    if (isCssNewline(d)) return [value, i];
+    if (d === 92) {
+      if (i + 1 >= css.length) return [value, i + 1];
+      const e = css.charCodeAt(i + 1);
+      if (e === 13 && css.charCodeAt(i + 2) === 10) {
+        i += 3;
+        continue;
+      }
+      if (isCssNewline(e)) {
+        i += 2;
+        continue;
+      }
+      const [dec, j] = consumeEscape(css, i);
+      value += dec;
+      i = j;
+      continue;
+    }
+    value += css[i];
+    i++;
+  }
+  return [value, i];
+}
+function scanCss(css, onToken) {
+  const n = css.length;
+  let i = 0;
+  while (i < n) {
+    const c = css.charCodeAt(i);
+    if (c === 47 && css.charCodeAt(i + 1) === 42) {
+      const close = css.indexOf("*/", i + 2);
+      const end = close === -1 ? n : close + 2;
+      onToken({ kind: "comment", start: i, end });
+      i = end;
+    } else if (c === 34 || c === 39) {
+      const [value, j] = consumeString(css, i);
+      onToken({ kind: "string", value });
+      i = j;
+    } else if (isSpace2(c)) {
+      while (i < n && isSpace2(css.charCodeAt(i))) i++;
+      onToken({ kind: "space" });
+    } else if (c === 64 || c === 35) {
+      const [name, j] = consumeName(css, i + 1);
+      onToken(name ? { kind: c === 64 ? "at" : "hash", name: name.toLowerCase() } : { kind: "other" });
+      i = name ? j : i + 1;
+    } else if (isNameChar(c) || isEscapeAt(css, i)) {
+      const [rawName, j] = consumeName(css, i);
+      const name = rawName.toLowerCase();
+      if (name === "url" && css.charCodeAt(j) === 40) {
+        let k = j + 1;
+        while (k < n && isSpace2(css.charCodeAt(k))) k++;
+        const q = css.charCodeAt(k);
+        if (q === 34 || q === 39) {
+          const [value, m] = consumeString(css, k);
+          onToken({ kind: "url", value });
+          i = m;
+        } else {
+          let value = "";
+          while (k < n && css.charCodeAt(k) !== 41) {
+            if (isEscapeAt(css, k)) {
+              const [d, m] = consumeEscape(css, k);
+              value += d;
+              k = m;
+            } else {
+              value += css[k];
+              k++;
+            }
+          }
+          onToken({ kind: "url", value: value.trim() });
+          i = Math.min(k + 1, n);
+        }
+      } else {
+        onToken({ kind: "ident", name });
+        i = j;
+      }
+    } else if (c === 92) {
+      i += 2;
+    } else {
+      onToken({ kind: "other" });
+      i++;
+    }
+  }
+}
+function externalCssRefs(css) {
   const counts = { url: 0, import: 0 };
-  const target = (from) => {
-    let i = from;
-    while (i < lower.length && isSpace2(lower.charCodeAt(i))) i++;
-    if (lower[i] === '"' || lower[i] === "'") i++;
-    return i;
-  };
-  let at = lower.indexOf("@import");
-  while (at !== -1) {
-    let i = target(at + 7);
-    if (lower.startsWith("url(", i)) i = target(i + 4);
-    if (externalAt(lower, i)) counts.import++;
-    at = lower.indexOf("@import", at + 7);
-  }
-  at = lower.indexOf("url(");
-  while (at !== -1) {
-    let k = at - 1;
-    while (k >= 0 && isSpace2(lower.charCodeAt(k))) k--;
-    const isImportTarget = k >= 6 && lower.startsWith("@import", k - 6);
-    if (!isImportTarget && externalAt(lower, target(at + 4))) counts.url++;
-    at = lower.indexOf("url(", at + 4);
-  }
+  let afterImport = false;
+  scanCss(css, (t) => {
+    if (t.kind === "space" || t.kind === "comment") return;
+    if (afterImport) {
+      afterImport = false;
+      if (t.kind === "string" || t.kind === "url") {
+        if (isExternal(t.value)) counts.import++;
+        return;
+      }
+    }
+    if (t.kind === "at" && t.name === "import") afterImport = true;
+    else if (t.kind === "url" && isExternal(t.value)) counts.url++;
+  });
   return counts;
 }
 function readStartTag(html, lower, at) {

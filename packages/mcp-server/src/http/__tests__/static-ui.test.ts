@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { mountStaticUi } from "../static-ui.js";
+import { MERMAID_RENDERER_DOC, mermaidRendererCsp, mountStaticUi } from "../static-ui.js";
 import { cors } from "hono/cors";
 import { corsAllowedOrigin } from "../origin-policy.js";
 
@@ -148,5 +148,77 @@ describe("D5 — the token-serving HTML route is not readable cross-origin", () 
   it("the webview origin can read it (the one legitimate cross-origin consumer)", async () => {
     const res = await app.request("/", { headers: { Origin: "vscode-webview://1a2b" } });
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("vscode-webview://1a2b");
+  });
+});
+
+describe("#714 gap 11 — the isolated Mermaid renderer document", () => {
+  let dir: string;
+  let app: Hono;
+  const RENDERER = "<!doctype html><html><head><title>r</title></head><body><script type=module crossorigin src=/assets/mermaid-renderer-x.js></script></body></html>";
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-static-mermaid-"));
+    fs.writeFileSync(path.join(dir, "index.html"), "<!doctype html><html><head></head><body></body></html>");
+    fs.writeFileSync(path.join(dir, "mermaid-renderer.html"), RENDERER);
+    fs.mkdirSync(path.join(dir, "assets"));
+    fs.writeFileSync(path.join(dir, "assets", "mermaid-renderer-x.js"), "export {};");
+    fs.writeFileSync(path.join(dir, "assets", "index-x.css"), "a{}");
+    app = buildApp(dir);
+  });
+
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is served raw (no token / projectHash injection) with a strict CSP header", async () => {
+    const res = await app.request(MERMAID_RENDERER_DOC, { headers: { Host: "127.0.0.1:20001" } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toBe(RENDERER);
+    expect(body).not.toContain(TOKEN);
+    expect(body).not.toContain("__deepPairingToken");
+    const csp = res.headers.get("content-security-policy") ?? "";
+    for (const d of ["default-src 'none'", "script-src 'self' http://127.0.0.1:20001", "img-src 'none'", "connect-src 'none'",
+      "font-src 'none'", "frame-src 'none'", "worker-src 'none'", "object-src 'none'", "base-uri 'none'", "form-action 'none'"]) {
+      expect(csp).toContain(d);
+    }
+    expect(csp).not.toMatch(/img-src[^;]*(data:|https?:|\*)/);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("drops a Host header that isn't a plain host:port from the CSP", () => {
+    expect(mermaidRendererCsp("evil.test; script-src *")).toContain("script-src 'self';");
+    expect(mermaidRendererCsp(undefined)).toContain("script-src 'self';");
+  });
+
+  it("the shipped renderer page carries the same CSP as its first head element", () => {
+    const shipped = fs.readFileSync(path.join(__dirname, "../../../web/mermaid-renderer.html"), "utf8");
+    const head = shipped.slice(shipped.indexOf("<head>") + 6).replace(/<!--[\s\S]*?-->/g, "").trimStart();
+    expect(head.startsWith('<meta http-equiv="Content-Security-Policy"')).toBe(true);
+    const meta = /content="([^"]+)"/.exec(head)![1]!;
+    for (const d of ["default-src 'none'", "img-src 'none'", "connect-src 'none'", "font-src 'none'", "frame-src 'none'"]) {
+      expect(meta).toContain(d);
+    }
+    expect(meta).toMatch(/script-src 'self' http:\/\/127\.0\.0\.1:\* http:\/\/localhost:\*/);
+  });
+
+  it("content-hashed /assets/ files are cached immutably; unhashed files and HTML are not", async () => {
+    fs.writeFileSync(path.join(dir, "assets", "mermaid.core-DF0wdvge.js"), "export {};");
+    fs.writeFileSync(path.join(dir, "assets", "plain.js"), "export {};");
+    const hashed = await app.request("/assets/mermaid.core-DF0wdvge.js");
+    expect(hashed.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect((await app.request("/assets/plain.js")).headers.get("cache-control")).toBeNull();
+    expect((await app.request("/")).headers.get("cache-control")).toBe("no-cache");
+    expect((await app.request(MERMAID_RENDERER_DOC)).headers.get("cache-control")).toBe("no-cache");
+  });
+
+  it("built JS chunks are CORS-readable for the opaque-origin frame; HTML and CSS are not", async () => {
+    const js = await app.request("/assets/mermaid-renderer-x.js", { headers: { Origin: "null" } });
+    expect(js.headers.get("access-control-allow-origin")).toBe("*");
+    const css = await app.request("/assets/index-x.css", { headers: { Origin: "null" } });
+    expect(css.headers.get("access-control-allow-origin")).toBeNull();
+    const index = await app.request("/", { headers: { Origin: "null" } });
+    expect(index.headers.get("access-control-allow-origin")).toBeNull();
+    expect(await index.text()).toContain(TOKEN);
   });
 });

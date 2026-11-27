@@ -26,7 +26,7 @@ export const PAGE_STRUCTURE_RULES = [
   `Mark each thing your pair must decide with ${PAGE_DECISION_ATTR} and each question with ${PAGE_QUESTION_ATTR}, and give both an id.`,
   "Give other key elements (tables, rows, diagrams) stable ids too.",
   "Use a table for any comparison.",
-  "Draw diagrams as inline SVG, or paste pre-rendered SVG. Mermaid source is not rendered for you.",
+  "Draw diagrams as Mermaid source in <pre class=\"mermaid\"> (the companion renders it to SVG) or as inline SVG.",
 ] as const;
 
 /** What the sandbox does to a page. */
@@ -102,7 +102,7 @@ ${PAGE_SKELETON_HTML.split("\n").map((line) => `    ${line}`).join("\n")}`;
  */
 export const PAGE_AUTHORING_TOOL_NOTE =
   "Rendering: the companion shows the page full-width in a sandboxed frame at an opaque origin with NO network (no fetch, no external scripts, stylesheets, fonts or images; inline styles and scripts, and images and fonts as data: URIs; video, audio, iframes and objects won't load). Its scripts run only when your pair clicks Run, so the page must read well without them. " +
-  `Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, inline SVG diagrams (Mermaid source is not rendered), <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. ` +
+  `Make it skimmable: a TL;DR block first, then <section id="..."> with an <h2> each, tables for comparisons, diagrams as Mermaid source in <pre class="mermaid"> (the companion renders it) or inline SVG, <details> for depth, stable ids on key elements, and each ask in an element marked ${PAGE_DECISION_ATTR} or ${PAGE_QUESTION_ATTR}. ` +
   "The result (and a page revise_artifact's) lists non-blocking warnings (external assets, no headings, a long page without section ids); they never refuse the page.";
 
 /** Greedy word wrap with a first-line and a continuation indent. */
