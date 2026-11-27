@@ -613,7 +613,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // it), sending the latest coalesced summary. The pending report carries the
   // frame document it was observed on and is dropped if that document is no
   // longer current. Never from a read-only page (closed, or a replay).
-  const offline = useOfflineReason() !== null;
+  const offlineReason = useOfflineReason();
+  const offline = offlineReason !== null;
   const pendingReportRef = useRef<{ doc: string; id: string; key: string; summary: string; firstAt: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   useEffect(() => () => {
     if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
@@ -835,6 +836,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   const reopenComment = useArtifactStore((s) => s.reopenComment);
   const onResolve = useCallback(
     (commentId: string, resolve: boolean) => {
+      // Offline: the buttons are disabled; never post from here either.
+      if (offlineReason) return;
       const n = anchored.findIndex((c) => c.id === commentId) + 1;
       const op = resolve ? markQuestionResolved(commentId) : reopenComment(commentId);
       void op.then(
@@ -842,7 +845,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
         () => {},
       );
     },
-    [anchored, markQuestionResolved, reopenComment, announce],
+    [anchored, markQuestionResolved, reopenComment, announce, offlineReason],
   );
 
   // #714 gap 4 — per-section badges. The frame says which section each pin
@@ -1060,6 +1063,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       onStep={stepComment}
       onResolve={readOnly ? undefined : onResolve}
       askAnswerIds={askAnswerIds}
+      offlineReason={offlineReason}
     />
   );
   const hoverEntry = hover ? queue.find((e) => e.comment.id === hover.id) : undefined;

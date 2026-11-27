@@ -20,6 +20,7 @@ import { useConnectionStore } from "../../stores/connection";
 import { useLedgerStore } from "../../stores/ledger";
 import { useConnectionGraceStore } from "../../lib/connectionGrace";
 import { usePreferencesStore } from "../../stores/preferences";
+import { OFFLINE_ACT_REASON } from "../../hooks/useOfflineReason";
 import { PAGE_MERMAID_PREPARE } from "../../lib/pageMermaid";
 
 // The full verb row only renders once the reader reaches the artifact's end.
@@ -2007,6 +2008,9 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
       expect(renderFailurePosts()).toHaveLength(1);
     } finally {
       vi.useRealTimers();
+      // Leave the connection stores as every other test expects them.
+      useConnectionStore.setState({ connected: false } as any);
+      useConnectionGraceStore.setState({ everConnected: false, graceOver: false } as any);
     }
   });
 });
@@ -2269,5 +2273,43 @@ describe("PageArtifact — #725 review fixes", () => {
     render(<PageArtifact artifact={pageArtifact} />);
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "C", bubbles: true })); });
     expect(screen.getByTestId("page-kbd-toggle")).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("PageArtifact — offline gating of Resolve / Reopen (#725)", () => {
+  const human = (id: string, extra: Partial<Comment> = {}): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id, htmlAnchor: { kind: "element", locator: "h1", quote: "Cache invalidation" } as any },
+    parentCommentId: null,
+    author: "human",
+    content: `note ${id}`,
+    acknowledged: false,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, Number(id.replace(/\D/g, "")) || 0)).toISOString(),
+    ...extra,
+  });
+
+  it("offline → Resolve and Reopen are disabled with the offline reason, and nothing is posted", async () => {
+    useArtifactStore.getState().addComment(human("cmt_1"));
+    useArtifactStore.getState().addComment(human("cmt_2", { humanResolvedAt: "2026-01-02T00:00:00.000Z" }));
+    act(() => {
+      useConnectionStore.setState({ connected: false } as any);
+      useConnectionGraceStore.setState({ everConnected: true, graceOver: true } as any);
+    });
+    try {
+      render(<PageArtifact artifact={pageArtifact} />);
+      await userEvent.click(screen.getByTestId("page-queue-filter-all"));
+      const resolve = screen.getByTestId("page-annotation-resolve");
+      const reopen = screen.getByTestId("page-annotation-reopen");
+      for (const b of [resolve, reopen]) {
+        expect(b).toBeDisabled();
+        expect(b).toHaveAttribute("title", OFFLINE_ACT_REASON);
+      }
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      expect(fetchMock.mock.calls.some((c) => /mark-(un)?resolved/.test(String(c[0])))).toBe(false);
+    } finally {
+      useConnectionStore.setState({ connected: false } as any);
+      useConnectionGraceStore.setState({ everConnected: false, graceOver: false } as any);
+    }
   });
 });

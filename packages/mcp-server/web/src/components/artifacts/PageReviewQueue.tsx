@@ -112,6 +112,9 @@ export interface PageReviewQueueProps {
   onResolve?: (commentId: string, resolve: boolean) => void;
   /** #725 — comments that answer one of the page's asks: no Resolve/Reopen. */
   askAnswerIds?: ReadonlySet<string>;
+  /** #725 — while the tab is offline (useOfflineReason), Resolve/Reopen are
+   *  disabled with this reason as their tooltip, like every act button. */
+  offlineReason?: string | null;
 }
 
 export function PageReviewQueue({
@@ -129,6 +132,7 @@ export function PageReviewQueue({
   onStep,
   onResolve,
   askAnswerIds,
+  offlineReason = null,
 }: PageReviewQueueProps) {
   const listRef = useRef<HTMLOListElement>(null);
   const idBase = useId();
@@ -275,10 +279,13 @@ export function PageReviewQueue({
                 {action && (
                   <button
                     type="button"
-                    onClick={() => onResolve!(c.id, action.kind === "resolve")}
-                    title={action.title}
+                    onClick={() => {
+                      if (!offlineReason) onResolve!(c.id, action.kind === "resolve");
+                    }}
+                    disabled={!!offlineReason}
+                    title={offlineReason ?? action.title}
                     aria-label={`${action.label} comment ${i + 1}`}
-                    className="shrink-0 self-start px-2 py-1 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-elevated focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+                    className="shrink-0 self-start px-2 py-1 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-elevated focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue pointer-coarse:min-h-11 pointer-coarse:min-w-11 disabled:opacity-50 disabled:cursor-not-allowed"
                     data-testid={action.kind === "resolve" ? "page-annotation-resolve" : "page-annotation-reopen"}
                   >
                     {action.label}
