@@ -7,6 +7,7 @@ import { PrototypeFrame, type FrameAnnotation } from "../PrototypeFrame";
 import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { useChainComments } from "../../hooks/useChainComments";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { useReplayStore } from "../../stores/replay";
 import { useArtifactStore } from "../../stores/artifact";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
@@ -527,6 +528,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
   // it), sending the latest coalesced summary. The pending report carries the
   // frame document it was observed on and is dropped if that document is no
   // longer current. Never from a read-only page (closed, or a replay).
+  const offline = useOfflineReason() !== null;
   const pendingReportRef = useRef<{ doc: string; id: string; key: string; summary: string; firstAt: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   useEffect(() => () => {
     if (pendingReportRef.current) clearTimeout(pendingReportRef.current.timer);
@@ -551,6 +553,8 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
       pendingReportRef.current = null;
     };
     // Only a report from the CURRENT frame document, for this artifact.
+    // Offline: hold the report (the latch below stays unset) and re-run on reconnect.
+    if (offline) return drop();
     if (readOnly || !diagState || diagState.doc !== frameDocRef.current || diagState.id !== artifact.id || !hasDiagnostics(diagState.diag)) return drop();
     const doc = diagState.doc;
     const summary = diagnosticsAgentSummary(diagState.diag, { version: artifact.version, running });
@@ -573,7 +577,7 @@ export function PageArtifact({ artifact }: { artifact: Artifact }) {
     };
     const delay = Math.max(0, Math.min(RENDER_ISSUES_REPORT_DELAY_MS, firstAt + RENDER_ISSUES_REPORT_MAX_WAIT_MS - now));
     pendingReportRef.current = { doc, id, key, summary, firstAt, timer: setTimeout(fire, delay) };
-  }, [diagState, readOnly, running, artifact.id, artifact.version]);
+  }, [diagState, readOnly, running, artifact.id, artifact.version, offline]);
   useEffect(() => {
     setHighlightId(null);
     setHover(null);

@@ -1979,4 +1979,34 @@ describe("PageArtifact — render diagnostics (#714 gap 12)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("offline: the automatic report is held while the tab is disconnected and sent once it reconnects", () => {
+    vi.useFakeTimers();
+    try {
+      const art = { ...pageArtifact, id: "art_page_offline" };
+      useArtifactStore.getState().addArtifact(art);
+      act(() => {
+        useConnectionStore.setState({ connected: false } as any);
+        useConnectionGraceStore.setState({ graceOver: true } as any);
+      });
+      render(<PageArtifact artifact={art} />);
+      const win = liveFrame();
+      fromFrame(win, DIAG);
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(renderFailurePosts()).toHaveLength(0);
+      // The banner still shows offline: only the agent-facing post waits.
+      expect(screen.getByTestId("page-render-issues")).toBeInTheDocument();
+      act(() => {
+        useConnectionStore.setState({ connected: true } as any);
+      });
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(renderFailurePosts()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
