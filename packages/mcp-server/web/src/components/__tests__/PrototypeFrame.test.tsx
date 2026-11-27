@@ -139,6 +139,41 @@ describe("PrototypeFrame", () => {
       unmount();
     });
 
+    it("Run during a pending theme render freezes the displayed document; the late render never reloads the running frame", async () => {
+      const themes: string[] = [];
+      let openDark!: () => void;
+      const darkGate = new Promise<void>((r) => { openDark = r; });
+      const annotation: FrameAnnotation = {
+        script: "/*annotator*/",
+        sanitize: sanitizePageHtml,
+        prepare: {
+          needed: (h) => h.includes("mermaid"),
+          run: async (h, theme) => {
+            if (theme === "dark") await darkGate;
+            return (await renderPageMermaid(h, { theme, renderer: fakeRenderer(themes) })).html;
+          },
+        },
+      };
+      act(() => usePreferencesStore.getState().setTheme("light"));
+      const { unmount } = render(<PrototypeFrame html={PAGE} staticFirst noun="page" annotation={annotation} />);
+      await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
+      // Flip the theme; the dark render is still pending when Run is pressed.
+      act(() => usePreferencesStore.getState().setTheme("dark"));
+      await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+      const runningFrame = document.querySelector("iframe")!;
+      expect(runningFrame.getAttribute("sandbox")).toBe("allow-scripts");
+      const runDoc = runningFrame.getAttribute("srcdoc");
+      expect(runDoc).toContain("<script>1</script>");
+      expect(runDoc).not.toContain("background:#1f2020");
+      // The dark render resolves after Run: it must not replace the srcdoc.
+      await act(async () => { openDark(); });
+      await waitFor(() => expect(themes).toEqual(["light", "dark"]));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(document.querySelector("iframe")).toBe(runningFrame);
+      expect(runningFrame.getAttribute("srcdoc")).toBe(runDoc);
+      unmount();
+    });
+
     it("the real gate: a page that only mentions Mermaid frames at once, no placeholder", () => {
       const real: FrameAnnotation = { script: "/*a*/", sanitize: sanitizePageHtml, prepare: PAGE_MERMAID_PREPARE };
       render(<PrototypeFrame html="<h1>Why not mermaid?</h1><p class='mermaid-ish'>We drew SVG.</p>" staticFirst noun="page" annotation={real} />);

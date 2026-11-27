@@ -53,9 +53,10 @@ export const PAGE_MERMAID_MAX_DIAGRAMS = 20;
 export const PAGE_MERMAID_MAX_SOURCE_CHARS = 20_000;
 /** A rendered SVG larger than this is discarded. */
 export const PAGE_MERMAID_MAX_SVG_CHARS = 1024 * 1024;
-/** Wait at most this long for one diagram. */
+/** Stop waiting on one diagram's pending render after this long (a guard for
+ *  responsive execution, not a hard deadline on synchronous work). */
 export const PAGE_MERMAID_TIMEOUT_MS = 5_000;
-/** And at most this long for the whole page. */
+/** And on the whole page's renders after this long (same kind of guard). */
 export const PAGE_MERMAID_TOTAL_TIMEOUT_MS = 15_000;
 
 export interface PageMermaidOptions {
@@ -300,8 +301,11 @@ function wrapperStyle(theme: PageTheme): string {
 
 class Timeout extends Error {}
 
-/** Run one render with a deadline. On timeout the request is ABORTED (the
- *  frame renderer destroys its frame, killing the work), not just abandoned.
+/** Run one render with a responsiveness guard on its pending promise. When
+ *  the guard fires the request is ABORTED (the frame renderer destroys its
+ *  frame) rather than just abandoned. It is not a hard deadline: a timer can't
+ *  preempt synchronous browser work already running, so it bounds how long the
+ *  page waits once the event loop is free, not how long Mermaid computes.
  *  `ms` (per diagram) starts when the renderer reports the work started;
  *  `budgetMs` (what is left of the page budget) runs from the call. */
 function renderWithTimeout(

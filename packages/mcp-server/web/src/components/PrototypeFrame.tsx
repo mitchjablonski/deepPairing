@@ -166,6 +166,12 @@ export function PrototypeFrame({
   // keeps the current frame up until the re-themed render is ready. Once the
   // human has chosen Run the theme is pinned to the one at Run, so a theme
   // flip never reloads a running page (it re-themes on the next mount).
+  // Run also FREEZES the prepared document on screen at that moment: a render
+  // still in flight (say, for a theme flipped just before Run) may resolve
+  // later, but it only updates `prepared` (the before-Run document), never the
+  // running frame's srcdoc, which would reload the page and re-run its
+  // scripts. The frozen copy is keyed to `html`: a new page while running is
+  // prepared afresh (in the pinned run theme) and frames once ready.
   const appTheme = resolveTheme(usePreferencesStore((s) => s.theme));
   const [runTheme, setRunTheme] = useState<"light" | "dark" | null>(null);
   const theme = running && runTheme ? runTheme : appTheme;
@@ -186,7 +192,14 @@ export function PrototypeFrame({
     );
     return () => { live = false; };
   }, [prep, html, theme]);
-  const frameHtml: string | null = prep ? (prepared?.html === html ? prepared.out : null) : html;
+  const preparedHtml: string | null = prep ? (prepared?.html === html ? prepared.out : null) : html;
+  const [runFrozen, setRunFrozen] = useState<{ html: string; out: string } | null>(null);
+  const frameHtml: string | null = running && runFrozen?.html === html ? runFrozen.out : preparedHtml;
+  const startRun = () => {
+    setRunTheme(appTheme);
+    setRunFrozen(preparedHtml !== null ? { html, out: preparedHtml } : null);
+    setRunning(true);
+  };
 
   useEffect(() => {
     onRunningChange?.(running);
@@ -196,16 +209,16 @@ export function PrototypeFrame({
   // annotator first, and a nonce CSP so only the annotator can run. Memoized
   // so a re-render doesn't hand the iframe a new srcdoc (which would reload it).
   const staticDoc = useMemo(() => {
-    if (!staticFirst || tooBig || frameHtml === null) return "";
-    if (!annotation) return wrapHtml(frameHtml);
-    const clean = annotation.sanitize(frameHtml);
+    if (!staticFirst || tooBig || preparedHtml === null) return "";
+    if (!annotation) return wrapHtml(preparedHtml);
+    const clean = annotation.sanitize(preparedHtml);
     return wrapHtml(clean.html, {
       headScript: annotation.script,
       nonce: makeNonce(),
       htmlAttrs: clean.htmlAttrs,
       bodyAttrs: clean.bodyAttrs,
     });
-  }, [frameHtml, staticFirst, tooBig, annotation]);
+  }, [preparedHtml, staticFirst, tooBig, annotation]);
   const runDoc = useMemo(
     () =>
       running && frameHtml !== null
@@ -271,7 +284,7 @@ export function PrototypeFrame({
           />
           {scripted && (
             <button
-              onClick={() => { setRunTheme(appTheme); setRunning(true); }}
+              onClick={startRun}
               className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-2 text-center
                          text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
             >
@@ -281,7 +294,7 @@ export function PrototypeFrame({
         </div>
       ) : (
         <button
-          onClick={() => { setRunTheme(appTheme); setRunning(true); }}
+          onClick={startRun}
           className="w-full rounded border border-dashed border-accent-violet/40 bg-accent-violet-dim/15 p-4 text-center
                      text-xs text-accent-violet hover:bg-accent-violet-dim/25 transition-colors"
         >

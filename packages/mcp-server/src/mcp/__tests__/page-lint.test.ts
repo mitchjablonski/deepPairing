@@ -140,6 +140,43 @@ describe("lintPage", () => {
     expect(warnings[0]!.sources).toEqual([{ source, count: 1 }]);
   });
 
+  // #721 review P3 — one CSS tokenizer drives both comment and reference
+  // detection: quoted examples are text, `url(` is a whole ident token, and a
+  // string ends at any CSS newline (LF, CR, CRLF, FF).
+  it.each([
+    ['<style>a::before{content:"see url(https://x/a.png)"}</style>'],
+    ["<style>a::before{content:'url(//x/a.png)'}</style>"],
+    ['<style>a::before{content:"@import \'https://x/a.css\'"}</style>'],
+    [`<div style='content:"url(https://x/a.png)"'>x</div>`],
+    ["<style>a{background:myurl(https://x/a.png)}</style>"],
+    ["<style>a{--x:--url(https://x/a.png)}</style>"],
+    ["<style>a{b:#url(https://x/a.png)}</style>"],
+    // A CR / CRLF / FF ends the string (bad-string), so the `/*` after it opens
+    // a real comment that runs to the end and hides the url().
+    ['<style>a{content:"x\r/*"} b{background:url(https://x/a.png)}</style>'],
+    ['<style>a{content:"x\r\n/*"} b{background:url(https://x/a.png)}</style>'],
+    ['<style>a{content:"x\f/*"} b{background:url(https://x/a.png)}</style>'],
+  ])("quoted text, non-url idents and CSS newlines never miscount: %s", (asset) => {
+    expect(lintPage(clean(asset))).toEqual([]);
+  });
+
+  it.each([
+    ['<style>a{background:URL( "https://x/a.png" )}</style>', "CSS url() in <style>"],
+    ["<style>a{background:u\\72l(https://x/a.png)}</style>", "CSS url() in <style>"],
+    ['<style>a{content:"x\r} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ['<style>a{content:"x\f} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ['<style>a{content:"a\\\r\nb"} b{background:url(https://x/a.png)}</style>', "CSS url() in <style>"],
+    ['<style>@import url("https://x/a.css");</style>', "CSS @import in <style>"],
+    ['<style>@import "https://x/a.css";</style>', "CSS @import in <style>"],
+    ["<style>a{b:x}url(https://x/a.png)</style>", "CSS url() in <style>"],
+    // `@imports` is not `@import`: its url() is a plain url() reference.
+    ["<style>@imports url(https://x/a.css);</style>", "CSS url() in <style>"],
+  ])("a real url()/@import still counts once: %s", (asset, source) => {
+    const warnings = lintPage(clean(asset));
+    expect(warnings.map((w) => w.code)).toEqual(["external_asset"]);
+    expect(warnings[0]!.sources).toEqual([{ source, count: 1 }]);
+  });
+
   it("stripCssComments keeps strings intact and still strips real comments", () => {
     expect(stripCssComments('a{content:"/* x */"}/* gone */b{}')).toBe('a{content:"/* x */"} b{}');
     expect(stripCssComments("a{content:'\\'/*'}/*c*/b{}")).toBe("a{content:'\\'/*'} b{}");
