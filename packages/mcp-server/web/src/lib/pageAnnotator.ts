@@ -1965,12 +1965,22 @@ var DIAG_ATTRS = { img: ["src", "srcset"], source: ["src", "srcset"], video: ["s
  *  "other resource" / "other". */
 var RESOURCE_KEYS = ["img src", "img srcset", "source src", "source srcset", "video src", "video poster", "audio src", "track src", "script src", "link href", "iframe src", "frame src", "embed src", "object data", "input src", "image href", "use href"];
 var CSP_DIRECTIVES = ["default-src", "script-src", "script-src-elem", "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src", "connect-src", "media-src", "object-src", "frame-src", "child-src", "worker-src", "manifest-src", "base-uri", "form-action", "frame-ancestors", "navigate-to", "prefetch-src", "sandbox", "trusted-types", "require-trusted-types-for", "upgrade-insecure-requests", "report-uri", "report-to"];
+/** #727 — after Run the page's scripts share this realm and can patch
+ *  Array.prototype (push/indexOf/sort/slice, an index setter, a species
+ *  constructor). The diagnostics path therefore calls no Array method: it
+ *  reads own elements in plain loops, appends with a defineProperty captured
+ *  at boot (a null-prototype descriptor, so an inherited get/set can't turn
+ *  it into an accessor), and swaps only existing own elements. */
+var dDefine = Object.defineProperty;
+function dIndex(a, v) { for (var i = 0; i < a.length; i++) if (a[i] === v) return i; return -1; }
+function dPush(a, v) { dDefine(a, a.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); }
+function dCopy(a) { var out = []; for (var i = 0; i < a.length; i++) dPush(out, a[i]); return out; }
 var diag = { script: 0, rejection: 0, scriptSamples: [], rejectionSamples: [], scriptClasses: [], rejectionClasses: [], resources: [], blocked: [] };
 /** An error's CLASS name (the only part of an error the agent sees), from
  *  a fixed allowlist; anything else is "Error". Must equal the shared
  *  PAGE_ERROR_CLASSES (a parity test checks). */
 var ERROR_CLASSES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "AggregateError", "InternalError", "DOMException", "SecurityError", "NetworkError", "AbortError", "NotAllowedError", "NotFoundError", "NotSupportedError", "InvalidStateError", "QuotaExceededError", "TimeoutError", "DataCloneError"];
-function knownClass(n) { return typeof n === "string" && ERROR_CLASSES.indexOf(n) !== -1; }
+function knownClass(n) { return typeof n === "string" && dIndex(ERROR_CLASSES, n) !== -1; }
 function errClass(name, message) {
   if (knownClass(name)) return name;
   var m = /^(?:Uncaught )?([A-Za-z]{1,40})\b/.exec(typeof message === "string" ? message : "");
@@ -1990,20 +2000,26 @@ function redactDiag(v) {
 function diagBump(n) { return n < DIAG.max ? n + 1 : n; }
 function diagSample(list, v) {
   var t = redactDiag(v);
-  if (t && list.length < DIAG.samples && list.indexOf(t) === -1) list.push(t);
+  if (t && list.length < DIAG.samples && dIndex(list, t) === -1) dPush(list, t);
 }
 /** Every distinct key is kept (keys come from finite allowlists, so this is
  *  bounded); the DIAG.keys cap is applied at report time, in canonical order
  *  (see canonKeys), so the retained keys never depend on discovery order. */
 function diagKey(list, key) {
   for (var i = 0; i < list.length; i++) if (list[i].key === key) { list[i].count = diagBump(list[i].count); return; }
-  list.push({ key: key, count: 1 });
+  dPush(list, { key: key, count: 1 });
 }
 function diagHas(el, attr) {
   if (attr === "xlink:href") return !!(el.getAttributeNS && el.getAttributeNS(XLINK, "href") !== null);
   return !!(el.hasAttribute && el.hasAttribute(attr));
 }
+/** #727 — only events the browser dispatched count: page script can
+ *  dispatchEvent a synthetic ErrorEvent, PromiseRejectionEvent or
+ *  SecurityPolicyViolationEvent, and isTrusted is unforgeable (an own
+ *  [LegacyUnforgeable] property of every event). */
+function untrusted(e) { return !e || e.isTrusted === false; }
 function onDiagError(e) {
+  if (untrusted(e)) return;
   var t = e ? e.target : null;
   if (t && t.nodeType === 1) {
     if (own(t)) return;
@@ -2013,7 +2029,7 @@ function onDiagError(e) {
     var attr = attrs[0];
     for (var i = 0; i < attrs.length; i++) if (diagHas(t, attrs[i])) { attr = attrs[i]; break; }
     var rk = tag + " " + (attr === "xlink:href" ? "href" : attr);
-    diagKey(diag.resources, RESOURCE_KEYS.indexOf(rk) !== -1 ? rk : "other resource");
+    diagKey(diag.resources, dIndex(RESOURCE_KEYS, rk) !== -1 ? rk : "other resource");
   } else {
     diag.script = diagBump(diag.script);
     var m = "", cls = "Error";
@@ -2028,6 +2044,7 @@ function onDiagError(e) {
   scheduleDiag();
 }
 function onDiagRejection(e) {
+  if (untrusted(e)) return;
   var m = "", cls = "Error";
   try {
     var r = e ? e.reason : undefined;
@@ -2042,9 +2059,10 @@ function onDiagRejection(e) {
   scheduleDiag();
 }
 function onDiagCsp(e) {
+  if (untrusted(e)) return;
   var d = "";
   try { d = String((e && (e.effectiveDirective || e.violatedDirective)) || "").toLowerCase().split(" ")[0]; } catch (x) { d = ""; }
-  if (CSP_DIRECTIVES.indexOf(d) === -1) d = "other";
+  if (dIndex(CSP_DIRECTIVES, d) === -1) d = "other";
   diagKey(diag.blocked, d);
   scheduleDiag();
 }
@@ -2052,22 +2070,44 @@ function onDiagCsp(e) {
  *  catch-all ("Error" is listed; "other resource" / "other" are not) last.
  *  Must rank as the shared pageRenderIssueKeyRank does. */
 function canonKeys(list, allow) {
-  var out = [];
-  for (var i = 0; i < list.length; i++) out.push({ key: list[i].key, count: list[i].count });
-  function rank(k) { var r = allow.indexOf(k); return r === -1 ? allow.length : r; }
-  out.sort(function (a, b) { return rank(a.key) - rank(b.key); });
-  return out.slice(0, DIAG.keys);
+  var all = [], out = [], i, j, x;
+  for (i = 0; i < list.length; i++) dPush(all, { key: list[i].key, count: list[i].count });
+  function rank(k) { var r = dIndex(allow, k); return r === -1 ? allow.length : r; }
+  // Stable insertion sort (the lists are short: finite allowlists).
+  for (i = 1; i < all.length; i++) {
+    x = all[i];
+    for (j = i - 1; j >= 0 && rank(all[j].key) > rank(x.key); j--) all[j + 1] = all[j];
+    all[j + 1] = x;
+  }
+  for (i = 0; i < all.length && i < DIAG.keys; i++) dPush(out, all[i]);
+  return out;
+}
+/** The dedupe signature, by string concatenation only (no JSON.stringify or
+ *  inherited toJSON, which page script could patch to see or rewrite it). */
+function diagSig(b) {
+  function keys(l) { var s = ""; for (var i = 0; i < l.length; i++) s += "|" + l[i].key + "=" + l[i].count; return s; }
+  function texts(l) { var s = ""; for (var i = 0; i < l.length; i++) s += "|" + l[i].length + ":" + l[i]; return s; }
+  return "s" + b.scriptErrors.count + texts(b.scriptErrors.samples) + keys(b.scriptErrors.classes) +
+    "/r" + b.rejections.count + texts(b.rejections.samples) + keys(b.rejections.classes) +
+    "/x" + keys(b.resources) + "/b" + keys(b.blocked);
 }
 function reportDiag() {
   diagPending = 0;
   if (!readySent) return;
   if (!diag.script && !diag.rejection && !diag.resources.length && !diag.blocked.length) return;
-  var msg = { dp: "diagnostics", doc: docId,
-    scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: canonKeys(diag.scriptClasses, ERROR_CLASSES) },
-    rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice(), classes: canonKeys(diag.rejectionClasses, ERROR_CLASSES) },
+  // #727 — the document id never goes near anything page script can patch
+  // after Run: the dedupe key is built from a body WITHOUT it (diagSig, no
+  // JSON.stringify), and the posted message is a fresh literal handed only to
+  // the parent's cross-origin postMessage.
+  var body = {
+    scriptErrors: { count: diag.script, samples: dCopy(diag.scriptSamples), classes: canonKeys(diag.scriptClasses, ERROR_CLASSES) },
+    rejections: { count: diag.rejection, samples: dCopy(diag.rejectionSamples), classes: canonKeys(diag.rejectionClasses, ERROR_CLASSES) },
     resources: canonKeys(diag.resources, RESOURCE_KEYS), blocked: canonKeys(diag.blocked, CSP_DIRECTIVES) };
-  var json = JSON.stringify(msg);
-  if (json !== lastDiagJson) { lastDiagJson = json; post(msg); }
+  var json = diagSig(body);
+  if (json !== lastDiagJson) {
+    lastDiagJson = json;
+    post({ dp: "diagnostics", doc: docId, scriptErrors: body.scriptErrors, rejections: body.rejections, resources: body.resources, blocked: body.blocked });
+  }
 }
 function scheduleDiag() {
   if (diagPending) return;
@@ -2145,8 +2185,19 @@ return function uninstall() {
  *  embedded; anything else is dropped (the annotator then draws its own). */
 export function annotatorScript(doc?: string): string {
   const id = typeof doc === "string" && /^[0-9a-f]{16,64}$/.test(doc) ? JSON.stringify(doc) : "undefined";
+  // #727 — both ANNOTATOR_CORE_SOURCE and ANNOTATOR_MAIN_SOURCE begin with
+  // "use strict", and that is load-bearing: strict functions expose no
+  // fn.arguments / fn.caller and V8 CallSite getThis/getFunction return
+  // undefined for them, so page script (after Run) can't walk from one of our
+  // callbacks up to the closure that holds the document id. A test pins it.
+  // #727 — first statement: the script removes its own <script> node, the
+  // only place the id appears in the frame document. It runs while the parser
+  // is blocked on it, before any agent markup is even parsed, so after Run no
+  // page script can read the id from the DOM (document.scripts, outerHTML,
+  // a MutationObserver: none exist yet). The id then lives only in a closure.
   return (
-    "(function(){try{var core=(function(document,window){" +
+    "(function(){var me=document.currentScript;if(me&&me.parentNode)me.parentNode.removeChild(me);me=null;" +
+    "try{var core=(function(document,window){" +
     ANNOTATOR_CORE_SOURCE +
     "\n})(document,window);(function(document,window,parent,core,DP_DOC){" +
     ANNOTATOR_MAIN_SOURCE +
