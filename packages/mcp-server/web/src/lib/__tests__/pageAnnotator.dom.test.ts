@@ -449,7 +449,10 @@ describe("annotator main — event wiring", () => {
       if (this.localName === "dp-annotator-badge") {
         const pin = this.parentElement as HTMLElement;
         const px = (el: HTMLElement, k: string) => parseFloat(el.style.getPropertyValue(k)) || 0;
-        return box(px(pin, "left") + px(this, "left"), px(pin, "top") + px(this, "top"), 18, 18);
+        const size = 18 + 2 * px(this, "border");
+        const left = px(pin, "left") + px(this, "left") - window.scrollX;
+        const top = px(pin, "top") + px(this, "top") - window.scrollY;
+        return box(left, top, size, size);
       }
       return box(anchor.left, anchor.top, anchor.width, anchor.height);
     });
@@ -503,6 +506,48 @@ describe("annotator main — event wiring", () => {
       expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
     } finally {
       rect.mockRestore();
+    }
+  });
+
+  it.each([false, true])("places the whole bottom-edge touch badge and checks controls there (control=%s)", (control) => {
+    document.body.insertAdjacentHTML("beforeend", '<input id="field">');
+    const field = document.getElementById("field")!;
+    const bottom = window.innerHeight;
+    const rect = geometry({ left: 0, top: bottom - 20, width: window.innerWidth, height: 20 },
+      (_x, y) => control && y < bottom - 28 ? field : document.body);
+    try {
+      const down = new Event("pointerdown", { bubbles: true });
+      Object.defineProperty(down, "pointerType", { value: "touch" });
+      document.body.dispatchEvent(down);
+      onePin();
+      const b = badgeBox();
+      expect(b.width).toBe(44);
+      expect(b.height).toBe(44);
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(b.bottom).toBeLessThanOrEqual(bottom);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe(control ? "none" : "auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("keeps the whole touch badge below the visible top after scrolling", () => {
+    const scroll = vi.spyOn(window, "scrollY", "get").mockReturnValue(400);
+    const rect = geometry({ left: 100, top: 12, width: 80, height: 20 }, () => document.body);
+    try {
+      const down = new Event("pointerdown", { bubbles: true });
+      Object.defineProperty(down, "pointerType", { value: "touch" });
+      document.body.dispatchEvent(down);
+      onePin();
+      const b = badgeBox();
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(b.bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+      scroll.mockRestore();
     }
   });
 
@@ -1800,3 +1845,282 @@ describe("annotator error-class allowlist parity (#714 gap 12)", () => {
   });
 });
 
+
+describe("annotator core — commentable blocks (#714 gap 9)", () => {
+  type BlockCore = Core & { commentableBlocks(): Element[]; blockKind(el: Element): string };
+  const blockCore = () => makeCore() as BlockCore;
+
+  it("lists text blocks, cells, Mermaid nodes and links in document order, skipping wrappers that repeat a child", () => {
+    document.body.innerHTML =
+      "<h2>Plan</h2><ul><li><p>Same text</p></li><li>Two</li></ul>" +
+      "<table><tr><th>A</th></tr><tr><td>1</td></tr></table>" +
+      "<svg><g class=\"node\" id=\"flowchart-X-1\"><text>X</text></g></svg>" +
+      "<p>See <a href=\"#plan\">the plan</a></p>" +
+      "<details><summary>More</summary><p>Hidden inside</p></details>" +
+      "<p hidden>Gone</p><script>var x = 1;</script>";
+    const core = blockCore();
+    const list = core.commentableBlocks();
+    const names = list.map((el) => `${el.localName}:${el.textContent!.trim()}`);
+    expect(names).toEqual(["h2:Plan", "p:Same text", "li:Two", "th:A", "td:1", "g:X", "p:See the plan", "a:the plan", "summary:More"]);
+    expect(list.map((el) => core.blockKind(el))).toEqual([
+      "heading", "paragraph", "list item", "cell", "cell", "diagram node", "paragraph", "link", "control",
+    ]);
+  });
+
+  it("names asks by kind and never lists our own layer", () => {
+    document.body.innerHTML = "<div data-dp-decision><p>Pick one</p></div><dp-annotator-layer><p>ours</p></dp-annotator-layer>";
+    const core = blockCore();
+    const list = core.commentableBlocks();
+    expect(list.map((el) => core.blockKind(el))).toEqual(["decision", "paragraph"]);
+  });
+});
+
+describe("annotator main — keyboard comment mode and touch (#714 gap 9)", () => {
+  let uninstall: () => void;
+  let posted: any[];
+  let realScroll: typeof Element.prototype.scrollIntoView;
+  beforeEach(() => {
+    posted = [];
+    realScroll = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function () {};
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      posted.push(msg);
+    }) as typeof window.postMessage);
+    uninstall = new Function("document", "window", "parent", "core", ANNOTATOR_MAIN_SOURCE)(
+      document, window, window, makeCore(),
+    ) as () => void;
+  });
+  afterEach(() => {
+    uninstall();
+    Element.prototype.scrollIntoView = realScroll;
+    vi.restoreAllMocks();
+  });
+  const mode = (extra: Record<string, unknown>) =>
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: false, ...extra }, source: window }));
+  const key = (k: string, init: KeyboardEventInit = {}) => {
+    const ev = new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...init });
+    document.body.dispatchEvent(ev);
+    return ev;
+  };
+  const cursors = () => posted.filter((m) => m?.dp === "kbd-cursor");
+
+  it("turning the mode on reports the first block; arrows and Tab move; Enter posts that block's anchor", () => {
+    mode({ kbd: true });
+    expect(cursors().at(-1)).toMatchObject({ index: 0, kind: "heading", text: "Cache invalidation", pins: [] });
+    expect(document.querySelector("dp-annotator-kbd")).not.toBeNull();
+    const ev = key("ArrowDown");
+    expect(ev.defaultPrevented).toBe(true);
+    expect(cursors().at(-1)).toMatchObject({ index: 1, kind: "paragraph" });
+    key("Tab");
+    key("ArrowUp");
+    expect(cursors().at(-1)).toMatchObject({ index: 1 });
+    key("End");
+    const last = cursors().at(-1);
+    expect(last.index).toBe(last.total - 1);
+    key("Home");
+    key("Enter");
+    const anchors = posted.filter((m) => m?.dp === "anchor").map((m) => m.anchor);
+    expect(anchors).toEqual([expect.objectContaining({ kind: "element", locator: "#title", quote: "Cache invalidation" })]);
+    expect(HtmlAnchorSchema.safeParse(anchors[0]).success).toBe(true);
+  });
+
+  it("stops handled keys before the page's own listeners see them", () => {
+    const seen: string[] = [];
+    const pageListener = (e: KeyboardEvent) => seen.push(e.key);
+    document.addEventListener("keydown", pageListener);
+    mode({ kbd: true });
+    key("ArrowDown");
+    key("Enter");
+    document.removeEventListener("keydown", pageListener);
+    expect(seen).toEqual([]);
+  });
+
+  it("Escape leaves the mode and tells the parent; Tab past the last block leaves without trapping focus", () => {
+    mode({ kbd: true });
+    key("Escape");
+    expect(posted.filter((m) => m?.dp === "kbd-off")).toHaveLength(1);
+    expect(document.querySelector("dp-annotator-kbd")).toBeNull();
+    mode({ kbd: true });
+    key("End");
+    const tab = key("Tab");
+    expect(tab.defaultPrevented).toBe(false);
+    expect(posted.filter((m) => m?.dp === "kbd-off")).toHaveLength(2);
+  });
+
+  it("says which pins sit on the block under the cursor", () => {
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }], states: ["open"], ids: ["c1"] },
+      source: window,
+    }));
+    mode({ kbd: true });
+    expect(cursors().at(-1)).toMatchObject({ index: 0, pins: [0] });
+  });
+
+  it("the mode needs pointing, and never takes keys typed into a page field", () => {
+    mode({ kbd: true, annotate: false });
+    expect(key("ArrowDown").defaultPrevented).toBe(false);
+    mode({ kbd: true });
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"f\">");
+    const ev = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
+    document.getElementById("f")!.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it("forwards C, ?, ], [ and Escape to the parent before Run only", () => {
+    for (const k of ["c", "?", "]", "[", "Escape"]) key(k);
+    expect(posted.filter((m) => m?.dp === "key").map((m) => m.key)).toEqual(["toggle-kbd", "help", "next", "prev", "escape"]);
+    mode({ scripts: true });
+    posted.length = 0;
+    const ev = key("c");
+    expect(ev.defaultPrevented).toBe(false);
+    expect(posted.filter((m) => m?.dp === "key")).toEqual([]);
+  });
+
+  it("marks every node it draws aria-hidden (pins are announced by the companion)", () => {
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }] },
+      source: window,
+    }));
+    mode({ kbd: true });
+    const drawn = Array.from(document.querySelectorAll("dp-annotator-pin, dp-annotator-badge, dp-annotator-kbd"));
+    expect(drawn.length).toBe(3);
+    expect(drawn.every((el) => el.getAttribute("aria-hidden") === "true")).toBe(true);
+  });
+
+  it("after a touch, the compatibility mousemove paints no hover outline", () => {
+    const p = document.querySelector(".intro")!;
+    const down = new Event("pointerdown", { bubbles: true, cancelable: true }) as Event & { pointerType?: string };
+    Object.defineProperty(down, "pointerType", { value: "touch" });
+    p.dispatchEvent(down);
+    p.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    const hover = document.querySelector("dp-annotator-hover") as HTMLElement | null;
+    expect(!hover || hover.style.getPropertyValue("display") === "none").toBe(true);
+  });
+
+  it("a touch selection gets a Comment button that posts the text anchor", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = document.querySelector(".intro")!;
+      const down = new Event("pointerdown", { bubbles: true, cancelable: true });
+      Object.defineProperty(down, "pointerType", { value: "touch" });
+      p.dispatchEvent(down);
+      const range = document.createRange();
+      range.setStart(p.firstChild!, 8);
+      range.setEnd(p.firstChild!, 16);
+      // jsdom has no layout: give the range a box.
+      (range as any).getBoundingClientRect = () => ({ left: 10, top: 10, right: 60, bottom: 24, width: 50, height: 14 });
+      vi.spyOn(window, "getSelection").mockReturnValue({
+        isCollapsed: false, rangeCount: 1, getRangeAt: () => range, removeAllRanges() {},
+      } as unknown as Selection);
+      document.dispatchEvent(new Event("selectionchange"));
+      vi.advanceTimersByTime(400);
+      const btn = document.querySelector("dp-annotator-selbtn") as HTMLElement;
+      expect(btn).not.toBeNull();
+      expect(btn.getAttribute("aria-label")).toBe("Comment on the selected text");
+      expect(btn.getAttribute("aria-hidden")).toBeNull();
+      expect(btn.style.getPropertyValue("min-height")).toBe("44px");
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      const anchors = posted.filter((m) => m?.dp === "anchor").map((m) => m.anchor);
+      expect(anchors).toEqual([expect.objectContaining({ kind: "text", quote: "pick one" })]);
+      expect(document.querySelector("dp-annotator-selbtn")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("on a coarse pointer, a pin badge keeps its look but takes a 44px hit area", () => {
+    const down = new Event("pointerdown", { bubbles: true });
+    Object.defineProperty(down, "pointerType", { value: "touch" });
+    document.body.dispatchEvent(down);
+    // Away from the viewport edges, so the outside-top-left spot fits.
+    const title = document.getElementById("title")!;
+    title.getBoundingClientRect = () => ({ left: 100, top: 100, right: 150, bottom: 120, width: 50, height: 20, x: 100, y: 100, toJSON() {} }) as DOMRect;
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }], ids: ["c1"] },
+      source: window,
+    }));
+    const badge = document.querySelector("dp-annotator-badge") as HTMLElement;
+    expect(badge.style.getPropertyValue("border")).toMatch(/^13px solid/);
+    expect(badge.style.getPropertyValue("left")).toBe("-46px");
+  });
+
+  it("#725 — stops the keyup and keypress of a handled key too", () => {
+    const seen: string[] = [];
+    const page = (e: Event) => { seen.push(`${e.type}:${(e as KeyboardEvent).key}`); };
+    for (const t of ["keyup", "keypress"]) document.addEventListener(t, page);
+    mode({ kbd: true });
+    key("ArrowDown");
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowDown", bubbles: true, cancelable: true }));
+    key("Enter");
+    document.body.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true, cancelable: true }));
+    // An unhandled key's keyup still reaches the page.
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "x", bubbles: true, cancelable: true }));
+    for (const t of ["keyup", "keypress"]) document.removeEventListener(t, page);
+    expect(seen).toEqual(["keyup:x"]);
+  });
+
+  it("#725 — C with Caps Lock forwards toggle-kbd too", () => {
+    key("C");
+    expect(posted.filter((m) => m?.dp === "key").map((m) => m.key)).toEqual(["toggle-kbd"]);
+  });
+
+  it("#725 — the touch Comment button sits outside every aria-hidden node", () => {
+    vi.useFakeTimers();
+    try {
+      const p = document.querySelector(".intro")!;
+      const down = new Event("pointerdown", { bubbles: true, cancelable: true });
+      Object.defineProperty(down, "pointerType", { value: "touch" });
+      p.dispatchEvent(down);
+      const range = document.createRange();
+      range.setStart(p.firstChild!, 8);
+      range.setEnd(p.firstChild!, 16);
+      (range as any).getBoundingClientRect = () => ({ left: 10, top: 10, right: 60, bottom: 24, width: 50, height: 14 });
+      vi.spyOn(window, "getSelection").mockReturnValue({
+        isCollapsed: false, rangeCount: 1, getRangeAt: () => range, removeAllRanges() {},
+      } as unknown as Selection);
+      document.dispatchEvent(new Event("selectionchange"));
+      vi.advanceTimersByTime(400);
+      const btn = document.querySelector("dp-annotator-selbtn") as HTMLElement;
+      expect(btn).not.toBeNull();
+      expect(btn.closest('[aria-hidden="true"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#725 P3-1 — a handled key whose keyup never arrives doesn't eat that key later in a page field", () => {
+    mode({ kbd: true });
+    // Enter opens the composer in the companion: its keyup lands there, not here.
+    key("Enter", { code: "Enter" });
+    mode({ kbd: false });
+    document.body.insertAdjacentHTML("beforeend", "<textarea id=\"ta\"></textarea>");
+    const ta = document.getElementById("ta")!;
+    const kp = new KeyboardEvent("keypress", { key: "Enter", code: "Enter", bubbles: true, cancelable: true });
+    ta.dispatchEvent(kp);
+    expect(kp.defaultPrevented).toBe(false);
+    const ku = new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true, cancelable: true });
+    ta.dispatchEvent(ku);
+    expect(ku.defaultPrevented).toBe(false);
+  });
+
+  it("#725 P3-1 — a stuck entry clears on blur and on another key's keydown", () => {
+    mode({ kbd: true });
+    key("ArrowDown", { code: "ArrowDown" });
+    window.dispatchEvent(new Event("blur"));
+    const up1 = new KeyboardEvent("keyup", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(up1);
+    expect(up1.defaultPrevented).toBe(false);
+    // ? then Shift released first: the keyup reads "/" but has the same code.
+    mode({ kbd: false });
+    key("?", { code: "Slash", shiftKey: true });
+    const slashUp = new KeyboardEvent("keyup", { key: "/", code: "Slash", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(slashUp);
+    expect(slashUp.defaultPrevented).toBe(true);
+    key("]", { code: "BracketRight" });
+    key("x", { code: "KeyX" });
+    const up2 = new KeyboardEvent("keyup", { key: "]", code: "BracketRight", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(up2);
+    expect(up2.defaultPrevented).toBe(false);
+  });
+});

@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import type { Artifact, FileWatchNoticeRef } from "@deeppairing/shared";
 import { fileWatchNoticeKey, undeliveredFileWatchRefs } from "@deeppairing/shared";
-import type { IStore } from "../../store/store-interface.js";
+import type { CommentResolutionSnapshot, IStore } from "../../store/store-interface.js";
 import type { ToolState } from "./types.js";
 
 /**
@@ -151,6 +151,7 @@ export function liveReservations(state: ToolState, now = Date.now()): Reservatio
 /** Acknowledgements buffered until the hand-off point. */
 export class PendingAcks {
   comments: string[] = [];
+  deliveredComments: CommentResolutionSnapshot[] = [];
   decisions: string[] = [];
   statusChanges: string[] = [];
   renderFailures: Array<{ artifactId: string; visualId: string }> = [];
@@ -171,6 +172,9 @@ export class PendingAcks {
       }
     };
     if (this.comments.length > 0) await run(() => store.acknowledgeComments(this.comments));
+    if (this.deliveredComments.length > 0) {
+      await run(() => store.acknowledgeComments(this.deliveredComments.map((c) => c.id), this.deliveredComments));
+    }
     if (this.decisions.length > 0) await run(() => store.acknowledgeDecisions(this.decisions));
     if (this.statusChanges.length > 0) await run(() => store.acknowledgeStatusChanges(this.statusChanges));
     if (this.renderFailures.length > 0) await run(() => store.acknowledgeRenderFailures?.(this.renderFailures));
@@ -353,7 +357,13 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
     if (typeof store.markWorkerStopsDelivered === "function") {
       overrides.markWorkerStopsDelivered = (ids: string[]) => void pending.workerStops.push(...ids);
     }
-    overrides.acknowledgeComments = (ids: string[]) => void pending.comments.push(...ids);
+    overrides.acknowledgeComments = (ids: string[], delivered?: CommentResolutionSnapshot[]) => {
+      if (delivered === undefined) pending.comments.push(...ids);
+      else {
+        const selected = new Set(ids);
+        pending.deliveredComments.push(...delivered.filter((c) => selected.has(c.id)));
+      }
+    };
     overrides.acknowledgeDecisions = (ids: string[]) => void pending.decisions.push(...ids);
     overrides.acknowledgeStatusChanges = (ids: string[]) => void pending.statusChanges.push(...ids);
     if (typeof store.acknowledgeFileWatchNotices === "function") {
