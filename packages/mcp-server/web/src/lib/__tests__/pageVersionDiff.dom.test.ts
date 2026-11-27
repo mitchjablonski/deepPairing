@@ -310,3 +310,129 @@ describe("#718 round 3 — loose-text runs, section identity, control values", (
   });
 });
 
+describe("#727 — a heading's level change is one quiet change, not a remove + add", () => {
+  it("h2 → h3 with the same text: one changed heading, nothing removed or moved", () => {
+    const v2 = V1.replace("<h2>Costs</h2>", "<h3>Costs</h3>");
+    const d = diffOf(V1, v2);
+    expect(d.changes.map((c) => [c.kind, c.block.tag, c.block.text, c.previous?.tag, c.levelChanged])).toEqual([
+      ["changed", "h3", "Costs", "h2", true],
+    ]);
+    expect(d.removed).toEqual([]);
+    expect(d.moved).toBe(0);
+    expect(lineFor(V1, v2)).toBe("Changed: Costs (h2\u2192h3)");
+    expect(computePageVersionDiff(V1, v2)!.marks).toEqual([{ kind: "changed", tag: "h3", text: "Costs", occurrence: 0 }]);
+  });
+
+  it("sibling sections stay untouched, and an edit in the same section joins the one change", () => {
+    const v2 = V1.replace("<h2>Storage</h2>", "<h4>Storage</h4>").replace("Backups nightly.", "Backups hourly.");
+    const d = diffOf(V1, v2);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.block.section])).toEqual([
+      ["changed", "Storage", "Storage"],
+      ["changed", "Backups hourly.", "Storage"],
+    ]);
+    expect(d.removed).toEqual([]);
+    expect(summarizePageDiff(d).changedSections).toEqual(["Storage"]);
+    expect(lineFor(V1, v2)).toBe("Changed: Storage (h2\u2192h4)");
+  });
+
+  it("several level changes (a section demoted under its neighbour) don't cascade", () => {
+    const v2 = V1.replace("<h2>Costs</h2>", "<h3>Costs</h3>").replace("<h2>Rollout</h2>", "<h3>Rollout</h3>");
+    const d = diffOf(V1, v2);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.levelChanged])).toEqual([
+      ["changed", "Costs", true],
+      ["changed", "Rollout", true],
+    ]);
+    expect(d.removed).toEqual([]);
+    expect(d.moved).toBe(0);
+    expect(lineFor(V1, v2)).toBe("Changed: Costs (h2\u2192h3), Rollout (h2\u2192h3)");
+  });
+
+  it("a reworded heading is still a plain change (not a level change)", () => {
+    const d = diffOf(V1, V1.replace("<h2>Costs</h2>", "<h2>Budget</h2>"));
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.previous?.text, c.levelChanged])).toEqual([
+      ["changed", "Budget", "Costs", undefined],
+    ]);
+  });
+
+  it("pairs only inside the gap between aligned blocks: the demoted Overview is Y's, X's is the one removed", () => {
+    const a = "<h2>X</h2><h3>Overview</h3><p>x1</p><h2>Y</h2><h3>Overview</h3><p>y1</p>";
+    const b = "<h2>X</h2><p>x1</p><h2>Y</h2><h4>Overview</h4><p>y1</p>";
+    const d = diffOf(a, b);
+    expect(d.removed.map((r) => [r.tag, r.text, r.sectionPath])).toEqual([["h3", "Overview", "X \u203a Overview"]]);
+    const level = d.changes.find((c) => c.levelChanged)!;
+    expect([level.block.tag, level.previous?.sectionPath]).toEqual(["h4", "Y \u203a Overview"]);
+    // y1 never reads as moved; x1 really did lose its section.
+    expect(d.changes.filter((c) => c.kind === "moved").map((c) => c.block.text)).toEqual(["x1"]);
+    expect(lineFor(a, b)).not.toMatch(/y1/);
+  });
+
+  it("an unrelated same-text heading elsewhere is a remove + add, not a level change", () => {
+    const a = "<h2>A</h2><p>a</p><h2>Notes</h2><p>old note</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+    const b = "<h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p><h3>Notes</h3><p>brand new</p>";
+    const d = diffOf(a, b);
+    expect(d.changes.some((c) => c.levelChanged)).toBe(false);
+    expect(lineFor(a, b)).toBe("Added: Notes; Removed: section Notes (1 paragraph)");
+  });
+
+  it("a section moved with its body AND re-levelled: one level change, and the heading's own move is counted", () => {
+    const a = "<h2>A</h2><p>a</p><h2>Notes</h2><p>n1</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+    const moved = "<h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p><h2>Notes</h2><p>n1</p>";
+    expect(diffOf(a, moved).moved).toBe(2); // the control: a plain move counts heading + body
+    const b = moved.replace("<h2>Notes</h2>", "<h3>Notes</h3>");
+    const d = diffOf(a, b);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.levelChanged])).toEqual([["changed", "Notes", true]]);
+    expect(d.removed).toEqual([]);
+    expect(d.moved).toBe(2);
+    expect(lineFor(a, b)).toBe("Changed: Notes (h2\u2192h3); 2 blocks moved");
+  });
+
+  it("one shared boilerplate block isn't enough to link a moved, re-levelled section: remove + add", () => {
+    const a = "<h2>A</h2><p>a</p><h2>Notes</h2><p>Old detail one.</p><p>Old detail two.</p><p>TBD</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+    const b = "<h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p><h3>Notes</h3><p>Entirely new.</p><p>TBD</p>";
+    const d = diffOf(a, b);
+    expect(d.changes.some((c) => c.levelChanged)).toBe(false);
+    expect(d.removed.filter((r) => r.heading).map((r) => r.text)).toEqual(["Notes"]);
+    expect(lineFor(a, b)).toMatch(/^Added: Notes;/);
+    expect(lineFor(a, b)).not.toMatch(/h2\u2192h3/);
+  });
+
+  it("duplicate same-text headings in one gap pair only by body evidence (the second Overview is the demoted one)", () => {
+    const a = "<h2>K</h2><h3>Overview</h3><p>first</p><h3>Overview</h3><p>second</p><h2>Z</h2>";
+    const b = "<h2>K</h2><h4>Overview</h4><p>second</p><h2>Z</h2>";
+    const d = diffOf(a, b);
+    const level = d.changes.find((c) => c.levelChanged)!;
+    expect(level.previous!.text).toBe("Overview");
+    expect(d.changes.filter((c) => c.kind === "moved")).toEqual([]);
+    expect(d.removed.map((r) => [r.tag, r.text])).toEqual([["h3", "Overview"], ["p", "first"]]);
+    // The removed heading is the FIRST Overview (block 1), with "first" under it.
+    expect(d.removed.map((r) => r.sectionId)).toEqual([1, 1]);
+    expect(d.moved).toBe(0);
+  });
+
+  it("duplicate same-text headings with no body evidence stay a remove + add", () => {
+    const a = "<h2>K</h2><h3>Overview</h3><p>first</p><h3>Overview</h3><p>second</p><h2>Z</h2>";
+    const b = "<h2>K</h2><h4>Overview</h4><p>third</p><h2>Z</h2>";
+    expect(diffOf(a, b).changes.some((c) => c.levelChanged)).toBe(false);
+  });
+
+  it("the level label is dropped when two changed sections share the name", () => {
+    const a = "<h2>Option A</h2><h3>Pros</h3><p>Fast</p><h2>Option B</h2><h3>Pros</h3><p>Cheap</p>";
+    const b = "<h2>Option A</h2><h4>Pros</h4><p>Fast</p><h2>Option B</h2><h3>Pros</h3><p>Cheaper</p>";
+    const d = diffOf(a, b);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.levelChanged])).toEqual([
+      ["changed", "Pros", true],
+      ["changed", "Cheaper", undefined],
+    ]);
+    const s = summarizePageDiff(d);
+    expect(s.headingLevels).toBeUndefined();
+    expect(formatPageDiffSummary(s)).toBe("Changed: Pros");
+  });
+
+  it("exactly half the old body following (and a minority of the new body) doesn't link: remove + add", () => {
+    const a = "<h2>A</h2><p>a</p><h2>Notes</h2><p>Old detail one.</p><p>TBD</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+    const b = "<h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p><h3>Notes</h3><p>New one.</p><p>New two.</p><p>New three.</p><p>TBD</p>";
+    const d = diffOf(a, b);
+    expect(d.changes.some((c) => c.levelChanged)).toBe(false);
+    expect(lineFor(a, b)).toMatch(/^Added: Notes;/);
+  });
+});

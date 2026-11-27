@@ -98,6 +98,8 @@ export interface PageBlockChange {
   block: PageBlock;
   /** The old block a "changed" or "moved" one came from. */
   previous?: PageBlock;
+  /** #727 — a heading whose only change is its level (h2 → h3, same text). */
+  levelChanged?: boolean;
 }
 
 export interface PageBlockDiff {
@@ -541,10 +543,30 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
     movedPairs.add(j);
   }
 
-  // Pair the rest inside each gap between aligned pairs.
   const changeAt = new Map<number, PageBlockChange>();
   const removed: PageBlock[] = [];
   const headingMap = new Map<number, number>();
+
+  // #727 — body evidence for heading identity: how many same-text body
+  // blocks went from under old heading oi to under new heading nj, and how
+  // many body blocks each old section had.
+  const bodyFollow = new Map<string, number>();
+  const bodySize = new Map<number, number>();
+  for (const o of oldBlocks) if (!o.heading && o.sectionId >= 0) bodySize.set(o.sectionId, (bodySize.get(o.sectionId) ?? 0) + 1);
+  const newBodySize = new Map<number, number>();
+  for (const nb of newBlocks) if (!nb.heading && nb.sectionId >= 0) newBodySize.set(nb.sectionId, (newBodySize.get(nb.sectionId) ?? 0) + 1);
+  for (const [i, j] of same) {
+    const o = oldBlocks[i]!, nb = newBlocks[j]!;
+    if (o.heading || nb.heading || o.sectionId < 0 || nb.sectionId < 0) continue;
+    const k = `${o.sectionId}:${nb.sectionId}`;
+    bodyFollow.set(k, (bodyFollow.get(k) ?? 0) + 1);
+  }
+  const levelPair = (i: number, j: number) => {
+    changeAt.set(j, { kind: "changed", block: newBlocks[j]!, previous: oldBlocks[i]!, levelChanged: true });
+    headingMap.set(i, j);
+  };
+
+  // Pair the rest inside each gap between aligned pairs.
   const bounds: Array<[number, number]> = [[-1, -1], ...aligned, [a.length, b.length]];
   for (let g = 0; g + 1 < bounds.length; g++) {
     const [a0, b0] = bounds[g]!;
@@ -560,6 +582,25 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
       changeAt.set(j, { kind: "changed", block: newBlocks[j]!, previous: oldBlocks[i]! });
       if (oldBlocks[i]!.heading && newBlocks[j]!.heading) headingMap.set(i, j);
     };
+    // 0. #727 — a heading with the same text but another level (h2 → h3) in
+    // this gap is the same section: one quiet "changed" on the heading, never
+    // a remove + add, and the section keeps its identity so the blocks under
+    // it don't read as moved. Only within the gap: a same-text heading
+    // elsewhere is a different section. One candidate each side pairs; with
+    // more, only if body evidence picks out exactly one pair — otherwise it
+    // stays a remove + add.
+    const oldByText = new Map<string, number[]>();
+    const newByText = new Map<string, number[]>();
+    for (const i of olds) if (oldBlocks[i]!.heading) { const q = oldByText.get(oldBlocks[i]!.text); if (q) q.push(i); else oldByText.set(oldBlocks[i]!.text, [i]); }
+    for (const j of news) if (newBlocks[j]!.heading) { const q = newByText.get(newBlocks[j]!.text); if (q) q.push(j); else newByText.set(newBlocks[j]!.text, [j]); }
+    for (const [text, js] of newByText) {
+      const is = oldByText.get(text);
+      if (!is) continue;
+      if (is.length === 1 && js.length === 1) { paired.add(is[0]!); levelPair(is[0]!, js[0]!); continue; }
+      const hits: Array<[number, number]> = [];
+      for (const i of is) for (const j of js) if (bodyFollow.get(`${i}:${j}`)) hits.push([i, j]);
+      if (hits.length === 1) { paired.add(hits[0]![0]); levelPair(hits[0]![0], hits[0]![1]); }
+    }
     // 1. Same tag under the same heading.
     const bySection = new Map<string, number[]>();
     for (const i of olds) {
@@ -570,6 +611,7 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
     }
     const unpairedNew: number[] = [];
     for (const j of news) {
+      if (changeAt.has(j)) continue;
       const nb = newBlocks[j]!;
       const q = bySection.get(`${nb.tag}\u0001${nb.heading ? "" : nb.section}`);
       let hit: number | undefined;
@@ -588,13 +630,47 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
     for (const i of olds) if (!paired.has(i)) removed.push(oldBlocks[i]!);
   }
 
+  // #727 — a section that moved AND changed its heading's level: its old
+  // heading (removed) and new one (added) share their text, and the body
+  // went with it: the same-text blocks that followed are MORE than half of
+  // the old section's body and at least half of the new section's body. That
+  // is the same section, moved: one quiet level change plus a counted move.
+  // Among same-text candidates, body evidence picks the pair: a pair is used
+  // only when that evidence qualifies exactly one partner for each side;
+  // anything else stays a remove + add.
+  let movedHeadings = 0;
+  const removedHeads = removed.filter((r) => r.heading).map((r) => r.sectionId);
+  if (removedHeads.length) {
+    const addedHeads = [...changeAt.entries()].filter(([, c]) => c.kind === "added" && c.block.heading).map(([j]) => j);
+    const cands: Array<[number, number]> = [];
+    for (const oi of removedHeads) {
+      for (const nj of addedHeads) {
+        if (oldBlocks[oi]!.text !== newBlocks[nj]!.text) continue;
+        const followed = bodyFollow.get(`${oi}:${nj}`) ?? 0;
+        if (followed >= 1 && followed * 2 > (bodySize.get(oi) ?? 0) && followed * 2 >= (newBodySize.get(nj) ?? 0)) cands.push([oi, nj]);
+      }
+    }
+    const usedOld = new Set<number>();
+    for (const [oi, nj] of cands) {
+      if (cands.filter(([x, y]) => x === oi || y === nj).length !== 1) continue;
+      usedOld.add(oi);
+      levelPair(oi, nj);
+      movedHeadings++;
+    }
+    if (usedOld.size) {
+      const keep = removed.filter((r) => !(r.heading && usedOld.has(r.sectionId)));
+      removed.length = 0;
+      removed.push(...keep);
+    }
+  }
+
   // Map sections by identity, then classify every same-text pair.
   for (const [i, j] of same) if (oldBlocks[i]!.heading && newBlocks[j]!.heading) headingMap.set(i, j);
   const sameSection = (o: PageBlock, nb: PageBlock): boolean => {
     if (o.sectionId < 0 || nb.sectionId < 0) return o.sectionId < 0 && nb.sectionId < 0;
     return headingMap.get(o.sectionId) === nb.sectionId;
   };
-  let moved = 0;
+  let moved = movedHeadings;
   for (const [i, j] of same) {
     const o = oldBlocks[i]!, nb = newBlocks[j]!;
     if (nb.heading) { if (movedPairs.has(j)) moved++; continue; }
@@ -748,6 +824,8 @@ export type PageDiffState = "identical" | "markup-only" | "outside-blocks" | "ch
 export interface PageDiffSummary {
   state: PageDiffState;
   changedSections: string[];
+  /** #727 — sections whose heading only changed level: name → "h2→h3". */
+  headingLevels?: Record<string, string>;
   addedSections: string[];
   removedSections: RemovedSection[];
   removed: RemovedGroup[];
@@ -764,6 +842,19 @@ export function summarizePageDiff(diff: PageBlockDiff & Partial<Pick<PageVersion
   const addedSections: string[] = [];
   const changedSections: string[] = [];
   const movedAcross: MovedAcross[] = [];
+  // A level label only when its name is unambiguous: one changed section by
+  // that name (two same-named sections would otherwise share a label).
+  const headingLevels: Record<string, string> = {};
+  const idsByName: Record<string, number[]> = {};
+  for (const c of diff.changes) {
+    const ids = (idsByName[c.block.section] ??= []);
+    if (!ids.includes(c.block.sectionId)) ids.push(c.block.sectionId);
+  }
+  for (const c of diff.changes) {
+    if (c.levelChanged && c.previous && idsByName[c.block.section]!.length === 1) {
+      headingLevels[c.block.section] = `${c.previous.tag}\u2192${c.block.tag}`;
+    }
+  }
   for (const c of diff.changes) {
     if (c.kind === "added" && c.block.heading && !addedSections.includes(c.block.section)) addedSections.push(c.block.section);
   }
@@ -817,15 +908,15 @@ export function summarizePageDiff(diff: PageBlockDiff & Partial<Pick<PageVersion
       : diff.textChangedOutsideBlocks
         ? "outside-blocks"
         : "markup-only";
-  return { state, changedSections, addedSections, removedSections, removed, movedAcross, movedCount: diff.moved, changeCount: diff.changes.length };
+  return { state, changedSections, ...(Object.keys(headingLevels).length ? { headingLevels } : {}), addedSections, removedSections, removed, movedAcross, movedCount: diff.moved, changeCount: diff.changes.length };
 }
 
 export function sectionLabel(section: string): string {
   return section === TOP ? "Top of page" : section;
 }
 
-function list(names: string[], max = 6): string {
-  const shown = names.slice(0, max).map(sectionLabel);
+function list(names: string[], max = 6, label: (name: string) => string = sectionLabel): string {
+  const shown = names.slice(0, max).map(label);
   return names.length > max ? `${shown.join(", ")} and ${names.length - max} more` : shown.join(", ");
 }
 
@@ -844,7 +935,11 @@ export const STATE_COPY: Record<Exclude<PageDiffState, "changes">, string> = {
 export function formatPageDiffSummary(s: PageDiffSummary): string {
   if (s.state !== "changes") return STATE_COPY[s.state];
   const parts: string[] = [];
-  if (s.changedSections.length) parts.push(`Changed: ${list(s.changedSections)}`);
+  if (s.changedSections.length) {
+    const levels = s.headingLevels ?? {};
+    const label = (n: string) => (Object.hasOwn(levels, n) ? `${sectionLabel(n)} (${levels[n]})` : sectionLabel(n));
+    parts.push(`Changed: ${list(s.changedSections, 6, label)}`);
+  }
   if (s.addedSections.length) parts.push(`Added: ${list(s.addedSections)}`);
   if (s.movedAcross.length) {
     const shown = s.movedAcross.slice(0, 3).map((m) => `“${clipQuote(m.text)}” from ${sectionLabel(m.from)} to ${sectionLabel(m.to)}`);
