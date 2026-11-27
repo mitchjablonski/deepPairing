@@ -319,6 +319,258 @@ describe("annotator main — event wiring", () => {
     expect(document.querySelector("img")).toBeNull();
   });
 
+  // --- #714 gap 7: pin colours, clickable badges, hover previews ----------
+  const pinsMsg = (extra: Record<string, unknown> = {}) =>
+    new MessageEvent("message", {
+      data: {
+        dp: "pins",
+        anchors: [
+          { kind: "element", locator: "#title", quote: "Cache invalidation" },
+          { kind: "element", locator: ".intro", quote: "You can pick one of three strategies for the session cache." },
+        ],
+        states: ["open", "addressed"],
+        ids: ["c_open", "c_done"],
+        ...extra,
+      },
+      source: window,
+    });
+  const badges = () => Array.from(document.querySelectorAll("dp-annotator-badge")) as HTMLElement[];
+  /** Real browsers hit-test: give the DOM an elementsFromPoint (plain page
+   *  text under every badge unless `under` says otherwise) and on-screen
+   *  boxes. Without it badges stay inert (the conservative fallback). */
+  function hitTesting(under: () => Element = () => document.body) {
+    (document as any).elementsFromPoint = () => [under()];
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 40, y: 40, left: 40, top: 40, right: 58, bottom: 58, width: 18, height: 18, toJSON: () => ({}),
+    } as DOMRect);
+  }
+  afterEach(() => {
+    delete (document as any).elementsFromPoint;
+  });
+
+  it("colours each pin by the state the parent sent: open amber, addressed greyed", () => {
+    window.dispatchEvent(pinsMsg());
+    const pins = Array.from(document.querySelectorAll("dp-annotator-pin")) as HTMLElement[];
+    expect(pins.map((p) => p.getAttribute("data-dp-pin-state"))).toEqual(["open", "addressed"]);
+    expect(pins[0]!.style.getPropertyValue("outline")).toContain("solid");
+    expect(pins[1]!.style.getPropertyValue("outline")).toContain("dashed");
+    expect(badges()[0]!.style.getPropertyValue("background")).not.toBe(badges()[1]!.style.getPropertyValue("background"));
+    // An unknown state reads as open; the layer and pin outlines never take clicks.
+    window.dispatchEvent(pinsMsg({ states: ["bogus", 7] }));
+    expect(Array.from(document.querySelectorAll("dp-annotator-pin")).map((p) => p.getAttribute("data-dp-pin-state"))).toEqual(["open", "open"]);
+    expect((document.querySelector("dp-annotator-layer") as HTMLElement).style.getPropertyValue("pointer-events")).toBe("none");
+    for (const p of document.querySelectorAll("dp-annotator-pin")) expect((p as HTMLElement).style.getPropertyValue("pointer-events")).toBe("none");
+  });
+
+  it("a click on a pin's badge posts {dp:'pin-click', id} and no anchor; the page under it is untouched", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    const pageClick = vi.fn();
+    document.body.addEventListener("click", pageClick);
+    const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+    badges()[1]!.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([{ dp: "pin-click", id: "c_done" }]);
+    expect(anchors()).toEqual([]);
+    expect(pageClick).not.toHaveBeenCalled();
+    document.body.removeEventListener("click", pageClick);
+  });
+
+  it("badges are hit targets only while pointing is on and page scripts aren't running", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["auto", "auto"]);
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: false, scripts: false }, source: window }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: true }, source: window }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    // Even a click that still lands on a badge (e.g. dispatched) posts nothing then.
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "mode", annotate: true, scripts: false }, source: window }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["auto", "auto"]);
+  });
+
+  it("a pin without a valid id gets no hit target", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg({ ids: ["", "x".repeat(129)] }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+  });
+
+  it("an authored element named like our badge is never treated as a pin", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    const fake = document.createElement("dp-annotator-badge");
+    fake.setAttribute("data-dp-annotator", "");
+    fake.textContent = "1";
+    document.body.appendChild(fake);
+    fake.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+  });
+
+  it("hovering a badge posts {dp:'pin-hover', id, x, y}; moving off posts id:null (never comment text)", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    badges()[0]!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 3, clientY: 4 }));
+    const hovers = () => posted.filter((m) => m?.dp === "pin-hover");
+    expect(hovers()).toEqual([{ dp: "pin-hover", id: "c_open", x: 40, y: 58 }]);
+    // Moving within the same badge doesn't re-post.
+    badges()[0]!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(hovers()).toHaveLength(1);
+    document.getElementById("title")!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(hovers().pop()).toEqual({ dp: "pin-hover", id: null });
+  });
+
+  it("Cmd/Ctrl-click on a badge passes through (no pin click); holding the key makes badges inert", () => {
+    hitTesting();
+    window.dispatchEvent(pinsMsg());
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Control", ctrlKey: true }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Control" }));
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["auto", "auto"]);
+    // A pointer move with the modifier held does the same.
+    document.getElementById("title")!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, metaKey: true }));
+    expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+  });
+
+  /** Real-ish geometry: every page element has `anchor`'s box; a badge's box
+   *  follows its pin's and its own left/top (so placement is measurable);
+   *  `under(x, y)` is what the page has at a point. */
+  function geometry(anchor: { left: number; top: number; width: number; height: number }, under: (x: number, y: number) => Element) {
+    (document as any).elementsFromPoint = (x: number, y: number) => [under(x, y)];
+    const box = (left: number, top: number, width: number, height: number) =>
+      ({ x: left, y: top, left, top, width, height, right: left + width, bottom: top + height, toJSON: () => ({}) }) as DOMRect;
+    return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.localName === "dp-annotator-badge") {
+        const pin = this.parentElement as HTMLElement;
+        const px = (el: HTMLElement, k: string) => parseFloat(el.style.getPropertyValue(k)) || 0;
+        return box(px(pin, "left") + px(this, "left"), px(pin, "top") + px(this, "top"), 18, 18);
+      }
+      return box(anchor.left, anchor.top, anchor.width, anchor.height);
+    });
+  }
+  const badgeBox = () => badges()[0]!.getBoundingClientRect();
+  const onePin = () => window.dispatchEvent(new MessageEvent("message", {
+    data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }], states: ["open"], ids: ["c_a"] },
+    source: window,
+  }));
+
+  it("the badge sits fully outside the anchored element's top-left corner when that is on screen", () => {
+    const rect = geometry({ left: 100, top: 100, width: 300, height: 40 }, () => document.body);
+    try {
+      window.dispatchEvent(pinsMsg());
+      expect(badges()[0]!.style.getPropertyValue("left")).toBe("-20px");
+      expect(badges()[0]!.style.getPropertyValue("top")).toBe("-20px");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it.each([
+    ["a full-bleed anchor at x=0", { left: 0, top: 100, width: 1024, height: 40 }],
+    ["an anchor at the common 8px margin", { left: 8, top: 100, width: 200, height: 40 }],
+    ["an anchor flush with the right edge", { left: 824, top: 100, width: 200, height: 40 }],
+    ["an anchor at the document's top edge", { left: 0, top: 0, width: 1024, height: 40 }],
+  ])("the badge stays fully on screen (and live over plain text) for %s", (_label, anchor) => {
+    const rect = geometry(anchor, () => document.body);
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("an edge badge skips a spot over a native control for one clear of it", () => {
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"field\">");
+    const field = document.getElementById("field")!;
+    // A control just right of the anchor: the outside-right spot is taken.
+    const rect = geometry({ left: 8, top: 100, width: 200, height: 40 }, (x) => (x >= 200 ? field : document.body));
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThan(200);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("when every on-screen spot covers a native control, the badge stays visible but inert", () => {
+    document.body.insertAdjacentHTML("beforeend", "<input id=\"field\">");
+    const field = document.getElementById("field")!;
+    const rect = geometry({ left: 0, top: 100, width: 300, height: 40 }, () => field);
+    try {
+      onePin();
+      const b = badgeBox();
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+      badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("without hit-testing (no elementsFromPoint) every badge stays inert: what lies under it is unknown", () => {
+    window.dispatchEvent(pinsMsg());
+    expect(badges().map((b) => b.style.getPropertyValue("pointer-events"))).toEqual(["none", "none"]);
+    badges()[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(posted.filter((m) => m?.dp === "pin-click")).toEqual([]);
+  });
+
+  it("with hit-testing, a badge over a native control (here an input) stays inert; over plain text it is live", () => {
+    document.body.innerHTML = "<p id=\"a\">Alpha</p><input id=\"field\"><p id=\"b\">Beta</p>";
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 40, y: 40, left: 40, top: 40, right: 58, bottom: 58, width: 18, height: 18, toJSON: () => ({}),
+    } as DOMRect);
+    let under: Element = document.getElementById("field")!;
+    (document as any).elementsFromPoint = () => [under];
+    try {
+      const send = () => window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { dp: "pins", anchors: [{ kind: "element", locator: "#a", quote: "Alpha" }], states: ["open"], ids: ["c_a"] },
+          source: window,
+        }),
+      );
+      send();
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("none");
+      under = document.getElementById("b")!;
+      send();
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      delete (document as any).elementsFromPoint;
+      rect.mockRestore();
+    }
+  });
+
+  it("{dp:'focus', anchor, block:'end'} scrolls the frame itself so the spot sits ~24px above its bottom edge", () => {
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { dp: "focus", anchor: { kind: "element", locator: "#title", quote: "Cache invalidation" }, block: "end" },
+        source: window,
+      }),
+    );
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    // Bottom of the spot lands 24px above the frame's bottom edge.
+    const r = document.getElementById("title")!.getBoundingClientRect();
+    expect(scrollTo).toHaveBeenLastCalledWith(0, Math.max(0, r.bottom - (window.innerHeight - 24)));
+    // A bogus anchor does nothing.
+    window.dispatchEvent(new MessageEvent("message", { data: { dp: "focus", anchor: "nope", block: "end" }, source: window }));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
   it("re-resolves after the page changes: a removed target reports not found, without a new pins message", async () => {
     window.dispatchEvent(
       new MessageEvent("message", { data: { dp: "pins", anchors: [{ kind: "element", locator: "#title", quote: "Cache invalidation" }] }, source: window }),

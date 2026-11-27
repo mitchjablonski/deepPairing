@@ -89,6 +89,16 @@ describe("CommentThread — renders replies under their parent", () => {
     expect(screen.queryByText(/awaiting agent/i)).not.toBeInTheDocument();
   });
 
+  it("#714 gap 7 — a comment a page revision named as addressed says 'addressed in vN', not 'seen by agent'", () => {
+    const c = mk({
+      id: "c1", author: "human", content: "Fix the TTL row", acknowledged: true,
+      addressedIn: { artifactId: "art_v3", version: 3 },
+    } as any);
+    render(<CommentThread artifactId="art_1" comments={[c]} />);
+    expect(screen.getByTestId("comment-addressed-in")).toHaveTextContent("✓ addressed in v3");
+    expect(screen.queryByText(/seen by agent/i)).not.toBeInTheDocument();
+  });
+
   it("renders markdown in a comment body — **bold** becomes <strong>, not literal asterisks", () => {
     const c = mk({ id: "m1", author: "agent", content: "This is **important** to note." });
     render(<CommentThread artifactId="art_1" comments={[c]} />);

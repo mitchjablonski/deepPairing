@@ -162,6 +162,14 @@ function fromFrame(source: unknown, data: unknown, opts: { frameFocused?: boolea
   else withActiveElement(frame(), dispatch);
 }
 
+/** A frame's pins-status report for the pin list the companion last sent it
+ *  (reports echo that list's key; a stale or keyless one is ignored). */
+function pinsStatus(win: { postMessage: ReturnType<typeof vi.fn> }, found: boolean[]) {
+  const last = () => win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "pins").at(-1) as any;
+  if (!last()) fromFrame(win, { dp: "ready" });
+  fromFrame(win, { dp: "pins-status", found, key: last().key });
+}
+
 const cellAnchor = {
   kind: "cell",
   locator: "table > tbody > tr:nth-of-type(2) > td:nth-of-type(2)",
@@ -317,15 +325,16 @@ describe("PageArtifact — annotation (#680 slice 2)", () => {
     const win = fakeFrameWindow();
     fromFrame(win, { dp: "ready" });
     expect(win.postMessage).toHaveBeenCalledWith(
-      { dp: "pins", anchors: [{ kind: "text", locator: "p", quote: "a sentence from v1" }], key: expect.any(String) },
+      { dp: "pins", anchors: [{ kind: "text", locator: "p", quote: "a sentence from v1" }], states: ["open"], ids: ["cmt_old"], key: expect.any(String) },
       "*",
     );
-    fromFrame(win, { dp: "pins-status", found: [false] });
+    pinsStatus(win, [false]);
     expect(screen.getByTestId("page-anchor-missing")).toHaveTextContent(/not found in this version/i);
     expect(within(screen.getByTestId("page-annotations")).getByText(/a sentence from v1/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("page-annotation"));
-    expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", index: 0 }, "*");
+    // Narrow (the composer docks below the frame): the pin goes near the frame's bottom, next to the composer.
+    expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", index: 0, block: "end" }, "*");
     // An explicit open from the companion still focuses the composer.
     expect(document.activeElement).toBe(screen.getByLabelText("Comment on the selected spot"));
   });
@@ -558,7 +567,7 @@ describe("PageArtifact — file watch (#680 slice 3)", () => {
     expect(within(screen.getByTestId("page-annotations")).getByText(/this sentence is wrong/)).toBeInTheDocument();
     // The frame's live re-find wins once it reports.
     const win = fakeFrameWindow();
-    fromFrame(win, { dp: "pins-status", found: [true] });
+    pinsStatus(win, [true]);
     expect(screen.queryByTestId("page-anchor-missing")).not.toBeInTheDocument();
   });
 
@@ -1023,7 +1032,7 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     for (const c of comments) useArtifactStore.getState().addComment(c);
     render(<PageArtifact artifact={pageArtifact} />);
     const win = fakeFrameWindow();
-    fromFrame(win, { dp: "pins-status", found: [true, true, true, true, false] });
+    pinsStatus(win, [true, true, true, true, false]);
     // A report for a different pin list (4 pins, not 5) is not counted.
     fromFrame(win, { ...OUTLINE, pins: [2, 2, 0, 1] });
     expect(screen.queryAllByTestId("page-outline-comments")).toHaveLength(0);
@@ -1345,5 +1354,351 @@ describe("PageArtifact — outline and asks (#714 gaps 4+5)", () => {
     const strip = screen.getByTestId("page-asks");
     expect(within(strip).queryByRole("button", { name: /Reply to/ })).not.toBeInTheDocument();
     expect(within(strip).getAllByRole("button", { name: /Show on the page/ })).toHaveLength(2);
+  });
+});
+
+// --- #714 gaps 7+8: the review queue and the composer beside its anchor ------
+
+describe("PageArtifact — review queue and composer placement (#714 gaps 7+8)", () => {
+  const at = (n: number) => new Date(Date.UTC(2026, 10, 20, 10, n)).toISOString();
+  const root = (id: string, n: number, quote: string, extra: Partial<Comment> = {}): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id, htmlAnchor: { kind: "text", locator: "p", quote } },
+    parentCommentId: null,
+    author: "human",
+    content: `comment on ${quote}`,
+    acknowledged: false,
+    createdAt: at(n),
+    ...extra,
+  });
+  const reply = (id: string, parent: string, n: number, author: "human" | "agent"): Comment => ({
+    id,
+    sessionId: "sess_1",
+    target: { artifactId: pageArtifact.id },
+    parentCommentId: parent,
+    author,
+    content: `${author} reply`,
+    acknowledged: false,
+    createdAt: at(n),
+  });
+  /** open (not seen), open (seen by agent, 1 human reply), addressed in a
+   *  revision, answered by the agent (1 agent reply), and one whose spot is
+   *  gone (orphaned once the frame reports). */
+  function seed() {
+    const add = useArtifactStore.getState().addComment;
+    add(root("c_open", 1, "alpha"));
+    add(root("c_seen", 2, "beta", { acknowledged: true }));
+    add(reply("r_seen", "c_seen", 3, "human"));
+    add(root("c_rev", 4, "gamma", { acknowledged: true, addressedIn: { artifactId: "art_page_v2", version: 2 } }));
+    add(root("c_ans", 5, "delta"));
+    add(reply("r_ans", "c_ans", 6, "agent"));
+    add(root("c_gone", 7, "epsilon"));
+  }
+  const rows = () => screen.getAllByTestId("page-annotation");
+  const ids = () => rows().map((r) => r.getAttribute("data-comment-id"));
+
+  it("filters Open / Addressed / Orphaned with counts, and says each state in its own words", async () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    pinsStatus(win, [true, true, true, true, false]);
+    const filters = screen.getByTestId("page-queue-filters");
+    expect(within(filters).getByTestId("page-queue-filter-open")).toHaveTextContent("Open 2");
+    expect(within(filters).getByTestId("page-queue-filter-addressed")).toHaveTextContent("Addressed 2");
+    expect(within(filters).getByTestId("page-queue-filter-orphaned")).toHaveTextContent("Orphaned 1");
+    expect(within(filters).getByTestId("page-queue-filter-all")).toHaveTextContent("All 5");
+    // Open is the default while anything is open.
+    expect(within(filters).getByTestId("page-queue-filter-open")).toHaveAttribute("aria-pressed", "true");
+    expect(ids()).toEqual(["c_open", "c_seen"]);
+    expect(within(rows()[0]!).getByTestId("page-annotation-state")).toHaveTextContent(/^Open$/);
+    expect(within(rows()[1]!).getByTestId("page-annotation-state")).toHaveTextContent("Seen by agent");
+    expect(within(rows()[1]!).getByTestId("page-annotation-replies")).toHaveTextContent("1 reply");
+
+    await userEvent.click(within(filters).getByTestId("page-queue-filter-addressed"));
+    expect(ids()).toEqual(["c_rev", "c_ans"]);
+    expect(within(rows()[0]!).getByTestId("page-annotation-state")).toHaveTextContent("Addressed in v2");
+    expect(within(rows()[1]!).getByTestId("page-annotation-state")).toHaveTextContent("Answered by the agent");
+    expect(within(rows()[1]!).getByTestId("page-annotation-replies")).toHaveTextContent("1 reply");
+    // Pin numbers keep the frame's numbering, whatever the filter.
+    expect(within(rows()[0]!).getByTestId("page-annotation-pin")).toHaveTextContent("3");
+
+    await userEvent.click(within(filters).getByTestId("page-queue-filter-orphaned"));
+    expect(ids()).toEqual(["c_gone"]);
+    expect(within(rows()[0]!).getByTestId("page-anchor-missing")).toHaveTextContent("Not found in this version");
+  });
+
+  it("sends each pin's colour state and comment id in the pins message (never comment text)", () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "ready" });
+    const pins = win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "pins").pop() as any;
+    expect(pins.states).toEqual(["open", "open", "addressed", "addressed", "open"]);
+    expect(pins.ids).toEqual(["c_open", "c_seen", "c_rev", "c_ans", "c_gone"]);
+    expect(JSON.stringify(pins)).not.toContain("comment on");
+    // A found report doesn't re-send the pins (no feedback loop).
+    const before = win.postMessage.mock.calls.filter((c) => (c[0] as any)?.dp === "pins").length;
+    pinsStatus(win, [true, true, true, true, false]);
+    pinsStatus(win, [true, true, true, true, false]);
+    expect(win.postMessage.mock.calls.filter((c) => (c[0] as any)?.dp === "pins").length).toBe(before);
+  });
+
+  it("a pin click highlights and reveals its comment (switching filter if needed), and posts nothing", async () => {
+    seed();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fetchMock.mockClear();
+    fromFrame(win, { dp: "pin-click", id: "c_rev" });
+    // c_rev is addressed: the queue switches to Addressed to show it.
+    expect(screen.getByTestId("page-queue-filter-addressed")).toHaveAttribute("aria-pressed", "true");
+    const row = rows().find((r) => r.getAttribute("data-comment-id") === "c_rev")!;
+    expect(row).toHaveAttribute("aria-current", "true");
+    expect(scroll).toHaveBeenCalled();
+    // The reviewer was in the frame, so focus follows to the row.
+    expect(document.activeElement).toBe(row);
+    // Display-only: no composer opened, no request made.
+    expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Unknown ids and malformed reports are ignored.
+    fromFrame(win, { dp: "pin-click", id: "c_nope" });
+    fromFrame(win, { dp: "pin-click", id: 3 });
+    expect(rows().find((r) => r.getAttribute("aria-current") === "true")?.getAttribute("data-comment-id")).toBe("c_rev");
+    delete (Element.prototype as any).scrollIntoView;
+  });
+
+  it("ignores pin clicks and pin hovers once the page's scripts run", async () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    await userEvent.click(screen.getByRole("button", { name: /run page scripts/i }));
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pin-click", id: "c_rev" });
+    fromFrame(win, { dp: "pin-hover", id: "c_open", x: 10, y: 10 });
+    expect(screen.getByTestId("page-queue-filter-open")).toHaveAttribute("aria-pressed", "true");
+    expect(rows().some((r) => r.getAttribute("aria-current") === "true")).toBe(false);
+    expect(screen.queryByTestId("page-pin-preview")).not.toBeInTheDocument();
+  });
+
+  it("a pin hover shows the comment's snippet as parent-rendered text; leaving clears it", () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "pin-hover", id: "c_seen", x: 40, y: 60 });
+    const preview = screen.getByTestId("page-pin-preview");
+    expect(preview).toHaveTextContent("#2");
+    expect(preview).toHaveTextContent("Seen by agent");
+    expect(preview).toHaveTextContent("1 reply");
+    expect(preview).toHaveTextContent("comment on beta");
+    fromFrame(win, { dp: "pin-hover", id: null });
+    expect(screen.queryByTestId("page-pin-preview")).not.toBeInTheDocument();
+    // Malformed coordinates are ignored.
+    fromFrame(win, { dp: "pin-hover", id: "c_seen", x: "40", y: 60 });
+    expect(screen.queryByTestId("page-pin-preview")).not.toBeInTheDocument();
+  });
+
+  it("ignores a pins-status report for a stale or unkeyed pin list (no positional misattribution)", () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    fromFrame(win, { dp: "ready" });
+    const lastPins = () => win.postMessage.mock.calls.map((c) => c[0]).filter((m: any) => m?.dp === "pins").at(-1) as any;
+    const oldKey = lastPins().key as string;
+    const filters = () => screen.getByTestId("page-queue-filters");
+    const count = (f: string) => within(filters()).queryByTestId(`page-queue-filter-${f}`)?.textContent ?? "";
+    // c_open is deleted while the frame's report for the 5-pin list is in flight.
+    act(() => {
+      useArtifactStore.setState((st) => ({
+        comments: { ...st.comments, [pageArtifact.id]: st.comments[pageArtifact.id]!.filter((c) => c.id !== "c_open") },
+      }));
+    });
+    // That report (c_open missing at index 0) lands now: index 0 is c_seen in
+    // the current list, which must NOT turn Orphaned.
+    fromFrame(win, { dp: "pins-status", found: [false, true, true, true, true], key: oldKey });
+    expect(count("open")).toBe("Open 2");
+    expect(count("orphaned")).not.toContain("Orphaned 1");
+    // A keyless report is unbound too.
+    fromFrame(win, { dp: "pins-status", found: [false, true, true, true] });
+    expect(count("open")).toBe("Open 2");
+    expect(count("orphaned")).not.toContain("Orphaned 1");
+    // The report for the current list is used.
+    const newKey = lastPins().key as string;
+    expect(newKey).not.toBe(oldKey);
+    fromFrame(win, { dp: "pins-status", found: [true, true, true, false], key: newKey });
+    expect(count("open")).toBe("Open 1");
+    expect(count("orphaned")).toBe("Orphaned 1");
+  });
+
+  it("outline badges count only comments still open in the queue", () => {
+    seed();
+    render(<PageArtifact artifact={pageArtifact} />);
+    const win = fakeFrameWindow();
+    pinsStatus(win, [true, true, true, true, false]);
+    fromFrame(win, {
+      dp: "outline",
+      headings: [{ level: 1, text: "Only section", locator: "h1" }],
+      pins: [0, 0, 0, 0, -1],
+      changes: [],
+    });
+    expect(within(screen.getByTestId("page-outline-rail")).getByTestId("page-outline-comments")).toHaveTextContent("2");
+  });
+
+  describe("composer placement", () => {
+    /** A controllable layout: every box reports `size`; ResizeObserver
+     *  callbacks fire on demand. */
+    function stubLayout(width: number, height: number) {
+      const size = { width, height };
+      const callbacks: Array<() => void> = [];
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          cb: () => void;
+          constructor(cb: () => void) { this.cb = cb; callbacks.push(cb); }
+          observe() {}
+          disconnect() {}
+          unobserve() {}
+        },
+      );
+      const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+        () => ({ x: 0, y: 0, top: 0, left: 0, right: size.width, bottom: size.height, width: size.width, height: size.height, toJSON: () => ({}) }) as DOMRect,
+      );
+      return {
+        spy,
+        resize(w: number) {
+          size.width = w;
+          act(() => { for (const cb of callbacks) cb(); });
+        },
+      };
+    }
+
+    it("wide panel: the composer and the queue sit in the right-hand review rail", () => {
+      const { spy } = stubLayout(1400, 800);
+      try {
+        seed();
+        render(<PageArtifact artifact={pageArtifact} />);
+        const win = fakeFrameWindow();
+        fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+        const column = screen.getByTestId("page-review-column");
+        expect(column).toHaveAttribute("data-placement", "rail");
+        const composer = within(column).getByTestId("page-anchor-composer");
+        expect(composer).toHaveAttribute("data-placement", "rail");
+        expect(within(column).getByTestId("page-annotations")).toHaveAttribute("data-variant", "rail");
+        expect(screen.getByTestId("page-review-grid").style.gridTemplateColumns).toBe("minmax(0,1fr) 18rem");
+        expect(document.activeElement).toBe(within(composer).getByLabelText("Comment on the selected spot", { selector: "textarea" }));
+        // Wide: the frame isn't asked to scroll for a spot the reviewer just clicked.
+        expect(win.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ dp: "focus" }), "*");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("narrow panel: the composer docks below the frame, never over it, and the frame scrolls the spot near its bottom", () => {
+      const { spy } = stubLayout(600, 600);
+      const scroll = vi.fn();
+      Element.prototype.scrollIntoView = scroll;
+      try {
+        render(<PageArtifact artifact={pageArtifact} />);
+        const win = fakeFrameWindow();
+        fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+        const composer = screen.getByTestId("page-anchor-composer");
+        expect(composer).toHaveAttribute("data-placement", "below");
+        // Not inside the frame's box, not absolutely positioned anywhere: a
+        // normal block in the review row under the frame.
+        expect(screen.getByTestId("page-frame-box").contains(composer)).toBe(false);
+        expect(screen.getByTestId("page-review-column")).toContainElement(composer);
+        expect(screen.getByTestId("page-review-column").className).toContain("col-span-full");
+        for (let el: HTMLElement | null = composer; el; el = el.parentElement) {
+          expect(el.className).not.toMatch(/\b(absolute|fixed)\b/);
+          expect(el.style.position).not.toMatch(/absolute|fixed/);
+        }
+        expect(screen.queryByTestId("page-composer-floating")).not.toBeInTheDocument();
+        // The frame is asked to put the spot near its bottom edge (next to the composer); the composer is
+        // brought into view with the least scroll; focus is in the textarea
+        // on the FIRST open.
+        expect(win.postMessage).toHaveBeenCalledWith({ dp: "focus", anchor: cellAnchor, block: "end" }, "*");
+        expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
+        expect(document.activeElement).toBe(within(composer).getByLabelText("Comment on the selected spot", { selector: "textarea" }));
+      } finally {
+        spy.mockRestore();
+        delete (Element.prototype as any).scrollIntoView;
+      }
+    });
+
+    it("the composer is one stable mount: focus and text survive a narrow/wide switch", async () => {
+      const layout = stubLayout(600, 600);
+      try {
+        render(<PageArtifact artifact={pageArtifact} />);
+        const win = fakeFrameWindow();
+        fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+        const textarea = screen.getByLabelText("Comment on the selected spot", { selector: "textarea" });
+        expect(document.activeElement).toBe(textarea);
+        await userEvent.type(textarea, "half typed");
+        layout.resize(1400);
+        expect(screen.getByTestId("page-review-column")).toHaveAttribute("data-placement", "rail");
+        expect(screen.getByLabelText("Comment on the selected spot", { selector: "textarea" })).toBe(textarea);
+        expect(document.activeElement).toBe(textarea);
+        layout.resize(600);
+        expect(screen.getByTestId("page-review-column")).toHaveAttribute("data-placement", "below");
+        expect(document.activeElement).toBe(textarea);
+        expect(textarea).toHaveValue("half typed");
+      } finally {
+        layout.spy.mockRestore();
+      }
+    });
+
+    it("clamps the pin preview by its real max width so it stays inside the frame", () => {
+      const { spy } = stubLayout(600, 600);
+      try {
+        seed();
+        render(<PageArtifact artifact={pageArtifact} />);
+        const win = fakeFrameWindow();
+        fromFrame(win, { dp: "pin-hover", id: "c_open", x: 550, y: 40 });
+        const preview = screen.getByTestId("page-pin-preview");
+        expect(preview.style.left).toBe("280px");
+        expect(preview.style.maxWidth).toBe("320px");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("Escape inside Rule this out's confirm step cancels only that step, not the composer", async () => {
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+      await userEvent.click(screen.getByRole("button", { name: "Rule this out" }));
+      const panel = screen.getByTestId("page-rule-out-panel");
+      within(panel).getByRole("button", { name: "Rule it out" }).focus();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByTestId("page-rule-out-panel")).not.toBeInTheDocument();
+      expect(screen.getByTestId("page-anchor-composer")).toBeInTheDocument();
+    });
+
+    it("with no layout measured, the composer falls back to just under the frame", () => {
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+      expect(screen.getByTestId("page-anchor-composer")).toHaveAttribute("data-placement", "below");
+    });
+
+    it("Escape closes the composer and hands focus back to the frame; Close does the same", async () => {
+      render(<PageArtifact artifact={pageArtifact} />);
+      const win = fakeFrameWindow();
+      fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+      const textarea = screen.getByLabelText("Comment on the selected spot", { selector: "textarea" });
+      expect(document.activeElement).toBe(textarea);
+      await userEvent.type(textarea, "keep me");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(frame());
+      // The text is kept as this spot's draft.
+      fromFrame(win, { dp: "anchor", anchor: cellAnchor });
+      expect(screen.getByLabelText("Comment on the selected spot", { selector: "textarea" })).toHaveValue("keep me");
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByTestId("page-anchor-composer")).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(frame());
+    });
   });
 });
