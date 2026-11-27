@@ -872,6 +872,42 @@ describe("authenticated standalone page revision", () => {
 });
 
 describe("authenticated standalone page", () => {
+  it("keeps End behind an admitted page presentation through preflight and receipt commit", async () => {
+    const f = fixture();
+    try {
+      const daemon = f.start();
+      await f.open(daemon);
+      const store = daemon.sessions.get(f.sessionId)!;
+      const closeout = daemon.standaloneCloseout;
+      const operationId = randomUUID();
+      const readMemory = store.getSessionMemory.bind(store);
+      const createArtifact = store.createArtifact.bind(store);
+      let ending: ReturnType<typeof closeout.end> | undefined;
+      let stateAtWrite: string | undefined;
+      vi.spyOn(store, "getSessionMemory").mockImplementationOnce(() => {
+        // Preflight awaits this read. Start End before the presentation resumes.
+        ending = closeout.end(f.sessionId);
+        void ending.catch(() => {});
+        return readMemory();
+      });
+      vi.spyOn(store, "createArtifact").mockImplementationOnce((input) => {
+        stateAtWrite = closeout.state(f.sessionId).state;
+        return createArtifact(input);
+      });
+
+      const response = await f.present(daemon, operationId, page("<p>Accepted before End</p>"));
+      expect(await response.json()).toMatchObject({ structuredContent: { artifactId: expect.any(String) } });
+      expect(ending).toBeDefined();
+      await ending;
+      expect(stateAtWrite).toBe("closing");
+      expect(closeout.state(f.sessionId).state).toBe("ended");
+      const receipt = path.join(f.root, ".deeppairing", "sessions", f.sessionId, `present-page-${operationId}.json`);
+      expect(JSON.parse(fs.readFileSync(receipt, "utf8"))).toMatchObject({ committed: true });
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("presents an inline page, replays the same request ID, and refuses changed input on it", async () => {
     const f = fixture();
     try {

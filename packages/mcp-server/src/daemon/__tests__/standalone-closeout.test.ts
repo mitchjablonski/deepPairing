@@ -83,7 +83,12 @@ describe("standalone End review core", () => {
         rename(from, to);
       });
       try {
-        await expect(coordinator.end(f.sessionId)).rejects.toThrow("Closeout marker interrupted");
+        const ending = coordinator.end(f.sessionId);
+        const waitingSave = coordinator.admitWatchedWrite(f.sessionId);
+        await expect(ending).rejects.toThrow("Closeout marker interrupted");
+        const releaseSave = await waitingSave;
+        expect(releaseSave).toBeTypeOf("function");
+        releaseSave?.();
         expect(coordinator.state(f.sessionId)).toEqual({ state: "open" });
         expect(fs.existsSync(f.marker)).toBe(false);
       } finally {
@@ -91,6 +96,25 @@ describe("standalone End review core", () => {
       }
       await expect(coordinator.end(f.sessionId)).resolves.toMatchObject({ sessionId: f.sessionId });
     } finally {
+      f.fx.dispose();
+    }
+  });
+
+  it("keeps a timed-out watch drain reserved until the save settles", async () => {
+    const f = fixture();
+    let release!: () => void;
+    const save = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const coordinator = new StandaloneCloseout(f.project, () => f.store, 50, undefined, () => save);
+      await expect(coordinator.end(f.sessionId)).rejects.toThrow(/still settling/);
+      expect(fs.existsSync(f.marker)).toBe(false);
+      expect(coordinator.state(f.sessionId)).toEqual({ state: "open" });
+      const retry = coordinator.end(f.sessionId);
+      expect(coordinator.state(f.sessionId)).toEqual({ state: "closing" });
+      release();
+      await expect(retry).resolves.toMatchObject({ sessionId: f.sessionId });
+    } finally {
+      release();
       f.fx.dispose();
     }
   });
@@ -256,7 +280,8 @@ describe("standalone End review core", () => {
       await expect(coordinator.end(f.sessionId)).rejects.toThrow();
       expect(fs.existsSync(f.marker)).toBe(false);
       fs.writeFileSync(f.marker, JSON.stringify({ version: 1, sessionId: "another review", endedAt: new Date().toISOString() }));
-      expect(() => coordinator.admitWrite(f.sessionId)).toThrow(/different review/);
+      expect(() => coordinator.admitWrite(f.sessionId)).toThrow(/End marker cannot be verified/);
+      await expect(coordinator.end(f.sessionId)).rejects.toMatchObject({ code: "session_marker_invalid" });
     } finally {
       f.fx.dispose();
     }
