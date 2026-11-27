@@ -98,6 +98,8 @@ export interface PageBlockChange {
   block: PageBlock;
   /** The old block a "changed" or "moved" one came from. */
   previous?: PageBlock;
+  /** #727 — a heading whose only change is its level (h2 → h3, same text). */
+  levelChanged?: boolean;
 }
 
 export interface PageBlockDiff {
@@ -541,10 +543,32 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
     movedPairs.add(j);
   }
 
-  // Pair the rest inside each gap between aligned pairs.
   const changeAt = new Map<number, PageBlockChange>();
   const removed: PageBlock[] = [];
   const headingMap = new Map<number, number>();
+
+  // #727 — a heading whose text is unchanged but whose level changed (h2 →
+  // h3) is the same section: one quiet "changed" on the heading, never a
+  // remove + add, and its section keeps its identity so the blocks under it
+  // don't read as moved.
+  const oldHeadings = new Map<string, number[]>();
+  for (let i = 0; i < a.length; i++) {
+    if (oldDone[i] || !oldBlocks[i]!.heading) continue;
+    const l = oldHeadings.get(oldBlocks[i]!.text);
+    if (l) l.push(i); else oldHeadings.set(oldBlocks[i]!.text, [i]);
+  }
+  for (let j = 0; j < b.length; j++) {
+    if (newDone[j] || !newBlocks[j]!.heading) continue;
+    const l = oldHeadings.get(newBlocks[j]!.text);
+    if (!l || !l.length) continue;
+    const i = l.shift()!;
+    oldDone[i] = 1;
+    newDone[j] = 1;
+    headingMap.set(i, j);
+    changeAt.set(j, { kind: "changed", block: newBlocks[j]!, previous: oldBlocks[i]!, levelChanged: true });
+  }
+
+  // Pair the rest inside each gap between aligned pairs.
   const bounds: Array<[number, number]> = [[-1, -1], ...aligned, [a.length, b.length]];
   for (let g = 0; g + 1 < bounds.length; g++) {
     const [a0, b0] = bounds[g]!;

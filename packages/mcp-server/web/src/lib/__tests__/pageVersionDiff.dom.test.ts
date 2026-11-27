@@ -310,3 +310,47 @@ describe("#718 round 3 — loose-text runs, section identity, control values", (
   });
 });
 
+describe("#727 — a heading's level change is one quiet change, not a remove + add", () => {
+  it("h2 → h3 with the same text: one changed heading, nothing removed or moved", () => {
+    const v2 = V1.replace("<h2>Costs</h2>", "<h3>Costs</h3>");
+    const d = diffOf(V1, v2);
+    expect(d.changes.map((c) => [c.kind, c.block.tag, c.block.text, c.previous?.tag, c.levelChanged])).toEqual([
+      ["changed", "h3", "Costs", "h2", true],
+    ]);
+    expect(d.removed).toEqual([]);
+    expect(d.moved).toBe(0);
+    expect(lineFor(V1, v2)).toBe("Changed: Costs");
+    expect(computePageVersionDiff(V1, v2)!.marks).toEqual([{ kind: "changed", tag: "h3", text: "Costs", occurrence: 0 }]);
+  });
+
+  it("sibling sections stay untouched, and an edit in the same section joins the one change", () => {
+    const v2 = V1.replace("<h2>Storage</h2>", "<h4>Storage</h4>").replace("Backups nightly.", "Backups hourly.");
+    const d = diffOf(V1, v2);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.block.section])).toEqual([
+      ["changed", "Storage", "Storage"],
+      ["changed", "Backups hourly.", "Storage"],
+    ]);
+    expect(d.removed).toEqual([]);
+    expect(summarizePageDiff(d).changedSections).toEqual(["Storage"]);
+    expect(lineFor(V1, v2)).toBe("Changed: Storage");
+  });
+
+  it("several level changes (a section demoted under its neighbour) don't cascade", () => {
+    const v2 = V1.replace("<h2>Costs</h2>", "<h3>Costs</h3>").replace("<h2>Rollout</h2>", "<h3>Rollout</h3>");
+    const d = diffOf(V1, v2);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.levelChanged])).toEqual([
+      ["changed", "Costs", true],
+      ["changed", "Rollout", true],
+    ]);
+    expect(d.removed).toEqual([]);
+    expect(d.moved).toBe(0);
+    expect(lineFor(V1, v2)).toBe("Changed: Costs, Rollout");
+  });
+
+  it("a reworded heading is still a plain change (not a level change)", () => {
+    const d = diffOf(V1, V1.replace("<h2>Costs</h2>", "<h2>Budget</h2>"));
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.previous?.text, c.levelChanged])).toEqual([
+      ["changed", "Budget", "Costs", undefined],
+    ]);
+  });
+});
