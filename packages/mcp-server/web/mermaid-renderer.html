@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <head>
+    <!-- #714 gap 11 — the isolated Mermaid renderer for agent pages. Loaded
+         only in a hidden sandbox="allow-scripts" iframe (opaque origin). The
+         daemon serves this document with a strict CSP header (no images,
+         fonts, connections or frames; scripts from the daemon only) and never
+         injects the bearer token into it; this meta repeats the policy. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:*; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; media-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta charset="UTF-8" />
+    <title>deepPairing Mermaid renderer</title>
+  </head>
+  <body>
+    <script type="module" src="/src/mermaidRenderer/main.ts"></script>
+  </body>
+</html>

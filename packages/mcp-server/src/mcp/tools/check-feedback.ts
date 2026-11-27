@@ -4,7 +4,7 @@ import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { decisionFeedback } from "./decision-feedback.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, coercePageContent, errorMessage, undeliveredFileWatchRefs } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, coercePageContent, errorMessage, undeliveredFileWatchRefs, PAGE_RENDER_ISSUES_VISUAL_ID, parsePageRenderIssues, describePageRenderIssues } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { formatWorkerStops, workerStopClause, type WorkerStopBatch } from "../../store/worker-stop-notices.js";
@@ -1138,22 +1138,46 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // O3 — reuse the post-wake render-failure snapshot (was a redundant read); no
   // acknowledge ran between the snapshot and here.
   const renderFailures = postWakeRenderFailures;
+  // #714 gap 12 — a `page`'s render issues (script errors, assets that didn't
+  // load, CSP blocks) ride the same lane under a reserved visual id; they are
+  // worded as page issues, not as a broken diagram. The error is the
+  // companion's bounded, redacted summary (no URLs; the store secret-scans it).
+  const isPageIssue = (f: { visualId: string }) => f.visualId === PAGE_RENDER_ISSUES_VISUAL_ID;
+  const diagramFailures = renderFailures.filter((f) => !isPageIssue(f));
+  const pageRenderIssues = renderFailures.filter(isPageIssue);
   const structuredRenderFailures = renderFailures.map((f) => ({
     artifactId: f.artifactId,
     visualId: f.visualId,
+    ...(isPageIssue(f) ? { kind: "page" } : {}),
     ...(f.title ? { title: f.title } : {}),
-    error: f.error,
+    // A page entry carries only the closed grammar; anything else is withheld.
+    error: isPageIssue(f) && !parsePageRenderIssues(f.error) ? "[page render issues withheld]" : f.error,
   }));
   if (renderFailures.length > 0) {
     await store.acknowledgeRenderFailures?.(
       renderFailures.map((f) => ({ artifactId: f.artifactId, visualId: f.visualId })),
     );
-    const lines = renderFailures.map((f) => {
+  }
+  if (diagramFailures.length > 0) {
+    const lines = diagramFailures.map((f) => {
       const name = f.title ? `"${f.title}"` : `visual ${f.visualId}`;
       return `- ${name} (${f.visualId}) on artifact ${f.artifactId} failed to render: ${f.error}`;
     });
     parts.push(
-      `🖼️ Diagram render failures (${renderFailures.length}) — the human sees a broken/repaired diagram:\n${lines.join("\n")}\nFix the Mermaid source and re-present the affected visual (revise_artifact).`,
+      `🖼️ Diagram render failures (${diagramFailures.length}) — the human sees a broken/repaired diagram:\n${lines.join("\n")}\nFix the Mermaid source and re-present the affected visual (revise_artifact).`,
+    );
+  }
+  if (pageRenderIssues.length > 0) {
+    // Worded from the PARSED closed grammar only (kinds, counts, class names,
+    // tag+attribute, directives): no page text ever reaches the agent here.
+    const lines = pageRenderIssues.map((f) => {
+      const parsed = parsePageRenderIssues(f.error);
+      const what = parsed ? `the page reported ${describePageRenderIssues(parsed)}` : "the page reported render issues (details unavailable)";
+      return `- ${f.title ? `"${f.title}"` : "page"} (${f.artifactId}): ${what}`;
+    });
+    parts.push(
+      `🧯 Page render issues (${pageRenderIssues.length}) — your pair's review frame reported problems with your page:\n${lines.join("\n")}\n` +
+        "The frame has no network: inline images, media and fonts as data: URIs (relative and external paths can't load), and fix script errors. Revise the page so it renders as you intended.",
     );
   }
 
@@ -1499,9 +1523,14 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   }
   // Q3 — a diagram the human is staring at, broken. The body already says "fix
   // the Mermaid source and re-present"; the suggestion said "proceed".
-  if (renderFailures.length > 0) {
+  if (diagramFailures.length > 0) {
     blockingClauses.push(
-      `${renderFailures.length} diagram${renderFailures.length === 1 ? "" : "s"} failed to render for the human — fix the Mermaid source and re-present (revise_artifact).`,
+      `${diagramFailures.length} diagram${diagramFailures.length === 1 ? "" : "s"} failed to render for the human — fix the Mermaid source and re-present (revise_artifact).`,
+    );
+  }
+  if (pageRenderIssues.length > 0) {
+    blockingClauses.push(
+      `${pageRenderIssues.length} page${pageRenderIssues.length === 1 ? " doesn't" : "s don't"} render cleanly for the human (see 🧯 Page render issues) — fix and revise the page.`,
     );
   }
 

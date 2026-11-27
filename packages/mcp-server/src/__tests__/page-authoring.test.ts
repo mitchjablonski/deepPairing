@@ -24,7 +24,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const guide = renderStandaloneGuide("node /fake/dist/cli/init.js");
 
 /** The key constraints every surface must carry. */
-const KEY_CONSTRAINTS = [/NO network|No network/, /clicks Run/, /images and fonts as data: URIs/, /video, audio, iframes and objects won't load/, PAGE_DECISION_ATTR, PAGE_QUESTION_ATTR, /<details>/, /<section id=/, /TL;DR/, /inline SVG/];
+const KEY_CONSTRAINTS = [/NO network|No network/, /clicks Run/, /images and fonts as data: URIs/, /video, audio, iframes and objects won't load/, PAGE_DECISION_ATTR, PAGE_QUESTION_ATTR, /<details>/, /<section id=/, /TL;DR/, /inline SVG/, /<pre class=\\?"mermaid\\?">/, /companion renders/];
 
 describe("page-authoring guidance (#714 gap 6)", () => {
   it("the standalone guide carries every rule and the skeleton, verbatim", () => {
@@ -36,6 +36,13 @@ describe("page-authoring guidance (#714 gap 6)", () => {
     const json = standaloneGuideJson("node /fake/dist/cli/init.js");
     expect(json.pageAuthoring.skeleton).toBe(PAGE_SKELETON_HTML);
     expect(json.pageAuthoring.structure).toEqual([...PAGE_STRUCTURE_RULES]);
+  });
+
+  it("no surface still says Mermaid is not rendered (#714 gap 11)", () => {
+    const skill = fs.readFileSync(path.join(repoRoot, "claude-plugin", "skills", "pairing-protocol", "SKILL.md"), "utf8");
+    for (const text of [guide, PAGE_AUTHORING_TOOL_NOTE, PAGE_STRUCTURE_RULES.join(" "), skill]) {
+      expect(text).not.toMatch(/Mermaid source is not rendered/i);
+    }
   });
 
   it("the skeleton has no external assets and marks a decision and a question", () => {

@@ -1,0 +1,1 @@
+import{i as e,n as t,r as n,t as r}from"./preferences-CF5l9JQc.js";export{r as EDITOR_PRESETS,t as SIDEBAR_WIDTHS,n as resolveTheme,e as usePreferencesStore};

@@ -2,6 +2,9 @@ import * as vscode from "vscode";
 import WebSocket from "ws";
 import * as fs from "fs";
 import * as path from "path";
+import { DAEMON_ORIGIN_META, daemonOrigin, validDaemonPort, webviewHeadTags } from "./webview-csp";
+import { DaemonBridge } from "./daemon-bridge";
+import { chooseDaemonPort, type DaemonCandidate } from "./daemon-choice";
 
 /**
  * Provides the deepPairing companion UI as a VS Code webview sidebar.
@@ -17,16 +20,23 @@ import * as path from "path";
  */
 export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
-  private ws?: WebSocket;
   private serverPort = 3847;
-  private reconnectAttempt = 0;
-  private reconnectTimer?: ReturnType<typeof setTimeout>;
-  /** Set when the user/VS Code has asked us to disconnect — suppresses auto-reconnect. */
-  private disposed = false;
+  /** #727 — the port read from daemon.json, or null before one is found. Only
+   *  a discovered port is ever allowed as a webview frame source. */
+  private discoveredPort: number | null = null;
+  /** The daemon WebSocket, bridged to the webview (see daemon-bridge.ts). */
+  private readonly bridge: DaemonBridge;
   /** Watches each workspace's .deeppairing/daemon.json so we re-discover after activation. */
   private daemonWatchers: vscode.FileSystemWatcher[] = [];
 
-  constructor(private readonly extensionUri: vscode.Uri) {}
+  constructor(private readonly extensionUri: vscode.Uri) {
+    this.bridge = new DaemonBridge({
+      createSocket: (url) => new WebSocket(url),
+      resolveUrl: () => this.resolveWsUrl(),
+      post: (msg) => { void this.view?.webview.postMessage(msg); },
+      onDaemonMessage: (msg) => this.notify(msg),
+    });
+  }
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -35,30 +45,27 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
   ) {
     this.view = webviewView;
 
-    webviewView.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this.extensionUri],
-    };
-
     // Discover server port
     this.discoverPort();
+    this.applyOptions(webviewView.webview);
 
     // Watch each workspace's daemon.json so we pick up daemons that start
     // after the extension activates, or switch workspaces with different daemons.
     this.watchDaemonFiles(webviewView.webview);
 
-    // Set up message bridge
+    // Set up message bridge. Every "dp:ready" (first load, a hide/show
+    // reload, a rebuild after the daemon moved) reconnects so the daemon
+    // replays its snapshot into the fresh document.
     webviewView.webview.onDidReceiveMessage((msg) => {
-      if (msg.type === "dp:ready") {
-        this.disposed = false;
-        this.connectToServer(webviewView.webview);
-      } else if (msg.type === "dp:disconnect") {
-        this.disconnectFromServer();
+      if (msg?.type === "dp:ready") {
+        this.bridge.ready();
+      } else if (msg?.type === "dp:disconnect") {
+        this.bridge.disconnect();
       }
     });
 
     webviewView.onDidDispose(() => {
-      this.disconnectFromServer();
+      this.bridge.disconnect();
       for (const w of this.daemonWatchers) w.dispose();
       this.daemonWatchers = [];
     });
@@ -67,29 +74,46 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtml(webviewView.webview);
   }
 
+  /** Webview options. #727 — `portMapping` for the daemon port is
+   *  best-effort: VS Code applies it in the webview service worker's fetch
+   *  handler, which likely misses the renderer frame's navigation and script
+   *  loads. Remotely the frame works only when the port reaches the same local
+   *  port (auto-forwarding, WSL2 localhost); otherwise diagrams fall back to
+   *  source. WS traffic goes through the extension host already. */
+  private applyOptions(webview: vscode.Webview): void {
+    const port = validDaemonPort(this.discoveredPort);
+    webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.extensionUri],
+      portMapping: port === null ? [] : [{ webviewPort: port, extensionHostPort: port }],
+    };
+  }
+
   // Port discovery reads .deeppairing/daemon.json directly. There is no
   // authenticated bootstrap and no token on the connection that follows.
   private discoverPort(): void {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) return;
 
-    // Prefer the folder whose daemon.json was written most recently — if the
-    // user has multiple projects open with different daemons, the freshest one
-    // is the one they're actively working on.
-    let best: { port: number; mtime: number } | null = null;
+    const candidates: DaemonCandidate[] = [];
     for (const folder of workspaceFolders) {
       const daemonFile = path.join(folder.uri.fsPath, ".deeppairing", "daemon.json");
       try {
         if (!fs.existsSync(daemonFile)) continue;
         const stat = fs.statSync(daemonFile);
         const info = JSON.parse(fs.readFileSync(daemonFile, "utf-8"));
-        if (typeof info?.port !== "number" || info.port <= 0) continue;
-        if (!best || stat.mtimeMs > best.mtime) {
-          best = { port: info.port, mtime: stat.mtimeMs };
-        }
+        if (validDaemonPort(info?.port) === null) continue;
+        candidates.push({ port: info.port, mtimeMs: stat.mtimeMs });
       } catch { /* skip */ }
     }
-    if (best) this.serverPort = best.port;
+    // First discovery takes the freshest daemon.json; after that the current
+    // daemon is kept while its file is fresh, so multi-root heartbeats don't
+    // flip (and rebuild) the view every ~30 s. See daemon-choice.ts.
+    const chosen = chooseDaemonPort(this.discoveredPort, candidates, Date.now());
+    if (chosen !== null) {
+      this.serverPort = chosen;
+      this.discoveredPort = chosen;
+    }
   }
 
   private watchDaemonFiles(webview: vscode.Webview): void {
@@ -100,126 +124,53 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
       const pattern = new vscode.RelativePattern(folder, ".deeppairing/daemon.json");
       const watcher = vscode.workspace.createFileSystemWatcher(pattern);
       const onChange = () => {
-        const previousPort = this.serverPort;
+        const previousOrigin = daemonOrigin(this.discoveredPort);
         this.discoverPort();
-        if (this.serverPort !== previousPort) {
-          // Daemon moved — reconnect on the new port.
-          this.disconnectFromServer();
-          this.disposed = false;
-          this.connectToServer(webview);
+        if (daemonOrigin(this.discoveredPort) !== previousOrigin) {
+          // Daemon moved (or appeared). The webview's CSP frame-src, port
+          // mapping and daemon-origin meta name the old port, so rebuild the
+          // document; its fresh "dp:ready" reconnects on the new port.
+          this.bridge.disconnect();
+          this.applyOptions(webview);
+          webview.html = this.getHtml(webview);
         }
       };
       watcher.onDidCreate(onChange);
       watcher.onDidChange(onChange);
+      watcher.onDidDelete(onChange);
       this.daemonWatchers.push(watcher);
     }
   }
 
-  private connectToServer(webview: vscode.Webview): void {
-    if (this.ws && this.ws.readyState <= 1) return;
-
-    try {
-      // HH5 — fetch the daemon's projectHash so the WS upgrade carries
-      // the GG2 gate parameter. Pre-HH5 the extension opened the WS
-      // with no projectHash query and the daemon accepted via the
-      // back-compat path — same gap that HH1 closed for the browser
-      // path. Fetch is fire-and-forget; if it 404s (daemon down or
-      // pre-GG2 daemon) we fall through to the unhashed connect, same
-      // back-compat behavior. The actual WS open happens inside the
-      // `.then` so the hash is on the URL when the upgrade fires.
-      void fetch(`http://localhost:${this.serverPort}/api/daemon-info`)
-        .then((res) => (res.ok ? res.json() : null))
-        .catch(() => null)
-        .then((info: unknown) => {
-          const hash = (info as { projectHash?: unknown } | null)?.projectHash;
-          const projectHash = typeof hash === "string" ? hash : null;
-          const url = projectHash
-            ? `ws://localhost:${this.serverPort}/ws?projectHash=${encodeURIComponent(projectHash)}`
-            : `ws://localhost:${this.serverPort}/ws`;
-          this.openWebSocket(webview, url);
-        });
-      return;
-    } catch (e) {
-      // Outer try guards against synchronous fetch errors (very rare in node).
-      console.error("[deepPairing] WS connect setup failed:", e);
-      return;
-    }
-  }
-
+  // HH5 — fetch the daemon's projectHash so the WS upgrade carries the GG2
+  // gate parameter. If it fails (daemon down or pre-GG2 daemon) we fall
+  // through to the unhashed connect, the same back-compat behavior.
   // The URL carries a project hash and no session id, so the webview receives
   // the project's stream rather than a session you selected.
-  private openWebSocket(webview: vscode.Webview, url: string): void {
-    if (this.ws && this.ws.readyState <= 1) return;
-    try {
-      this.ws = new WebSocket(url);
-
-      this.ws.on("open", () => {
-        this.reconnectAttempt = 0; // Reset backoff on success
-        webview.postMessage({ type: "dp:connected" });
-      });
-
-      this.ws.on("message", (data) => {
-        try {
-          const parsed = JSON.parse(data.toString());
-          webview.postMessage({ type: "dp:message", data: parsed });
-
-          // Show VS Code notifications for decisions and plan reviews
-          if (parsed.type === "decision_request") {
-            vscode.window.showInformationMessage(
-              `deepPairing: Decision needed — ${parsed.context ?? "choose an approach"}`,
-              "Open Companion",
-            ).then((action) => {
-              if (action === "Open Companion") {
-                vscode.commands.executeCommand("deeppairing.companion.focus");
-              }
-            });
-          } else if (parsed.type === "plan_review_request") {
-            vscode.window.showInformationMessage(
-              `deepPairing: Plan review — ${parsed.title ?? "review implementation plan"}`,
-              "Open Companion",
-            ).then((action) => {
-              if (action === "Open Companion") {
-                vscode.commands.executeCommand("deeppairing.companion.focus");
-              }
-            });
-          }
-        } catch { /* ignore malformed */ }
-      });
-
-      this.ws.on("close", () => {
-        webview.postMessage({ type: "dp:disconnected" });
-        this.scheduleReconnect(webview);
-      });
-
-      this.ws.on("error", () => {
-        this.ws?.close();
-      });
-    } catch {
-      this.scheduleReconnect(webview);
-    }
+  private async resolveWsUrl(): Promise<string> {
+    const port = this.serverPort;
+    const info: unknown = await fetch(`http://localhost:${port}/api/daemon-info`)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null);
+    const hash = (info as { projectHash?: unknown } | null)?.projectHash;
+    return typeof hash === "string"
+      ? `ws://localhost:${port}/ws?projectHash=${encodeURIComponent(hash)}`
+      : `ws://localhost:${port}/ws`;
   }
 
-  private scheduleReconnect(webview: vscode.Webview): void {
-    if (this.disposed) return;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectAttempt++;
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt - 1), 30000);
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = undefined;
-      if (this.disposed) return;
-      this.connectToServer(webview);
-    }, delay);
-  }
-
-  private disconnectFromServer(): void {
-    this.disposed = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = undefined;
+  /** VS Code notifications for decisions and plan reviews. */
+  private notify(parsed: Record<string, unknown>): void {
+    const show = (text: string) => {
+      vscode.window.showInformationMessage(text, "Open Companion").then((action) => {
+        if (action === "Open Companion") {
+          vscode.commands.executeCommand("deeppairing.companion.focus");
+        }
+      });
+    };
+    if (parsed.type === "decision_request") {
+      show(`deepPairing: Decision needed — ${parsed.context ?? "choose an approach"}`);
+    } else if (parsed.type === "plan_review_request") {
+      show(`deepPairing: Plan review — ${parsed.title ?? "review implementation plan"}`);
     }
   }
 
@@ -233,6 +184,7 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${daemonOriginMetaTag(this.discoveredPort)}
   <title>deepPairing</title>
 </head>
 <body>
@@ -255,9 +207,9 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
       html = html.replace(/(href|src)="\.?\/?assets\//g, `$1="${webDistUri}/assets/`);
       html = html.replace(/(href|src)="\//g, `$1="${webDistUri}/`);
 
-      // Add Content-Security-Policy for webview
-      const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src ${webview.cspSource} data:; connect-src ws://localhost:* http://localhost:*;">`;
-      html = html.replace("<head>", `<head>\n${csp}`);
+      // Content-Security-Policy for the webview, plus (#727) frame-src and the
+      // daemon-origin meta for the Mermaid renderer frame, exact port only.
+      html = html.replace("<head>", `<head>\n${webviewHeadTags(webview.cspSource, this.discoveredPort)}`);
 
       return html;
     } catch {
@@ -272,4 +224,10 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
 </html>`;
     }
   }
+}
+
+/** Dev mode has no CSP; it still needs the daemon-origin hint. */
+function daemonOriginMetaTag(port: number | null): string {
+  const origin = daemonOrigin(port);
+  return origin ? `<meta name="${DAEMON_ORIGIN_META}" content="${origin}">` : "";
 }

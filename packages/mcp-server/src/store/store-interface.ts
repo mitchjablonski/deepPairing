@@ -244,7 +244,20 @@ export interface RenderFailureRecord {
   at: string;
   /** V-fix-style drain flag: check_feedback reports once, then acknowledges. */
   acknowledged?: boolean;
+  /** #714 gap 12 — page-issues records only (the reserved visual id): the
+   *  set of issue kinds/keys that last armed the record (counts excluded), so
+   *  a count change updates the text without re-arming or waking. */
+  wakeKey?: string;
+  /** #714 gap 12 — when this page record last armed (ISO): at most one wake
+   *  per page artifact per PAGE_RENDER_ISSUES_WAKE_WINDOW_MS. */
+  lastWakeAt?: string;
+  /** #714 gap 12 — a new kind inside the window is deferred: the record stays
+   *  out of the unacknowledged list until this time (ISO). */
+  armAt?: string;
 }
+
+/** #714 gap 12 — the per-page cap on render-issue wakes. */
+export const PAGE_RENDER_ISSUES_WAKE_WINDOW_MS = 5 * 60 * 1000;
 
 export interface RejectedApproach {
   description: string;
