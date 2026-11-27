@@ -151,6 +151,25 @@ describe("HTTP Routes", () => {
     expect(store.getUnacknowledgedComments().some((c) => c.id === "c2")).toBe(true);
   });
 
+  it("#725 — duplicate reopen and reopen of a never-resolved comment leave drained feedback unchanged", async () => {
+    const events: any[] = [];
+    const local = withHash(createHttpRoutes(store, tmpDir, (event) => events.push(event)), tmpDir);
+    const reopen = (id: string) => local.request(`/api/comments/${id}/mark-unresolved`, { method: "POST" });
+    store.addComment({ id: "resolved", artifactId: "art_1", content: "Review this", author: "human" });
+    store.addComment({ id: "never", artifactId: "art_1", content: "And this", author: "human" });
+    store.markCommentHumanResolved("resolved");
+    expect((await (await reopen("resolved")).json()).status).toBe("reopened");
+    store.acknowledgeComments(["resolved", "never"]);
+    expect(await (await reopen("resolved")).json()).toMatchObject({
+      status: "unchanged", comment: { humanResolvedAt: null, acknowledged: true },
+    });
+    const never = await (await reopen("never")).json();
+    expect(never).toMatchObject({ status: "unchanged", comment: { acknowledged: true } });
+    expect(never.comment).not.toHaveProperty("humanResolvedAt");
+    expect(store.getUnacknowledgedComments()).toEqual([]);
+    expect(events.filter((event) => event.type === "comment_updated")).toHaveLength(1);
+  });
+
   it("#725 — mark-resolved refuses a plain comment that answers a page ask (409), still resolves an Ask on it", async () => {
     const local = withHash(createHttpRoutes(store, tmpDir, () => {}), tmpDir);
     store.createArtifact({ id: "pg_ask", type: "page", title: "P", content: { title: "P", html: '<div id="q1" data-dp-question>Which DB?</div>' } });

@@ -1,5 +1,6 @@
 import type { Artifact, Comment, HtmlAnchor } from "@deeppairing/shared";
 import type { FileStore } from "../store/file-store.js";
+import { effectiveHumanResolution } from "../store/comment-resolution.js";
 import { findPageSuccessor } from "./page-successor.js";
 
 export const MAX_COMMENTS = 50;
@@ -12,8 +13,8 @@ function pageMetadata({ id, version, status }: Artifact) {
 type PageFeedbackNote = Pick<Comment, "id" | "content" | "intent" | "parentCommentId" | "followUp" | "ruleOut" | "humanResolvedAt">;
 type PageFeedbackComment = PageFeedbackNote & { htmlAnchor: HtmlAnchor };
 
-function noteFeedback(comment: Comment): PageFeedbackNote {
-  const { id, content, intent, parentCommentId, followUp, ruleOut, humanResolvedAt } = comment;
+function noteFeedback(comment: Comment, humanResolvedAt: Comment["humanResolvedAt"]): PageFeedbackNote {
+  const { id, content, intent, parentCommentId, followUp, ruleOut } = comment;
   return {
     id, content, parentCommentId,
     ...(intent !== undefined && { intent }),
@@ -97,6 +98,7 @@ export function readPageFeedback(
 
   const pending = store.getCommentsForArtifact(artifactId).filter((comment) =>
     comment.sessionId === sessionId && comment.author === "human" && !comment.acknowledged && comment.id !== reasonComment?.id);
+  const effectiveResolution = effectiveHumanResolution(store.getComments());
   pending.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
   const anchoredCount = pending.filter((comment) => comment.target.htmlAnchor).length;
   const result: StandalonePageFeedbackRead = {
@@ -124,7 +126,7 @@ export function readPageFeedback(
     if (items === MAX_COMMENTS) break;
     if (comment.content.length > MAX_RESPONSE_BYTES - responseBytes) continue;
     const anchor = comment.target.htmlAnchor;
-    const feedback = noteFeedback(comment);
+    const feedback = noteFeedback(comment, effectiveResolution(comment));
     const lane = anchor ? result.comments : result.notes;
     const item = anchor ? { ...feedback, htmlAnchor: anchor } : feedback;
     const added = bytes(item) + (lane.length ? 1 : 0);

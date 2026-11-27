@@ -5,7 +5,7 @@
  * (kind, locator, quote, prefix/suffix, table headers, nodeId, href, version).
  * A comment with no anchor is unchanged.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 
@@ -185,6 +185,20 @@ describe("check_feedback — a page comment the human resolved themselves (#714)
     const openLine = (res.text as string).split("\n").find((l) => l.includes("add a TL;DR"))!;
     expect(openLine).not.toContain("RESOLVED");
   });
+
+  it("omits obsolete resolution metadata after a later human reply that was already drained", async () => {
+    const id = await presentPage();
+    const anchor = { kind: "element" as const, locator: "h1", quote: "Cache invalidation" };
+    store.addComment({ id: "root", artifactId: id, content: "rename this heading", author: "human", target: { artifactId: id, htmlAnchor: anchor } });
+    store.markCommentHumanResolved("root", "2001-01-01T00:00:00.000Z");
+    store.addComment({ id: "reply", artifactId: id, content: "I still need this", author: "human", parentCommentId: "root" });
+    store.acknowledgeComments(["reply"]);
+    const res = await callTool("check_feedback");
+    const comment = (res.structuredContent as any).comments.find((x: any) => x.id === "root");
+    expect(comment).not.toHaveProperty("humanResolvedAt");
+    expect(comment).not.toHaveProperty("reopenedByHuman");
+    expect((res.text as string).split("\n").find((line) => line.includes("rename this heading"))).not.toMatch(/RESOLVED|REOPENED/);
+  });
 });
 
 describe("check_feedback — a page comment the human reopened (#725)", () => {
@@ -200,5 +214,30 @@ describe("check_feedback — a page comment the human reopened (#725)", () => {
     expect(line).toContain("REOPENED BY THE HUMAN");
     expect(line).not.toContain("RESOLVED BY THE HUMAN");
     expect((res.structuredContent as any).comments.find((x: any) => x.id === "cmt_re").reopenedByHuman).toBe(true);
+  });
+
+  it("keeps a reopen that races with settling an in-flight resolved delivery", async () => {
+    const id = await presentPage();
+    const commentId = "cmt_race";
+    store.addComment({
+      id: commentId, artifactId: id, content: "rename this heading", author: "human",
+      target: { artifactId: id, htmlAnchor: { kind: "element", locator: "h1", quote: "Cache invalidation" } },
+    });
+    store.markCommentHumanResolved(commentId);
+    const acknowledge = store.acknowledgeComments.bind(store);
+    const race = vi.spyOn(store, "acknowledgeComments").mockImplementationOnce((ids, delivered) => {
+      store.markCommentHumanResolved(commentId, null);
+      acknowledge(ids, delivered);
+    });
+    try {
+      const earlier = await callTool("check_feedback");
+      expect((earlier.structuredContent as any).comments.find((c: any) => c.id === commentId)).toHaveProperty("humanResolvedAt");
+      expect(store.getComment(commentId)?.acknowledged).toBe(false);
+      const later = await callTool("check_feedback");
+      expect((later.structuredContent as any).comments.find((c: any) => c.id === commentId)).toMatchObject({ reopenedByHuman: true });
+      expect(store.getComment(commentId)?.acknowledged).toBe(true);
+    } finally {
+      race.mockRestore();
+    }
   });
 });

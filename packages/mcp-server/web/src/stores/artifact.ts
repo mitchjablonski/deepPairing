@@ -1558,38 +1558,36 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     const owner = existing?.sessionId || undefined;
     const routeTo = owner ?? tabSessionAtCall();
     if (isForeignSession(owner)) await guardForeignOwner("Reopening a comment", owner);
-    const prior = existing?.humanResolvedAt;
-    const priorAck = existing?.acknowledged;
-    if (!prior) return;
+    if (!existing?.humanResolvedAt) return;
+    const key = existing.target.artifactId;
     // null (not a deleted key): the WS comment_updated merge keeps any key
     // the update omits, so only an explicit null clears it everywhere.
-    if (storeGeneration === generationAtSubmit) set((state) => {
-      const nextComments: Record<string, Comment[]> = {};
-      for (const [key, list] of Object.entries(state.comments)) {
-        // #725 — the server re-queues a drained comment on reopen
-        // (acknowledged → false); mirror it so the row never reads "seen".
-        nextComments[key] = list.map((c) => (c.id === commentId ? { ...c, humanResolvedAt: null, acknowledged: false } : c));
-      }
-      return { comments: nextComments };
-    });
+    const optimistic: Comment = { ...existing, humanResolvedAt: null, acknowledged: false };
+    // An upsert from the socket replaces the comment object, even if it has
+    // the same stamp and acknowledgement. Leave that newer update intact.
+    const replaceIfCurrent = (current: Comment, next: Comment) => {
+      if (storeGeneration !== generationAtSubmit) return;
+      set((state) => {
+        const list = state.comments[key];
+        if (!list?.includes(current)) return state;
+        return { comments: { ...state.comments, [key]: list.map((c) => c === current ? next : c) } };
+      });
+    };
+    replaceIfCurrent(existing, optimistic);
     try {
-      await safeFetch(`${apiBase()}/api/comments/${commentId}/mark-unresolved`, {
+      const res = await safeFetch(`${apiBase()}/api/comments/${commentId}/mark-unresolved`, {
         method: "POST",
         headers: sessionHeaders(routeTo),
         body: JSON.stringify({}),
       });
+      const result = await res.json().catch(() => null) as { comment?: Comment } | null;
+      const comment = result?.comment;
+      if (comment?.id === commentId && comment.sessionId === existing.sessionId && comment.target?.artifactId === key) {
+        replaceIfCurrent(optimistic, comment);
+      }
     } catch (err) {
       if (storeGeneration !== generationAtSubmit) throw err;
-      // Surgical rollback: only if nothing re-stamped it meanwhile.
-      set((state) => {
-        const nextComments: Record<string, Comment[]> = {};
-        for (const [key, list] of Object.entries(state.comments)) {
-          nextComments[key] = list.map((c) =>
-            c.id === commentId && c.humanResolvedAt == null ? { ...c, humanResolvedAt: prior, acknowledged: priorAck ?? c.acknowledged } : c,
-          );
-        }
-        return { comments: nextComments };
-      });
+      replaceIfCurrent(optimistic, existing);
       await toastApiError("Reopen comment", err);
       throw err;
     }

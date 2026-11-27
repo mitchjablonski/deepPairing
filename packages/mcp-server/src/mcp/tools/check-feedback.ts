@@ -1,6 +1,7 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES } from "./types.js";
-import type { Artifact, Request } from "@deeppairing/shared";
+import type { Artifact, Comment, Request } from "@deeppairing/shared";
+import { effectiveHumanResolution } from "../../store/comment-resolution.js";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { decisionFeedback } from "./decision-feedback.js";
 import { SERVER_VERSION } from "../../version.js";
@@ -524,7 +525,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // check-feedback-golden-parity.test.ts; measured by
   // check-feedback-read-amplification.test.ts. `getFullState` is captured lazily
   // at its first use below so the scoped early-return path never pays for it.
-  const newComments = await store.getUnacknowledgedComments();
+  const newComments = (await store.getUnacknowledgedComments()).map((comment) => ({ ...comment }));
   const newResolved = await store.getResolvedDecisions();
   const postWakeArtifacts = await store.getArtifacts();
   const postWakeRenderFailures = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
@@ -711,10 +712,14 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // Unacknowledged comments (reuse the single drain snapshot fetched above)
   const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
   const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
+  const ackDeliveredComments = (comments: Comment[]) => store.acknowledgeComments(
+    comments.map((c) => c.id),
+    comments.map((c) => ({ id: c.id, resolvedAt: c.humanResolvedAt, token: c.humanResolutionToken })),
+  );
 
   // Session-level directives (free-form messages from human)
   if (sessionMessages.length > 0) {
-    await store.acknowledgeComments(sessionMessages.map((c) => c.id));
+    await ackDeliveredComments(sessionMessages);
     const formatted = sessionMessages.map((c) => `- ${c.content}${commentSecretNote(c)}`).join("\n");
     parts.push(`🎯 Human directive:\n${formatted}\n\nAdjust your approach based on this guidance.`);
     for (const c of sessionMessages) {
@@ -733,7 +738,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     return aIsQ - bIsQ;
   });
   if (artifactCommentsSorted.length > 0) {
-    await store.acknowledgeComments(artifactCommentsSorted.map((c) => c.id));
+    await ackDeliveredComments(artifactCommentsSorted);
+    const effectiveResolution = effectiveHumanResolution(fullState?.comments ?? allComments);
     const questionLines: string[] = [];
     const suggestionLines: string[] = [];
     const otherLines: string[] = [];
@@ -749,7 +755,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // guidance paragraph below).
     let anyFollowUp = false;
     for (const c of artifactCommentsSorted) {
-      const delivery = deliverComment(c, artsForTargets);
+      const humanResolvedAt = effectiveResolution(c);
+      const delivery = deliverComment(humanResolvedAt === c.humanResolvedAt ? c : { ...c, humanResolvedAt }, artsForTargets);
       if (delivery.isFollowUp) anyFollowUp = true;
       switch (delivery.bucket) {
         case "suggestion":

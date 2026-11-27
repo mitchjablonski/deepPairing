@@ -449,7 +449,10 @@ describe("annotator main — event wiring", () => {
       if (this.localName === "dp-annotator-badge") {
         const pin = this.parentElement as HTMLElement;
         const px = (el: HTMLElement, k: string) => parseFloat(el.style.getPropertyValue(k)) || 0;
-        return box(px(pin, "left") + px(this, "left"), px(pin, "top") + px(this, "top"), 18, 18);
+        const size = 18 + 2 * px(this, "border");
+        const left = px(pin, "left") + px(this, "left") - window.scrollX;
+        const top = px(pin, "top") + px(this, "top") - window.scrollY;
+        return box(left, top, size, size);
       }
       return box(anchor.left, anchor.top, anchor.width, anchor.height);
     });
@@ -503,6 +506,48 @@ describe("annotator main — event wiring", () => {
       expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
     } finally {
       rect.mockRestore();
+    }
+  });
+
+  it.each([false, true])("places the whole bottom-edge touch badge and checks controls there (control=%s)", (control) => {
+    document.body.insertAdjacentHTML("beforeend", '<input id="field">');
+    const field = document.getElementById("field")!;
+    const bottom = window.innerHeight;
+    const rect = geometry({ left: 0, top: bottom - 20, width: window.innerWidth, height: 20 },
+      (_x, y) => control && y < bottom - 28 ? field : document.body);
+    try {
+      const down = new Event("pointerdown", { bubbles: true });
+      Object.defineProperty(down, "pointerType", { value: "touch" });
+      document.body.dispatchEvent(down);
+      onePin();
+      const b = badgeBox();
+      expect(b.width).toBe(44);
+      expect(b.height).toBe(44);
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(b.bottom).toBeLessThanOrEqual(bottom);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe(control ? "none" : "auto");
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("keeps the whole touch badge below the visible top after scrolling", () => {
+    const scroll = vi.spyOn(window, "scrollY", "get").mockReturnValue(400);
+    const rect = geometry({ left: 100, top: 12, width: 80, height: 20 }, () => document.body);
+    try {
+      const down = new Event("pointerdown", { bubbles: true });
+      Object.defineProperty(down, "pointerType", { value: "touch" });
+      document.body.dispatchEvent(down);
+      onePin();
+      const b = badgeBox();
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(b.bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(badges()[0]!.style.getPropertyValue("pointer-events")).toBe("auto");
+    } finally {
+      rect.mockRestore();
+      scroll.mockRestore();
     }
   });
 

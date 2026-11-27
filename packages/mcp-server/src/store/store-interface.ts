@@ -318,6 +318,12 @@ export type AddStanceResult =
  *  not tell. Self-reported either way. */
 export type StanceRequestedBy = "user" | "unknown";
 
+export interface CommentResolutionSnapshot {
+  id: string;
+  resolvedAt?: string | null;
+  token?: string;
+}
+
 /**
  * Store interface — implemented by both FileStore (sync) and DaemonClient (async HTTP).
  * Methods use MaybePromise so FileStore can return values directly while DaemonClient
@@ -520,20 +526,17 @@ export interface IStore {
   addComment(params: AddCommentParams): MaybePromise<Comment>;
   getCommentsForArtifact(artifactId: string): MaybePromise<Comment[]>;
   getUnacknowledgedComments(): MaybePromise<Comment[]>;
-  acknowledgeComments(ids: string[]): MaybePromise<void>;
+  /** A guarded delivery can settle only an ID whose resolution snapshot still matches. */
+  acknowledgeComments(ids: string[], delivered?: CommentResolutionSnapshot[]): MaybePromise<void>;
   /** Mark a question comment as answered by linking to the answer comment. */
   markCommentAnswered(commentId: string, answerCommentId: string): MaybePromise<void>;
   /**
    * Mark a human's OWN unanswered question as resolved by the human. Sets
-   * `humanResolvedAt`; no-op if the comment isn't found. Does NOT touch the
-   * agent's `acknowledged` queue — this is a human-side "I'm done waiting"
-   * signal so the "waiting on human" indicator stops counting it.
-   * #714 — `null` withdraws the human's resolve (Reopen from the page review
-   * queue): the field is set to null, so a broadcast clears it everywhere,
-   * and a comment the agent already drained is re-queued (acknowledged →
-   * false) so check_feedback delivers it again.
+   * `humanResolvedAt` independently from the agent's acknowledgement.
+   * A null request withdraws an existing resolve and re-queues a drained
+   * comment. Returns false for a missing comment or an already-open thread.
    */
-  markCommentHumanResolved(commentId: string, resolvedAt?: string | null): MaybePromise<void>;
+  markCommentHumanResolved(commentId: string, resolvedAt?: string | null): MaybePromise<boolean>;
   getComment(commentId: string): MaybePromise<Comment | undefined>;
   /**
    * #172 — patch a comment's `suggestion` state machine. Applies `update` over

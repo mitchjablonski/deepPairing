@@ -1355,13 +1355,15 @@ function nativeUnder(el) {
 /** Would this badge cover a native control? Hit-tests the page under the
  *  badge's centre and corners. A badge off screen is never live until a redraw finds it on
  *  screen (scrolling redraws). */
-function badgeCoversNative(badge) {
+function badgeCoversNative(badge, hit) {
   // No hit-testing (old engines, test DOMs): we can't know what lies under
   // the offset badge, so it stays inert (conservative).
   if (typeof document.elementsFromPoint !== "function") return true;
   var r = badge.getBoundingClientRect();
-  var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+  var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var vh = window.innerHeight || document.documentElement.clientHeight || 0;
   if (!r.width || r.right < 0 || r.bottom < 0 || (vw && r.left > vw) || (vh && r.top > vh)) return true;
+  if (hit && (r.left < 0 || r.top < 0 || (vw && r.right > vw) || (vh && r.bottom > vh))) return true;
   var pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 1, r.top + 1], [r.right - 1, r.top + 1], [r.left + 1, r.bottom - 1], [r.right - 1, r.bottom - 1]];
   for (var i = 0; i < pts.length; i++) if (nativeUnder(pageElAt(pts[i][0], pts[i][1]))) return true;
   return false;
@@ -1373,26 +1375,27 @@ function badgeSpots(r, bw, hit) {
   var w = r.width + 4, out = -(20 + 2 * (hit || 0));
   return [[out, out], [w + 2, out], [4, 4], [w - 4 - bw, 4]];
 }
-/** Place the badge on the first spot that is fully inside the viewport
- *  horizontally (and not above the document's top) AND clear of native
- *  controls; else the first spot that is on screen (it stays inert); else
- *  clamp it to the viewport edge. Returns badgeCoversNative() for the spot
- *  chosen, so a badge over a control is never live. */
+/** Choose an unobstructed spot. Touch badges must fit in both viewport axes.
+ *  Desktop badges keep the original horizontal fit and document-top bound.
+ *  Recheck the final rectangle after clamping before making a badge live. */
 function placeBadge(badge, r, hit) {
   // #714 gap 9 — hit is the touch hit-area border on each side.
   var bw = Math.max(18 + 2 * (hit || 0), badge.offsetWidth || 0);
+  var bh = 18 + 2 * (hit || 0);
   var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var vh = window.innerHeight || document.documentElement.clientHeight || 0;
   var sy = window.scrollY || window.pageYOffset || 0;
   var spots = badgeSpots(r, bw, hit), fallback = null;
   function fits(s) {
     var x = r.left - 2 + s[0], y = r.top - 2 + s[1];
-    return x >= 0 && (!vw || x + bw <= vw) && y + sy >= 0;
+    var fitsY = hit ? y >= 0 && (!vh || y + bh <= vh) : y + sy >= 0;
+    return x >= 0 && (!vw || x + bw <= vw) && fitsY;
   }
   function put(s) { important(badge, { left: s[0] + "px", top: s[1] + "px" }); }
   for (var i = 0; i < spots.length; i++) {
     if (!fits(spots[i])) continue;
     put(spots[i]);
-    if (!badgeCoversNative(badge)) return false;
+    if (!badgeCoversNative(badge, hit)) return false;
     if (!fallback) fallback = spots[i];
   }
   if (!fallback) {
@@ -1401,10 +1404,15 @@ function placeBadge(badge, r, hit) {
     var o = 22 + 2 * (hit || 0);
     var x = Math.min(Math.max(r.left - o, 0), vw ? Math.max(vw - bw, 0) : Infinity);
     var y = Math.max(r.top - o, -sy);
+    // Keep a touch fallback fully in view while its anchor is visible.
+    // An offscreen anchor should continue to scroll with its badge.
+    if (hit && r.bottom > 0 && (!vh || r.top < vh)) {
+      y = Math.min(Math.max(y, 0), vh ? Math.max(vh - bh, 0) : Infinity);
+    }
     fallback = [x - (r.left - 2), y - (r.top - 2)];
   }
   put(fallback);
-  return badgeCoversNative(badge);
+  return badgeCoversNative(badge, hit);
 }
 function setModHeld(v) {
   if (v === modHeld) return;

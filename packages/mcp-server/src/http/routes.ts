@@ -696,7 +696,7 @@ export function createHttpRoutes(
 
   // #714 — withdraw the human's own resolve (Reopen on the page review
   // queue): the exact inverse of mark-resolved, over the same field. Sets
-  // humanResolvedAt to null; never touches `acknowledged` or artifact status.
+  // an existing humanResolvedAt to null and re-queues a drained comment.
   app.post("/api/comments/:commentId/mark-unresolved", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
@@ -709,12 +709,12 @@ export function createHttpRoutes(
         404,
       );
     }
-    await store.markCommentHumanResolved(commentId, null);
+    const reopened = await store.markCommentHumanResolved(commentId, null);
     const comment = await store.getComment(commentId);
-    if (comment) {
+    if (reopened && comment) {
       broadcast({ type: "comment_updated", comment }, sid);
     }
-    return c.json({ status: "reopened", commentId, comment: comment ?? null });
+    return c.json({ status: reopened ? "reopened" : "unchanged", commentId, comment: comment ?? null });
   });
 
   // #172 — the human resolves a COUNTERED suggestion from the companion UI.

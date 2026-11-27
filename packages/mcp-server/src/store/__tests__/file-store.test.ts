@@ -295,6 +295,35 @@ describe("FileStore", () => {
     expect(createStore("human-resolved-reopen").getComment("c1")?.humanResolvedAt).toBeNull();
   });
 
+  it("settles only the delivered Resolve/Reopen generation, including across store instances", () => {
+    const session = "human-resolution-ack";
+    const store = createStore(session);
+    const id = "c1";
+    store.addComment({ id, artifactId: "a1", content: "Review this", author: "human" });
+    const snapshot = (reader: FileStore) => {
+      const row = reader.getUnacknowledgedComments().find((comment) => comment.id === id)!;
+      return { id, resolvedAt: row.humanResolvedAt, token: row.humanResolutionToken };
+    };
+    const initial = snapshot(store);
+    store.markCommentHumanResolved(id);
+    store.markCommentHumanResolved(id, null);
+    store.acknowledgeComments([id], [initial]);
+    expect(store.getComment(id)?.acknowledged).toBe(false);
+
+    const firstReopen = snapshot(store);
+    const writer = createStore(session);
+    writer.markCommentHumanResolved(id);
+    writer.markCommentHumanResolved(id, null);
+    store.acknowledgeComments([id], [firstReopen]);
+    expect(store.getComment(id)?.acknowledged).toBe(false);
+    const latest = snapshot(store);
+    expect(latest.resolvedAt).toBeNull();
+    expect(latest.token).not.toBe(firstReopen.token);
+
+    store.acknowledgeComments([id], [latest]);
+    expect(createStore(session).getComment(id)).toMatchObject({ acknowledged: true, humanResolutionToken: latest.token });
+  });
+
   it("pending plan-reviews / decisions exclude CLOSED artifacts (F1 orphan guard)", () => {
     const store = createStore("orphan_guard");
     store.createArtifact({ id: "p1", type: "plan", title: "Plan", content: { steps: [], estimatedChanges: 0 } });
