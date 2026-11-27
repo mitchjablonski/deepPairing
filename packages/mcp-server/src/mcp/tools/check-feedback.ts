@@ -1,7 +1,7 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES } from "./types.js";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
-import { effectiveHumanResolution } from "../../store/comment-resolution.js";
+import { commentResolutionSnapshot, effectiveHumanResolution } from "../../store/comment-resolution.js";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { decisionFeedback } from "./decision-feedback.js";
 import { SERVER_VERSION } from "../../version.js";
@@ -714,7 +714,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
   const ackDeliveredComments = (comments: Comment[]) => store.acknowledgeComments(
     comments.map((c) => c.id),
-    comments.map((c) => ({ id: c.id, resolvedAt: c.humanResolvedAt, token: c.humanResolutionToken })),
+    comments.map(commentResolutionSnapshot),
   );
 
   // Session-level directives (free-form messages from human)
@@ -739,7 +739,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   });
   if (artifactCommentsSorted.length > 0) {
     await ackDeliveredComments(artifactCommentsSorted);
-    const effectiveResolution = effectiveHumanResolution(fullState?.comments ?? allComments);
+    const effectiveResolution = effectiveHumanResolution(fullState?.comments ?? allComments, fullState?.artifacts ?? postWakeArtifacts);
     const questionLines: string[] = [];
     const suggestionLines: string[] = [];
     const otherLines: string[] = [];

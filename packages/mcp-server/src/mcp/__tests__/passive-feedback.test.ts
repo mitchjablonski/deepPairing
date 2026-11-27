@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { getPassiveFeedback, isObligationBearingComment } from "../tool-helpers.js";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
@@ -32,6 +32,25 @@ describe("getPassiveFeedback — skips obligation-bearing comments (#225 F1)", (
     expect(out).toContain("nit: rename this");
     // Acked — check_feedback won't re-show it.
     expect(store.getCommentsForArtifact("art_1").find((c) => c.id === "cmt_plain")?.acknowledged).toBe(true);
+  });
+
+  it("leaves explicit reopens for check_feedback, including one that raced with passive settlement", async () => {
+    const id = "cmt_reopen";
+    store.addComment({ id, artifactId: "art_1", content: "please revisit", author: "human" });
+    store.markCommentHumanResolved(id);
+    const acknowledge = store.acknowledgeComments.bind(store);
+    const race = vi.spyOn(store, "acknowledgeComments").mockImplementationOnce((ids, delivered) => {
+      store.markCommentHumanResolved(id, null);
+      acknowledge(ids, delivered);
+    });
+    try {
+      expect(await getPassiveFeedback(store)).toContain("please revisit");
+      expect(store.getComment(id)).toMatchObject({ humanResolvedAt: null, acknowledged: false });
+      expect(await getPassiveFeedback(store, [id])).toBe("");
+      expect(store.getComment(id)?.acknowledged).toBe(false);
+    } finally {
+      race.mockRestore();
+    }
   });
 
   it("does NOT drain or acknowledge a SUGGESTION — its must-respond lane is preserved", async () => {

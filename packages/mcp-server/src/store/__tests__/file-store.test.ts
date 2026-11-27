@@ -324,6 +324,24 @@ describe("FileStore", () => {
     expect(createStore(session).getComment(id)).toMatchObject({ acknowledged: true, humanResolutionToken: latest.token });
   });
 
+  it("settles delivery alongside a legacy malformed stamp without rewriting it", () => {
+    const session = "legacy-resolution-stamp";
+    const writer = createStore(session);
+    const legacy = writer.addComment({ id: "legacy", artifactId: "a1", content: "Old comment", author: "human" });
+    legacy.humanResolvedAt = "previously accepted opaque text";
+    writer.addComment({ id: "next", artifactId: "a1", content: "New comment", author: "human" });
+    writer.forceFlush();
+
+    const reader = createStore(session);
+    const delivered = reader.getUnacknowledgedComments().map((c) => ({
+      id: c.id, resolvedAt: c.humanResolvedAt, token: c.humanResolutionToken,
+    }));
+    reader.acknowledgeComments(["legacy", "next"], delivered);
+    const reloaded = createStore(session);
+    expect(reloaded.getComment("legacy")).toMatchObject({ humanResolvedAt: legacy.humanResolvedAt, acknowledged: true });
+    expect(reloaded.getComment("next")?.acknowledged).toBe(true);
+  });
+
   it("pending plan-reviews / decisions exclude CLOSED artifacts (F1 orphan guard)", () => {
     const store = createStore("orphan_guard");
     store.createArtifact({ id: "p1", type: "plan", title: "Plan", content: { steps: [], estimatedChanges: 0 } });

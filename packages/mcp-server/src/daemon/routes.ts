@@ -1386,13 +1386,12 @@ export function createDaemonRoutes(
     // client always sends an object (`{resolvedAt}`), so no empty-body affordance.
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
-    const { resolvedAt } = parsed.body as { resolvedAt?: unknown };
-    // #714 — null withdraws the resolve; anything but a string/null/absent is
-    // treated as absent (stamp now), as before.
-    const changed = r.store.markCommentHumanResolved(
-      c.req.param("commentId"),
-      resolvedAt === null ? null : typeof resolvedAt === "string" ? resolvedAt : undefined,
-    );
+    const stamp = z.string().datetime().nullable().optional().safeParse(parsed.body.resolvedAt);
+    if (!stamp.success) {
+      return c.json({ error: "Expected resolvedAt to be an ISO timestamp or null", code: ERROR_CODES.validation_error }, 400);
+    }
+    const resolvedAt = stamp.data;
+    const changed = r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
     return c.json({ status: resolvedAt === null ? (changed ? "reopened" : "unchanged") : "resolved", changed });
   });
 

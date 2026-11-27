@@ -98,7 +98,7 @@ export function readPageFeedback(
 
   const pending = store.getCommentsForArtifact(artifactId).filter((comment) =>
     comment.sessionId === sessionId && comment.author === "human" && !comment.acknowledged && comment.id !== reasonComment?.id);
-  const effectiveResolution = effectiveHumanResolution(store.getComments());
+  const effectiveResolution = effectiveHumanResolution(store.getComments(), artifacts);
   pending.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
   const anchoredCount = pending.filter((comment) => comment.target.htmlAnchor).length;
   const result: StandalonePageFeedbackRead = {

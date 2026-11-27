@@ -175,10 +175,11 @@ describe("check_feedback — a page comment the human resolved themselves (#714)
     const anchor = { kind: "element" as const, locator: "h1", quote: "Cache invalidation", version: 1 };
     await store.addComment({ id: "cmt_done", artifactId: id, content: "rename this heading", author: "human", target: { artifactId: id, htmlAnchor: anchor } });
     await store.addComment({ id: "cmt_open", artifactId: id, content: "add a TL;DR", author: "human", target: { artifactId: id, htmlAnchor: anchor } });
-    store.markCommentHumanResolved("cmt_done", "2026-11-26T10:00:00.000Z");
+    const stamp = store.getComment("cmt_done")!.createdAt;
+    store.markCommentHumanResolved("cmt_done", stamp);
     const res = await callTool("check_feedback");
     const sc = res.structuredContent as any;
-    expect(sc.comments.find((x: any) => x.id === "cmt_done").humanResolvedAt).toBe("2026-11-26T10:00:00.000Z");
+    expect(sc.comments.find((x: any) => x.id === "cmt_done").humanResolvedAt).toBe(stamp);
     expect(sc.comments.find((x: any) => x.id === "cmt_open").humanResolvedAt).toBeUndefined();
     const line = (res.text as string).split("\n").find((l) => l.includes("rename this heading"))!;
     expect(line).toContain("RESOLVED BY THE HUMAN");
@@ -190,8 +191,10 @@ describe("check_feedback — a page comment the human resolved themselves (#714)
     const id = await presentPage();
     const anchor = { kind: "element" as const, locator: "h1", quote: "Cache invalidation" };
     store.addComment({ id: "root", artifactId: id, content: "rename this heading", author: "human", target: { artifactId: id, htmlAnchor: anchor } });
-    store.markCommentHumanResolved("root", "2001-01-01T00:00:00.000Z");
-    store.addComment({ id: "reply", artifactId: id, content: "I still need this", author: "human", parentCommentId: "root" });
+    const stamp = store.getComment("root")!.createdAt;
+    store.markCommentHumanResolved("root", stamp);
+    const reply = store.addComment({ id: "reply", artifactId: id, content: "I still need this", author: "human", parentCommentId: "root" });
+    reply.createdAt = new Date(Date.parse(stamp) + 1).toISOString();
     store.acknowledgeComments(["reply"]);
     const res = await callTool("check_feedback");
     const comment = (res.structuredContent as any).comments.find((x: any) => x.id === "root");
@@ -206,7 +209,7 @@ describe("check_feedback — a page comment the human reopened (#725)", () => {
     const id = await presentPage();
     const anchor = { kind: "element" as const, locator: "h1", quote: "Cache invalidation", version: 1 };
     await store.addComment({ id: "cmt_re", artifactId: id, content: "rename this heading", author: "human", target: { artifactId: id, htmlAnchor: anchor } });
-    store.markCommentHumanResolved("cmt_re", "2026-11-26T10:00:00.000Z");
+    store.markCommentHumanResolved("cmt_re");
     await callTool("check_feedback");
     store.markCommentHumanResolved("cmt_re", null);
     const res = await callTool("check_feedback");

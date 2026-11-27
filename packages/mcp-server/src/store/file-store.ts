@@ -65,6 +65,11 @@ const RetirementCommentFields = z.object({
   humanResolutionToken: z.string().uuid().optional(),
   suggestion: z.object({ state: z.enum(["pending", "countered", "applied", "insisted"]) }).passthrough().optional(),
 }).passthrough();
+// Earlier daemon versions accepted any string for this stamp. Delivery
+// compares the raw value and token, so unrelated rows can still settle.
+const DeliveryCommentFields = RetirementCommentFields.extend({
+  humanResolvedAt: z.string().nullable().optional(),
+});
 
 /** #486 — one cross-project mirror refused by a busy ledger lock, queued in
  *  `.deeppairing/ledger-mirror-pending.json` for replay. */
@@ -475,8 +480,8 @@ export class FileStore implements IStore {
   /** An uncertain attempt must announce its truth once a retry confirms persistence. */
   private unannouncedRetirements = new Map<string, string | undefined>();
 
-  private validateRetirementComments(raw: unknown): Comment[] {
-    if (!Array.isArray(raw) || raw.some((c: unknown) => !RetirementCommentFields.safeParse(c).success) ||
+  private validateRetirementComments(raw: unknown, fields = RetirementCommentFields): Comment[] {
+    if (!Array.isArray(raw) || raw.some((c: unknown) => !fields.safeParse(c).success) ||
       new Set(raw.map((c: Comment) => c.id)).size !== raw.length ||
       raw.some((c: Comment) => c.sessionId !== this.sessionId)) {
       throw Object.assign(new Error("Retirement feedback remains unreadable; original comments were not overwritten."), { code: "ERETIREMENTFEEDBACKUNKNOWN" });
@@ -1481,10 +1486,10 @@ export class FileStore implements IStore {
   private updateDurableComments<T>(update: (comments: Comment[]) => T): T {
     if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     return withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
-      const { merged, filePath, diskBytes } = this.readDurableComments(true);
+      const { merged, filePath, diskBytes } = this.readDurableComments(true, DeliveryCommentFields);
       const comments = merged.map((comment) => ({ ...comment }));
       const result = update(comments);
-      this.writeDurableComments(comments, filePath, diskBytes);
+      this.writeDurableComments(comments, filePath, diskBytes, { clearRetirementBlock: false });
       return result;
     });
   }
@@ -1509,7 +1514,7 @@ export class FileStore implements IStore {
     return { artifacts: artifacts as Artifact[], merged, filePath, diskBytes };
   }
 
-  private readDurableComments(allowBuffered: boolean) {
+  private readDurableComments(allowBuffered: boolean, fields = RetirementCommentFields) {
     const file = "comments.json";
     const filePath = path.join(this.sessionDir(), file);
     let diskBytes: string | undefined;
@@ -1518,7 +1523,7 @@ export class FileStore implements IStore {
       if (errorCode(error) !== "ENOENT" || this.observedRecordFiles.has(file) || !allowBuffered) throw error;
     }
     const validate = (read: () => unknown) => {
-      try { return this.validateRetirementComments(read()); }
+      try { return this.validateRetirementComments(read(), fields); }
       catch (error) {
         // Keep a subsequent ordinary timer flush from salvaging this exact
         // malformed collection before the operator repairs it.
@@ -1529,7 +1534,7 @@ export class FileStore implements IStore {
     const disk = validate(() => JSON.parse(diskBytes ?? "[]"));
     const local = validate(() => this.comments);
     const baseline = JSON.parse(this.recordBaselines[file] ?? "[]") as Comment[];
-    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id));
+    const merged = this.validateRetirementComments(mergeSessionRecords(baseline, local, disk, (c) => c.id), fields);
     return { disk, local, baseline, merged, filePath, diskBytes };
   }
 
@@ -1549,14 +1554,14 @@ export class FileStore implements IStore {
     });
   }
 
-  private writeDurableComments(comments: Comment[], filePath: string, diskBytes: string | undefined): void {
+  private writeDurableComments(comments: Comment[], filePath: string, diskBytes: string | undefined, { clearRetirementBlock = true } = {}): void {
     const bytes = JSON.stringify(comments, null, 2);
     if (bytes !== diskBytes) writeStringAtomic(filePath, bytes);
     this.comments = comments;
     this.recordBaselines["comments.json"] = JSON.stringify(comments);
     this.observedRecordFiles.add("comments.json");
     delete this.backedUpCorruption[filePath];
-    this.retirementFeedbackBlocked = false;
+    if (clearRetirementBlock) this.retirementFeedbackBlocked = false;
   }
 
   /** Keep the warm read unchanged until the exact acknowledgement is durable. */
@@ -2004,7 +2009,7 @@ export class FileStore implements IStore {
     let requeued = false;
     const changed = this.updateDurableComments((comments) => {
       const comment = comments.find((c) => c.id === commentId);
-      if (!comment || (resolvedAt === null && !comment.humanResolvedAt)) return false;
+      if (!comment || (resolvedAt === null && (!comment.humanResolvedAt || !Number.isFinite(Date.parse(comment.humanResolvedAt))))) return false;
       // #714 — null withdraws the resolve (Reopen); undefined stamps now.
       comment.humanResolvedAt = resolvedAt === null ? null : resolvedAt ?? new Date().toISOString();
       comment.humanResolutionToken = crypto.randomUUID();
