@@ -385,4 +385,46 @@ describe("#727 — a heading's level change is one quiet change, not a remove + 
     expect(d.moved).toBe(2);
     expect(lineFor(a, b)).toBe("Changed: Notes (h2\u2192h3); 2 blocks moved");
   });
+
+  it("one shared boilerplate block isn't enough to link a moved, re-levelled section: remove + add", () => {
+    const a = "<h2>A</h2><p>a</p><h2>Notes</h2><p>Old detail one.</p><p>Old detail two.</p><p>TBD</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+    const b = "<h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p><h3>Notes</h3><p>Entirely new.</p><p>TBD</p>";
+    const d = diffOf(a, b);
+    expect(d.changes.some((c) => c.levelChanged)).toBe(false);
+    expect(d.removed.filter((r) => r.heading).map((r) => r.text)).toEqual(["Notes"]);
+    expect(lineFor(a, b)).toMatch(/^Added: Notes;/);
+    expect(lineFor(a, b)).not.toMatch(/h2\u2192h3/);
+  });
+
+  it("duplicate same-text headings in one gap pair only by body evidence (the second Overview is the demoted one)", () => {
+    const a = "<h2>K</h2><h3>Overview</h3><p>first</p><h3>Overview</h3><p>second</p><h2>Z</h2>";
+    const b = "<h2>K</h2><h4>Overview</h4><p>second</p><h2>Z</h2>";
+    const d = diffOf(a, b);
+    const level = d.changes.find((c) => c.levelChanged)!;
+    expect(level.previous!.text).toBe("Overview");
+    expect(d.changes.filter((c) => c.kind === "moved")).toEqual([]);
+    expect(d.removed.map((r) => [r.tag, r.text])).toEqual([["h3", "Overview"], ["p", "first"]]);
+    // The removed heading is the FIRST Overview (block 1), with "first" under it.
+    expect(d.removed.map((r) => r.sectionId)).toEqual([1, 1]);
+    expect(d.moved).toBe(0);
+  });
+
+  it("duplicate same-text headings with no body evidence stay a remove + add", () => {
+    const a = "<h2>K</h2><h3>Overview</h3><p>first</p><h3>Overview</h3><p>second</p><h2>Z</h2>";
+    const b = "<h2>K</h2><h4>Overview</h4><p>third</p><h2>Z</h2>";
+    expect(diffOf(a, b).changes.some((c) => c.levelChanged)).toBe(false);
+  });
+
+  it("the level label is dropped when two changed sections share the name", () => {
+    const a = "<h2>Option A</h2><h3>Pros</h3><p>Fast</p><h2>Option B</h2><h3>Pros</h3><p>Cheap</p>";
+    const b = "<h2>Option A</h2><h4>Pros</h4><p>Fast</p><h2>Option B</h2><h3>Pros</h3><p>Cheaper</p>";
+    const d = diffOf(a, b);
+    expect(d.changes.map((c) => [c.kind, c.block.text, c.levelChanged])).toEqual([
+      ["changed", "Pros", true],
+      ["changed", "Cheaper", undefined],
+    ]);
+    const s = summarizePageDiff(d);
+    expect(s.headingLevels).toBeUndefined();
+    expect(formatPageDiffSummary(s)).toBe("Changed: Pros");
+  });
 });
