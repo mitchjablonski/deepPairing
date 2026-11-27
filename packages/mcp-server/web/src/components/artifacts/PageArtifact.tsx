@@ -12,6 +12,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { ANNOTATOR_SCRIPT, annotatorScript } from "../../lib/pageAnnotator";
 import { sanitizePageHtml } from "../../lib/pageSanitize";
+import { PAGE_MERMAID_PREPARE } from "../../lib/pageMermaid";
 import {
   acceptAnchorMessage,
   acceptPinClick,
@@ -111,7 +112,7 @@ const RENDER_ISSUES_REPORT_DELAY_MS = 1500;
 const RENDER_ISSUES_REPORT_MAX_WAIT_MS = 5000;
 
 /** Module-level so PrototypeFrame's memo sees one stable object. */
-const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, scriptFor: annotatorScript, sanitize: sanitizePageHtml };
+const PAGE_ANNOTATION: FrameAnnotation = { script: ANNOTATOR_SCRIPT, scriptFor: annotatorScript, sanitize: sanitizePageHtml, prepare: PAGE_MERMAID_PREPARE };
 const NO_MARKS: ChangeLocator[] = [];
 
 /** #714 — the pointing toggle's shortcut, as shown on this platform. */
