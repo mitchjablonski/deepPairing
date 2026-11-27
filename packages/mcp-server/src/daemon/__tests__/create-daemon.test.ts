@@ -615,6 +615,26 @@ it("releases End admission when a guarded browser write 404s, 400s, or throws (#
   }
 });
 
+it("answers a path-named standalone review with no directory as a typed 404, creating nothing (#711)", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  daemon.createSession(sessionId);
+  const ghost = createStandaloneSessionId(tmpDir);
+  const ghostDir = path.join(tmpDir, ".deeppairing", "sessions", ghost);
+  const { send } = reviewWriterHarness(tmpDir, daemon);
+  for (const [method, route, body] of [
+    ["POST", `sessions/${ghost}/annotations`, { targetEventId: "evt_1", note: "Lost note" }],
+    ["DELETE", `sessions/${ghost}/annotations/ann_existing`, undefined],
+  ] as const) {
+    const response = await send(method, route, body, sessionId);
+    expect(response.status, route).toBe(404);
+    expect(await response.json(), route).toMatchObject({ code: ERROR_CODES.session_not_found });
+  }
+  expect(fs.existsSync(ghostDir)).toBe(false);
+  await daemon.standaloneCloseout.end(sessionId);
+  expect(daemon.standaloneCloseout.state(sessionId)).toMatchObject({ state: "ended" });
+});
+
 it("wakes only the ended review's exact decision waiters after the marker commits", async () => {
   const { tmpDir, daemon } = makeDaemon();
   const sessionId = createStandaloneSessionId(tmpDir);

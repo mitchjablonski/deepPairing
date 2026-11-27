@@ -417,6 +417,14 @@ export function createHttpRoutes(
     return c.json({ error: "Internal server error" }, 500);
   });
 
+  // #711 — a path-named standalone review with no session directory is a
+  // typed 404 before admission (closeout cannot read a missing review), and
+  // nothing is created. Wrapper ids keep their existing behavior.
+  function missingStandaloneSession(c: Context, root: string, sessionId: string): Response | null {
+    if (!isStandaloneSessionForProject(sessionId, root) || sessionDirExists(root, sessionId)) return null;
+    return c.json({ error: "Session not found", code: ERROR_CODES.session_not_found }, 404);
+  }
+
   async function withReviewWrite(
     c: Context, store: Pick<IStore, "getSessionId"> | null, requestedSid: string | undefined,
     run: (sid: string | undefined) => Promise<Response>,
@@ -1982,6 +1990,8 @@ export function createHttpRoutes(
     // #711 — admit the PATH session (the one actually written), never the
     // header/default store, before constructing its writer.
     const root = projectRoot;
+    const missing = missingStandaloneSession(c, root, sessionId);
+    if (missing) return missing;
     return withReviewWrite(c, null, sessionId, async () => {
       const s = new FileStore(root, sessionId);
       const annotation = s.addAnnotation({ targetEventId, note, tags });
@@ -2069,6 +2079,8 @@ export function createHttpRoutes(
     }
     // #711 — admit the path session before constructing its writer.
     const root = projectRoot;
+    const missing = missingStandaloneSession(c, root, sessionId);
+    if (missing) return missing;
     return withReviewWrite(c, null, sessionId, async () => {
       const s = new FileStore(root, sessionId);
       const ok = s.deleteAnnotation(annotationId);
