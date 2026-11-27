@@ -2062,12 +2062,19 @@ function reportDiag() {
   diagPending = 0;
   if (!readySent) return;
   if (!diag.script && !diag.rejection && !diag.resources.length && !diag.blocked.length) return;
-  var msg = { dp: "diagnostics", doc: docId,
+  // #727 — the document id never goes near anything page script can patch
+  // after Run: the dedupe key is built from a body WITHOUT it (JSON.stringify
+  // and an inherited toJSON are page-replaceable), and the posted message is
+  // a fresh literal handed only to the parent's cross-origin postMessage.
+  var body = {
     scriptErrors: { count: diag.script, samples: diag.scriptSamples.slice(), classes: canonKeys(diag.scriptClasses, ERROR_CLASSES) },
     rejections: { count: diag.rejection, samples: diag.rejectionSamples.slice(), classes: canonKeys(diag.rejectionClasses, ERROR_CLASSES) },
     resources: canonKeys(diag.resources, RESOURCE_KEYS), blocked: canonKeys(diag.blocked, CSP_DIRECTIVES) };
-  var json = JSON.stringify(msg);
-  if (json !== lastDiagJson) { lastDiagJson = json; post(msg); }
+  var json = JSON.stringify(body);
+  if (json !== lastDiagJson) {
+    lastDiagJson = json;
+    post({ dp: "diagnostics", doc: docId, scriptErrors: body.scriptErrors, rejections: body.rejections, resources: body.resources, blocked: body.blocked });
+  }
 }
 function scheduleDiag() {
   if (diagPending) return;
@@ -2145,8 +2152,14 @@ return function uninstall() {
  *  embedded; anything else is dropped (the annotator then draws its own). */
 export function annotatorScript(doc?: string): string {
   const id = typeof doc === "string" && /^[0-9a-f]{16,64}$/.test(doc) ? JSON.stringify(doc) : "undefined";
+  // #727 — first statement: the script removes its own <script> node, the
+  // only place the id appears in the frame document. It runs while the parser
+  // is blocked on it, before any agent markup is even parsed, so after Run no
+  // page script can read the id from the DOM (document.scripts, outerHTML,
+  // a MutationObserver: none exist yet). The id then lives only in a closure.
   return (
-    "(function(){try{var core=(function(document,window){" +
+    "(function(){var me=document.currentScript;if(me&&me.parentNode)me.parentNode.removeChild(me);me=null;" +
+    "try{var core=(function(document,window){" +
     ANNOTATOR_CORE_SOURCE +
     "\n})(document,window);(function(document,window,parent,core,DP_DOC){" +
     ANNOTATOR_MAIN_SOURCE +
