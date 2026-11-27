@@ -217,14 +217,16 @@ it("wakes only the ended review's exact decision waiters after the marker commit
     (source as unknown as { feedbackWaiters: Array<() => void> }).feedbackWaiters;
 
   try {
+    const generalPending = store.waitForFeedback(10_000, cancel.signal);
+    const [generalWaiter] = waiters(store);
     const pending = read(sessionId, "pending", 10_000);
     const otherPending = read(siblingId, "pending", 10_000);
-    const generalPending = store.waitForFeedback(10_000, cancel.signal);
     await vi.waitFor(() => {
       expect(waiters(store)).toHaveLength(2);
       expect(waiters(sibling)).toHaveLength(1);
     });
     const before = [...waiters(store)];
+    const siblingBefore = [...waiters(sibling)];
     const flush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("End flush failed"); });
     try {
       await expect(daemon.standaloneCloseout.end(sessionId)).rejects.toThrow("End flush failed");
@@ -233,6 +235,8 @@ it("wakes only the ended review's exact decision waiters after the marker commit
       flush.mockRestore();
     }
     const marker = await daemon.standaloneCloseout.end(sessionId);
+    expect(waiters(store)).toEqual([generalWaiter]);
+    expect(waiters(sibling)).toEqual(siblingBefore);
     expect(JSON.parse(fs.readFileSync(path.join(dir, "review-ended.json"), "utf8"))).toEqual(marker);
     expect(fs.readFileSync(decisionFile, "utf8")).toBe(decisionsBefore);
     const ended = await (await pending).json();
