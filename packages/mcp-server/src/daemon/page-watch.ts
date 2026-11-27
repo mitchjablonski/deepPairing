@@ -301,6 +301,11 @@ export class PageWatcher {
               // The replace finished inside the window: process it as this save.
               this.onChange(entry, returned);
               generation = entry.gen;
+            } else if (returned !== MISSING && entry.lastSig === returned) {
+              // A watcher event or poll tick already recorded this same
+              // recreate during the wait (gen moved, lastSig is the file as it
+              // is now). Adopt it rather than fail End as pending.
+              generation = entry.gen;
             }
           }
           // Another eventless save may have landed during the wait. Mark

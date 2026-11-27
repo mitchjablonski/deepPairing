@@ -633,6 +633,31 @@ describe("page file watch — a save landing during the gate check (Codex review
     expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Recreated</p>" } });
   });
 
+  it("End adopts a recreate that a watcher event already recorded during the recheck (#736 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => {
+        fs.writeFileSync(file, "<p>Recreated</p>");
+        sig.bump();
+        fakeWatchers[0]!.fire("page.html"); // the event lands inside the wait
+      },
+    });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await watcher.drainQueuedSaves(SID);
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Recreated</p>" } });
+    await settle(PAGE_WATCH_QUIET_MS * 2);
+    expect(pages()).toHaveLength(2);
+    expect(events.filter((e) => e.type === "artifact_created")).toHaveLength(1);
+  });
+
   it("End still completes for a genuine delete after one bounded recheck (#730 review)", async () => {
     const sig = counterSig();
     const waits: number[] = [];
