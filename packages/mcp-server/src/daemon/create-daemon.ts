@@ -264,7 +264,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // + the client count; `sessions.size` is monotonic and never reaches 0, which
   // is why the daemon used to leak a process per project forever.
   const activeSessions = new Set<string>();
-  const standaloneCloseout = new StandaloneCloseout(projectRoot, (sessionId) => sessions.get(sessionId),
+  const standaloneCloseout: StandaloneCloseout = new StandaloneCloseout(projectRoot, (sessionId) => sessions.get(sessionId),
     undefined, (sessionId) => pageWatcher.stopSession(sessionId), (sessionId) => pageWatcher.drainQueuedSaves(sessionId));
   const demoRuns = new Map<string, () => void>();
   // #470 — active allowances live ONLY here (O1). A restart ends every grant:
@@ -283,7 +283,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // #680 slice 3 — the file watch behind live file-backed page artifacts. It
   // re-syncs on every artifact-changing broadcast (below), on registration,
   // and stops a session's watches when its wrapper leaves.
-  const pageWatcher = new PageWatcher({
+  const pageWatcher: PageWatcher = new PageWatcher({
     projectRoot,
     getStore: (sessionId) => sessions.get(sessionId),
     broadcast: (sessionId, event) => broadcast(sessionId, event),
