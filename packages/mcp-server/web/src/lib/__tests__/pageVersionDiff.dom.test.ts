@@ -427,4 +427,12 @@ describe("#727 — a heading's level change is one quiet change, not a remove + 
     expect(s.headingLevels).toBeUndefined();
     expect(formatPageDiffSummary(s)).toBe("Changed: Pros");
   });
+
+  it("exactly half the old body following (and a minority of the new body) doesn't link: remove + add", () => {
+    const a = "<h2>A</h2><p>a</p><h2>Notes</h2><p>Old detail one.</p><p>TBD</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+    const b = "<h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p><h3>Notes</h3><p>New one.</p><p>New two.</p><p>New three.</p><p>TBD</p>";
+    const d = diffOf(a, b);
+    expect(d.changes.some((c) => c.levelChanged)).toBe(false);
+    expect(lineFor(a, b)).toMatch(/^Added: Notes;/);
+  });
 });

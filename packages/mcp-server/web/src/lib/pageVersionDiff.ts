@@ -553,6 +553,8 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
   const bodyFollow = new Map<string, number>();
   const bodySize = new Map<number, number>();
   for (const o of oldBlocks) if (!o.heading && o.sectionId >= 0) bodySize.set(o.sectionId, (bodySize.get(o.sectionId) ?? 0) + 1);
+  const newBodySize = new Map<number, number>();
+  for (const nb of newBlocks) if (!nb.heading && nb.sectionId >= 0) newBodySize.set(nb.sectionId, (newBodySize.get(nb.sectionId) ?? 0) + 1);
   for (const [i, j] of same) {
     const o = oldBlocks[i]!, nb = newBlocks[j]!;
     if (o.heading || nb.heading || o.sectionId < 0 || nb.sectionId < 0) continue;
@@ -629,11 +631,13 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
   }
 
   // #727 — a section that moved AND changed its heading's level: its old
-  // heading (removed) and new one (added) share their text, and most of the
-  // section's body went with it (at least half of its body blocks, at least
-  // one, now sit under the new heading). That is the same section, moved:
-  // one quiet level change plus a counted move. Anything less, or more than
-  // one candidate either side, stays a remove + add.
+  // heading (removed) and new one (added) share their text, and the body
+  // went with it: the same-text blocks that followed are MORE than half of
+  // the old section's body and at least half of the new section's body. That
+  // is the same section, moved: one quiet level change plus a counted move.
+  // Among same-text candidates, body evidence picks the pair: a pair is used
+  // only when that evidence qualifies exactly one partner for each side;
+  // anything else stays a remove + add.
   let movedHeadings = 0;
   const removedHeads = removed.filter((r) => r.heading).map((r) => r.sectionId);
   if (removedHeads.length) {
@@ -643,7 +647,7 @@ export function diffPageBlocks(oldBlocks: PageBlock[], newBlocks: PageBlock[]): 
       for (const nj of addedHeads) {
         if (oldBlocks[oi]!.text !== newBlocks[nj]!.text) continue;
         const followed = bodyFollow.get(`${oi}:${nj}`) ?? 0;
-        if (followed >= 1 && followed * 2 >= (bodySize.get(oi) ?? 0)) cands.push([oi, nj]);
+        if (followed >= 1 && followed * 2 > (bodySize.get(oi) ?? 0) && followed * 2 >= (newBodySize.get(nj) ?? 0)) cands.push([oi, nj]);
       }
     }
     const usedOld = new Set<number>();
