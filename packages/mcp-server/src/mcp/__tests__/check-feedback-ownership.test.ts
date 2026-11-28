@@ -169,6 +169,56 @@ describe("check_feedback acknowledgement during standalone closeout", () => {
     expect(ackComments).not.toHaveBeenCalled();
     expect(ackDecisions).not.toHaveBeenCalled();
   });
+  // #711 gate 1 — End's cutoff lands between the ended check and the backstop
+  // ledger write (a pick saved before the resolve route recorded approvals).
+  it("delivers the saved choice when End refuses the backstop ledger write mid-read", async () => {
+    let state: "open" | "ended" = "open";
+    class EndsDuringLedgerWrite extends FileStore {
+      override recordApprovedPattern(params: Parameters<FileStore["recordApprovedPattern"]>[0]) {
+        void params;
+        state = "ended";
+        throw Object.assign(new Error("This standalone review has ended."), { status: 409, code: "session_ended" });
+      }
+    }
+    const store = fx.track(new EndsDuringLedgerWrite(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    ctx.store.getStandaloneReviewState = () => state;
+    store.createArtifact({ id: "review", type: "decision", title: "Cache review", content: { decisionId: "d1" } });
+    store.recordDecisionRequest({ decisionId: "d1", artifactId: "review", context: "Choose a cache", options: [{
+      id: "a", title: "Local cache", description: "Cache locally", pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
+    }] });
+    store.resolveDecision("d1", "a", "Works offline");
+    const ackDecisions = vi.spyOn(store, "acknowledgeDecisions");
+
+    const result = await handleCheckFeedback(ctx, {});
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]?.text).toContain("Works offline");
+    expect(result.content[0]?.text).not.toContain("recording it in the project ledger failed");
+    expect(result.structuredContent).toMatchObject({ sessionStatus: "session_ended", decisions: [expect.objectContaining({ decisionId: "d1" })] });
+    expect(ackDecisions).not.toHaveBeenCalled();
+    expect(store.getDecision("d1")?.acknowledged).toBeFalsy();
+  });
+
+  it("acks a pick whose ledger row the resolve already wrote, without a second ledger write", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    ctx.store.getStandaloneReviewState = () => "open";
+    store.createArtifact({ id: "review", type: "decision", title: "Cache review", content: { decisionId: "d1" } });
+    store.recordDecisionRequest({ decisionId: "d1", artifactId: "review", context: "Choose a cache", options: [{
+      id: "a", title: "Local cache", description: "Cache locally", pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
+    }] });
+    expect(store.resolveDecisionAtomic("d1", "a", "Works offline")).toMatchObject({ kind: "resolved" });
+    expect(store.recordDecisionApproval("d1")).toMatchObject({ description: "Choose a cache: Local cache", concept: "Cache locally" });
+    store.settleResolution("d1", true);
+    const ledger = vi.spyOn(store, "recordApprovedPattern");
+
+    const result = await handleCheckFeedback(ctx, {});
+
+    expect(result.content[0]?.text).toContain("Works offline");
+    expect(ledger).not.toHaveBeenCalled();
+    expect(store.getDecision("d1")?.acknowledged).toBe(true);
+  });
   it.each([
     [409, "session_closing"],
     [409, "session_ended"],

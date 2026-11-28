@@ -36,6 +36,7 @@ import { PAGE_RENDER_ISSUES_VISUAL_ID, pageRenderIssuesWakeKey, parsePageRenderI
 import { normalizeConceptKey } from "../mcp/preflight-validator.js";
 
 import { isPublishableStance } from "./stance-add.js";
+import { decisionApprovalKeys } from "./decision-approval.js";
 import { PageRevisionFeedbackConflictError, provePageRevisionFeedback, type PageRevisionFeedbackProof } from "./page-revision-feedback.js";
 
 const isStanceAddedVia = (v: unknown): v is StanceAddedVia => v === "cli" || v === "mcp";
@@ -2169,6 +2170,8 @@ export class FileStore implements IStore {
     writtenResponse: DecisionRecord["response"];
     backingStatus: Artifact["status"] | undefined;
     backingHistoryLength: number;
+    /** #711 gate 1 — the approvedPatterns row recordDecisionApproval added. */
+    addedApproval?: string;
   }>();
   private feedbackNotifyHolds = 0;
   private feedbackNotifyPending = false;
@@ -2202,6 +2205,23 @@ export class FileStore implements IStore {
         }
       }
       this.unannouncedResolutions.delete(decisionId);
+      // #711 gate 1 — the pick never committed, so neither did its approval:
+      // retract the local row this resolve added (a cross-project mirror that
+      // already landed stays; a queued one no longer replays, as it is gated on
+      // the local row).
+      const addedApproval = pending.addedApproval;
+      if (addedApproval) {
+        try {
+          this.mutatePreferences((prefs) => {
+            const approved: string[] = Array.isArray(prefs.approvedPatterns) ? prefs.approvedPatterns : [];
+            if (!approved.includes(addedApproval)) return false;
+            prefs.approvedPatterns = approved.filter((p) => p !== addedApproval);
+            return true;
+          });
+        } catch (err) {
+          console.error(`[deepPairing] could not retract the approval of a rolled-back pick (${String(err)}).`);
+        }
+      }
       // #490 — a partial flush may have landed the backing artifact (written
       // before decisions.json) while the decision didn't: re-flush so disk
       // converges back to this rolled-back state once the store can write.
@@ -2243,6 +2263,29 @@ export class FileStore implements IStore {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * #711 gate 1 — record the pick's approval in the ledger INSIDE the resolve
+   * (see IStore.recordDecisionApproval). The preferences write is synchronous
+   * and lock-guarded, so the row is durable when this returns; the
+   * `ledgerRecordedAt` stamp rides the resolve's own flush, and a rolled-back
+   * resolve (settleResolution(…, false)) restores the record without it.
+   */
+  recordDecisionApproval(decisionId: string): { description: string; concept?: string; artifactId: string } | null {
+    this.assertAuthorizationReadable();
+    const dec = this.decisions.get(decisionId);
+    if (!dec?.response) return null;
+    const keys = decisionApprovalKeys(dec);
+    if (!keys) return null;
+    const added = this.recordApprovedPatternReportingAdded(keys);
+    // A resolve whose flush then fails is rolled back by settleResolution; it
+    // retracts the row too, but only when this write added it.
+    const pending = this.pendingResolutions.get(decisionId);
+    if (pending && added) pending.addedApproval = keys.description;
+    dec.ledgerRecordedAt = new Date().toISOString();
+    this.scheduleFlush();
+    return { ...keys, artifactId: dec.artifactId };
   }
 
   /** #484 review — decisions whose answer was written by resolveDecisionAtomic
@@ -2756,6 +2799,11 @@ export class FileStore implements IStore {
    * Stored in .deeppairing/preferences.json under "approvedPatterns".
    */
   recordApprovedPattern(params: { description: string; concept?: string }): void {
+    this.recordApprovedPatternReportingAdded(params);
+  }
+
+  /** #711 gate 1 — recordApprovedPattern, reporting whether the local row was new. */
+  private recordApprovedPatternReportingAdded(params: { description: string; concept?: string }): boolean {
     const { description, concept } = params;
     // AA1 — symmetric with recordRejectedApproach: concept (when present)
     // is the cross-project ledger key. Pre-AA1 the approved path passed
@@ -2765,11 +2813,13 @@ export class FileStore implements IStore {
     // III8 — same per-project publish opt-in gate as the rejected path.
     // Demo isolation — same never-mirror gate as the rejected path.
     // #408 review — local record first (a busy lock throws before the mirror).
+    let added = false;
     this.mutatePreferences((prefs) => {
       const approved: string[] = prefs.approvedPatterns ?? [];
       if (approved.includes(description)) return false;
       approved.push(description);
       prefs.approvedPatterns = approved;
+      added = true;
       return true;
     });
 
@@ -2783,6 +2833,7 @@ export class FileStore implements IStore {
         FileStore.logLedgerMirrorFailure("approved", err);
       }
     }
+    return added;
   }
 
   /**

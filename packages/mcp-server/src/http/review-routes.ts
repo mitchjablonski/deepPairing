@@ -40,6 +40,7 @@ export type ReviewStore = Pick<
   | "recordRejectedApproach"
   | "resolveDecisionAtomic"
   | "isResolutionDurable"
+  | "recordDecisionApproval"
   | "settleResolution"
   | "takeResolutionAnnouncement"
   | "resolvePlanReview"
@@ -236,6 +237,12 @@ export function createReviewRoutes({
           }
         }
 
+        // #711 gate 1 — the pick's ledger approval lands inside this admission
+        // permit, before the flush, so End's marker can never precede it. A
+        // throw (busy preferences lock) fails the resolve and the finally rolls
+        // the pick back — never a saved pick without its ledger row.
+        const approval = outcome.kind === "resolved" ? await store.recordDecisionApproval?.(decisionId) : null;
+
         // A decision response authorizes its backing artifact. Persist the
         // artifact and decision record together before announcing success; a
         // concurrent proposal rewrite must return the global typed 409 and emit no
@@ -269,6 +276,9 @@ export function createReviewRoutes({
           optionId: ann?.optionId ?? optionId,
           reasoning: ann ? ann.reasoning : reasoning,
         }, sid);
+        if (approval) {
+          broadcast({ type: "ledger_write", kind: "approved", description: approval.description, concept: approval.concept, sourceArtifactId: approval.artifactId }, sid);
+        }
 
         return c.json({ status: "resolved", decisionId });
       } finally {

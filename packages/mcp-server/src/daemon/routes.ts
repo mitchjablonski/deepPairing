@@ -1624,6 +1624,11 @@ export function createDaemonRoutes(
         // already advanced it on disk; this closes the live-update gap that left
         // this path — unlike the public route — broadcasting no artifactId at all).
         const artifactId = r.store.getDecision(decisionId)?.artifactId;
+        // #711 gate 1 — the pick's ledger approval lands inside this admission
+        // permit, before the flush, so End's marker can never precede it. A
+        // throw (busy preferences lock) fails the resolve and the finally
+        // rolls the pick back — never a saved pick without its ledger row.
+        const approval = r.store.recordDecisionApproval(decisionId);
         // A response and its backing artifact are one authorization write. Flush
         // before the daemon claims success; app.onError maps a concurrent proposal
         // rewrite to the shared session_review_conflict 409, with no broadcast.
@@ -1636,6 +1641,9 @@ export function createDaemonRoutes(
         committed = true; // #484 review — durable: settle as committed
         r.store.takeResolutionAnnouncement(decisionId); // #484 review — announced now; a retry won't repeat it
         broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
+        if (approval) {
+          broadcast(sessionId, { type: "ledger_write", kind: "approved", description: approval.description, concept: approval.concept, sourceArtifactId: approval.artifactId });
+        }
         return c.json({ status: "resolved" });
       } finally {
         if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
@@ -1824,11 +1832,17 @@ export function createDaemonRoutes(
       const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.recordApprovedPattern(parsed);
-    if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
-      try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" }); } catch {}
-    }
-    return c.json({ status: "recorded" });
+    // #711 gate 1 — check_feedback's backstop approval (a record resolved
+    // before the resolve route recorded it) is a session write: refused with
+    // the typed closeout code once End's cutoff starts. check_feedback still
+    // displays the saved choice.
+    return withSessionWrite(c, r.store, () => {
+      r.store.recordApprovedPattern(parsed);
+      if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+        try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" }); } catch {}
+      }
+      return c.json({ status: "recorded" });
+    });
   });
 
   // Scope-down a personal rejected-approach the pre-flight gate matched as a

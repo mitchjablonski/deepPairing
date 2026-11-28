@@ -60,6 +60,11 @@ export interface DecisionRecord {
   acknowledged?: boolean;
   createdAt: string;
   resolvedAt?: string;
+  /** #711 gate 1 — set when the resolve route recorded this pick's approval
+   *  in the ledger inside the same write (and admission permit) as the pick.
+   *  check_feedback then skips its own ledger write. Absent on records
+   *  resolved before this field existed; check_feedback records those. */
+  ledgerRecordedAt?: string;
 }
 
 export interface PlanReviewRecord {
@@ -594,6 +599,16 @@ export interface IStore {
   /** #490 — after a failed flush: is this unsettled resolution durably on disk
    *  anyway (a partial write)? true → the caller settles it as committed. */
   isResolutionDurable(decisionId: string): MaybePromise<boolean>;
+  /**
+   * #711 gate 1 — record the approval for a pick this store just wrote with
+   * resolveDecisionAtomic, and stamp the record's `ledgerRecordedAt`, so the
+   * ledger row lands inside the resolve's admission permit (before any End
+   * marker). Call before the resolve's flush; a throw (busy preferences lock)
+   * must fail the resolve so settleResolution rolls the pick back. Returns the
+   * recorded keys, or null when the record has no matching option. Optional:
+   * only disk-backed stores implement it.
+   */
+  recordDecisionApproval?(decisionId: string): MaybePromise<{ description: string; concept?: string; artifactId: string } | null>;
   getDecisionResponse(decisionId: string): MaybePromise<{ optionId: string; reasoning?: string } | null>;
   getPendingDecisions(): MaybePromise<DecisionRecord[]>;
   getDecision(decisionId: string): MaybePromise<DecisionRecord | undefined>;
