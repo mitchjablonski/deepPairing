@@ -1455,12 +1455,18 @@ export function createDaemonRoutes(
     const parsed = await parseJsonBody(c, OperationBody);
     if (!parsed.ok) return parsed.res;
     if (!stanceExceptions) return c.json({ status: "none" });
-    const outcome = await stanceExceptions.runOperation(
-      sessionId, r.store, c.req.header(REGISTRATION_HEADER), c.req.param("operationId"),
-      parsed.data.callFingerprint, parsed.data.admission,
-    );
-    if (outcome.status === "inconsistent") return c.json(outcome, 409);
-    return c.json(outcome);
+    const registry = stanceExceptions;
+    // #711 — admit before enqueue: an admitted operation keeps its permit while
+    // queued and through create, follow-ups, flushes and broadcasts, so End
+    // waits for it; one arriving after the cutoff is refused before any write.
+    return withSessionWrite(c, r.store, async () => {
+      const outcome = await registry.runOperation(
+        r.store.getSessionId(), r.store, c.req.header(REGISTRATION_HEADER), c.req.param("operationId"),
+        parsed.data.callFingerprint, parsed.data.admission,
+      );
+      if (outcome.status === "inconsistent") return c.json(outcome, 409);
+      return c.json(outcome);
+    });
   });
 
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
