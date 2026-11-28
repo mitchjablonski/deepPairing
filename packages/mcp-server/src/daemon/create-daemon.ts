@@ -698,10 +698,19 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // A parity test pins this set to the server/web pending classifiers.
   // #680 — a draft `page` awaits a verdict too.
   const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "page"]);
+  // #711 — a review whose End marker is durable owes nothing, even while its
+  // warm store stays installed. state() throws on a damaged marker, which the
+  // callers' per-store catch turns into a skip (fail closed, like the catalog).
+  function endedStandalone(store: FileStore): boolean {
+    const sessionId = store.getSessionId();
+    return isStandaloneSessionForProject(sessionId, projectRoot) && standaloneCloseout.state(sessionId).state === "ended";
+  }
+
   function computeDaemonPendingCount(): number {
     let n = 0;
     for (const store of sessions.values()) {
       try {
+        if (endedStandalone(store)) continue;
         // PP4 — getArtifacts() is the in-memory array; getFullState() additionally
         // re-read preferences.json from disk per session (via getSessionMemory) +
         // ran getEngagementMetrics — all unused here, and this runs per
@@ -725,6 +734,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     let n = 0;
     for (const store of sessions.values()) {
       try {
+        if (endedStandalone(store)) continue;
         // PP4 — getComments() is the in-memory array; getFullState() would
         // additionally re-read preferences.json from disk per session on every
         // /api/daemon-info poll (the sibling pendingCount path dodges this too).

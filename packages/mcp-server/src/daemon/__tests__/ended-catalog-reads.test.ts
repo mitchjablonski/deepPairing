@@ -175,6 +175,24 @@ describe("#711 gate 5 — the catalog decides End from the durable marker", () =
   });
 });
 
+describe("#711 — the daemon-info badges skip a durably ended review", () => {
+  it("drops pending and unanswered counts to 0 after End with the warm store installed, and fails closed on a damaged marker", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    const sessionId = createStandaloneSessionId(tmpDir);
+    const store = daemon.createSession(sessionId);
+    store.createArtifact({ id: "plan", type: "plan", title: "Plan", content: { steps: [] } });
+    store.addComment({ id: "q1", artifactId: "plan", content: "Why this order?", author: "human", intent: "question" });
+    const info = async () => (await daemon.app.request("/api/daemon-info", { headers: { "X-Project-Hash": projectHashOf(tmpDir) } })).json() as
+      Promise<{ pendingCount: number; unansweredQuestionCount: number }>;
+    expect(await info()).toMatchObject({ pendingCount: 1, unansweredQuestionCount: 1 });
+    await daemon.standaloneCloseout.end(sessionId);
+    expect(daemon.sessions.get(sessionId)).toBe(store);
+    expect(await info()).toMatchObject({ pendingCount: 0, unansweredQuestionCount: 0 });
+    fs.writeFileSync(path.join(tmpDir, ".deeppairing", "sessions", sessionId, "review-ended.json"), "{ damaged");
+    expect(await info()).toMatchObject({ pendingCount: 0, unansweredQuestionCount: 0 });
+  });
+});
+
 describe("#711 gate 6 — CLI exact reads of an ended review come from disk snapshots", () => {
   function seed(store: FileStore): void {
     const htmlAnchor = { kind: "link" as const, quote: "Replay docs", locator: "a", href: "/replay", prefix: "See ", suffix: ".", version: 1 };
@@ -246,6 +264,26 @@ describe("#711 gate 6 — CLI exact reads of an ended review come from disk snap
     expect(cold.daemon.activeSessions.size).toBe(0);
     expect(cold.daemon.pageWatcher.watched(sessionId)).toEqual([]);
     expect(cold.watchCalls).toEqual([]);
+  });
+
+  it("a snapshot cannot be written through a cast, and a snapshot-mode store refuses to flush", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    const sessionId = createStandaloneSessionId(tmpDir);
+    seed(daemon.createSession(sessionId));
+    await daemon.standaloneCloseout.end(sessionId);
+    const before = tree(tmpDir);
+    const view = FileStore.openSessionSnapshot(tmpDir, sessionId)!;
+    expect(Object.isFrozen(view)).toBe(true);
+    const cast = view as unknown as FileStore;
+    expect(() => cast.createArtifact({ id: "forged", type: "research", title: "Forged", content: {} })).toThrow(TypeError);
+    expect(() => cast.forceFlush()).toThrow(TypeError);
+    // Defence in depth: the underlying snapshot-mode instance refuses every flush path.
+    const mode = (FileStore as unknown as { sessionSnapshot: symbol }).sessionSnapshot;
+    const raw = new (FileStore as unknown as new (root: string, sid: string, mode: symbol) => FileStore)(tmpDir, sessionId, mode);
+    expect(() => raw.createArtifact({ id: "forged", type: "research", title: "Forged", content: {} })).toThrow(/read-only/);
+    expect(() => raw.forceFlush()).toThrow(/read-only/);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(tree(tmpDir)).toEqual(before);
   });
 
   it("keeps a missing review directory a not-found and creates nothing", async () => {

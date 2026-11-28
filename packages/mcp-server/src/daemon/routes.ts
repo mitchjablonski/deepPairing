@@ -357,8 +357,10 @@ export function createActiveSessionRoutes(
 
   app.get("/api/active-sessions", (c) => {
     // #711 gate 5 — End is decided by the durable marker, not by membership in
-    // the live map. An ended review (warm or not) moves to history; a review
-    // whose marker cannot be verified fails closed and is never attachable.
+    // the live map. This catalog only walks the live map, so `endedSessions`
+    // lists WARM ended reviews (store still installed); cold ended reviews are
+    // simply absent and reach history through /api/sessions. A review whose
+    // marker cannot be verified fails closed and is never attachable.
     const endedSessions: Array<{ sessionId: string; title: string; endedAt: string }> = [];
     const unverifiedSessions: Array<{ sessionId: string; code: string }> = [];
     const list = Array.from(sessions.entries()).flatMap(([id, store]) => {
@@ -856,7 +858,11 @@ export function createDaemonRoutes(
       if (invalid) return invalid;
       const readEnded = (): Response => {
         const ended = endedSnapshot(c, sessionId);
-        if (!ended) throw new Error("Standalone review is not ended.");
+        // End never reverts: a marker that vanished mid-request is damaged history.
+        if (!ended) {
+          return c.json({ error: "The standalone review's End marker disappeared. Review its session files before retrying.",
+            code: ERROR_CODES.session_marker_invalid }, 409);
+        }
         if ("response" in ended) return ended.response;
         const found = exactDecision(ended.view, sessionId, decisionId);
         if (!found) {
