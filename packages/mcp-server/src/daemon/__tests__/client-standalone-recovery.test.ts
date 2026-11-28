@@ -1,68 +1,69 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { projectHashOf } from "../../project-root.js";
 import { createStandaloneSessionId } from "../../standalone-session-id.js";
+import { SERVER_VERSION } from "../../version.js";
 import { DaemonClient } from "../client.js";
-import { ensureDaemon } from "../lifecycle.js";
 import { createDaemonRoutes } from "../routes.js";
 
-vi.mock("../lifecycle.js", () => ({ ensureDaemon: vi.fn() }));
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.mocked(ensureDaemon).mockReset();
-});
-
 describe("DaemonClient standalone recovery", () => {
-  const root = process.cwd();
+  const oldOrigin = "http://localhost:4881";
+  const newOrigin = "http://localhost:4882";
+  let root: string;
   const json = (body: object, status = 200) => new Response(JSON.stringify(body), {
     status, headers: { "Content-Type": "application/json" },
   });
 
-  it("retries at a newly adopted port with the new token and no wrapper registration", async () => {
-    const sessionId = createStandaloneSessionId(root);
-    const fetch = vi.fn<typeof globalThis.fetch>()
-      .mockRejectedValueOnce(new TypeError("socket closed"))
-      .mockResolvedValueOnce(json({ artifacts: [] }));
-    vi.stubGlobal("fetch", fetch);
-    vi.mocked(ensureDaemon).mockResolvedValue({
-      port: 4882, pid: 123, startedAt: "2026-01-02T00:00:00.000Z", authToken: "new-token", projectRoot: root,
-    });
-    const client = new DaemonClient(4881, sessionId, root, "old-token");
-
-    await expect(client.getArtifacts()).resolves.toEqual([]);
-    expect(ensureDaemon).toHaveBeenCalledExactlyOnceWith(root);
-    expect(fetch.mock.calls.map(([url, init]) => ({
-      url, authorization: new Headers(init?.headers).get("Authorization"),
-      project: new Headers(init?.headers).get("X-Project-Hash"),
-    }))).toEqual([
-      { url: `http://localhost:4881/api/internal/sessions/${sessionId}/artifacts`, authorization: "Bearer old-token", project: projectHashOf(root) },
-      { url: `http://localhost:4882/api/internal/sessions/${sessionId}/artifacts`, authorization: "Bearer new-token", project: projectHashOf(root) },
-    ]);
-    expect(client.getLivePort()).toBe(4882);
-    expect(client.consumePortChangeNotice()).toEqual({ previousPort: 4881, newPort: 4882 });
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-standalone-recovery-")));
   });
 
-  it("surfaces the cold session's typed 404 after re-adopting a daemon without registering", async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(["warm", "cold"] as const)("re-adopts a %s daemon at a new port without registering", async (state) => {
     const sessionId = createStandaloneSessionId(root);
+    const endpoint = `/api/internal/sessions/${sessionId}/artifacts`;
+    const hash = projectHashOf(root);
+    const dataDir = path.join(root, ".deeppairing");
+    fs.mkdirSync(dataDir);
+    // Exercise real ensureDaemon adoption without binding ports or spawning a
+    // process: the matching version and successful /api/state probe adopt.
+    fs.writeFileSync(path.join(dataDir, "daemon.json"), JSON.stringify({
+      port: 4882, pid: process.pid, startedAt: "2026-01-02T00:00:00.000Z",
+      authToken: "new-token", projectRoot: root, version: SERVER_VERSION,
+    }));
     const createSession = () => { throw new Error("A standalone recovery cannot create a wrapper session"); };
     const newDaemon = createDaemonRoutes(new Map(), new Map(), createSession, () => {}, undefined, root, "new-token");
-    const fetch = vi.fn<typeof globalThis.fetch>()
-      .mockRejectedValueOnce(new TypeError("socket closed"))
-      .mockImplementation(async (url, init) => newDaemon.request(new Request(url, init)));
-    vi.stubGlobal("fetch", fetch);
-    vi.mocked(ensureDaemon).mockResolvedValue({
-      port: 4882, pid: 123, startedAt: "2026-01-02T00:00:00.000Z", authToken: "new-token", projectRoot: root,
-    });
+    const calls: Array<{ url: string; authorization: string | null; project: string | null }> = [];
+    const transport: typeof globalThis.fetch = async (url, init) => {
+      const req = new Request(url, init);
+      calls.push({
+        url: req.url, authorization: req.headers.get("Authorization"), project: req.headers.get("X-Project-Hash"),
+      });
+      if (req.url === oldOrigin + endpoint) throw new TypeError("socket closed");
+      if (req.url === newOrigin + "/api/state") return json({});
+      if (req.url === newOrigin + endpoint && state === "warm") return json({ artifacts: [] });
+      return newDaemon.request(req);
+    };
+    vi.stubGlobal("fetch", transport);
     const client = new DaemonClient(4881, sessionId, root, "old-token");
 
-    await expect(client.getArtifacts()).rejects.toMatchObject({
+    const read = client.getArtifacts();
+    if (state === "warm") await expect(read).resolves.toEqual([]);
+    else await expect(read).rejects.toMatchObject({
       status: 404, code: "session_not_registered", message: expect.stringContaining(`resume ${sessionId}`),
     });
-    const endpoint = `/api/internal/sessions/${sessionId}/artifacts`;
-    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-      `http://localhost:4881${endpoint}`, `http://localhost:4882${endpoint}`,
+    expect(calls).toEqual([
+      { url: oldOrigin + endpoint, authorization: "Bearer old-token", project: hash },
+      { url: newOrigin + "/api/state", authorization: "Bearer new-token", project: hash },
+      { url: newOrigin + endpoint, authorization: "Bearer new-token", project: hash },
     ]);
-    expect(ensureDaemon).toHaveBeenCalledExactlyOnceWith(root);
+    expect(client.getLivePort()).toBe(4882);
     expect(client.consumePortChangeNotice()).toEqual({ previousPort: 4881, newPort: 4882 });
   });
 
@@ -77,7 +78,5 @@ describe("DaemonClient standalone recovery", () => {
       status: 404, code: "session_not_registered", message: "[deepPairing] Resume the standalone review",
     });
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(ensureDaemon).not.toHaveBeenCalled();
   });
 });
-

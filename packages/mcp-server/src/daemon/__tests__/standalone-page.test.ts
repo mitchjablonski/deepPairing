@@ -1132,10 +1132,11 @@ describe("authenticated standalone page", () => {
         .structuredContent.artifactId as string;
       await until(() => daemon.pageWatcher.watched(f.sessionId).length === 1);
 
-      expect((await f.request(daemon, "register", {})).status).toBe(200);
-      expect(daemon.activeSessions.has(f.sessionId)).toBe(true);
-      expect((await f.request(daemon, "unregister", {})).status).toBe(200);
-      expect(daemon.activeSessions.has(f.sessionId)).toBe(false);
+      const wrapper = { session: "session_wrapper" };
+      expect((await f.request(daemon, "register", {}, wrapper)).status).toBe(200);
+      expect(daemon.activeSessions).toEqual(new Set([wrapper.session]));
+      expect((await f.request(daemon, "unregister", {}, wrapper)).status).toBe(200);
+      expect(daemon.activeSessions.size).toBe(0);
       expect(daemon.pageWatcher.watched(f.sessionId)).toEqual([artifactId]);
       expect(f.watchers.filter((w) => !w.closed)).toHaveLength(1);
     } finally {
