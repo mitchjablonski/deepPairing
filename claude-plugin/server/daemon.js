@@ -43763,11 +43763,12 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const store = sessions.get(sessionId);
     if (!store) {
       log2(`[internal] 404 \u2014 session not registered: sid=${sessionId} path=${c.req.path}`);
+      const message = isStandaloneSessionId(sessionId) ? `Standalone review ${sessionId} is not loaded. Use ${cliInvocation(`resume ${sessionId}`)} to reopen it.` : `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`;
       return {
         ok: false,
         response: c.json(
           {
-            error: `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`,
+            error: message,
             code: ERROR_CODES.session_not_registered
           },
           404
@@ -44046,6 +44047,28 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         },
         403
       );
+    }
+    if (isStandaloneSessionId(sessionId)) {
+      if (daemonProjectRoot) {
+        if (!isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+          return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+        }
+        const directory = path32.join(daemonProjectRoot, ".deeppairing", "sessions", sessionId);
+        if (!fs29.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory()) {
+          return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+        }
+        const state = standaloneCloseout?.state(sessionId).state;
+        if (state === "ended") {
+          return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+        }
+        if (state === "closing") {
+          return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+        }
+      }
+      return c.json({
+        error: `Standalone reviews cannot register a wrapper. Use ${cliInvocation(`resume ${sessionId}`)} to read this review.`,
+        code: ERROR_CODES.session_not_registered
+      }, 409);
     }
     const store = installSession(sessionId, body);
     activeSessions?.add(sessionId);
@@ -44328,19 +44351,19 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const params = parsed.data;
     delete params.verdictFeedback;
     const requestedId = params.id;
-    let comment;
-    try {
-      comment = r.store.addComment(params);
-    } catch (error51) {
-      if (error51 instanceof ReservedVerdictFeedbackIdError) {
-        return c.json({ error: error51.message, code: ERROR_CODES.validation_error }, 409);
+    return withSessionWrite(c, r.store, () => {
+      let comment;
+      try {
+        comment = r.store.addComment(params);
+      } catch (error51) {
+        if (error51 instanceof ReservedVerdictFeedbackIdError) {
+          return c.json({ error: error51.message, code: ERROR_CODES.validation_error }, 409);
+        }
+        throw error51;
       }
-      throw error51;
-    }
-    if (comment.id === requestedId) {
-      broadcast(sessionId, { type: "comment_added", comment });
-    }
-    return c.json({ comment });
+      if (comment.id === requestedId) broadcast(r.store.getSessionId(), { type: "comment_added", comment });
+      return c.json({ comment });
+    });
   });
   app.get("/api/internal/sessions/:sessionId/comments/unacknowledged", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44383,14 +44406,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
     const { answerCommentId } = parsed.body;
-    r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
-    if (daemonProjectRoot) {
-      try {
-        recordMetricEvent(daemonProjectRoot, { kind: "question_answered" });
-      } catch {
+    return withSessionWrite(c, r.store, () => {
+      r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
+      if (daemonProjectRoot) {
+        try {
+          recordMetricEvent(daemonProjectRoot, { kind: "question_answered" });
+        } catch {
+        }
       }
-    }
-    return c.json({ status: "marked" });
+      return c.json({ status: "marked" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/suggestion", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44398,13 +44423,15 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await parseJsonBody(c, SuggestionUpdateBodySchema);
     if (!parsed.ok) return parsed.res;
     const commentId = c.req.param("commentId");
-    const existing = r.store.getComment(commentId);
-    if (!existing?.suggestion) return c.json({ comment: null });
-    const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
-    if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
-    const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
-    if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
-    return c.json({ comment: comment ?? null });
+    return withSessionWrite(c, r.store, () => {
+      const existing = r.store.getComment(commentId);
+      if (!existing?.suggestion) return c.json({ comment: null });
+      const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
+      if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
+      const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
+      if (comment) broadcast(r.store.getSessionId(), { type: "comment_updated", comment });
+      return c.json({ comment: comment ?? null });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/requests/:requestId/served", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -45298,6 +45325,9 @@ var PageWatcher = class {
   pollMs;
   missingRecheckMs;
   disposed = false;
+  now() {
+    return (this.deps.now ?? Date.now)();
+  }
   sig(p) {
     return (this.deps.statSig ?? statSig)(p);
   }
@@ -45361,14 +45391,28 @@ var PageWatcher = class {
    * mid-replace by the sweep: the file is "missing" and the entry is dirty.
    * Reading it then records nothing, and the rewrite that lands moments later
    * would be post-cut and lost. So a dirty (or mid-read) entry whose cut
-   * signature is missing gets ONE bounded recheck (missingRecheckMs, ~50ms)
-   * inside its drain, before anything is read. If the file is back, that is the same save
-   * completing: its new signature becomes this drain's generation and it is
-   * recorded before End commits. If it is still missing, it is treated as a
-   * genuine delete: nothing is recorded and End proceeds. The entry is already
-   * marked draining during the wait, so no quiet timer or poll can start a
-   * read that would wait on End's own admission. A file that returns only
-   * after the recheck is post-cut, like any other save on a clean entry.
+   * signature is missing gets a grace window of missingRecheckMs (~50ms)
+   * measured from the cut itself (the injectable `now` clock), not from when
+   * earlier in-flight work settles. A sampler started at the cut stats the
+   * file every missingRecheckMs/5 until the deadline, in parallel with any
+   * held read. An observation counts only if `now() <= deadline` at the
+   * moment it is made, whether it comes from the sampler, a watcher event, a
+   * poll tick or the drain's own stat; a timer that fires late is discarded,
+   * never credited. The first present signature seen inside the window is the
+   * candidate for that save completing. When the drain gets to decide, it
+   * re-stats: if the file still has that signature, it becomes this drain's
+   * generation and is recorded before End commits, and the read itself is
+   * bracketed by signature checks against it (a file replaced between the
+   * adoption and the read is pending, not recorded). Otherwise End fails with
+   * session_save_pending (retry End): a second, distinct signature inside the
+   * window (ambiguous: the editor finishing, or another save), a re-delete
+   * after a reappearance, any change seen after the window, a current signature that
+   * differs from the in-window one, or a file whose first reappearance is seen
+   * only after the window. If the window ends with the file still missing, it
+   * is a genuine delete: nothing is recorded and End proceeds. The drain
+   * sleeps at most the window's remainder, the sampler costs at most the
+   * window, and the entry is already marked draining, so no quiet timer or
+   * poll can start a read that would wait on End's own admission.
    *
    * Post-cut saves otherwise. A save seen after the cut on an entry that was
    * dirty at the cut makes End fail with session_save_pending (retry End). On
@@ -45379,8 +45423,10 @@ var PageWatcher = class {
     for (const entry of entries) this.checkSignature(entry);
     const drains = entries.filter((entry) => entry.dirty || entry.processing || entry.draining).map((entry) => {
       let generation = entry.gen;
+      let adopted;
       const signature = entry.lastSig;
       const vanished = signature === MISSING && (entry.dirty || entry.processing !== null);
+      const grace = vanished && !entry.draining ? this.openGrace(entry) : null;
       const checkGeneration = () => {
         if (entry.gen !== generation || entry.dirty) {
           throw new StandaloneCloseoutError(
@@ -45396,31 +45442,39 @@ var PageWatcher = class {
         await entry.processing;
         if (entry.stopped) return;
         try {
-          if (vanished && entry.gen === generation) {
-            let returned = this.sig(entry.absPath);
-            if (returned === MISSING) {
-              await (this.deps.sleep ?? defaultSleep)(this.missingRecheckMs);
+          if (grace) {
+            const remaining = grace.deadline - this.now();
+            if (remaining > 0) {
+              await (this.deps.sleep ?? defaultSleep)(remaining);
               if (entry.stopped) return;
-              returned = this.sig(entry.absPath);
             }
-            if (returned !== MISSING && entry.gen === generation) {
-              this.onChange(entry, returned);
-              generation = entry.gen;
-            } else if (returned !== MISSING && entry.lastSig === returned) {
-              generation = entry.gen;
+            this.sampleGrace(entry, grace);
+            this.closeGrace(entry);
+            const current = this.sig(entry.absPath);
+            const pending = () => new StandaloneCloseoutError(
+              ERROR_CODES.session_save_pending,
+              "A watched file was replaced while the standalone review was closing. Let it settle, then retry End review."
+            );
+            if (current !== entry.lastSig) this.onChange(entry, current);
+            if (grace.spoiled || current !== (grace.sig ?? MISSING) || grace.gen !== entry.gen) {
+              if (grace.spoiled || grace.sig !== void 0 || current !== MISSING) throw pending();
+            } else {
+              generation = grace.gen;
+              adopted = grace.sig;
             }
           }
           this.checkSignature(entry, signature);
           const queued = entry.dirty;
           entry.dirty = false;
           checkGeneration();
-          if (queued) await this.processAdmitted(entry);
+          if (queued) await this.processAdmitted(entry, adopted);
           checkGeneration();
         } catch (error51) {
           entry.dirty = true;
           throw error51;
         }
       }).finally(() => {
+        this.closeGrace(entry);
         entry.draining = null;
         if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
       });
@@ -45457,7 +45511,8 @@ var PageWatcher = class {
       gen: 0,
       processing: null,
       draining: null,
-      stopped: false
+      stopped: false,
+      grace: null
     };
     this.entries.set(this.key(sessionId, a.id), entry);
     const dir = path35.dirname(absPath);
@@ -45497,6 +45552,7 @@ var PageWatcher = class {
       clearInterval(entry.poll);
       entry.poll = null;
     }
+    this.closeGrace(entry);
     try {
       entry.watcher?.close();
     } catch {
@@ -45514,8 +45570,60 @@ var PageWatcher = class {
     entry.lastSig = signature ?? this.sig(entry.absPath);
     entry.dirty = true;
     entry.gen++;
+    if (entry.grace) this.noteGrace(entry.grace, entry.lastSig, entry.gen);
     if (entry.processing || entry.draining) return;
     this.arm(entry, this.quietMs);
+  }
+  /** Open End's missing-file grace at the cut and start its sampler. */
+  openGrace(entry) {
+    const grace = { deadline: this.now() + this.missingRecheckMs, spoiled: false, gen: entry.gen, sampler: null };
+    entry.grace = grace;
+    if (this.missingRecheckMs <= 0) return grace;
+    const stopSampling = () => {
+      if (grace.sampler) {
+        clearInterval(grace.sampler);
+        grace.sampler = null;
+      }
+    };
+    grace.sampler = setInterval(() => {
+      if (entry.stopped || entry.grace !== grace || this.now() > grace.deadline) {
+        stopSampling();
+        return;
+      }
+      this.sampleGrace(entry, grace);
+    }, Math.max(1, Math.floor(this.missingRecheckMs / 5)));
+    grace.sampler.unref?.();
+    return grace;
+  }
+  closeGrace(entry) {
+    const grace = entry.grace;
+    if (!grace) return;
+    if (grace.sampler) {
+      clearInterval(grace.sampler);
+      grace.sampler = null;
+    }
+    entry.grace = null;
+  }
+  /** One in-window observation: a stat made after the deadline is discarded. */
+  sampleGrace(entry, grace) {
+    if (entry.grace !== grace || this.now() > grace.deadline) return;
+    const signature = this.sig(entry.absPath);
+    if (signature !== entry.lastSig) this.onChange(entry, signature);
+  }
+  /** Judge a change seen while End's missing-file grace is open. */
+  noteGrace(grace, signature, gen) {
+    if (grace.spoiled) return;
+    if (this.now() > grace.deadline) {
+      grace.spoiled = true;
+    } else if (signature === MISSING) {
+      if (grace.sig === void 0) grace.gen = gen;
+      else grace.spoiled = true;
+    } else if (grace.sig === void 0 || grace.sig === signature) {
+      grace.sig = signature;
+      grace.gen = gen;
+    } else {
+      grace.spoiled = true;
+    }
   }
   arm(entry, ms) {
     if (entry.quiet) clearTimeout(entry.quiet);
@@ -45551,7 +45659,10 @@ var PageWatcher = class {
       release2?.();
     }
   }
-  async processAdmitted(entry) {
+  /** `expectSig`: the signature End's missing-file grace adopted. The read is
+   *  then bracketed by checks against it, so a file replaced after the
+   *  adoption is never read as the adopted save. */
+  async processAdmitted(entry, expectSig) {
     const store = this.deps.getStore(entry.sessionId);
     if (!store) return;
     const startGen = entry.gen;
@@ -45565,12 +45676,26 @@ var PageWatcher = class {
       this.sync(entry.sessionId);
       return;
     }
-    try {
-      fs31.lstatSync(entry.absPath);
-    } catch {
-      return;
+    const verifyAdopted = () => {
+      if (expectSig === void 0 || this.sig(entry.absPath) === expectSig) return;
+      entry.dirty = true;
+      throw new StandaloneCloseoutError(
+        ERROR_CODES.session_save_pending,
+        "A watched file changed again while the standalone review was closing. Let it settle, then retry End review."
+      );
+    };
+    verifyAdopted();
+    if (expectSig !== void 0) {
+      this.deps.beforeGraceRead?.(entry.absPath);
+    } else {
+      try {
+        fs31.lstatSync(entry.absPath);
+      } catch {
+        return;
+      }
     }
     const source = readPageSource(this.rootReal, entry.sourcePath);
+    verifyAdopted();
     if (!source.ok) {
       const message = readerReason(source.error.content[0]?.text ?? "the file could not be read");
       this.refuse(store, entry, cur, { cause: "unreadable", message, digest: sha256(`unreadable:${message}`) });

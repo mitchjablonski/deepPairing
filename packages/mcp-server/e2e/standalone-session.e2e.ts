@@ -82,7 +82,8 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
 
     const info = readDaemonInfo(project);
     if (!info?.authToken) throw new Error("Test daemon did not publish its authentication token");
-    const sibling = new DaemonClient(info.port, resumed.sessionId, project, info.authToken);
+    const wrapperId = `session_${randomUUID()}`;
+    const sibling = new DaemonClient(info.port, wrapperId, project, info.authToken);
     const readCatalog = async (companionUrl = resumed.companionUrl) => {
       const response = await fetch(new URL("/api/active-sessions", companionUrl), {
         headers: daemonAuthHeaders(project), signal: AbortSignal.timeout(5_000),
@@ -92,19 +93,23 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     };
     await sibling.register({ expectedProjectRoot: project, project: "Example project" });
     try {
-      await sibling.renameSession("Renamed review");
+      await sibling.renameSession("Renamed wrapper");
       const concurrent = await Promise.all([receipt("resume", resumed.sessionId), receipt("resume", resumed.sessionId)]);
       expect(concurrent).toEqual([resumed, resumed]);
       expect(await readCatalog()).toMatchObject({
-        sessions: expect.arrayContaining([expect.objectContaining({
-          sessionId: resumed.sessionId, live: true, title: "Renamed review", project: "Example project", artifactCount: 0,
-        })]),
+        sessions: expect.arrayContaining([
+          expect.objectContaining({ sessionId: resumed.sessionId, live: false, artifactCount: 0 }),
+          expect.objectContaining({ sessionId: wrapperId, live: true, title: "Renamed wrapper", project: "Example project", artifactCount: 0 }),
+        ]),
       });
     } finally {
       await sibling.unregister();
     }
     expect(await readCatalog()).toMatchObject({
-      sessions: expect.arrayContaining([expect.objectContaining({ sessionId: resumed.sessionId, live: false })]),
+      sessions: expect.arrayContaining([
+        expect.objectContaining({ sessionId: resumed.sessionId, live: false }),
+        expect.objectContaining({ sessionId: wrapperId, live: false }),
+      ]),
     });
 
     const inputFile = path.join(root, "options.json");
@@ -172,10 +177,11 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     await expect(rejection).toHaveCount(0);
 
     const commentId = "cmt_passive_decision_read";
-    await sibling.addComment({ id: commentId, artifactId: presented.artifactId, author: "human", content: "Please document the replay procedure." });
-    const pendingDecisions = await sibling.getResolvedDecisions();
-    const pendingComments = await sibling.getUnacknowledgedComments();
-    const approvedPatterns = (await sibling.getSessionMemory()).approvedPatterns;
+    const review = new DaemonClient(info.port, resumed.sessionId, project, info.authToken);
+    await review.addComment({ id: commentId, artifactId: presented.artifactId, author: "human", content: "Please document the replay procedure." });
+    const pendingDecisions = await review.getResolvedDecisions();
+    const pendingComments = await review.getUnacknowledgedComments();
+    const approvedPatterns = (await review.getSessionMemory()).approvedPatterns;
     expect(pendingDecisions.map((d) => d.decisionId)).toEqual([presented.decisionId]);
     expect(pendingComments.map((comment) => comment.id)).toContain(commentId);
 
@@ -190,7 +196,7 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
       selectedTitle: "Local file",
       recordedRejections: [{ description: "Choose a replay backend: Redis Streams", reason }],
     });
-    await sibling.forceFlush();
+    await review.forceFlush();
     // Disconnect the browser before restarting so only CLI commands can load the review.
     await page.goto("about:blank");
     await stopProjectDaemon(project);

@@ -490,6 +490,147 @@ it("End lets a held decision resolution settle before an admitted close-out insp
   }
 });
 
+it("internal register never warms or creates a standalone review", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const missingId = createStandaloneSessionId(tmpDir);
+  const coldOpenId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  const marker = await daemon.standaloneCloseout.end(sessionId);
+  store.dispose();
+  daemon.sessions.delete(sessionId);
+  const sessionsDir = path.join(tmpDir, ".deeppairing", "sessions");
+  const coldOpenDir = path.join(sessionsDir, coldOpenId);
+  fs.mkdirSync(coldOpenDir);
+  const dir = path.join(sessionsDir, sessionId);
+  const files = () => fs.readdirSync(dir).sort().map((name) => [name, fs.readFileSync(path.join(dir, name), "utf8")]);
+  const before = files();
+  const register = (id: string, splitMode = false) => daemon.app.request(`/api/internal/sessions/${id}/register`, {
+    method: "POST", headers: {
+      Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ expectedProjectRoot: tmpDir, splitMode }),
+  });
+
+  const wrapperId = "session_wrapper";
+  const wrapper = await register(wrapperId, true);
+  expect(wrapper.status).toBe(200);
+  const { registrationId, registrationToken } = await wrapper.json() as { registrationId: string; registrationToken: string };
+  expect(daemon.stanceExceptions.resolveToken(registrationToken)).toMatchObject({ registrationId, sessionId: wrapperId });
+
+  const ended = await register(sessionId, true);
+  expect(ended.status).toBe(409);
+  expect(await ended.json()).toMatchObject({ code: "session_ended" });
+  expect(daemon.sessions.has(sessionId)).toBe(false);
+  expect(files()).toEqual(before);
+  expect(JSON.parse(fs.readFileSync(path.join(dir, "review-ended.json"), "utf8"))).toEqual(marker);
+
+  const missing = await register(missingId);
+  expect(missing.status).toBe(404);
+  expect(await missing.json()).toMatchObject({ code: "session_not_registered" });
+  expect(daemon.sessions.has(missingId)).toBe(false);
+  expect(fs.existsSync(path.join(sessionsDir, missingId))).toBe(false);
+
+  const open = await register(coldOpenId, true);
+  expect(open.status).toBe(409);
+  expect(await open.json()).toMatchObject({ code: "session_not_registered" });
+  expect(daemon.sessions.has(coldOpenId)).toBe(false);
+  expect(fs.readdirSync(coldOpenDir)).toEqual([]);
+
+  const coldRead = await daemon.app.request(`/api/internal/sessions/${coldOpenId}/artifacts`, {
+    headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir) },
+  });
+  expect(coldRead.status).toBe(404);
+  expect(await coldRead.json()).toMatchObject({
+    code: "session_not_registered", error: expect.stringContaining(`resume ${coldOpenId}`),
+  });
+  expect(daemon.sessions.has(coldOpenId)).toBe(false);
+  expect(fs.readdirSync(coldOpenDir)).toEqual([]);
+
+  fs.writeFileSync(path.join(dir, "review-ended.json"), "{ invalid");
+  const corrupt = await register(sessionId, true);
+  expect(corrupt.status).toBe(409);
+  expect(await corrupt.json()).toMatchObject({ code: "session_marker_invalid" });
+  expect(daemon.sessions.has(sessionId)).toBe(false);
+
+  expect(daemon.sessions.has(wrapperId)).toBe(true);
+  expect(daemon.activeSessions).toEqual(new Set([wrapperId]));
+  expect(daemon.stanceExceptions.resolveToken(registrationToken)).toMatchObject({ registrationId, sessionId: wrapperId });
+  expect(daemon.stanceExceptions.hasLiveRegistration(coldOpenId)).toBe(false);
+  expect(daemon.stanceExceptions.hasLiveRegistration(sessionId)).toBe(false);
+});
+
+it("internal comment writers refuse a closing and ended review while sibling and wrapper writes succeed", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const siblingId = createStandaloneSessionId(tmpDir);
+  const wrapperId = "session_wrapper";
+  const store = daemon.createSession(sessionId);
+  const sibling = daemon.createSession(siblingId);
+  const wrapper = daemon.createSession(wrapperId);
+  const suggestion = {
+    originalText: "before", replacementText: "after", lineStart: 1, lineEnd: 1, state: "pending" as const,
+  };
+  for (const target of [store, sibling, wrapper]) {
+    target.createArtifact({ id: "page", type: "page", title: "Page", content: { title: "Page", html: "<h1>Test</h1>" } });
+    target.addComment({ id: "question", artifactId: "page", content: "What about this?", author: "human", intent: "question" });
+    target.addComment({
+      id: "suggestion", artifactId: "page", content: "Try this", author: "human", intent: "suggestion", suggestion,
+    });
+    target.forceFlush();
+  }
+  const writes: Array<[string, Record<string, unknown>]> = [
+    ["comments", { id: "answer", artifactId: "page", content: "Here is the answer", author: "agent", parentCommentId: "question" }],
+    ["comments/question/answered", { answerCommentId: "answer" }],
+    ["comments/suggestion/suggestion", { state: "countered", counter: { reason: "Use a smaller change" } }],
+  ];
+  const post = (id: string, route: string, body: Record<string, unknown>) =>
+    daemon.app.request(`/api/internal/sessions/${id}/${route}`, {
+      method: "POST", headers: {
+        Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+  const markerDir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  const commentsFile = path.join(markerDir, "comments.json");
+  const before = fs.readFileSync(commentsFile, "utf8");
+  const release = daemon.standaloneCloseout.admitWrite(sessionId);
+  expect(release).toBeTypeOf("function");
+  const ending = daemon.standaloneCloseout.end(sessionId);
+  try {
+    for (const [route, body] of writes) {
+      const denied = await post(sessionId, route, body);
+      expect(denied.status, route).toBe(409);
+      expect(await denied.json(), route).toMatchObject({ code: "session_closing" });
+      expect((await post(siblingId, route, body)).status, route).toBe(200);
+      expect((await post(wrapperId, route, body)).status, route).toBe(200);
+    }
+    const registering = await post(sessionId, "register", { expectedProjectRoot: tmpDir });
+    expect(registering.status).toBe(409);
+    expect(await registering.json()).toMatchObject({ code: "session_closing" });
+    expect(fs.existsSync(path.join(markerDir, "review-ended.json"))).toBe(false);
+    expect(fs.readFileSync(commentsFile, "utf8")).toBe(before);
+  } finally {
+    release?.();
+    await ending;
+  }
+  for (const [route, body] of writes) {
+    const denied = await post(sessionId, route, body);
+    expect(denied.status, route).toBe(409);
+    expect(await denied.json(), route).toMatchObject({ code: "session_ended" });
+  }
+  expect(fs.readFileSync(commentsFile, "utf8")).toBe(before);
+  expect(store.getComment("answer")).toBeUndefined();
+  expect(store.getComment("question")?.answeredByCommentId).toBeFalsy();
+  expect(store.getComment("suggestion")?.suggestion?.state).toBe("pending");
+  for (const target of [sibling, wrapper]) {
+    expect(target.getComment("answer")?.parentCommentId).toBe("question");
+    expect(target.getComment("question")?.answeredByCommentId).toBe("answer");
+    expect(target.getComment("suggestion")?.suggestion?.state).toBe("countered");
+  }
+});
+
 it("End waits for an admitted internal decision resolve and refuses later writes only in that review", async () => {
   const { tmpDir, daemon } = makeDaemon();
   const sessionId = createStandaloneSessionId(tmpDir);
@@ -585,6 +726,35 @@ it("End waits for an admitted internal decision resolve and refuses later writes
     release();
     await Promise.allSettled([resolving, ending]);
     delayed.mockRestore();
+  }
+});
+
+it("a failed admitted internal decision flush releases End after rolling the choice back", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  store.createArtifact({ id: "decision", type: "decision", title: "Choose a cache", content: { decisionId: "d1" } });
+  store.recordDecisionRequest({ decisionId: "d1", artifactId: "decision", context: "Choose a cache", options: OPTS });
+  store.forceFlush();
+  const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  const decisionFile = path.join(dir, "decisions.json");
+  const before = fs.readFileSync(decisionFile, "utf8");
+  const flush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("Cannot flush the choice"); });
+  try {
+    const failed = await daemon.app.request(`/api/internal/sessions/${sessionId}/decisions/d1/resolve`, {
+      method: "POST", headers: {
+        Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ optionId: "o2" }),
+    });
+    expect(failed.status).toBe(500);
+    expect(store.getDecision("d1")?.response).toBeUndefined();
+    expect(store.getArtifacts().find((a) => a.id === "decision")?.status).toBe("draft");
+    const marker = await daemon.standaloneCloseout.end(sessionId);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "review-ended.json"), "utf8"))).toEqual(marker);
+    expect(fs.readFileSync(decisionFile, "utf8")).toBe(before);
+  } finally {
+    flush.mockRestore();
   }
 });
 

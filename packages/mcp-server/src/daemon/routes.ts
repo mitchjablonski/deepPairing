@@ -11,6 +11,7 @@ import type { Context } from "hono";
 import { z } from "zod";
 import { ParentSupersededError, ReservedVerdictFeedbackIdError, type FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
+import { cliInvocation } from "../cli-invocation.js";
 import type { PreflightTrace } from "@deeppairing/shared";
 import { AutonomyLevelSchema, decisionCanAcceptAnswer, DetailDensitySchema, PAGE_HTML_MAX_BYTES, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
 import { validateSuggestionTransition } from "../store/store-interface.js";
@@ -21,7 +22,7 @@ import { isSessionReviewConflictError } from "../store/session-records.js";
 import { REGISTRATION_HEADER, type StanceExceptionRegistry } from "./stance-exceptions.js";
 import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing/shared";
 import type { RetirementInput } from "../store/retirement.js";
-import { isStandaloneSessionForProject } from "../standalone-session-id.js";
+import { isStandaloneSessionForProject, isStandaloneSessionId } from "../standalone-session-id.js";
 import { presentStandaloneOptions } from "./standalone-options.js";
 import { presentStandalonePage } from "./standalone-page.js";
 import { reviseStandalonePage } from "./standalone-revise-page.js";
@@ -521,11 +522,14 @@ export function createDaemonRoutes(
     const store = sessions.get(sessionId);
     if (!store) {
       log(`[internal] 404 — session not registered: sid=${sessionId} path=${c.req.path}`);
+      const message = isStandaloneSessionId(sessionId)
+        ? `Standalone review ${sessionId} is not loaded. Use ${cliInvocation(`resume ${sessionId}`)} to reopen it.`
+        : `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`;
       return {
         ok: false,
         response: c.json(
           {
-            error: `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`,
+            error: message,
             code: ERROR_CODES.session_not_registered,
           },
           404,
@@ -816,6 +820,30 @@ export function createDaemonRoutes(
         },
         403,
       );
+    }
+    // Standalone reviews are opened or resumed without a wrapper registration.
+    // Inspect the exact review before any store, lease or watcher can be installed.
+    if (isStandaloneSessionId(sessionId)) {
+      if (daemonProjectRoot) {
+        if (!isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+          return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+        }
+        const directory = path.join(daemonProjectRoot, ".deeppairing", "sessions", sessionId);
+        if (!fs.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory()) {
+          return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+        }
+        const state = standaloneCloseout?.state(sessionId).state;
+        if (state === "ended") {
+          return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+        }
+        if (state === "closing") {
+          return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+        }
+      }
+      return c.json({
+        error: `Standalone reviews cannot register a wrapper. Use ${cliInvocation(`resume ${sessionId}`)} to read this review.`,
+        code: ERROR_CODES.session_not_registered,
+      }, 409);
     }
     const store = installSession(sessionId, body);
     // C-3 — mark this session's wrapper as live so idle-shutdown holds off.
@@ -1186,22 +1214,20 @@ export function createDaemonRoutes(
     // store's late-follow-up stamp by smuggling it through this route.
     delete (params as { verdictFeedback?: boolean }).verdictFeedback;
     const requestedId = params.id;
-    let comment: ReturnType<FileStore["addComment"]>;
-    try {
-      comment = r.store.addComment(params);
-    } catch (error) {
-      if (error instanceof ReservedVerdictFeedbackIdError) {
-        return c.json({ error: error.message, code: ERROR_CODES.validation_error }, 409);
+    return withSessionWrite(c, r.store, () => {
+      let comment: ReturnType<FileStore["addComment"]>;
+      try {
+        comment = r.store.addComment(params);
+      } catch (error) {
+        if (error instanceof ReservedVerdictFeedbackIdError) {
+          return c.json({ error: error.message, code: ERROR_CODES.validation_error }, 409);
+        }
+        throw error;
       }
-      throw error;
-    }
-    // U0.1 — only broadcast when addComment created a new record. Dedupe
-    // returns the existing comment whose id differs from the one we asked
-    // for; the original already broadcast.
-    if (comment.id === requestedId) {
-      broadcast(sessionId, { type: "comment_added", comment });
-    }
-    return c.json({ comment });
+      // U0.1 — a deduplicated comment has already been broadcast.
+      if (comment.id === requestedId) broadcast(r.store.getSessionId(), { type: "comment_added", comment });
+      return c.json({ comment });
+    });
   });
 
   app.get("/api/internal/sessions/:sessionId/comments/unacknowledged", (c) => {
@@ -1250,14 +1276,14 @@ export function createDaemonRoutes(
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
     const { answerCommentId } = parsed.body as { answerCommentId: string };
-    r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
-    // F1 — record the metric HERE (daemon-side), the truth point for an
-    // answered question. The MCP server's question_answered broadcast is a
-    // no-op in standalone, so the prior daemon broadcast-tap never saw it.
-    if (daemonProjectRoot) {
-      try { recordMetricEvent(daemonProjectRoot, { kind: "question_answered" }); } catch {}
-    }
-    return c.json({ status: "marked" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
+      // F1 — record the metric here because the MCP wrapper's broadcast is a no-op.
+      if (daemonProjectRoot) {
+        try { recordMetricEvent(daemonProjectRoot, { kind: "question_answered" }); } catch {}
+      }
+      return c.json({ status: "marked" });
+    });
   });
 
   // #172 — agent-side suggestion state transitions (apply / counter / stamp the
@@ -1272,13 +1298,15 @@ export function createDaemonRoutes(
     const parsed = await parseJsonBody(c, SuggestionUpdateBodySchema);
     if (!parsed.ok) return parsed.res;
     const commentId = c.req.param("commentId");
-    const existing = r.store.getComment(commentId);
-    if (!existing?.suggestion) return c.json({ comment: null });
-    const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
-    if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
-    const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
-    if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
-    return c.json({ comment: comment ?? null });
+    return withSessionWrite(c, r.store, () => {
+      const existing = r.store.getComment(commentId);
+      if (!existing?.suggestion) return c.json({ comment: null });
+      const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
+      if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
+      const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
+      if (comment) broadcast(r.store.getSessionId(), { type: "comment_updated", comment });
+      return c.json({ comment: comment ?? null });
+    });
   });
 
   // G1 (#198b) — the agent links a fulfilling artifact to a human REQUEST. The

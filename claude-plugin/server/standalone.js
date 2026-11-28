@@ -44316,6 +44316,12 @@ function installWrapperShutdown(opts) {
   return { unregisterOnce };
 }
 
+// src/standalone-session-id.ts
+var REVIEW_SESSION = /^review_[0-9a-f]{8}_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function isStandaloneSessionId(id) {
+  return REVIEW_SESSION.test(id);
+}
+
 // src/daemon/client.ts
 var DaemonClient = class {
   reviewPosts = {
@@ -44446,7 +44452,7 @@ var DaemonClient = class {
    * connection, and the daemon may have idle-shut and respawned on a
    * DIFFERENT port). Re-adopt our project's daemon via ensureDaemon
    * (probe → projectRoot-matched adopt → spawn), rotate the token + port,
-   * and re-register the session. Returns false (so the caller surfaces a
+   * and re-register wrapper sessions. Returns false (so the caller surfaces a
    * clear error) when there's no projectRoot to recover against, when the
    * register binding lacks expectedProjectRoot (AA6.4 — never silently
    * rebind to a possibly-wrong project), or when re-adoption fails.
@@ -44463,7 +44469,7 @@ var DaemonClient = class {
       }
       this.livePort = info.port;
       this.baseUrl = `http://localhost:${info.port}/api/internal/sessions/${this.sessionId}`;
-      await this.register(this.lastRegisterMeta);
+      if (!isStandaloneSessionId(this.sessionId)) await this.register(this.lastRegisterMeta);
       return true;
     } catch {
       return false;
@@ -44481,9 +44487,9 @@ var DaemonClient = class {
    * those 404s flowed back to callers as `data.artifacts === undefined`
    * — silent failure for any wrapper that survived a daemon idle-shutdown.
    *
-   * Now: on a 404 + code=session_not_registered, replay register() once
-   * with the stored meta and retry the original call. Other non-2xx
-   * statuses throw with a structured error so caller bugs surface.
+   * Now: a wrapper's 404 + code=session_not_registered replays register()
+   * once with the stored meta and retries the original call. Other non-2xx
+   * responses throw a structured error.
    */
   async request(path23, init, isRetry = false) {
     const extraHeaders = {};
@@ -44519,7 +44525,7 @@ var DaemonClient = class {
         return this.request(path23, init, true);
       }
     }
-    if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
+    if (res.status === 404 && body?.code === "session_not_registered" && !isRetry && !isStandaloneSessionId(this.sessionId)) {
       if (this.lastRegisterMeta && !this.lastRegisterMeta.expectedProjectRoot) {
         throw new Error(
           `[deepPairing] retry refused \u2014 register meta lacks expectedProjectRoot binding. Y3' protection requires the wrapper to declare which project it expects so the daemon can 403 on mismatch. Pass expectedProjectRoot to register() before issuing requests.`
