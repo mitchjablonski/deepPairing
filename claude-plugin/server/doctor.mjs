@@ -16153,6 +16153,13 @@ var AgentEventSchema = external_exports.discriminatedUnion("type", [
   CommentUpdatedEventSchema,
   PlanReviewRequestEventSchema
 ]);
+var ReviewEndedEventSchema = external_exports.object({
+  type: external_exports.literal("review_ended"),
+  sessionId: external_exports.string(),
+  endedAt: external_exports.string().datetime().optional(),
+  code: external_exports.enum(["session_ended", "session_marker_invalid"]).optional(),
+  message: external_exports.string().optional()
+});
 
 // ../shared/dist/schemas/page-file-watch.js
 var PAGE_FILE_WATCH_LIMITS = {

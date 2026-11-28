@@ -38,6 +38,8 @@ export {
   type ArtifactUpdatedEvent,
   type CommentAddedEvent,
   type PlanReviewRequestEvent,
+  ReviewEndedEventSchema,
+  type ReviewEndedEvent,
 } from "./schemas/message.js";
 
 export {

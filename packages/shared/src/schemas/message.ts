@@ -168,3 +168,21 @@ export type ArtifactUpdatedEvent = z.infer<typeof ArtifactUpdatedEventSchema>;
 export type CommentAddedEvent = z.infer<typeof CommentAddedEventSchema>;
 export type CommentUpdatedEvent = z.infer<typeof CommentUpdatedEventSchema>;
 export type PlanReviewRequestEvent = z.infer<typeof PlanReviewRequestEventSchema>;
+
+// --- Companion WebSocket review-state frame (#711 gate 4) ---
+// A daemon → companion frame, not an agent event. The socket is send-only:
+// writes are HTTP routes, which refuse a closing / ended review with typed
+// 409s. Every field beyond `type` and `sessionId` is optional.
+
+/** Sent to a session's tabs when End review completes, and to a tab that
+ *  connects after End. `session_marker_invalid` means the End marker exists but
+ *  cannot be verified, so writes stay refused. */
+export const ReviewEndedEventSchema = z.object({
+  type: z.literal("review_ended"),
+  sessionId: z.string(),
+  endedAt: z.string().datetime().optional(),
+  code: z.enum(["session_ended", "session_marker_invalid"]).optional(),
+  message: z.string().optional(),
+});
+
+export type ReviewEndedEvent = z.infer<typeof ReviewEndedEventSchema>;

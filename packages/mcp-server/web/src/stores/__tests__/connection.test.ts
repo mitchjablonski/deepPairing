@@ -857,6 +857,23 @@ describe("connection store — handleMessage dispatch", () => {
       expect(useConnectionStore.getState().connected).toBe(false);
     });
 
+    it("#711 gate 4 — records `review_ended` for the bound session only, and a reconnect clears it", async () => {
+      useConnectionStore.getState().connect("s1");
+      expect(useConnectionStore.getState().reviewEnded).toBeNull();
+      activeAdapter.emit({ type: "review_ended", sessionId: "s2", endedAt: "2026-11-28T10:00:00.000Z", code: "session_ended" });
+      await flush();
+      expect(useConnectionStore.getState().reviewEnded).toBeNull();
+      activeAdapter.emit({ type: "review_ended", sessionId: "s1", endedAt: "2026-11-28T10:00:00.000Z", code: "session_ended" });
+      await flush();
+      expect(useConnectionStore.getState().reviewEnded).toEqual({ endedAt: "2026-11-28T10:00:00.000Z", code: "session_ended" });
+      // The daemon re-sends End on every connect while it holds.
+      activeAdapter.connect();
+      expect(useConnectionStore.getState().reviewEnded).toBeNull();
+      activeAdapter.emit({ type: "review_ended", sessionId: "s1", code: "session_marker_invalid" });
+      await flush();
+      expect(useConnectionStore.getState().reviewEnded).toEqual({ code: "session_marker_invalid" });
+    });
+
     it("pushes an info toast on `feedback_received` (Q5 pair-tempo signal)", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();

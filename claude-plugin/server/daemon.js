@@ -20562,6 +20562,13 @@ var AgentEventSchema = external_exports.discriminatedUnion("type", [
   CommentUpdatedEventSchema,
   PlanReviewRequestEventSchema
 ]);
+var ReviewEndedEventSchema = external_exports.object({
+  type: external_exports.literal("review_ended"),
+  sessionId: external_exports.string(),
+  endedAt: external_exports.string().datetime().optional(),
+  code: external_exports.enum(["session_ended", "session_marker_invalid"]).optional(),
+  message: external_exports.string().optional()
+});
 
 // ../shared/dist/schemas/page-file-watch.js
 var PAGE_FILE_WATCH_LIMITS = {
@@ -42016,7 +42023,7 @@ var StandaloneCloseout = class {
         writeJsonAtomic(path29.join(dir, "review-ended.json"), committed2, 2, { mode: 384 });
         return committed2;
       });
-      this.onEnded?.(sessionId);
+      this.onEnded?.(sessionId, committed.endedAt);
       return committed;
     }).finally(() => {
       entry.close = void 0;
@@ -46186,6 +46193,32 @@ var PageWatcher = class {
   }
 };
 
+// src/daemon/socket-review-state.ts
+function readReviewState(closeout, projectRoot2, sessionId) {
+  if (!isStandaloneSessionForProject(sessionId, projectRoot2)) return null;
+  try {
+    return closeout.state(sessionId);
+  } catch (error51) {
+    if (error51 instanceof StandaloneCloseoutError && error51.code === ERROR_CODES.session_marker_invalid) {
+      return { state: "marker_invalid" };
+    }
+    return null;
+  }
+}
+function reviewEndedOnConnect(closeout, projectRoot2, sessionId) {
+  const state = readReviewState(closeout, projectRoot2, sessionId);
+  if (state?.state === "ended") return { type: "review_ended", sessionId, endedAt: state.endedAt, code: ERROR_CODES.session_ended };
+  if (state?.state === "marker_invalid") {
+    return {
+      type: "review_ended",
+      sessionId,
+      code: ERROR_CODES.session_marker_invalid,
+      message: "The standalone review's End marker cannot be verified. Review its session files before retrying."
+    };
+  }
+  return null;
+}
+
 // src/daemon/create-daemon.ts
 async function defaultOpenBrowser(url2) {
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
@@ -46242,7 +46275,12 @@ function createDaemon(deps) {
     projectRoot2,
     (sessionId) => sessions.get(sessionId),
     void 0,
-    (sessionId) => {
+    (sessionId, endedAt) => {
+      try {
+        broadcast(sessionId, { type: "review_ended", sessionId, endedAt, code: ERROR_CODES.session_ended });
+      } catch (error51) {
+        log2(`[end-review] Failed to notify companion tabs: ${errorMessage(error51)}`);
+      }
       try {
         sessions.get(sessionId)?.notifyStandaloneReviewEnded();
       } catch (error51) {
@@ -46764,7 +46802,7 @@ function createDaemon(deps) {
       throw err;
     }
   }
-  const wss = new import_websocket_server.default({ noServer: true });
+  const wss = new import_websocket_server.default({ noServer: true, maxPayload: 64 * 1024 });
   function attachUpgradeHandler(server) {
     server.on?.("upgrade", (request, socket, head) => {
       if (!request.url?.startsWith("/ws")) {
@@ -46825,6 +46863,7 @@ function createDaemon(deps) {
       });
       ws.on("close", cleanup2);
       clients.add(ws);
+      const ended = reviewEndedOnConnect(standaloneCloseout, projectRoot2, sessionId);
       const store = sessions.get(sessionId);
       if (store) {
         try {
@@ -46869,6 +46908,20 @@ function createDaemon(deps) {
             }
           }
           return;
+        }
+      } else if (ended) {
+        try {
+          const state = FileStore.readSessionSnapshot(projectRoot2, sessionId);
+          if (state) ws.send(JSON.stringify({ type: "connected", state, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+        } catch (error51) {
+          log2(`[ws] ended review snapshot unavailable (session=${sessionId}): ${errorMessage(error51)}`);
+        }
+      }
+      if (ended) {
+        try {
+          ws.send(JSON.stringify(ended));
+        } catch (error51) {
+          log2(`[ws] review_ended send failed (session=${sessionId}): ${errorMessage(error51)}`);
         }
       }
       if (sessionId.startsWith("demo_")) {
