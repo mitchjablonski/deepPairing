@@ -975,7 +975,8 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // a testable builder (see daemon-routes.ts). Without the gate, a stale tab on a
   // daemon serving a DIFFERENT project could read this project's session list +
   // full state. Mounted on "/" like the other route groups.
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log, { epoch: revisionEpoch, counts: sessionRevisions }));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log, { epoch: revisionEpoch, counts: sessionRevisions },
+    (sessionId) => isStandaloneSessionForProject(sessionId, projectRoot) ? standaloneCloseout.state(sessionId) : undefined));
 
   // --- Serve static web UI ---
   // Extracted to http/static-ui.ts so the bootstrap-injection contract (the

@@ -9,11 +9,11 @@ import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
-import { ParentSupersededError, ReservedVerdictFeedbackIdError, type FileStore } from "../store/file-store.js";
+import { FileStore, ParentSupersededError, ReservedVerdictFeedbackIdError, type SessionSnapshotView } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import { cliInvocation } from "../cli-invocation.js";
 import type { PreflightTrace } from "@deeppairing/shared";
-import { AutonomyLevelSchema, decisionCanAcceptAnswer, DetailDensitySchema, PAGE_HTML_MAX_BYTES, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
+import { AutonomyLevelSchema, decisionCanAcceptAnswer, DetailDensitySchema, errorMessage, PAGE_HTML_MAX_BYTES, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
 import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
@@ -26,7 +26,7 @@ import { isStandaloneSessionForProject, isStandaloneSessionId } from "../standal
 import { presentStandaloneOptions, replayEndedStandaloneOptions } from "./standalone-options.js";
 import { presentStandalonePage, replayEndedStandalonePage } from "./standalone-page.js";
 import { replayEndedStandaloneRevision, reviseStandalonePage } from "./standalone-revise-page.js";
-import { readStandaloneReplaySnapshot, StandaloneCloseoutError, type StandaloneCloseout } from "./standalone-closeout.js";
+import { readStandaloneReplaySnapshot, StandaloneCloseoutError, type StandaloneCloseout, type StandaloneReviewState } from "./standalone-closeout.js";
 import type { StandaloneReplaySnapshot } from "./standalone-receipts.js";
 import { pageRevisionFeedbackIdsSchema } from "../store/page-revision-feedback.js";
 import { readPageFeedback } from "./page-feedback.js";
@@ -338,9 +338,13 @@ export function createActiveSessionRoutes(
    *  daemon restart and could climb back to a value a tab cached, so clients
    *  compare (epoch, revision), never the bare number. */
   sessionRevisions?: { epoch: string; counts: Map<string, number> },
+  /** #711 gate 5 — the durable End state of a standalone review owned by this
+   *  project (undefined for every other session). Throws on a damaged marker. */
+  reviewState?: (sessionId: string) => StandaloneReviewState | undefined,
 ): Hono {
   const app = new Hono();
   app.onError((error, c) => {
+    if (error instanceof StandaloneCloseoutError) return c.json({ error: error.message, code: error.code }, 409);
     if (isFileLockError(error)) return lockBusyRouteError(logFn ?? (() => {}), c, error);
     if (isSessionReviewConflictError(error)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
@@ -352,9 +356,26 @@ export function createActiveSessionRoutes(
   app.use("/api/live-session/*", gate);
 
   app.get("/api/active-sessions", (c) => {
-    const list = Array.from(sessions.entries()).map(([id, store]) => {
+    // #711 gate 5 — End is decided by the durable marker, not by membership in
+    // the live map. An ended review (warm or not) moves to history; a review
+    // whose marker cannot be verified fails closed and is never attachable.
+    const endedSessions: Array<{ sessionId: string; title: string; endedAt: string }> = [];
+    const unverifiedSessions: Array<{ sessionId: string; code: string }> = [];
+    const list = Array.from(sessions.entries()).flatMap(([id, store]) => {
       const meta = sessionMeta.get(id);
-      return {
+      let review: StandaloneReviewState | undefined;
+      try {
+        review = reviewState?.(id);
+      } catch (error) {
+        if (error instanceof StandaloneCloseoutError) unverifiedSessions.push({ sessionId: id, code: error.code });
+        else logFn?.(`[active-sessions] omitted standalone review ${id}: ${errorMessage(error)}`);
+        return [];
+      }
+      if (review?.state === "ended") {
+        endedSessions.push({ sessionId: id, title: meta?.title ?? id, endedAt: review.endedAt });
+        return [];
+      }
+      return [{
         sessionId: id,
         title: meta?.title ?? id,
         project: meta?.project ?? "",
@@ -371,16 +392,33 @@ export function createActiveSessionRoutes(
         lastActivity: meta?.lastActivity ?? meta?.registeredAt,
         // #460 — the sibling change signal (status changes + comments too).
         ...(sessionRevisions ? { revision: sessionRevisions.counts.get(id) ?? 0, revisionEpoch: sessionRevisions.epoch } : {}),
-      };
+        ...(review ? { reviewState: review.state } : {}),
+      }];
     });
-    return c.json({ sessions: list });
+    return c.json({
+      sessions: list,
+      ...(endedSessions.length ? { endedSessions } : {}),
+      ...(unverifiedSessions.length ? { unverifiedSessions } : {}),
+    });
   });
 
   // A6a — serve a single live session's state directly from the in-memory store
   // so the companion UI's MultiAgentSync can merge artifacts across sessions.
   app.get("/api/live-session/:sessionId", (c) => {
-    const store = sessions.get(c.req.param("sessionId"));
+    const sessionId = c.req.param("sessionId");
+    const store = sessions.get(sessionId);
     if (!store) return c.json({ error: "unknown_session" }, 404);
+    let review: StandaloneReviewState | undefined;
+    try {
+      review = reviewState?.(sessionId);
+    } catch (error) {
+      // A damaged marker is the typed 409; any other unreadable review is not live.
+      if (error instanceof StandaloneCloseoutError) throw error;
+      return c.json({ error: "unknown_session" }, 404);
+    }
+    if (review?.state === "ended") {
+      return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended, endedAt: review.endedAt }, 409);
+    }
     return c.json(store.getFullState());
   });
 
@@ -763,6 +801,50 @@ export function createDaemonRoutes(
       }, () => endedReceipt(c, sessionId, (snapshot) =>
         replayEndedStandaloneRevision(projectRoot, sessionId, operationId, input, snapshot)));
     });
+    // #711 gate 6 — an ended review's exact reads come from disk only. The
+    // strict replay reader proves the history End validated; the load-only
+    // session snapshot renders it. No store, watch, lease or activity is
+    // touched, so warm and cold ended reviews answer byte-for-byte alike.
+    function endedSnapshot(c: Context, sessionId: string): { view: SessionSnapshotView } | { response: Response } | undefined {
+      if (standaloneCloseout?.state(sessionId).state !== "ended") return;
+      let view: SessionSnapshotView | null;
+      try {
+        readStandaloneReplaySnapshot(projectRoot, sessionId);
+        view = FileStore.openSessionSnapshot(projectRoot, sessionId);
+      } catch {
+        return { response: c.json({ error: "The ended standalone review's history could not be verified. Check the review's session files.",
+          code: ERROR_CODES.session_review_conflict }, 409) };
+      }
+      if (!view) {
+        return { response: c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404) };
+      }
+      return { view };
+    }
+    type DecisionSource = Pick<SessionSnapshotView, "getDecision" | "getArtifacts" | "getSessionMemory">;
+    function exactDecision(source: DecisionSource, sessionId: string, decisionId: string) {
+      const decision = source.getDecision(decisionId);
+      const artifacts = decision ? source.getArtifacts() : [];
+      const artifact = decision && artifacts.find((a) =>
+        a.sessionId === sessionId && a.type === "decision" && a.id === decision.artifactId &&
+        (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
+      return decision && artifact ? { decision, artifact, artifacts } : undefined;
+    }
+    function settledDecision({ decision, artifact, artifacts }: NonNullable<ReturnType<typeof exactDecision>>) {
+      if (decision.response) return "resolved" as const;
+      if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) return "closed" as const;
+    }
+    function decisionRead(source: DecisionSource, sessionId: string, found: NonNullable<ReturnType<typeof exactDecision>>,
+      waitStatus: StandaloneDecisionRead["waitStatus"]): StandaloneDecisionRead {
+      return {
+        ...decisionFeedback(found.decision),
+        sessionId,
+        artifactStatus: found.artifact.status,
+        recordedRejections: source.getSessionMemory().rejectedApproaches
+          .filter((entry) => entry.sourceArtifactId === found.artifact.id)
+          .map(({ description, reason }) => ({ description, reason })),
+        ...(waitStatus === undefined ? {} : { waitStatus }),
+      };
+    }
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
       const signal = c.req.raw.signal;
       const parsed = await parseJsonBody(c, ReadStandaloneDecisionBody);
@@ -770,6 +852,19 @@ export function createDaemonRoutes(
       const { expectedProjectRoot, decisionId, waitMs } = parsed.data;
       const deadline = performance.now() + (waitMs ?? 0);
       const sessionId = c.req.param("sessionId");
+      const invalid = verifyStandaloneDirectory(c, projectRoot, sessionId, expectedProjectRoot);
+      if (invalid) return invalid;
+      const readEnded = (): Response => {
+        const ended = endedSnapshot(c, sessionId);
+        if (!ended) throw new Error("Standalone review is not ended.");
+        if ("response" in ended) return ended.response;
+        const found = exactDecision(ended.view, sessionId, decisionId);
+        if (!found) {
+          return c.json({ error: "Decision does not exist in this standalone session.", code: ERROR_CODES.decision_not_in_session }, 404);
+        }
+        return c.json(decisionRead(ended.view, sessionId, found, waitMs === undefined ? undefined : settledDecision(found) ?? "session_ended"));
+      };
+      if (standaloneCloseout?.state(sessionId).state === "ended") return readEnded();
       const lookup = requireWarmStandaloneStore(c, expectedProjectRoot, sessionId, "read-decision");
       if (!lookup.ok) return lookup.response;
       const { store } = lookup;
@@ -779,48 +874,32 @@ export function createDaemonRoutes(
         // committed choice cannot fall between the snapshot and subscription.
         const read = await withDecisionResolveLock(store, async () => {
           if (signal.aborted) return null;
-          const decision = store.getDecision(decisionId);
-          const artifacts = decision ? store.getArtifacts() : [];
-          const artifact = decision && artifacts.find((a) =>
-            a.sessionId === sessionId && a.type === "decision" && a.id === decision.artifactId &&
-            (a.content as { decisionId?: string } | null)?.decisionId === decisionId);
-          if (!decision || !artifact) return null;
+          // The marker check and waiter registration are synchronous. Once
+          // ended, the answer comes from disk, never from this warm store.
+          if (standaloneCloseout?.state(sessionId).state === "ended") return { ended: true as const };
+          const found = exactDecision(store, sessionId, decisionId);
+          if (!found) return null;
           let waitStatus: StandaloneDecisionRead["waitStatus"];
           if (waitMs !== undefined) {
             const remaining = deadline - performance.now();
-            if (decision.response) {
-              waitStatus = "resolved";
-            } else if (!decisionCanAcceptAnswer(artifact.status) || classifyClosedDecision(artifact, artifacts)) {
-              waitStatus = "closed";
-            } else if (standaloneCloseout?.state(sessionId).state === "ended") {
-              waitStatus = "session_ended";
-            } else if (remaining > 0) {
+            waitStatus = settledDecision(found);
+            if (waitStatus === undefined && remaining > 0) {
               // Give an accepted wait a fresh idle interval without a wrapper lease.
               if (!idleRefreshed) {
                 refreshCompanionLink();
                 idleRefreshed = true;
               }
-              // The marker check and waiter registration are synchronous.
               return { wake: store.waitForFeedback(Math.ceil(remaining), signal, "review_end") };
-            } else {
-              waitStatus = "timed_out";
             }
+            waitStatus ??= "timed_out";
           }
-          const result: StandaloneDecisionRead = {
-            ...decisionFeedback(decision),
-            sessionId,
-            artifactStatus: artifact.status,
-            recordedRejections: store.getSessionMemory().rejectedApproaches
-              .filter((entry) => entry.sourceArtifactId === artifact.id)
-              .map(({ description, reason }) => ({ description, reason })),
-            ...(waitStatus === undefined ? {} : { waitStatus }),
-          };
-          return { result };
+          return { result: decisionRead(store, sessionId, found, waitStatus) };
         });
         if (signal.aborted) break;
         if (!read) {
           return c.json({ error: "Decision does not exist in this standalone session.", code: ERROR_CODES.decision_not_in_session }, 404);
         }
+        if ("ended" in read) return readEnded();
         if (read.result) return c.json(read.result);
         // Do not hold the lock while waiting for the browser to resolve.
         await read.wake;
@@ -831,9 +910,20 @@ export function createDaemonRoutes(
       const parsed = await parseJsonBody(c, ReadStandalonePageFeedbackBody);
       if (!parsed.ok) return parsed.res;
       const { expectedProjectRoot, artifactId } = parsed.data;
-      const lookup = requireWarmStandaloneStore(c, expectedProjectRoot, c.req.param("sessionId"), "read-page-feedback");
-      if (!lookup.ok) return lookup.response;
-      const result = readPageFeedback(lookup.store, artifactId);
+      const sessionId = c.req.param("sessionId");
+      const invalid = verifyStandaloneDirectory(c, projectRoot, sessionId, expectedProjectRoot);
+      if (invalid) return invalid;
+      const ended = endedSnapshot(c, sessionId);
+      if (ended && "response" in ended) return ended.response;
+      let source: Parameters<typeof readPageFeedback>[0];
+      if (ended) {
+        source = ended.view;
+      } else {
+        const lookup = requireWarmStandaloneStore(c, expectedProjectRoot, sessionId, "read-page-feedback");
+        if (!lookup.ok) return lookup.response;
+        source = lookup.store;
+      }
+      const result = readPageFeedback(source, artifactId);
       if (!result) {
         return c.json({ error: "Page does not exist in this standalone session.", code: ERROR_CODES.artifact_not_in_session }, 404);
       }
@@ -1972,15 +2062,19 @@ export function createDaemonRoutes(
   // --- Active sessions list ---
 
   app.get("/api/internal/sessions", (c) => {
-    const list = Array.from(sessions.entries()).map(([id, store]) => {
+    const list = Array.from(sessions.entries()).flatMap(([id, store]) => {
+      // #711 gate 5 — an ended or unverifiable standalone review is not live.
+      try {
+        if (standaloneStateForStore(store)?.state === "ended") return [];
+      } catch { return []; }
       const meta = sessionMeta.get(id);
-      return {
+      return [{
         sessionId: id,
         title: meta?.title ?? id,
         project: meta?.project ?? "",
         artifactCount: store.getArtifacts().length,
         registeredAt: meta?.registeredAt,
-      };
+      }];
     });
     return c.json({ sessions: list });
   });

@@ -151,6 +151,10 @@ export class ParentSupersededError extends Error {
  * Stores data in .deeppairing/ directory within the project root.
  * In-memory cache with debounced disk flush.
  */
+/** Read accessors of a load-only session snapshot. Mutators are deliberately absent. */
+export type SessionSnapshotView = Pick<FileStore,
+  "getSessionId" | "getArtifacts" | "getComments" | "getCommentsForArtifact" | "getDecision" | "getSessionMemory" | "getFullState">;
+
 export class FileStore implements IStore {
   private static readonly sessionSnapshot = Symbol("sessionSnapshot");
   private readonly snapshotOnly: boolean;
@@ -3590,10 +3594,16 @@ export class FileStore implements IStore {
 
   /** Load the replay payload from an existing session without opening a writer. */
   static readSessionSnapshot(projectRoot: string, sessionId: string): ReturnType<FileStore["getFullState"]> | null {
+    return FileStore.openSessionSnapshot(projectRoot, sessionId)?.getFullState() ?? null;
+  }
+
+  /** The same load-only reader as readSessionSnapshot, exposed through its read
+   * accessors only: no mkdir, mirror replay, corruption backup or flush. */
+  static openSessionSnapshot(projectRoot: string, sessionId: string): SessionSnapshotView | null {
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return null;
     const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
     if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return null;
-    return new FileStore(projectRoot, sessionId, FileStore.sessionSnapshot).getFullState();
+    return new FileStore(projectRoot, sessionId, FileStore.sessionSnapshot);
   }
 
   static searchAll = searchAll;
