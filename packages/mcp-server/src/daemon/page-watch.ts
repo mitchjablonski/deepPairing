@@ -100,7 +100,7 @@ export interface PageWatchDeps {
   /** The clock End's missing-file grace is measured on. Default Date.now. */
   now?: () => number;
   /** Test hook: runs on the End-grace path between the pre-read signature
-   *  check and the read itself (to replace the file at that instant). */
+   *  check and the read itself (to replace or delete the file there). */
   beforeGraceRead?: (absPath: string) => void;
 }
 
@@ -597,9 +597,15 @@ export class PageWatcher {
         "A watched file changed again while the standalone review was closing. Let it settle, then retry End review.");
     };
     verifyAdopted();
-    try { fs.lstatSync(entry.absPath); } catch { return; }
+    if (expectSig !== undefined) {
+      // No lstat shortcut for an adopted candidate: a file that vanished since
+      // the check above must not pass as a genuine delete. The read plus the
+      // post-read check below turn that into pending.
+      this.deps.beforeGraceRead?.(entry.absPath);
+    } else {
+      try { fs.lstatSync(entry.absPath); } catch { return; }
+    }
 
-    if (expectSig !== undefined) this.deps.beforeGraceRead?.(entry.absPath);
     const source = readPageSource(this.rootReal, entry.sourcePath);
     // Before any refusal or record: the bytes read must be the adopted file.
     verifyAdopted();

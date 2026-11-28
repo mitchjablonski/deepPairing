@@ -847,6 +847,33 @@ describe("page file watch — a save landing during the gate check (Codex review
     expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Replaced externally</p>" } });
   });
 
+  it("End rejects an adopted candidate that vanishes before the read (#737 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    let deleted = false;
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => { fs.writeFileSync(file, "<p>Recreated</p>"); sig.bump(); },
+      beforeGraceRead: () => {
+        if (deleted) return;
+        deleted = true;
+        fs.unlinkSync(file); // eventless, after the adoption check
+      },
+    });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await expect(watcher.drainQueuedSaves(SID)).rejects.toMatchObject({ code: "session_save_pending" });
+    expect(deleted).toBe(true);
+    expect(pages()).toHaveLength(1);
+    expect(liveTip()!.id).toBe(v1.id);
+    expect(liveTip()!.fileWatch).toBeUndefined();
+  });
+
   it("End rejects a second watcher-observed edit after the accepted recreate (#736 audit)", async () => {
     const sig = counterSig();
     const file = path.join(root, "docs/page.html");
