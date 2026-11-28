@@ -892,14 +892,19 @@ var dErrMessage = dGetterOf(window.ErrorEvent, "message"), dErrError = dGetterOf
 var dRejReason = dGetterOf(window.PromiseRejectionEvent, "reason");
 var dCspEffective = dGetterOf(window.SecurityPolicyViolationEvent, "effectiveDirective");
 var dCspViolated = dGetterOf(window.SecurityPolicyViolationEvent, "violatedDirective");
-/** A field through its captured getter. A plain read only where the
- *  platform has no such getter, the object isn't an instance (the getter
- *  throws; never a real event), or the getter yields undefined (a test DOM
- *  without the internal slot; on a real event only an undefined rejection
- *  reason, which the page chose anyway). */
+/** A field through its captured getter. Never a prototype lookup (page
+ *  script can patch those after Run): where the platform has no such getter,
+ *  the object isn't an instance (the getter throws), or the getter yields
+ *  undefined, only an OWN data property is read, via the captured
+ *  hasOwnProperty and descriptor value (a browser-made event has none; our
+ *  capture listeners run before any page listener could add one). */
 function dGet(getter, o, name) {
   if (getter) { try { var v = getter(o); if (v !== undefined) return v; } catch (e) { /* not an instance */ } }
-  return o[name];
+  try {
+    if (o == null || !dHasOwn(o, name)) return undefined;
+    var d = dGOPD(o, name);
+    return d && dHasOwn(d, "value") ? d.value : undefined;
+  } catch (e) { return undefined; }
 }
 function dTimeout(fn, ms) { return dSetTimeout(fn, ms); }
 function dCancel(id) { dClearTimeout(id); }
