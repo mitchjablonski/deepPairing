@@ -97,6 +97,25 @@ export interface PageWatchDeps {
   /** The recheck's wait. Tests pass a fake that recreates (or keeps deleted)
    *  the file instead of advancing a clock. */
   sleep?: (ms: number) => Promise<void>;
+  /** The clock End's missing-file grace is measured on. Default Date.now. */
+  now?: () => number;
+  /** Test hook: runs on the End-grace path between the pre-read signature
+   *  check and the read itself (to replace or delete the file there). */
+  beforeGraceRead?: (absPath: string) => void;
+}
+
+/** End's missing-file grace for one entry, opened at the cut. */
+interface Grace {
+  /** Cut time + missingRecheckMs. A change seen later is not the cut's save. */
+  deadline: number;
+  /** The first present signature observed inside the window, if any. */
+  sig?: string;
+  /** The generation that in-window state stands for. */
+  gen?: number;
+  /** A change the grace can't accept was seen: End must report pending. */
+  spoiled: boolean;
+  /** The in-window sampler, started at the cut. */
+  sampler: ReturnType<typeof setInterval> | null;
 }
 
 interface Entry {
@@ -116,6 +135,7 @@ interface Entry {
   processing: Promise<void> | null;
   draining: Promise<void> | null;
   stopped: boolean;
+  grace: Grace | null;
 }
 
 function statSig(p: string): string {
@@ -178,6 +198,10 @@ export class PageWatcher {
     this.minIntervalMs = deps.minIntervalMs ?? PAGE_WATCH_MIN_INTERVAL_MS;
     this.pollMs = deps.pollIntervalMs ?? PAGE_WATCH_POLL_MS;
     this.missingRecheckMs = Math.max(0, deps.missingRecheckMs ?? PAGE_WATCH_MISSING_RECHECK_MS);
+  }
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
   }
 
   private sig(p: string): string {
@@ -255,14 +279,28 @@ export class PageWatcher {
    * mid-replace by the sweep: the file is "missing" and the entry is dirty.
    * Reading it then records nothing, and the rewrite that lands moments later
    * would be post-cut and lost. So a dirty (or mid-read) entry whose cut
-   * signature is missing gets ONE bounded recheck (missingRecheckMs, ~50ms)
-   * inside its drain, before anything is read. If the file is back, that is the same save
-   * completing: its new signature becomes this drain's generation and it is
-   * recorded before End commits. If it is still missing, it is treated as a
-   * genuine delete: nothing is recorded and End proceeds. The entry is already
-   * marked draining during the wait, so no quiet timer or poll can start a
-   * read that would wait on End's own admission. A file that returns only
-   * after the recheck is post-cut, like any other save on a clean entry.
+   * signature is missing gets a grace window of missingRecheckMs (~50ms)
+   * measured from the cut itself (the injectable `now` clock), not from when
+   * earlier in-flight work settles. A sampler started at the cut stats the
+   * file every missingRecheckMs/5 until the deadline, in parallel with any
+   * held read. An observation counts only if `now() <= deadline` at the
+   * moment it is made, whether it comes from the sampler, a watcher event, a
+   * poll tick or the drain's own stat; a timer that fires late is discarded,
+   * never credited. The first present signature seen inside the window is the
+   * candidate for that save completing. When the drain gets to decide, it
+   * re-stats: if the file still has that signature, it becomes this drain's
+   * generation and is recorded before End commits, and the read itself is
+   * bracketed by signature checks against it (a file replaced between the
+   * adoption and the read is pending, not recorded). Otherwise End fails with
+   * session_save_pending (retry End): a second, distinct signature inside the
+   * window (ambiguous: the editor finishing, or another save), a re-delete
+   * after a reappearance, any change seen after the window, a current signature that
+   * differs from the in-window one, or a file whose first reappearance is seen
+   * only after the window. If the window ends with the file still missing, it
+   * is a genuine delete: nothing is recorded and End proceeds. The drain
+   * sleeps at most the window's remainder, the sampler costs at most the
+   * window, and the entry is already marked draining, so no quiet timer or
+   * poll can start a read that would wait on End's own admission.
    *
    * Post-cut saves otherwise. A save seen after the cut on an entry that was
    * dirty at the cut makes End fail with session_save_pending (retry End). On
@@ -275,8 +313,10 @@ export class PageWatcher {
     for (const entry of entries) this.checkSignature(entry);
     const drains = entries.filter((entry) => entry.dirty || entry.processing || entry.draining).map((entry) => {
       let generation = entry.gen;
+      let adopted: string | undefined;
       const signature = entry.lastSig;
       const vanished = signature === MISSING && (entry.dirty || entry.processing !== null);
+      const grace = vanished && !entry.draining ? this.openGrace(entry) : null;
       const checkGeneration = () => {
         if (entry.gen !== generation || entry.dirty) {
           throw new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
@@ -290,22 +330,25 @@ export class PageWatcher {
         await entry.processing;
         if (entry.stopped) return;
         try {
-          if (vanished && entry.gen === generation) {
-            let returned = this.sig(entry.absPath);
-            if (returned === MISSING) {
-              await (this.deps.sleep ?? defaultSleep)(this.missingRecheckMs);
+          if (grace) {
+            const remaining = grace.deadline - this.now();
+            if (remaining > 0) {
+              await (this.deps.sleep ?? defaultSleep)(remaining);
               if (entry.stopped) return;
-              returned = this.sig(entry.absPath);
             }
-            if (returned !== MISSING && entry.gen === generation) {
-              // The replace finished inside the window: process it as this save.
-              this.onChange(entry, returned);
-              generation = entry.gen;
-            } else if (returned !== MISSING && entry.lastSig === returned) {
-              // A watcher event or poll tick already recorded this same
-              // recreate during the wait (gen moved, lastSig is the file as it
-              // is now). Adopt it rather than fail End as pending.
-              generation = entry.gen;
+            this.sampleGrace(entry, grace); // counts only if still in the window
+            this.closeGrace(entry);
+            const current = this.sig(entry.absPath);
+            const pending = () => new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
+              "A watched file was replaced while the standalone review was closing. Let it settle, then retry End review.");
+            if (current !== entry.lastSig) this.onChange(entry, current); // seen after the window
+            if (grace.spoiled || current !== (grace.sig ?? MISSING) || grace.gen !== entry.gen) {
+              // A later change, a re-delete, or a first reappearance seen only
+              // after the window. Nothing still missing and unchanged lands here.
+              if (grace.spoiled || grace.sig !== undefined || current !== MISSING) throw pending();
+            } else {
+              generation = grace.gen;
+              adopted = grace.sig;
             }
           }
           // Another eventless save may have landed during the wait. Mark
@@ -314,13 +357,14 @@ export class PageWatcher {
           const queued = entry.dirty;
           entry.dirty = false;
           checkGeneration();
-          if (queued) await this.processAdmitted(entry);
+          if (queued) await this.processAdmitted(entry, adopted);
           checkGeneration();
         } catch (error) {
           entry.dirty = true;
           throw error;
         }
       }).finally(() => {
+        this.closeGrace(entry);
         entry.draining = null;
         if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
       });
@@ -366,6 +410,7 @@ export class PageWatcher {
       processing: null,
       draining: null,
       stopped: false,
+      grace: null,
     };
     this.entries.set(this.key(sessionId, a.id), entry);
     const dir = path.dirname(absPath);
@@ -402,6 +447,7 @@ export class PageWatcher {
     entry.stopped = true;
     if (entry.quiet) { clearTimeout(entry.quiet); entry.quiet = null; }
     if (entry.poll) { clearInterval(entry.poll); entry.poll = null; }
+    this.closeGrace(entry);
     try { entry.watcher?.close(); } catch { /* gone */ }
     entry.watcher = null;
     const k = this.key(entry.sessionId, entry.artifactId);
@@ -419,9 +465,66 @@ export class PageWatcher {
     entry.lastSig = signature ?? this.sig(entry.absPath);
     entry.dirty = true;
     entry.gen++;
+    if (entry.grace) this.noteGrace(entry.grace, entry.lastSig, entry.gen);
     // A read in flight reschedules itself when it finishes (dirty).
     if (entry.processing || entry.draining) return;
     this.arm(entry, this.quietMs);
+  }
+
+  /** Open End's missing-file grace at the cut and start its sampler. */
+  private openGrace(entry: Entry): Grace {
+    const grace: Grace = { deadline: this.now() + this.missingRecheckMs, spoiled: false, gen: entry.gen, sampler: null };
+    entry.grace = grace;
+    if (this.missingRecheckMs <= 0) return grace;
+    const stopSampling = () => {
+      if (grace.sampler) { clearInterval(grace.sampler); grace.sampler = null; }
+    };
+    grace.sampler = setInterval(() => {
+      // Past the deadline the sampler stops, but the grace stays open on the
+      // entry until the drain decides, so a later event still spoils it.
+      if (entry.stopped || entry.grace !== grace || this.now() > grace.deadline) {
+        stopSampling();
+        return;
+      }
+      this.sampleGrace(entry, grace);
+    }, Math.max(1, Math.floor(this.missingRecheckMs / 5)));
+    grace.sampler.unref?.();
+    return grace;
+  }
+
+  private closeGrace(entry: Entry): void {
+    const grace = entry.grace;
+    if (!grace) return;
+    if (grace.sampler) { clearInterval(grace.sampler); grace.sampler = null; }
+    entry.grace = null;
+  }
+
+  /** One in-window observation: a stat made after the deadline is discarded. */
+  private sampleGrace(entry: Entry, grace: Grace): void {
+    if (entry.grace !== grace || this.now() > grace.deadline) return;
+    const signature = this.sig(entry.absPath);
+    if (signature !== entry.lastSig) this.onChange(entry, signature);
+  }
+
+  /** Judge a change seen while End's missing-file grace is open. */
+  private noteGrace(grace: Grace, signature: string, gen: number): void {
+    if (grace.spoiled) return;
+    if (this.now() > grace.deadline) {
+      grace.spoiled = true;
+    } else if (signature === MISSING) {
+      // Still gone before any reappearance is harmless; gone again after one is not.
+      if (grace.sig === undefined) grace.gen = gen;
+      else grace.spoiled = true;
+    } else if (grace.sig === undefined || grace.sig === signature) {
+      // The first reappearance is the candidate (repeat events of it are
+      // the same save).
+      grace.sig = signature;
+      grace.gen = gen;
+    } else {
+      // A second, distinct signature: the editor finishing, or another save?
+      // Ambiguous, so End reports pending and is retried once it settles.
+      grace.spoiled = true;
+    }
   }
 
   private arm(entry: Entry, ms: number): void {
@@ -463,7 +566,10 @@ export class PageWatcher {
     }
   }
 
-  private async processAdmitted(entry: Entry): Promise<void> {
+  /** `expectSig`: the signature End's missing-file grace adopted. The read is
+   *  then bracketed by checks against it, so a file replaced after the
+   *  adoption is never read as the adopted save. */
+  private async processAdmitted(entry: Entry, expectSig?: string): Promise<void> {
     const store = this.deps.getStore(entry.sessionId);
     if (!store) return;
     // Codex review — the snapshot this read is about. A save that lands while
@@ -484,9 +590,25 @@ export class PageWatcher {
     }
     // Missing (deleted, or mid atomic save): nothing to read yet. lstat, so a
     // dangling symlink counts as present and gets the reader's refusal.
-    try { fs.lstatSync(entry.absPath); } catch { return; }
+    const verifyAdopted = () => {
+      if (expectSig === undefined || this.sig(entry.absPath) === expectSig) return;
+      entry.dirty = true;
+      throw new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
+        "A watched file changed again while the standalone review was closing. Let it settle, then retry End review.");
+    };
+    verifyAdopted();
+    if (expectSig !== undefined) {
+      // No lstat shortcut for an adopted candidate: a file that vanished since
+      // the check above must not pass as a genuine delete. The read plus the
+      // post-read check below turn that into pending.
+      this.deps.beforeGraceRead?.(entry.absPath);
+    } else {
+      try { fs.lstatSync(entry.absPath); } catch { return; }
+    }
 
     const source = readPageSource(this.rootReal, entry.sourcePath);
+    // Before any refusal or record: the bytes read must be the adopted file.
+    verifyAdopted();
     if (!source.ok) {
       const message = readerReason(source.error.content[0]?.text ?? "the file could not be read");
       this.refuse(store, entry, cur, { cause: "unreadable", message, digest: sha256(`unreadable:${message}`) });
