@@ -2,6 +2,8 @@
 // request-body Zod validation, no-active-session handling, X-Session-Id
 // routing, and the F6 cross-session mutation guards.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { createHttpRoutes } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
 import { createRoutesTestContext, destroyRoutesTestContext, withHash, type RoutesApp } from "./routes.harness.js";
@@ -270,6 +272,19 @@ describe("HTTP Routes", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.artifacts).toHaveLength(1);
+  });
+
+  it("GET /api/sessions/:sessionId refuses a missing session without creating one", async () => {
+    const sessionsDir = path.join(tmpDir, ".deeppairing", "sessions");
+    const before = fs.readdirSync(sessionsDir).sort();
+    const missing = await app.request("/api/sessions/missing_review");
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: "Session not found" });
+    expect(fs.readdirSync(sessionsDir).sort()).toEqual(before);
+
+    const empty = await app.request("/api/sessions/test_session");
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toMatchObject({ sessionId: "test_session", artifacts: [], comments: [], decisions: [] });
   });
 
   it("GET /api/export returns markdown", async () => {

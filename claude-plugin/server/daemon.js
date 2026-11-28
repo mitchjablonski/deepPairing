@@ -30215,6 +30215,8 @@ var ParentSupersededError = class extends Error {
   code = "parent_superseded";
 };
 var FileStore = class _FileStore {
+  static sessionSnapshot = /* @__PURE__ */ Symbol("sessionSnapshot");
+  snapshotOnly;
   basePath;
   projectHint;
   guardrails;
@@ -30288,24 +30290,27 @@ var FileStore = class _FileStore {
   // BB4 — also read by the recall mode='ledger' handler to call
   // FileStore.ledgerDigest(projectRoot) for the agent-facing moat surface.
   projectRoot;
-  constructor(projectRoot2, sessionId) {
+  constructor(projectRoot2, sessionId, mode) {
+    this.snapshotOnly = mode === _FileStore.sessionSnapshot;
     this.projectRoot = projectRoot2;
     this.basePath = path17.join(projectRoot2, ".deeppairing");
     this.projectHint = path17.basename(projectRoot2);
-    this.guardrails = senseProjectGuardrails(projectRoot2);
-    this.teamPreferences = loadTeamPreferences(this.basePath);
+    this.guardrails = this.snapshotOnly ? [] : senseProjectGuardrails(projectRoot2);
+    this.teamPreferences = this.snapshotOnly ? [] : loadTeamPreferences(this.basePath);
     this.sessionId = sessionId ?? `session_${Date.now()}`;
     if (this.sessionId.includes("..") || this.sessionId.includes("/") || this.sessionId.includes("\\")) {
       throw new Error("Invalid session ID");
     }
     this.isDemoSession = this.sessionId.startsWith("demo_");
     if (this.isDemoSession) this.demoPreferences = {};
-    this.ensureDir();
+    if (!this.snapshotOnly) this.ensureDir();
     this.load();
-    this.captureRecordBaselines();
+    if (!this.snapshotOnly) this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
-    if (!this.isDemoSession && fs18.existsSync(this.ledgerMirrorPendingPath())) this.scheduleMirrorReplay(0, 0);
+    if (!this.snapshotOnly && !this.isDemoSession && fs18.existsSync(this.ledgerMirrorPendingPath())) {
+      this.scheduleMirrorReplay(0, 0);
+    }
   }
   ensureDir() {
     const sessionDir = path17.join(this.basePath, "sessions", this.sessionId);
@@ -30418,6 +30423,7 @@ var FileStore = class _FileStore {
         return fallback;
       }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${errorMessage(err)}`);
+      if (this.snapshotOnly) return fallback;
       try {
         fs18.copyFileSync(filePath, filePath + ".corrupt");
         if (err instanceof SyntaxError && bytes2 !== void 0) this.backedUpCorruption[filePath] = bytes2;
@@ -32925,6 +32931,13 @@ var FileStore = class _FileStore {
   static loadSession(projectRoot2, sessionId) {
     const store = new _FileStore(projectRoot2, sessionId);
     return store.getFullState();
+  }
+  /** Load the replay payload from an existing session without opening a writer. */
+  static readSessionSnapshot(projectRoot2, sessionId) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return null;
+    const dir = path17.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+    if (!fs18.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return null;
+    return new _FileStore(projectRoot2, sessionId, _FileStore.sessionSnapshot).getFullState();
   }
   static searchAll = searchAll;
   /** #138 — project-wide decisions (every session's decisions.json, flattened
@@ -43048,11 +43061,11 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       return c.json({ error: "Invalid session ID" }, 400);
     }
     try {
-      const state = FileStore.loadSession(projectRoot2, sessionId);
-      return c.json(state);
+      const state = FileStore.readSessionSnapshot(projectRoot2, sessionId);
+      if (state) return c.json(state);
     } catch {
-      return c.json({ error: "Session not found" }, 404);
     }
+    return c.json({ error: "Session not found" }, 404);
   });
   app.get("/api/sessions/:sessionId/annotations", (c) => {
     const sessionId = c.req.param("sessionId");

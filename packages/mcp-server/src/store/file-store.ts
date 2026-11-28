@@ -152,6 +152,8 @@ export class ParentSupersededError extends Error {
  * In-memory cache with debounced disk flush.
  */
 export class FileStore implements IStore {
+  private static readonly sessionSnapshot = Symbol("sessionSnapshot");
+  private readonly snapshotOnly: boolean;
   private basePath: string;
   private projectHint: string;
   private guardrails: ProjectGuardrail[];
@@ -228,7 +230,8 @@ export class FileStore implements IStore {
   // FileStore.ledgerDigest(projectRoot) for the agent-facing moat surface.
   readonly projectRoot: string;
 
-  constructor(projectRoot: string, sessionId?: string) {
+  constructor(projectRoot: string, sessionId?: string, mode?: typeof FileStore.sessionSnapshot) {
+    this.snapshotOnly = mode === FileStore.sessionSnapshot;
     this.projectRoot = projectRoot;
     this.basePath = path.join(projectRoot, ".deeppairing");
     // Project hint for the global philosophy ledger — basename only so the
@@ -238,11 +241,11 @@ export class FileStore implements IStore {
     // infra, secrets). The agent gets these on first tool call so it knows
     // to escalate for changes in those paths even when global autonomy is
     // "autonomous" — zero user configuration.
-    this.guardrails = senseProjectGuardrails(projectRoot);
+    this.guardrails = this.snapshotOnly ? [] : senseProjectGuardrails(projectRoot);
     // N6.2: load committable team preferences from .deeppairing/team.json.
     // Cached for the lifetime of the FileStore — the file is meant to be
     // edited via PR, so a session reload is the right reload point.
-    this.teamPreferences = loadTeamPreferences(this.basePath);
+    this.teamPreferences = this.snapshotOnly ? [] : loadTeamPreferences(this.basePath);
     this.sessionId = sessionId ?? `session_${Date.now()}`;
     // Prevent path traversal via sessionId
     if (this.sessionId.includes("..") || this.sessionId.includes("/") || this.sessionId.includes("\\")) {
@@ -250,14 +253,16 @@ export class FileStore implements IStore {
     }
     this.isDemoSession = this.sessionId.startsWith("demo_");
     if (this.isDemoSession) this.demoPreferences = {};
-    this.ensureDir();
+    if (!this.snapshotOnly) this.ensureDir();
     this.load();
-    this.captureRecordBaselines();
+    if (!this.snapshotOnly) this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
     // #486 — a mirror queued by an earlier process (a daemon that restarted
     // before its retries succeeded) is replayed once this store is up.
-    if (!this.isDemoSession && fs.existsSync(this.ledgerMirrorPendingPath())) this.scheduleMirrorReplay(0, 0);
+    if (!this.snapshotOnly && !this.isDemoSession && fs.existsSync(this.ledgerMirrorPendingPath())) {
+      this.scheduleMirrorReplay(0, 0);
+    }
   }
 
   private ensureDir(): void {
@@ -406,6 +411,7 @@ export class FileStore implements IStore {
         return fallback;
       }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${errorMessage(err)}`);
+      if (this.snapshotOnly) return fallback;
       try {
         fs.copyFileSync(filePath, filePath + ".corrupt");
         if (err instanceof SyntaxError && bytes !== undefined) this.backedUpCorruption[filePath] = bytes;
@@ -3579,6 +3585,14 @@ export class FileStore implements IStore {
   static loadSession(projectRoot: string, sessionId: string) {
     const store = new FileStore(projectRoot, sessionId);
     return store.getFullState();
+  }
+
+  /** Load the replay payload from an existing session without opening a writer. */
+  static readSessionSnapshot(projectRoot: string, sessionId: string): ReturnType<FileStore["getFullState"]> | null {
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return null;
+    const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+    if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return null;
+    return new FileStore(projectRoot, sessionId, FileStore.sessionSnapshot).getFullState();
   }
 
   static searchAll = searchAll;
