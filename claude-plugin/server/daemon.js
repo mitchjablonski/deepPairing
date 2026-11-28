@@ -43763,11 +43763,12 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const store = sessions.get(sessionId);
     if (!store) {
       log2(`[internal] 404 \u2014 session not registered: sid=${sessionId} path=${c.req.path}`);
+      const message = isStandaloneSessionId(sessionId) ? `Standalone review ${sessionId} is not loaded. Use ${cliInvocation(`resume ${sessionId}`)} to reopen it.` : `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`;
       return {
         ok: false,
         response: c.json(
           {
-            error: `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`,
+            error: message,
             code: ERROR_CODES.session_not_registered
           },
           404
@@ -44046,6 +44047,28 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         },
         403
       );
+    }
+    if (isStandaloneSessionId(sessionId)) {
+      if (daemonProjectRoot) {
+        if (!isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+          return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+        }
+        const directory = path32.join(daemonProjectRoot, ".deeppairing", "sessions", sessionId);
+        if (!fs29.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory()) {
+          return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+        }
+        const state = standaloneCloseout?.state(sessionId).state;
+        if (state === "ended") {
+          return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+        }
+        if (state === "closing") {
+          return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+        }
+      }
+      return c.json({
+        error: `Standalone reviews cannot register a wrapper. Use ${cliInvocation(`resume ${sessionId}`)} to read this review.`,
+        code: ERROR_CODES.session_not_registered
+      }, 409);
     }
     const store = installSession(sessionId, body);
     activeSessions?.add(sessionId);
@@ -44328,19 +44351,19 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const params = parsed.data;
     delete params.verdictFeedback;
     const requestedId = params.id;
-    let comment;
-    try {
-      comment = r.store.addComment(params);
-    } catch (error51) {
-      if (error51 instanceof ReservedVerdictFeedbackIdError) {
-        return c.json({ error: error51.message, code: ERROR_CODES.validation_error }, 409);
+    return withSessionWrite(c, r.store, () => {
+      let comment;
+      try {
+        comment = r.store.addComment(params);
+      } catch (error51) {
+        if (error51 instanceof ReservedVerdictFeedbackIdError) {
+          return c.json({ error: error51.message, code: ERROR_CODES.validation_error }, 409);
+        }
+        throw error51;
       }
-      throw error51;
-    }
-    if (comment.id === requestedId) {
-      broadcast(sessionId, { type: "comment_added", comment });
-    }
-    return c.json({ comment });
+      if (comment.id === requestedId) broadcast(r.store.getSessionId(), { type: "comment_added", comment });
+      return c.json({ comment });
+    });
   });
   app.get("/api/internal/sessions/:sessionId/comments/unacknowledged", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44383,14 +44406,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
     const { answerCommentId } = parsed.body;
-    r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
-    if (daemonProjectRoot) {
-      try {
-        recordMetricEvent(daemonProjectRoot, { kind: "question_answered" });
-      } catch {
+    return withSessionWrite(c, r.store, () => {
+      r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
+      if (daemonProjectRoot) {
+        try {
+          recordMetricEvent(daemonProjectRoot, { kind: "question_answered" });
+        } catch {
+        }
       }
-    }
-    return c.json({ status: "marked" });
+      return c.json({ status: "marked" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/suggestion", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44398,13 +44423,15 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await parseJsonBody(c, SuggestionUpdateBodySchema);
     if (!parsed.ok) return parsed.res;
     const commentId = c.req.param("commentId");
-    const existing = r.store.getComment(commentId);
-    if (!existing?.suggestion) return c.json({ comment: null });
-    const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
-    if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
-    const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
-    if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
-    return c.json({ comment: comment ?? null });
+    return withSessionWrite(c, r.store, () => {
+      const existing = r.store.getComment(commentId);
+      if (!existing?.suggestion) return c.json({ comment: null });
+      const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
+      if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
+      const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
+      if (comment) broadcast(r.store.getSessionId(), { type: "comment_updated", comment });
+      return c.json({ comment: comment ?? null });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/requests/:requestId/served", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
