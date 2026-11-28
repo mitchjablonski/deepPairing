@@ -43763,11 +43763,12 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const store = sessions.get(sessionId);
     if (!store) {
       log2(`[internal] 404 \u2014 session not registered: sid=${sessionId} path=${c.req.path}`);
+      const message = isStandaloneSessionId(sessionId) ? `Standalone review ${sessionId} is not loaded. Use ${cliInvocation(`resume ${sessionId}`)} to reopen it.` : `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`;
       return {
         ok: false,
         response: c.json(
           {
-            error: `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`,
+            error: message,
             code: ERROR_CODES.session_not_registered
           },
           404
@@ -44047,6 +44048,28 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         403
       );
     }
+    if (isStandaloneSessionId(sessionId)) {
+      if (daemonProjectRoot) {
+        if (!isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+          return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
+        }
+        const directory = path32.join(daemonProjectRoot, ".deeppairing", "sessions", sessionId);
+        if (!fs29.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory()) {
+          return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
+        }
+        const state = standaloneCloseout?.state(sessionId).state;
+        if (state === "ended") {
+          return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+        }
+        if (state === "closing") {
+          return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+        }
+      }
+      return c.json({
+        error: `Standalone reviews cannot register a wrapper. Use ${cliInvocation(`resume ${sessionId}`)} to read this review.`,
+        code: ERROR_CODES.session_not_registered
+      }, 409);
+    }
     const store = installSession(sessionId, body);
     activeSessions?.add(sessionId);
     const registration = stanceExceptions?.register(sessionId, { split: body.splitMode === true });
@@ -44100,24 +44123,26 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, CreateArtifactBody);
     if (!parsed.ok) return parsed.res;
-    let artifact;
-    try {
-      artifact = r.store.createArtifact(parsed.data);
-    } catch (err) {
-      if (err instanceof ParentSupersededError) {
-        return c.json({
-          error: err.message,
-          code: ERROR_CODES.parent_superseded,
-          parentId: err.parentId,
-          ...err.successorId ? { successorId: err.successorId } : {},
-          ...err.successorVersion ? { successorVersion: err.successorVersion } : {},
-          successorFromFile: err.successorFromFile
-        }, 409);
+    return withSessionWrite(c, r.store, () => {
+      let artifact;
+      try {
+        artifact = r.store.createArtifact(parsed.data);
+      } catch (err) {
+        if (err instanceof ParentSupersededError) {
+          return c.json({
+            error: err.message,
+            code: ERROR_CODES.parent_superseded,
+            parentId: err.parentId,
+            ...err.successorId ? { successorId: err.successorId } : {},
+            ...err.successorVersion ? { successorVersion: err.successorVersion } : {},
+            successorFromFile: err.successorFromFile
+          }, 409);
+        }
+        throw err;
       }
-      throw err;
-    }
-    broadcast(sessionId, { type: "artifact_created", artifact });
-    return c.json({ artifact });
+      broadcast(r.store.getSessionId(), { type: "artifact_created", artifact });
+      return c.json({ artifact });
+    });
   });
   app.get("/api/internal/sessions/:sessionId/artifacts", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44202,13 +44227,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await parseJsonBody(c, RetirementBody);
     if (!parsed.ok) return parsed.res;
     if (parsed.data.artifactId !== c.req.param("artifactId")) return c.json({ error: "artifactId mismatch", code: ERROR_CODES.validation_error }, 400);
-    const result = r.store.retireArtifact(parsed.data);
-    if (result.kind === "committed" || result.kind === "already_retired" && result.repaired) {
-      broadcast(sessionId, { type: "artifact_content_updated", artifact: result.artifact });
-      broadcast(sessionId, { type: "artifact_updated", artifactId: result.artifact.id, status: result.artifact.status });
-      if (result.marker && result.markerAdded) broadcast(sessionId, { type: "comment_added", comment: result.marker });
-    }
-    return c.json(result);
+    return withSessionWrite(c, r.store, () => {
+      const result = r.store.retireArtifact(parsed.data);
+      if (result.kind === "committed" || result.kind === "already_retired" && result.repaired) {
+        const owner = r.store.getSessionId();
+        broadcast(owner, { type: "artifact_content_updated", artifact: result.artifact });
+        broadcast(owner, { type: "artifact_updated", artifactId: result.artifact.id, status: result.artifact.status });
+        if (result.marker && result.markerAdded) broadcast(owner, { type: "comment_added", comment: result.marker });
+      }
+      return c.json(result);
+    });
   });
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
     const sessionId = c.req.param("sessionId");
@@ -44221,14 +44249,17 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (reason === "agent_retract" || reason === "agent_obsolete" || reason === "agent_withdraw") {
       return c.json({ error: "Use the guarded retirement operation", code: ERROR_CODES.validation_error }, 400);
     }
-    const target = r.store.getArtifacts().find((a) => a.id === artifactId);
-    log2(
-      `[status:internal] sid=${sessionId} artifactId=${artifactId} targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason ?? "unspecified"}`
-    );
-    r.store.updateArtifactStatus(artifactId, status, reason);
-    r.store.forceFlush();
-    broadcast(sessionId, { type: "artifact_updated", artifactId, status, reason: reason ?? "unspecified" });
-    return c.json({ status: "updated" });
+    return withSessionWrite(c, r.store, () => {
+      const owner = r.store.getSessionId();
+      const target = r.store.getArtifacts().find((a) => a.id === artifactId);
+      log2(
+        `[status:internal] sid=${owner} artifactId=${artifactId} targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason ?? "unspecified"}`
+      );
+      r.store.updateArtifactStatus(artifactId, status, reason);
+      r.store.forceFlush();
+      broadcast(owner, { type: "artifact_updated", artifactId, status, reason: reason ?? "unspecified" });
+      return c.json({ status: "updated" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/plan-progress", async (c) => {
     const sessionId = c.req.param("sessionId");
@@ -44243,14 +44274,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const clean = updates.filter(
       (u) => Number.isInteger(u?.stepIndex) && u.stepIndex >= 0 && VALID.has(u?.status)
     );
-    const artifact = r.store.updatePlanProgress(
-      artifactId,
-      clean,
-      Array.isArray(skeletonVisuals) ? { skeletonVisuals, ...typeof skeletonReadAt === "number" && Number.isFinite(skeletonReadAt) ? { skeletonReadAt } : {} } : void 0
-    );
-    if (!artifact) return c.json({ artifact: null });
-    broadcast(sessionId, { type: "plan_progress_updated", artifact });
-    return c.json({ artifact });
+    return withSessionWrite(c, r.store, () => {
+      const artifact = r.store.updatePlanProgress(
+        artifactId,
+        clean,
+        Array.isArray(skeletonVisuals) ? { skeletonVisuals, ...typeof skeletonReadAt === "number" && Number.isFinite(skeletonReadAt) ? { skeletonReadAt } : {} } : void 0
+      );
+      if (!artifact) return c.json({ artifact: null });
+      broadcast(r.store.getSessionId(), { type: "plan_progress_updated", artifact });
+      return c.json({ artifact });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/rename", async (c) => {
     const sessionId = c.req.param("sessionId");
@@ -44259,9 +44292,12 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
     const { title } = parsed.body;
-    r.store.renameArtifact(c.req.param("artifactId"), title);
-    broadcast(sessionId, { type: "artifact_renamed", artifactId: c.req.param("artifactId"), title });
-    return c.json({ status: "renamed" });
+    const artifactId = c.req.param("artifactId");
+    return withSessionWrite(c, r.store, () => {
+      r.store.renameArtifact(artifactId, title);
+      broadcast(r.store.getSessionId(), { type: "artifact_renamed", artifactId, title });
+      return c.json({ status: "renamed" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/retract-reason", async (c) => {
     const sessionId = c.req.param("sessionId");
@@ -44273,10 +44309,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (typeof reason !== "string" || reason.length === 0) {
       return c.json({ error: "reason is required", code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.setRetractReason?.(c.req.param("artifactId"), reason);
-    const art = r.store.getArtifacts().find((a) => a.id === c.req.param("artifactId"));
-    if (art) broadcast(sessionId, { type: "artifact_content_updated", artifact: art });
-    return c.json({ status: "stamped" });
+    const artifactId = c.req.param("artifactId");
+    return withSessionWrite(c, r.store, () => {
+      r.store.setRetractReason?.(artifactId, reason);
+      const art = r.store.getArtifacts().find((a) => a.id === artifactId);
+      if (art) broadcast(r.store.getSessionId(), { type: "artifact_content_updated", artifact: art });
+      return c.json({ status: "stamped" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/posted-reviews", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44328,19 +44367,19 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const params = parsed.data;
     delete params.verdictFeedback;
     const requestedId = params.id;
-    let comment;
-    try {
-      comment = r.store.addComment(params);
-    } catch (error51) {
-      if (error51 instanceof ReservedVerdictFeedbackIdError) {
-        return c.json({ error: error51.message, code: ERROR_CODES.validation_error }, 409);
+    return withSessionWrite(c, r.store, () => {
+      let comment;
+      try {
+        comment = r.store.addComment(params);
+      } catch (error51) {
+        if (error51 instanceof ReservedVerdictFeedbackIdError) {
+          return c.json({ error: error51.message, code: ERROR_CODES.validation_error }, 409);
+        }
+        throw error51;
       }
-      throw error51;
-    }
-    if (comment.id === requestedId) {
-      broadcast(sessionId, { type: "comment_added", comment });
-    }
-    return c.json({ comment });
+      if (comment.id === requestedId) broadcast(r.store.getSessionId(), { type: "comment_added", comment });
+      return c.json({ comment });
+    });
   });
   app.get("/api/internal/sessions/:sessionId/comments/unacknowledged", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44383,14 +44422,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
     const { answerCommentId } = parsed.body;
-    r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
-    if (daemonProjectRoot) {
-      try {
-        recordMetricEvent(daemonProjectRoot, { kind: "question_answered" });
-      } catch {
+    return withSessionWrite(c, r.store, () => {
+      r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
+      if (daemonProjectRoot) {
+        try {
+          recordMetricEvent(daemonProjectRoot, { kind: "question_answered" });
+        } catch {
+        }
       }
-    }
-    return c.json({ status: "marked" });
+      return c.json({ status: "marked" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/suggestion", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44398,13 +44439,15 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await parseJsonBody(c, SuggestionUpdateBodySchema);
     if (!parsed.ok) return parsed.res;
     const commentId = c.req.param("commentId");
-    const existing = r.store.getComment(commentId);
-    if (!existing?.suggestion) return c.json({ comment: null });
-    const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
-    if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
-    const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
-    if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
-    return c.json({ comment: comment ?? null });
+    return withSessionWrite(c, r.store, () => {
+      const existing = r.store.getComment(commentId);
+      if (!existing?.suggestion) return c.json({ comment: null });
+      const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
+      if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
+      const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
+      if (comment) broadcast(r.store.getSessionId(), { type: "comment_updated", comment });
+      return c.json({ comment: comment ?? null });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/requests/:requestId/served", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
