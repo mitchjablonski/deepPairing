@@ -27,7 +27,7 @@ let live: boolean;
 let fakeWatchers: Array<{ dir: string; fire: (name: string | null) => void; closed: boolean }>;
 let watcher: PageWatcher;
 
-function makeWatcher(opts: Partial<Pick<PageWatchDeps, "pollIntervalMs" | "gate" | "statSig" | "getStore" | "sleep">> = {}): PageWatcher {
+function makeWatcher(opts: Partial<Pick<PageWatchDeps, "pollIntervalMs" | "gate" | "statSig" | "getStore" | "sleep" | "beforeGraceRead">> = {}): PageWatcher {
   return new PageWatcher({
     projectRoot: root,
     getStore: opts.getStore ?? ((sid) => (sid === SID ? store : undefined)),
@@ -43,6 +43,7 @@ function makeWatcher(opts: Partial<Pick<PageWatchDeps, "pollIntervalMs" | "gate"
     ...(opts.gate ? { gate: opts.gate } : {}),
     ...(opts.statSig ? { statSig: opts.statSig } : {}),
     ...(opts.sleep ? { sleep: opts.sleep } : {}),
+    ...(opts.beforeGraceRead ? { beforeGraceRead: opts.beforeGraceRead } : {}),
   });
 }
 
@@ -787,6 +788,63 @@ describe("page file watch — a save landing during the gate check (Codex review
     fs.unlinkSync(file);
     await expect(watcher.drainQueuedSaves(SID)).rejects.toMatchObject({ code: "session_save_pending" });
     expect(pages()).toHaveLength(1);
+  });
+
+  it("End rejects a second distinct in-window signature as ambiguous (#737 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => {
+        fs.writeFileSync(file, "<p>Recreated</p>");
+        sig.bump();
+        fakeWatchers[0]!.fire("page.html"); // the first reappearance: the candidate
+        fs.writeFileSync(file, "<p>A second edit</p>");
+        sig.bump();
+        fakeWatchers[0]!.fire("page.html"); // distinct, still inside the window
+      },
+    });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await expect(watcher.drainQueuedSaves(SID)).rejects.toMatchObject({ code: "session_save_pending" });
+    expect(pages()).toHaveLength(1);
+    await watcher.drainQueuedSaves(SID);
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>A second edit</p>" } });
+  });
+
+  it("End rejects a file replaced between the grace adoption and the read (#737 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    let replaced = false;
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => { fs.writeFileSync(file, "<p>Recreated</p>"); sig.bump(); },
+      beforeGraceRead: () => {
+        if (replaced) return;
+        replaced = true;
+        fs.writeFileSync(file, "<p>Replaced externally</p>"); // eventless
+        sig.bump();
+      },
+    });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await expect(watcher.drainQueuedSaves(SID)).rejects.toMatchObject({ code: "session_save_pending" });
+    expect(replaced).toBe(true);
+    expect(pages()).toHaveLength(1);
+    expect(liveTip()!.fileWatch).toBeUndefined();
+
+    await watcher.drainQueuedSaves(SID);
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Replaced externally</p>" } });
   });
 
   it("End rejects a second watcher-observed edit after the accepted recreate (#736 audit)", async () => {

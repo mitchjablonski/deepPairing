@@ -99,13 +99,16 @@ export interface PageWatchDeps {
   sleep?: (ms: number) => Promise<void>;
   /** The clock End's missing-file grace is measured on. Default Date.now. */
   now?: () => number;
+  /** Test hook: runs on the End-grace path between the pre-read signature
+   *  check and the read itself (to replace the file at that instant). */
+  beforeGraceRead?: (absPath: string) => void;
 }
 
 /** End's missing-file grace for one entry, opened at the cut. */
 interface Grace {
   /** Cut time + missingRecheckMs. A change seen later is not the cut's save. */
   deadline: number;
-  /** The last present signature observed inside the window, if any. */
+  /** The first present signature observed inside the window, if any. */
   sig?: string;
   /** The generation that in-window state stands for. */
   gen?: number;
@@ -283,12 +286,15 @@ export class PageWatcher {
    * held read. An observation counts only if `now() <= deadline` at the
    * moment it is made, whether it comes from the sampler, a watcher event, a
    * poll tick or the drain's own stat; a timer that fires late is discarded,
-   * never credited. The last present signature seen inside the window is that
-   * save completing (an editor may write it in steps). When the drain gets to
-   * decide, it re-stats: if the file still has that signature, it becomes
-   * this drain's generation and is recorded before End commits. Otherwise End
-   * fails with session_save_pending (retry End): a re-delete after a
-   * reappearance, any change seen after the window, a current signature that
+   * never credited. The first present signature seen inside the window is the
+   * candidate for that save completing. When the drain gets to decide, it
+   * re-stats: if the file still has that signature, it becomes this drain's
+   * generation and is recorded before End commits, and the read itself is
+   * bracketed by signature checks against it (a file replaced between the
+   * adoption and the read is pending, not recorded). Otherwise End fails with
+   * session_save_pending (retry End): a second, distinct signature inside the
+   * window (ambiguous: the editor finishing, or another save), a re-delete
+   * after a reappearance, any change seen after the window, a current signature that
    * differs from the in-window one, or a file whose first reappearance is seen
    * only after the window. If the window ends with the file still missing, it
    * is a genuine delete: nothing is recorded and End proceeds. The drain
@@ -307,6 +313,7 @@ export class PageWatcher {
     for (const entry of entries) this.checkSignature(entry);
     const drains = entries.filter((entry) => entry.dirty || entry.processing || entry.draining).map((entry) => {
       let generation = entry.gen;
+      let adopted: string | undefined;
       const signature = entry.lastSig;
       const vanished = signature === MISSING && (entry.dirty || entry.processing !== null);
       const grace = vanished && !entry.draining ? this.openGrace(entry) : null;
@@ -341,6 +348,7 @@ export class PageWatcher {
               if (grace.spoiled || grace.sig !== undefined || current !== MISSING) throw pending();
             } else {
               generation = grace.gen;
+              adopted = grace.sig;
             }
           }
           // Another eventless save may have landed during the wait. Mark
@@ -349,7 +357,7 @@ export class PageWatcher {
           const queued = entry.dirty;
           entry.dirty = false;
           checkGeneration();
-          if (queued) await this.processAdmitted(entry);
+          if (queued) await this.processAdmitted(entry, adopted);
           checkGeneration();
         } catch (error) {
           entry.dirty = true;
@@ -507,10 +515,15 @@ export class PageWatcher {
       // Still gone before any reappearance is harmless; gone again after one is not.
       if (grace.sig === undefined) grace.gen = gen;
       else grace.spoiled = true;
-    } else {
-      // The editor may write the file in steps: the last in-window one wins.
+    } else if (grace.sig === undefined || grace.sig === signature) {
+      // The first reappearance is the candidate (repeat events of it are
+      // the same save).
       grace.sig = signature;
       grace.gen = gen;
+    } else {
+      // A second, distinct signature: the editor finishing, or another save?
+      // Ambiguous, so End reports pending and is retried once it settles.
+      grace.spoiled = true;
     }
   }
 
@@ -553,7 +566,10 @@ export class PageWatcher {
     }
   }
 
-  private async processAdmitted(entry: Entry): Promise<void> {
+  /** `expectSig`: the signature End's missing-file grace adopted. The read is
+   *  then bracketed by checks against it, so a file replaced after the
+   *  adoption is never read as the adopted save. */
+  private async processAdmitted(entry: Entry, expectSig?: string): Promise<void> {
     const store = this.deps.getStore(entry.sessionId);
     if (!store) return;
     // Codex review — the snapshot this read is about. A save that lands while
@@ -574,9 +590,19 @@ export class PageWatcher {
     }
     // Missing (deleted, or mid atomic save): nothing to read yet. lstat, so a
     // dangling symlink counts as present and gets the reader's refusal.
+    const verifyAdopted = () => {
+      if (expectSig === undefined || this.sig(entry.absPath) === expectSig) return;
+      entry.dirty = true;
+      throw new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
+        "A watched file changed again while the standalone review was closing. Let it settle, then retry End review.");
+    };
+    verifyAdopted();
     try { fs.lstatSync(entry.absPath); } catch { return; }
 
+    if (expectSig !== undefined) this.deps.beforeGraceRead?.(entry.absPath);
     const source = readPageSource(this.rootReal, entry.sourcePath);
+    // Before any refusal or record: the bytes read must be the adopted file.
+    verifyAdopted();
     if (!source.ok) {
       const message = readerReason(source.error.content[0]?.text ?? "the file could not be read");
       this.refuse(store, entry, cur, { cause: "unreadable", message, digest: sha256(`unreadable:${message}`) });
