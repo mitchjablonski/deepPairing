@@ -170,7 +170,7 @@ export class StandaloneCloseout {
     private readonly projectRoot: string,
     private readonly getStore: (sessionId: string) => FileStore | undefined,
     private readonly timeoutMs = 5_000,
-    private readonly onEnded?: (sessionId: string) => void,
+    private readonly onEnded?: (sessionId: string, endedAt: string) => void,
     private readonly drainWatchedSaves?: (sessionId: string) => Promise<void>,
     /** #711 gate 1 — told about each owed approval End's reconcile recorded,
      *  so it is announced (and counted) exactly once, like a resolve's. */
@@ -291,7 +291,7 @@ export class StandaloneCloseout {
         writeJsonAtomic(path.join(dir, "review-ended.json"), committed, 2, { mode: 0o600 });
         return committed;
       });
-      this.onEnded?.(sessionId);
+      this.onEnded?.(sessionId, committed.endedAt);
       return committed;
     }).finally(() => {
       entry.close = undefined;

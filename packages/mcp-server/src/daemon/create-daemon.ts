@@ -75,6 +75,7 @@ import { isSessionReviewConflictError } from "../store/session-records.js";
 import { probeDaemonIdentity } from "./lifecycle.js";
 import { PageWatcher, type PageWatchDeps } from "./page-watch.js";
 import { StandaloneCloseout } from "./standalone-closeout.js";
+import { reviewEndedOnConnect } from "./socket-review-state.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 
 /**
@@ -265,8 +266,15 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // is why the daemon used to leak a process per project forever.
   const activeSessions = new Set<string>();
   const standaloneCloseout: StandaloneCloseout = new StandaloneCloseout(projectRoot, (sessionId) => sessions.get(sessionId),
-    undefined, (sessionId) => {
+    undefined, (sessionId, endedAt) => {
       // The marker is already durable. Each notification is best-effort.
+      // #711 gate 4 — tabs open on this review learn End from this push, not
+      // by polling; a tab that connects later reads the marker on connect.
+      try {
+        broadcast(sessionId, { type: "review_ended", sessionId, endedAt, code: ERROR_CODES.session_ended });
+      } catch (error) {
+        log(`[end-review] Failed to notify companion tabs: ${errorMessage(error)}`);
+      }
       try {
         sessions.get(sessionId)?.notifyStandaloneReviewEnded();
       } catch (error) {
@@ -705,10 +713,19 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // A parity test pins this set to the server/web pending classifiers.
   // #680 — a draft `page` awaits a verdict too.
   const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "page"]);
+  // #711 — a review whose End marker is durable owes nothing, even while its
+  // warm store stays installed. state() throws on a damaged marker, which the
+  // callers' per-store catch turns into a skip (fail closed, like the catalog).
+  function endedStandalone(store: FileStore): boolean {
+    const sessionId = store.getSessionId();
+    return isStandaloneSessionForProject(sessionId, projectRoot) && standaloneCloseout.state(sessionId).state === "ended";
+  }
+
   function computeDaemonPendingCount(): number {
     let n = 0;
     for (const store of sessions.values()) {
       try {
+        if (endedStandalone(store)) continue;
         // PP4 — getArtifacts() is the in-memory array; getFullState() additionally
         // re-read preferences.json from disk per session (via getSessionMemory) +
         // ran getEngagementMetrics — all unused here, and this runs per
@@ -732,6 +749,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     let n = 0;
     for (const store of sessions.values()) {
       try {
+        if (endedStandalone(store)) continue;
         // PP4 — getComments() is the in-memory array; getFullState() would
         // additionally re-read preferences.json from disk per session on every
         // /api/daemon-info poll (the sibling pendingCount path dodges this too).
@@ -982,7 +1000,8 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // a testable builder (see daemon-routes.ts). Without the gate, a stale tab on a
   // daemon serving a DIFFERENT project could read this project's session list +
   // full state. Mounted on "/" like the other route groups.
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log, { epoch: revisionEpoch, counts: sessionRevisions }));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log, { epoch: revisionEpoch, counts: sessionRevisions },
+    (sessionId) => isStandaloneSessionForProject(sessionId, projectRoot) ? standaloneCloseout.state(sessionId) : undefined));
 
   // --- Serve static web UI ---
   // Extracted to http/static-ui.ts so the bootstrap-injection contract (the
@@ -1130,7 +1149,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   // WebSocket server (noServer: true — it rides index.ts's accept socket via
   // attachUpgradeHandler; it owns no LISTEN socket of its own, see I5).
-  const wss = new WebSocketServer({ noServer: true });
+  // The socket is send-only (every browser write is an HTTP route behind End
+  // admission), so no inbound frame is legitimately large: cap them.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
   // GG2 — auth the WebSocket upgrade. Pre-GG2 the upgrade handler did
   // ZERO checks: no Origin, no X-Project-Hash, accepted any sessionId
@@ -1227,6 +1248,11 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       // Send session state on connect. U4 — include `daemonStartedAt` so
       // the client can detect a daemon-restart on reconnect (a different
       // daemon process means stale in-memory state, force re-hydrate).
+      // #711 gate 4 — read the End marker once, synchronously with the
+      // subscription above: a tab connecting after End (or on a damaged End
+      // marker) learns it on connect; a tab connected while closing hears the
+      // review_ended broadcast instead. Marker read only — no writable store.
+      const ended = reviewEndedOnConnect(standaloneCloseout, projectRoot, sessionId);
       const store = sessions.get(sessionId);
       if (store) {
         try {
@@ -1265,6 +1291,21 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
             try { ws.terminate(); } catch {}
           }
           return;
+        }
+      } else if (ended) {
+        // An ended review this daemon has not loaded still hydrates, from the
+        // read-only snapshot reader (never a writable store), so the tab shows
+        // what was reviewed alongside End.
+        try {
+          const state = FileStore.readSessionSnapshot(projectRoot, sessionId);
+          if (state) ws.send(JSON.stringify({ type: "connected", state, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
+        } catch (error) {
+          log(`[ws] ended review snapshot unavailable (session=${sessionId}): ${errorMessage(error)}`);
+        }
+      }
+      if (ended) {
+        try { ws.send(JSON.stringify(ended)); } catch (error) {
+          log(`[ws] review_ended send failed (session=${sessionId}): ${errorMessage(error)}`);
         }
       }
 

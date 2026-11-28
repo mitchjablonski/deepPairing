@@ -88,6 +88,15 @@ interface ConnectionState {
   staleDaemon: boolean;
   snapshotUnavailable: boolean;
   sessionConflict: boolean;
+  /**
+   * #711 gate 4 — this tab's standalone review has ended (or its End marker
+   * cannot be verified, `code: "session_marker_invalid"`). Set from the
+   * daemon's `review_ended` frame — pushed when End completes, or sent on
+   * connect after End — and cleared on the next connect, which re-sends it
+   * while it still holds. Writes are refused server-side either way; this
+   * only lets the UI say so up front.
+   */
+  reviewEnded: { endedAt?: string; code: "session_ended" | "session_marker_invalid" } | null;
   /** D8 (H4) — epoch ms of the FIRST disconnect of the current outage; null while connected. */
   disconnectedSince: number | null;
   sessionId: string | null;
@@ -397,6 +406,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       recoveryMutationTypes.has(data.type)
     ) {
       pendingRecovery.messages.push(data);
+      return;
+    }
+    // #711 gate 4 — End is session state, not an artifact mutation: apply it
+    // synchronously, and only for the session this tab is bound to.
+    if (data.type === "review_ended") {
+      if (typeof data.sessionId === "string" && data.sessionId === get().sessionId) {
+        set({
+          reviewEnded: {
+            ...(typeof data.endedAt === "string" ? { endedAt: data.endedAt } : {}),
+            code: data.code === "session_marker_invalid" ? "session_marker_invalid" : "session_ended",
+          },
+        });
+      }
       return;
     }
     // Import artifact store lazily to avoid circular deps
@@ -1146,6 +1168,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     staleDaemon: false,
     snapshotUnavailable: false,
     sessionConflict: false,
+    reviewEnded: null,
     sessionId: null,
     projectRoot: null,
     agentActivityAt: null,
@@ -1195,7 +1218,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         // the bounded probe may decline to reload and must not strand it.
         reloadIfChunkFailedOffline();
         thisConnection = ++connectionGeneration;
-        set({ connected: true, disconnectedSince: null, staleDaemon: false, snapshotUnavailable: false, sessionConflict: false });
+        set({ connected: true, disconnectedSince: null, staleDaemon: false, snapshotUnavailable: false, sessionConflict: false, reviewEnded: null });
         // Request notification permission on first connect
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
           Notification.requestPermission();
@@ -1332,7 +1355,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         // preserveStateUntilConnected path deliberately retains the actual
         // frame; its existing binding still identifies that retained evidence.
         set({
-          sessionId, agentActivityAt: null, agentActiveSince: null,
+          sessionId, agentActivityAt: null, agentActiveSince: null, reviewEnded: null,
           ...(!options?.preserveStateUntilConnected ? { hydrated: false, hydratedBinding: null } : {}),
         });
         void import("./artifact").then(({ useArtifactStore }) => {
