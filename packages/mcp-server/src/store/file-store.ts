@@ -1909,16 +1909,17 @@ export class FileStore implements IStore {
   /**
    * #569 pilot task A (#553/#572) — this session's worker-subagent gate stops
    * not yet delivered to the lead. Reads the project block log (written by
-   * the daemon's hooks-state watcher) plus this session's delivered-ids file;
-   * never touches either on read. Demo sessions have no real workers: [].
+   * the daemon's hooks-state watcher) plus this session's delivered-ids file.
+   * Historical reads leave both files untouched. Demo sessions have no real workers.
    */
-  getUndeliveredWorkerStops(): WorkerStopBatch {
+  getUndeliveredWorkerStops({ readOnly = false } = {}): WorkerStopBatch {
     if (this.isDemoSession) return { stops: [] };
-    const entries = readPreflightBlocks(this.projectRoot);
+    const entries = readPreflightBlocks(this.projectRoot, { readOnly });
     // A corrupt delivered-ids file is backed up and rebuilt as "seen = every
     // stop of this session in the log now" (no burst of old re-deliveries).
     const seen = loadDeliveredWorkerStops(this.sessionDir(), () =>
       workerStopsFor(entries, this.sessionId, []).map((s) => s.id),
+      { readOnly },
     );
     const stops = workerStopsFor(entries, this.sessionId, seen.ids);
     return seen.notice ? { stops, notice: seen.notice } : { stops };

@@ -203,6 +203,15 @@ export class DaemonClient implements IStore {
     return this.sessionId;
   }
 
+  async getStandaloneReviewState(): Promise<"open" | "closing" | "ended" | undefined> {
+    if (!isStandaloneSessionId(this.sessionId)) return;
+    const result = await this.request<{ state?: unknown } | undefined>("/review-state", { method: "GET" });
+    if (result === undefined) return;
+    const state = result?.state;
+    if (state === "open" || state === "closing" || state === "ended") return state;
+    throw new Error("[deepPairing] daemon returned an invalid review state");
+  }
+
   /**
    * Z1 — common request path with auto-recover on session_not_registered.
    *
@@ -256,6 +265,12 @@ export class DaemonClient implements IStore {
       );
     }
     if (res.ok) return res.json();
+
+    // Older daemons use Hono's plain-text default for an unknown route.
+    if (path === "/review-state" && res.status === 404 &&
+      res.headers.get("Content-Type")?.startsWith("text/plain") && await res.clone().text() === "404 Not Found") {
+      return undefined as T;
+    }
 
     // Try to parse the structured error body the daemon now returns.
     let body: any = {};

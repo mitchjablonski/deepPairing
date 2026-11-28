@@ -79,4 +79,23 @@ describe("DaemonClient standalone recovery", () => {
     });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+
+  it("queries standalone lifecycle and only treats the legacy missing-route response as unsupported", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(json({ state: "ended" }))
+      .mockResolvedValueOnce(new Response("404 Not Found", { status: 404 }))
+      .mockResolvedValueOnce(json({ code: "session_not_registered", error: "Missing review" }, 404));
+    vi.stubGlobal("fetch", fetch);
+    const id = createStandaloneSessionId(root);
+    const standalone = new DaemonClient(4881, id, root, "token");
+    const wrapper = new DaemonClient(4881, "wrapper", root, "token");
+
+    await expect(wrapper.getStandaloneReviewState()).resolves.toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(standalone.getStandaloneReviewState()).resolves.toBe("ended");
+    await expect(standalone.getStandaloneReviewState()).resolves.toBeUndefined();
+    await expect(standalone.getStandaloneReviewState()).rejects.toMatchObject({ status: 404, code: "session_not_registered" });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledWith(`${oldOrigin}/api/internal/sessions/${id}/review-state`, expect.objectContaining({ method: "GET" }));
+  });
 });

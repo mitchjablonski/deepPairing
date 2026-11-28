@@ -31234,6 +31234,7 @@ ${assembled.join("\n")}`;
 
 // src/mcp/tool-helpers.ts
 import { createHash as createHash3 } from "node:crypto";
+import { debuglog } from "node:util";
 
 // src/store/comment-resolution.ts
 function commentResolutionSnapshot(comment) {
@@ -31277,6 +31278,476 @@ function effectiveHumanResolution(comments, artifacts) {
     if (comment.answeredByCommentId && !seen.has(comment.answeredByCommentId) && rootAt >= resolvedAt) return void 0;
     return stamp;
   };
+}
+
+// src/mcp/tools/feedback-ownership.ts
+import { performance as performance2 } from "node:perf_hooks";
+
+// src/error-codes.ts
+var ERROR_CODES = {
+  /** /api/internal/* received a missing or invalid Authorization header. */
+  daemon_auth_required: "daemon_auth_required",
+  /** Wrapper called an internal route for a session the daemon doesn't know about. */
+  session_not_registered: "session_not_registered",
+  /** Wrapper registered with expectedProjectRoot != daemon's projectRoot. */
+  project_mismatch: "project_mismatch",
+  /** X-Project-Hash header missing or mismatched on a public route. */
+  project_hash_mismatch: "project_hash_mismatch",
+  /** /api/evict received the wrong X-DeepPairing-Confirm-Pid. */
+  evict_pid_mismatch: "evict_pid_mismatch",
+  /** III6 — request body exceeded the 64 KiB cap. */
+  body_too_large: "body_too_large",
+  /** Browser sent X-Session-Id but the daemon has no active session. */
+  no_active_session: "no_active_session",
+  /** Zod (or hand-rolled) validation failed on a request body. */
+  validation_error: "validation_error",
+  /** Q2 — POST /api/preferences carried `globalLedgerPublish` but the bound
+   *  store has no project preferences file to write it to (a read-only replay
+   *  store; setGlobalLedgerPublish is optional on IStore). Refuse loudly rather
+   *  than 200 on a write that didn't land — the same posture as F6's
+   *  artifact_not_in_session: a preference this one governs whether the human's
+   *  stances leave the project, so a silent no-op would be a privacy lie. */
+  publish_toggle_unsupported: "publish_toggle_unsupported",
+  /** C-4 — request arrived with a non-loopback Host header (DNS-rebinding guard). */
+  forbidden_host: "forbidden_host",
+  /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
+  artifact_not_in_session: "artifact_not_in_session",
+  /** O3 (#231) — a stale tab tried to REVERSE an already-final human verdict
+   *  (approved↔rejected↔revised). The route refuses with 409 + the current
+   *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
+  verdict_already_final: "verdict_already_final",
+  /** #521 — a confidence AUTO-approval reached the daemon after the autonomy level
+   *  (or the artifact) no longer permitted it. 409, no state change. */
+  auto_approve_not_permitted: "auto_approve_not_permitted",
+  /** #680 slice 3 — a supersede-create lost the race: its parent was already
+   *  replaced (the page file watch or another revise recorded a version). 409,
+   *  nothing created; the body names the successor. */
+  parent_superseded: "parent_superseded",
+  /** A review verdict raced a change to the artifact content being reviewed. */
+  session_review_conflict: "session_review_conflict",
+  session_closing: "session_closing",
+  session_ended: "session_ended",
+  session_marker_invalid: "session_marker_invalid",
+  session_save_pending: "session_save_pending",
+  /** F6 — decision resolve for a decision the bound session doesn't know. */
+  decision_not_in_session: "decision_not_in_session",
+  /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
+   *  This slice writes only into the current project's store (a cross-project
+   *  write would mean two daemons owning the same files); the read model still
+   *  SHOWS the decision, so the refusal is explicit rather than a silent no-op. */
+  cross_project_close_out_unsupported: "cross_project_close_out_unsupported",
+  /** Context bank — close-out on a decision the human actually ANSWERED. Closing
+   *  it out would overwrite real history with "retired, nobody chose". */
+  decision_already_resolved: "decision_already_resolved",
+  /** #492 — a resolve on a decision whose backing artifact is closed
+   *  (superseded / retracted / obsolete): nothing is written. */
+  decision_closed: "decision_closed",
+  /** #549 — "Never suggest this" on a decision with no recorded pick: the
+   *  control is for an UNCHOSEN option, and nothing is unchosen yet. */
+  decision_not_resolved: "decision_not_resolved",
+  /** F6 — mark-resolved for a comment the bound session doesn't own. */
+  comment_not_in_session: "comment_not_in_session",
+  /** #725 — mark-resolved on a plain comment that answers one of a page's
+   *  asks (resolving it would reopen the ask). */
+  comment_answers_page_ask: "comment_answers_page_ask",
+  /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
+  suggestion_not_countered: "suggestion_not_countered",
+  /** #172 — agent tried to counter a suggestion the human INSISTED on (their
+   *  version is authoritative — apply verbatim, don't re-argue). */
+  suggestion_insisted_authoritative: "suggestion_insisted_authoritative",
+  /** #172 — a transition on a suggestion already shipped in a version (counter
+   *  after apply, or a second apply stamping a different version). */
+  suggestion_already_applied: "suggestion_already_applied",
+  /** #172 — answer_question hit a pending/insisted suggestion without a valid
+   *  suggestionState (the MUST-respond contract). */
+  suggestion_response_required: "suggestion_response_required",
+  /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
+  stance_not_found: "stance_not_found",
+  /** A path-scoped browser write named a standalone review with no session
+   *  directory (#711): answered 404 before End admission, nothing created. */
+  session_not_found: "session_not_found",
+  /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
+   *  (H1-5 write-refusal surfaced as a structured route error). */
+  ledger_frozen: "ledger_frozen",
+  /** #171 — a changeset-review write targeted an artifact that isn't a
+   *  changeset, or a file path that isn't part of it. */
+  not_a_changeset_file: "not_a_changeset_file",
+  /** #171 — the store can't persist changeset review state (a read-only /
+   *  non-FileStore implementation lacks setChangesetFileReview). */
+  unsupported: "unsupported",
+  /** Durable review-post state needs inspection; do not retry an external POST. */
+  review_post_conflict: "review_post_conflict",
+  /** A standalone review request ID is already bound to different input. */
+  standalone_operation_conflict: "standalone_operation_conflict",
+  /** The standalone proposal matched a previously rejected approach. */
+  rejected_approach_blocked: "rejected_approach_blocked",
+  /** #680 slice 4 — "Rule this out" on a page spot: the anchored text can't
+   *  become a stance the gate would enforce sensibly (`reason`: no_text,
+   *  too_short, too_generic, or not_on_page — not within one block of it). */
+  rule_out_not_gateable: "rule_out_not_gateable",
+  /** #680 slice 4 — "Rule this out" on a page version that is no longer under
+   *  review (superseded, retracted, rejected or dismissed). */
+  rule_out_page_closed: "rule_out_page_closed",
+  /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
+   *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
+   *  unverifiable) owner. Nothing was committed; retry, or inspect with
+   *  `deeppairing doctor` (dead-owner locks are recovered automatically). */
+  lock_busy: "lock_busy",
+  /** #470 — stance exceptions ("Allow this proposal once"). No block with that
+   *  id is held by this daemon (unknown, or from an earlier daemon instance). */
+  stance_exception_block_not_found: "stance_exception_block_not_found",
+  /** #470 — the block can't be allowed: a team rule, a demo session, a retired
+   *  stance, an ended session, or no eligible snapshot. */
+  stance_exception_not_eligible: "stance_exception_not_eligible",
+  /** #470 — a grant needs a typed reason of 3–280 characters. */
+  stance_exception_reason_required: "stance_exception_reason_required",
+  /** #470 — a grant must come from the human-facing route, never from a
+   *  registered agent wrapper. */
+  stance_exception_interactive_required: "stance_exception_interactive_required",
+  /** #470 — the claim did not admit this call (used, revoked, ended, expired,
+   *  wrong registration, or a stance retired since). */
+  stance_exception_claim_refused: "stance_exception_claim_refused",
+  /** #470 — something the allowed proposal depended on changed after the grant. */
+  stance_exception_dependencies_changed: "stance_exception_dependencies_changed",
+  /** #470 — an operation stamp's follow-up targets disagree with the lineage
+   *  recorded on the child; a replay refuses rather than act on them. */
+  stance_exception_operation_inconsistent: "stance_exception_operation_inconsistent"
+};
+var USER_FACING_ERROR_CODES = [
+  ERROR_CODES.daemon_auth_required,
+  ERROR_CODES.project_hash_mismatch,
+  ERROR_CODES.session_not_registered,
+  ERROR_CODES.session_review_conflict,
+  ERROR_CODES.review_post_conflict,
+  ERROR_CODES.lock_busy
+];
+var TOOL_ERROR_CODES = {
+  /** Zod validation failed on tool input — agent should fix the shape and retry. */
+  INPUT_VALIDATION_FAILED: "INPUT_VALIDATION_FAILED",
+  /** #183 — the agent replayed a validation-error EXAMPLE payload verbatim as
+   *  real content (the "Which cache layer?" field bug: a confused agent echoed
+   *  the minimal example embedded in an INPUT_VALIDATION_FAILED message back as
+   *  a real present_options call, twice, minting junk draft decisions). This is
+   *  NOT a schema failure — the shape is valid; the CONTENT is the teaching
+   *  sample. Agent should replace every value with real content and retry. */
+  EXAMPLE_ECHO_REJECTED: "EXAMPLE_ECHO_REJECTED",
+  /** #184 — the ROOT cause that preceded the echo: a tool call truncated in
+   *  transit. `context`/`summary` streams before the required array
+   *  (`options`/`findings`), the model's turn was cut off mid-call, so the
+   *  args arrived with the earlier field present but the required array
+   *  absent. A generic Zod "expected array, received undefined" mis-taught the
+   *  agent (it invented a "1KB cap" AND echoed the embedded example). This code
+   *  names the real failure so the agent retries with a shorter/split call
+   *  instead of resubmitting an example. */
+  TOOL_CALL_TRUNCATED: "TOOL_CALL_TRUNCATED",
+  /** Preflight matched a stance the user has rejected — agent must revise approach, not retry. */
+  REJECTED_APPROACH_BLOCKED: "REJECTED_APPROACH_BLOCKED",
+  /** H1-6 — the artifact payload exceeded the daemon's body cap (413). Agent
+   *  should trim/split the input and retry. */
+  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
+  /** H1-6 — a tool handler threw (e.g. daemon down/restarting). Usually
+   *  transient; the agent can re-check state and retry. Distinct from a clean
+   *  validation refusal — this is an unexpected error mapped to a clean
+   *  isError result instead of a raw JSON-RPC protocol error. */
+  TOOL_EXECUTION_FAILED: "TOOL_EXECUTION_FAILED"
+};
+var TOOL_ERROR_RETRYABLE = {
+  [TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED]: true,
+  // #183 — retryable: the agent can fix the call by substituting real content
+  // for the echoed example, so its retry reflex should fire (same grain as
+  // INPUT_VALIDATION_FAILED).
+  [TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED]: true,
+  // #184 — retryable: a truncated call can succeed on a shorter/split retry.
+  [TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED]: true,
+  [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false,
+  [TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE]: true,
+  [TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED]: true
+};
+
+// src/mcp/tools/feedback-ownership.ts
+var LIVE_POLL_GRACE_MS = 60 * 1e3;
+function parseFeedbackFilter(args) {
+  const a = args ?? {};
+  const filter = {};
+  if (typeof a.presentedBy === "string" && a.presentedBy.trim()) {
+    filter.presentedBy = a.presentedBy.trim().slice(0, 80);
+  }
+  if (Array.isArray(a.artifactIds)) {
+    const ids = a.artifactIds.filter((x) => typeof x === "string" && x.length > 0);
+    if (ids.length > 0) filter.artifactIds = ids;
+  }
+  return filter.presentedBy || filter.artifactIds ? filter : null;
+}
+function consumerKey(filter) {
+  if (filter.presentedBy && !filter.artifactIds) return `by:${filter.presentedBy}`;
+  return JSON.stringify({ by: filter.presentedBy ?? null, ids: [...filter.artifactIds ?? []].sort() });
+}
+function consumerLabel(filter) {
+  if (filter.presentedBy) return filter.presentedBy;
+  return `artifacts ${(filter.artifactIds ?? []).join(", ")}`;
+}
+function beginConsumer(state, filter, now = Date.now()) {
+  const key2 = consumerKey(filter);
+  state.liveConsumers ??= {};
+  const c = state.liveConsumers[key2] ??= { filter, inflight: 0, lastAt: now };
+  c.inflight++;
+  c.lastAt = now;
+  return key2;
+}
+function endConsumer(state, key2, now = Date.now()) {
+  const c = state.liveConsumers?.[key2];
+  if (!c) return;
+  c.inflight = Math.max(0, c.inflight - 1);
+  c.lastAt = now;
+}
+function liveReservations(state, now = Date.now()) {
+  const out = [];
+  for (const c of Object.values(state.liveConsumers ?? {})) {
+    const since = now - c.lastAt;
+    if (c.inflight > 0) out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: null });
+    else if (since <= LIVE_POLL_GRACE_MS) {
+      out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: LIVE_POLL_GRACE_MS - since });
+    }
+  }
+  return out;
+}
+function feedbackAckRefusal(error51) {
+  if (typeof error51 !== "object" || error51 === null || !("status" in error51) || error51.status !== 409 || !("code" in error51)) return;
+  if (error51.code === ERROR_CODES.session_closing || error51.code === ERROR_CODES.session_ended) return error51.code;
+}
+var PendingAcks = class {
+  comments = [];
+  deliveredComments = [];
+  decisions = [];
+  statusChanges = [];
+  renderFailures = [];
+  /** #569 pilot task A — worker-stop ids to mark delivered. */
+  workerStops = [];
+  /** #680 slice 3 — page artifacts whose file-watch notices were reported. */
+  fileWatchNotices = [];
+  /** Flush every lane. Unacknowledged entries remain in the store so a later
+   *  poll can select them again if closeout fails and the review reopens. */
+  async flush(store) {
+    const errors = [];
+    let refusal;
+    const run2 = async (fn) => {
+      try {
+        await fn();
+      } catch (err) {
+        const closeout = feedbackAckRefusal(err);
+        if (!closeout) errors.push(err);
+        else if (!refusal || closeout === ERROR_CODES.session_ended) refusal = closeout;
+      }
+    };
+    if (this.comments.length > 0) await run2(() => store.acknowledgeComments(this.comments));
+    if (this.deliveredComments.length > 0) {
+      await run2(() => store.acknowledgeComments(this.deliveredComments.map((c) => c.id), this.deliveredComments));
+    }
+    if (this.decisions.length > 0) await run2(() => store.acknowledgeDecisions(this.decisions));
+    if (this.statusChanges.length > 0) await run2(() => store.acknowledgeStatusChanges(this.statusChanges));
+    if (this.renderFailures.length > 0) await run2(() => store.acknowledgeRenderFailures?.(this.renderFailures));
+    if (this.workerStops.length > 0) await run2(() => store.markWorkerStopsDelivered?.(this.workerStops));
+    if (this.fileWatchNotices.length > 0) await run2(() => store.acknowledgeFileWatchNotices?.(this.fileWatchNotices));
+    return { errors, refusal };
+  }
+};
+function matchesFilter(a, byId, filter) {
+  if (filter.presentedBy && a.presentedBy !== filter.presentedBy) return false;
+  if (filter.artifactIds) {
+    const wanted = new Set(filter.artifactIds);
+    let cur = a;
+    const seen = /* @__PURE__ */ new Set();
+    while (cur && !seen.has(cur.id)) {
+      if (wanted.has(cur.id)) return true;
+      seen.add(cur.id);
+      cur = cur.parentId ? byId[cur.parentId] : void 0;
+    }
+    return false;
+  }
+  return true;
+}
+var claimsByStore = /* @__PURE__ */ new WeakMap();
+function feedbackStoreView(store, opts) {
+  const { filter, reservations, pending } = opts;
+  const scoping = filter !== null || reservations.length > 0;
+  const token = /* @__PURE__ */ Symbol("check_feedback poll");
+  let claims = claimsByStore.get(store);
+  if (!claims) {
+    claims = /* @__PURE__ */ new Map();
+    claimsByStore.set(store, claims);
+  }
+  const claimTable = claims;
+  const mine = [];
+  const held = {};
+  const allArtifacts = async () => await store.getArtifacts() ?? [];
+  const ownership = async () => {
+    const arts = await allArtifacts();
+    const byId = {};
+    for (const a of arts) byId[a.id] = a;
+    return (artifactId) => {
+      const a = artifactId ? byId[artifactId] : void 0;
+      if (filter) return a !== void 0 && matchesFilter(a, byId, filter) ? null : "";
+      if (!a) return null;
+      for (const r of reservations) if (matchesFilter(a, byId, r.filter)) return r.label;
+      return null;
+    };
+  };
+  const consumable = (lane, read, artifactOf, idOf, claim2) => async () => {
+    const rows = await read() ?? [];
+    const owner = scoping ? await ownership() : null;
+    const out = [];
+    for (const x of rows) {
+      if (owner) {
+        const heldBy = owner(artifactOf(x));
+        if (heldBy !== null) {
+          if (heldBy) {
+            const t = held[heldBy] ??= { comments: /* @__PURE__ */ new Set(), decisions: /* @__PURE__ */ new Set(), statusChanges: /* @__PURE__ */ new Set(), renderFailures: /* @__PURE__ */ new Set(), fileWatch: /* @__PURE__ */ new Set() };
+            t[lane].add(idOf(x));
+          }
+          continue;
+        }
+      }
+      const key2 = `${lane}:${idOf(x)}`;
+      const by = claimTable.get(key2);
+      if (by && by !== token) continue;
+      if (claim2 && !by) {
+        claimTable.set(key2, token);
+        mine.push(key2);
+      }
+      out.push(x);
+    }
+    return out;
+  };
+  const commentsLane = (claim2) => consumable("comments", () => store.getUnacknowledgedComments(), (c) => c.target.artifactId, (c) => c.id, claim2);
+  const decisionsLane = (claim2) => consumable("decisions", () => store.getResolvedDecisions(), (d) => d.artifactId, (d) => d.decisionId, claim2);
+  const statusLane = (claim2) => consumable("statusChanges", () => store.getUnacknowledgedStatusChanges(), (a) => a.id, (a) => a.id, claim2);
+  const renderLane = (claim2) => consumable(
+    "renderFailures",
+    () => store.getUnacknowledgedRenderFailures?.(),
+    (f) => f.artifactId,
+    (f) => `${f.artifactId}/${f.visualId}`,
+    claim2
+  );
+  const overrides = {
+    selectFileWatchNotices: (artifacts, o) => consumable("fileWatch", () => undeliveredFileWatchRefs(artifacts), (r) => r.artifactId, fileWatchNoticeKey, !o?.peek)(),
+    getUnacknowledgedComments: commentsLane(true),
+    getResolvedDecisions: decisionsLane(true),
+    getUnacknowledgedStatusChanges: statusLane(true)
+  };
+  if (typeof store.getUnacknowledgedRenderFailures === "function") {
+    overrides.getUnacknowledgedRenderFailures = renderLane(true);
+  }
+  const workerStopsLane = (claim2) => async () => {
+    if (filter) return { stops: [] };
+    const batch = await store.getUndeliveredWorkerStops() ?? { stops: [] };
+    const out = [];
+    for (const x of batch.stops ?? []) {
+      const key2 = `workerStops:${x.id}`;
+      const by = claimTable.get(key2);
+      if (by && by !== token) continue;
+      if (claim2 && !by) {
+        claimTable.set(key2, token);
+        mine.push(key2);
+      }
+      out.push(x);
+    }
+    return batch.notice ? { stops: out, notice: batch.notice } : { stops: out };
+  };
+  if (typeof store.getUndeliveredWorkerStops === "function") {
+    overrides.getUndeliveredWorkerStops = workerStopsLane(true);
+  }
+  if (pending) {
+    if (typeof store.markWorkerStopsDelivered === "function") {
+      overrides.markWorkerStopsDelivered = (ids) => void pending.workerStops.push(...ids);
+    }
+    overrides.acknowledgeComments = (ids, delivered) => {
+      if (delivered === void 0) pending.comments.push(...ids);
+      else {
+        const selected = new Set(ids);
+        pending.deliveredComments.push(...delivered.filter((c) => selected.has(c.id)));
+      }
+    };
+    overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
+    overrides.acknowledgeStatusChanges = (ids) => void pending.statusChanges.push(...ids);
+    if (typeof store.acknowledgeFileWatchNotices === "function") {
+      overrides.acknowledgeFileWatchNotices = (refs) => void pending.fileWatchNotices.push(...refs);
+    }
+    if (typeof store.acknowledgeRenderFailures === "function") {
+      overrides.acknowledgeRenderFailures = (refs) => void pending.renderFailures.push(...refs);
+    }
+  }
+  if (scoping) {
+    const peekLanes = [commentsLane(false), decisionsLane(false), statusLane(false)];
+    if (typeof store.getUnacknowledgedRenderFailures === "function") peekLanes.push(renderLane(false));
+    if (!filter && typeof store.getUndeliveredWorkerStops === "function") {
+      const peekStops = workerStopsLane(false);
+      peekLanes.push(async () => (await peekStops()).stops);
+    }
+    overrides.waitForFeedback = async (timeoutMs = 3e4) => {
+      const deadline = performance2.now() + timeoutMs;
+      for (; ; ) {
+        const remaining = deadline - performance2.now();
+        if (remaining <= 0) return;
+        const started = performance2.now();
+        await store.waitForFeedback(Math.ceil(remaining));
+        if (performance2.now() >= deadline) return;
+        for (const peek of peekLanes) if ((await peek()).length > 0) return;
+        if (performance2.now() - started < 50) await new Promise((r) => setTimeout(r, 100));
+      }
+    };
+  }
+  if (filter) {
+    const own2 = (read, artifactOf) => async () => {
+      const rows = await read() ?? [];
+      const owner = await ownership();
+      return rows.filter((x) => owner(artifactOf(x)) === null);
+    };
+    overrides.getArtifacts = own2(() => allArtifacts(), (a) => a.id);
+    overrides.getPendingDecisions = own2(() => store.getPendingDecisions(), (d) => d.artifactId);
+    overrides.getPendingPlanReviews = own2(() => store.getPendingPlanReviews(), (p) => p.artifactId);
+    overrides.getFullState = async () => {
+      const full = await store.getFullState();
+      const owner = await ownership();
+      return {
+        ...full,
+        artifacts: (full.artifacts ?? []).filter((a) => owner(a.id) === null),
+        comments: (full.comments ?? []).filter((c) => owner(c.target.artifactId) === null),
+        // Human requests are addressed to the session, not to one presenter.
+        requests: []
+      };
+    };
+  }
+  const view = new Proxy(store, {
+    get(target, prop2, _receiver) {
+      if (typeof prop2 === "string" && Object.prototype.hasOwnProperty.call(overrides, prop2)) {
+        return overrides[prop2];
+      }
+      const v2 = Reflect.get(target, prop2, target);
+      return typeof v2 === "function" ? v2.bind(target) : v2;
+    }
+  });
+  return {
+    store: view,
+    held,
+    release() {
+      for (const key2 of mine.splice(0)) {
+        if (claimTable.get(key2) === token) claimTable.delete(key2);
+      }
+    }
+  };
+}
+function describeHeld(t) {
+  const parts = [];
+  const add = (n, one, many) => {
+    if (n > 0) parts.push(`${n} ${n === 1 ? one : many}`);
+  };
+  add(t.decisions.size, "decision", "decisions");
+  add(t.comments.size, "comment", "comments");
+  add(t.statusChanges.size, "status change", "status changes");
+  add(t.renderFailures.size, "render failure", "render failures");
+  add(t.fileWatch?.size ?? 0, "page file-watch notice", "page file-watch notices");
+  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size + (t.fileWatch?.size ?? 0);
+  return { total, text: parts.join(", ") };
 }
 
 // src/mcp/elicit.ts
@@ -31931,6 +32402,7 @@ function reviseSnapshot(old, title, reason, content) {
 }
 
 // src/mcp/tool-helpers.ts
+var feedbackDebug = debuglog("deeppairing");
 async function tryElicit(server, message) {
   if (!terminalApproveEnabled(process.env)) return null;
   try {
@@ -32106,7 +32578,13 @@ async function getPassiveFeedback(store, excludeIds = []) {
   if (comments.length === 0) return "";
   const drainable = comments.filter((c) => c.humanResolvedAt !== null && !isObligationBearingComment(c));
   if (drainable.length === 0) return "";
-  await store.acknowledgeComments(drainable.map((c) => c.id), drainable.map(commentResolutionSnapshot));
+  try {
+    await store.acknowledgeComments(drainable.map((c) => c.id), drainable.map(commentResolutionSnapshot));
+  } catch (error51) {
+    const refusal = feedbackAckRefusal(error51);
+    if (!refusal) throw error51;
+    feedbackDebug("Passive feedback ACK deferred for %s: %s", store.getSessionId(), refusal);
+  }
   const exclude = new Set(excludeIds);
   const shown = drainable.filter((c) => !exclude.has(c.id));
   if (shown.length === 0) return "";
@@ -32311,187 +32789,6 @@ function nanoid3(size = 21) {
   }
   return id;
 }
-
-// src/error-codes.ts
-var ERROR_CODES = {
-  /** /api/internal/* received a missing or invalid Authorization header. */
-  daemon_auth_required: "daemon_auth_required",
-  /** Wrapper called an internal route for a session the daemon doesn't know about. */
-  session_not_registered: "session_not_registered",
-  /** Wrapper registered with expectedProjectRoot != daemon's projectRoot. */
-  project_mismatch: "project_mismatch",
-  /** X-Project-Hash header missing or mismatched on a public route. */
-  project_hash_mismatch: "project_hash_mismatch",
-  /** /api/evict received the wrong X-DeepPairing-Confirm-Pid. */
-  evict_pid_mismatch: "evict_pid_mismatch",
-  /** III6 — request body exceeded the 64 KiB cap. */
-  body_too_large: "body_too_large",
-  /** Browser sent X-Session-Id but the daemon has no active session. */
-  no_active_session: "no_active_session",
-  /** Zod (or hand-rolled) validation failed on a request body. */
-  validation_error: "validation_error",
-  /** Q2 — POST /api/preferences carried `globalLedgerPublish` but the bound
-   *  store has no project preferences file to write it to (a read-only replay
-   *  store; setGlobalLedgerPublish is optional on IStore). Refuse loudly rather
-   *  than 200 on a write that didn't land — the same posture as F6's
-   *  artifact_not_in_session: a preference this one governs whether the human's
-   *  stances leave the project, so a silent no-op would be a privacy lie. */
-  publish_toggle_unsupported: "publish_toggle_unsupported",
-  /** C-4 — request arrived with a non-loopback Host header (DNS-rebinding guard). */
-  forbidden_host: "forbidden_host",
-  /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
-  artifact_not_in_session: "artifact_not_in_session",
-  /** O3 (#231) — a stale tab tried to REVERSE an already-final human verdict
-   *  (approved↔rejected↔revised). The route refuses with 409 + the current
-   *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
-  verdict_already_final: "verdict_already_final",
-  /** #521 — a confidence AUTO-approval reached the daemon after the autonomy level
-   *  (or the artifact) no longer permitted it. 409, no state change. */
-  auto_approve_not_permitted: "auto_approve_not_permitted",
-  /** #680 slice 3 — a supersede-create lost the race: its parent was already
-   *  replaced (the page file watch or another revise recorded a version). 409,
-   *  nothing created; the body names the successor. */
-  parent_superseded: "parent_superseded",
-  /** A review verdict raced a change to the artifact content being reviewed. */
-  session_review_conflict: "session_review_conflict",
-  session_closing: "session_closing",
-  session_ended: "session_ended",
-  session_marker_invalid: "session_marker_invalid",
-  session_save_pending: "session_save_pending",
-  /** F6 — decision resolve for a decision the bound session doesn't know. */
-  decision_not_in_session: "decision_not_in_session",
-  /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
-   *  This slice writes only into the current project's store (a cross-project
-   *  write would mean two daemons owning the same files); the read model still
-   *  SHOWS the decision, so the refusal is explicit rather than a silent no-op. */
-  cross_project_close_out_unsupported: "cross_project_close_out_unsupported",
-  /** Context bank — close-out on a decision the human actually ANSWERED. Closing
-   *  it out would overwrite real history with "retired, nobody chose". */
-  decision_already_resolved: "decision_already_resolved",
-  /** #492 — a resolve on a decision whose backing artifact is closed
-   *  (superseded / retracted / obsolete): nothing is written. */
-  decision_closed: "decision_closed",
-  /** #549 — "Never suggest this" on a decision with no recorded pick: the
-   *  control is for an UNCHOSEN option, and nothing is unchosen yet. */
-  decision_not_resolved: "decision_not_resolved",
-  /** F6 — mark-resolved for a comment the bound session doesn't own. */
-  comment_not_in_session: "comment_not_in_session",
-  /** #725 — mark-resolved on a plain comment that answers one of a page's
-   *  asks (resolving it would reopen the ask). */
-  comment_answers_page_ask: "comment_answers_page_ask",
-  /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
-  suggestion_not_countered: "suggestion_not_countered",
-  /** #172 — agent tried to counter a suggestion the human INSISTED on (their
-   *  version is authoritative — apply verbatim, don't re-argue). */
-  suggestion_insisted_authoritative: "suggestion_insisted_authoritative",
-  /** #172 — a transition on a suggestion already shipped in a version (counter
-   *  after apply, or a second apply stamping a different version). */
-  suggestion_already_applied: "suggestion_already_applied",
-  /** #172 — answer_question hit a pending/insisted suggestion without a valid
-   *  suggestionState (the MUST-respond contract). */
-  suggestion_response_required: "suggestion_response_required",
-  /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
-  stance_not_found: "stance_not_found",
-  /** A path-scoped browser write named a standalone review with no session
-   *  directory (#711): answered 404 before End admission, nothing created. */
-  session_not_found: "session_not_found",
-  /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
-   *  (H1-5 write-refusal surfaced as a structured route error). */
-  ledger_frozen: "ledger_frozen",
-  /** #171 — a changeset-review write targeted an artifact that isn't a
-   *  changeset, or a file path that isn't part of it. */
-  not_a_changeset_file: "not_a_changeset_file",
-  /** #171 — the store can't persist changeset review state (a read-only /
-   *  non-FileStore implementation lacks setChangesetFileReview). */
-  unsupported: "unsupported",
-  /** Durable review-post state needs inspection; do not retry an external POST. */
-  review_post_conflict: "review_post_conflict",
-  /** A standalone review request ID is already bound to different input. */
-  standalone_operation_conflict: "standalone_operation_conflict",
-  /** The standalone proposal matched a previously rejected approach. */
-  rejected_approach_blocked: "rejected_approach_blocked",
-  /** #680 slice 4 — "Rule this out" on a page spot: the anchored text can't
-   *  become a stance the gate would enforce sensibly (`reason`: no_text,
-   *  too_short, too_generic, or not_on_page — not within one block of it). */
-  rule_out_not_gateable: "rule_out_not_gateable",
-  /** #680 slice 4 — "Rule this out" on a page version that is no longer under
-   *  review (superseded, retracted, rejected or dismissed). */
-  rule_out_page_closed: "rule_out_page_closed",
-  /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
-   *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
-   *  unverifiable) owner. Nothing was committed; retry, or inspect with
-   *  `deeppairing doctor` (dead-owner locks are recovered automatically). */
-  lock_busy: "lock_busy",
-  /** #470 — stance exceptions ("Allow this proposal once"). No block with that
-   *  id is held by this daemon (unknown, or from an earlier daemon instance). */
-  stance_exception_block_not_found: "stance_exception_block_not_found",
-  /** #470 — the block can't be allowed: a team rule, a demo session, a retired
-   *  stance, an ended session, or no eligible snapshot. */
-  stance_exception_not_eligible: "stance_exception_not_eligible",
-  /** #470 — a grant needs a typed reason of 3–280 characters. */
-  stance_exception_reason_required: "stance_exception_reason_required",
-  /** #470 — a grant must come from the human-facing route, never from a
-   *  registered agent wrapper. */
-  stance_exception_interactive_required: "stance_exception_interactive_required",
-  /** #470 — the claim did not admit this call (used, revoked, ended, expired,
-   *  wrong registration, or a stance retired since). */
-  stance_exception_claim_refused: "stance_exception_claim_refused",
-  /** #470 — something the allowed proposal depended on changed after the grant. */
-  stance_exception_dependencies_changed: "stance_exception_dependencies_changed",
-  /** #470 — an operation stamp's follow-up targets disagree with the lineage
-   *  recorded on the child; a replay refuses rather than act on them. */
-  stance_exception_operation_inconsistent: "stance_exception_operation_inconsistent"
-};
-var USER_FACING_ERROR_CODES = [
-  ERROR_CODES.daemon_auth_required,
-  ERROR_CODES.project_hash_mismatch,
-  ERROR_CODES.session_not_registered,
-  ERROR_CODES.session_review_conflict,
-  ERROR_CODES.review_post_conflict,
-  ERROR_CODES.lock_busy
-];
-var TOOL_ERROR_CODES = {
-  /** Zod validation failed on tool input — agent should fix the shape and retry. */
-  INPUT_VALIDATION_FAILED: "INPUT_VALIDATION_FAILED",
-  /** #183 — the agent replayed a validation-error EXAMPLE payload verbatim as
-   *  real content (the "Which cache layer?" field bug: a confused agent echoed
-   *  the minimal example embedded in an INPUT_VALIDATION_FAILED message back as
-   *  a real present_options call, twice, minting junk draft decisions). This is
-   *  NOT a schema failure — the shape is valid; the CONTENT is the teaching
-   *  sample. Agent should replace every value with real content and retry. */
-  EXAMPLE_ECHO_REJECTED: "EXAMPLE_ECHO_REJECTED",
-  /** #184 — the ROOT cause that preceded the echo: a tool call truncated in
-   *  transit. `context`/`summary` streams before the required array
-   *  (`options`/`findings`), the model's turn was cut off mid-call, so the
-   *  args arrived with the earlier field present but the required array
-   *  absent. A generic Zod "expected array, received undefined" mis-taught the
-   *  agent (it invented a "1KB cap" AND echoed the embedded example). This code
-   *  names the real failure so the agent retries with a shorter/split call
-   *  instead of resubmitting an example. */
-  TOOL_CALL_TRUNCATED: "TOOL_CALL_TRUNCATED",
-  /** Preflight matched a stance the user has rejected — agent must revise approach, not retry. */
-  REJECTED_APPROACH_BLOCKED: "REJECTED_APPROACH_BLOCKED",
-  /** H1-6 — the artifact payload exceeded the daemon's body cap (413). Agent
-   *  should trim/split the input and retry. */
-  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
-  /** H1-6 — a tool handler threw (e.g. daemon down/restarting). Usually
-   *  transient; the agent can re-check state and retry. Distinct from a clean
-   *  validation refusal — this is an unexpected error mapped to a clean
-   *  isError result instead of a raw JSON-RPC protocol error. */
-  TOOL_EXECUTION_FAILED: "TOOL_EXECUTION_FAILED"
-};
-var TOOL_ERROR_RETRYABLE = {
-  [TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED]: true,
-  // #183 — retryable: the agent can fix the call by substituting real content
-  // for the echoed example, so its retry reflex should fire (same grain as
-  // INPUT_VALIDATION_FAILED).
-  [TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED]: true,
-  // #184 — retryable: a truncated call can succeed on a shorter/split retry.
-  [TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED]: true,
-  [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false,
-  [TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE]: true,
-  [TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED]: true
-};
 
 // src/mcp/spec-ids.ts
 var MAX_LISTED_PROBLEMS = 20;
@@ -36746,22 +37043,22 @@ function proseSafe(value, max) {
   const flat = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/`/g, "'").replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
 }
-function stopSentence(s) {
+function stopSentence(s, historical) {
   const type = proseSafe(s.agentType ?? "worker", 60) || "worker";
   const target = proseSafe(s.targetPath ?? "(unknown path)", 200) || "(unknown path)";
   const concept = proseSafe(s.concept, 120);
   if (s.decision === "deny") {
-    return `a \`${type}\` subagent was **stopped** at \`${target}\` by stance \`${concept}\`. That edit did not happen. Don't advance work that depends on it; re-plan or ask the human. Don't retry the same edit.`;
+    return `a \`${type}\` subagent was **stopped** at \`${target}\` by stance \`${concept}\`. That edit did not happen. ` + (historical ? "Work depending on that edit remains blocked." : "Don't advance work that depends on it; re-plan or ask the human. Don't retry the same edit.");
   }
-  return `a \`${type}\` subagent's edit to \`${target}\` matched stance \`${concept}\`, and Claude Code **asked the human**. It may or may not have gone through, so check the file before relying on it. Don't retry it if it was refused.`;
+  return `a \`${type}\` subagent's edit to \`${target}\` matched stance \`${concept}\`, and Claude Code **asked the human**. ` + (historical ? "The result of that edit was unconfirmed." : "It may or may not have gone through, so check the file before relying on it. Don't retry it if it was refused.");
 }
-function formatWorkerStops(stops) {
+function formatWorkerStops(stops, { historical = false } = {}) {
   if (stops.length === 0) return "";
   const denies = stops.filter((s) => s.decision === "deny").length;
   const label = denies === stops.length ? "Worker stopped" : denies === 0 ? "Worker asked the human" : "Worker stopped or asked the human";
-  if (stops.length === 1) return `\u26D4 ${label} (1): ${stopSentence(stops[0])}`;
+  if (stops.length === 1) return `\u26D4 ${label} (1): ${stopSentence(stops[0], historical)}`;
   return `\u26D4 ${label} (${stops.length}):
-${stops.map((s) => `- ${stopSentence(s)}`).join("\n")}`;
+${stops.map((s) => `- ${stopSentence(s, historical)}`).join("\n")}`;
 }
 
 // src/mcp/tools/page-watch-feedback.ts
@@ -36769,9 +37066,9 @@ function clip(s, n) {
   const t = s.replace(/\s+/g, " ").trim();
   return t.length > n ? `${t.slice(0, n - 1)}\u2026` : t;
 }
-function recordedLine(a, r) {
+function recordedLine(a, r, ended = false) {
   const orphanCount = r.orphaned.length + (r.orphanedOverflow ?? 0);
-  let line = `- ${a.id} (v${a.version}) "${a.title}" was recorded automatically from ${r.sourcePath} after your save; it supersedes ${r.fromArtifactId} (v${r.fromVersion}) and is the draft under review now.`;
+  let line = `- ${a.id} (v${a.version}) "${a.title}" was recorded automatically from ${r.sourcePath} after your save; it supersedes ${r.fromArtifactId} (v${r.fromVersion})${ended ? "." : " and is the draft under review now."}`;
   if (orphanCount === 0) {
     line += r.carriedCount > 0 ? ` All ${r.carriedCount} page comment(s) still point at text on the page.` : "";
     return line;
@@ -36788,16 +37085,18 @@ function recordedLine(a, r) {
   ${r.carriedCount} other page comment(s) still point at text on the page.`;
   return line;
 }
-function refusedLine(a, r) {
+function refusedLine(a, r, ended = false) {
+  const visible = ended ? `The saved page stayed at v${a.version}.` : `Your pair still sees v${a.version}.`;
   if (r.cause === "gate") {
-    return `- \u26D4 A save to ${r.sourcePath} was NOT recorded as a new version of ${a.id} "${a.title}": ${r.message}. Your pair still sees v${a.version}. Change the page so it no longer proposes that approach (the next save is checked again), or ask your pair.`;
+    return `- \u26D4 A save to ${r.sourcePath} was NOT recorded as a new version of ${a.id} "${a.title}": ${r.message}. ` + visible + (ended ? "" : " Change the page so it no longer proposes that approach (the next save is checked again), or ask your pair.");
   }
-  return `- \u26A0 A save to ${r.sourcePath} could not be recorded for ${a.id} "${a.title}": ${r.message}. Your pair still sees v${a.version}.`;
+  return `- \u26A0 A save to ${r.sourcePath} could not be recorded for ${a.id} "${a.title}": ${r.message}. ${visible}`;
 }
 function collectPageWatchNotices(artifacts, refs) {
   const byId = new Map(artifacts.map((a) => [a.id, a]));
   const out = [];
   const lines = [];
+  const endedLines = [];
   const structured = [];
   for (const ref of refs) {
     const a = byId.get(ref.artifactId);
@@ -36814,6 +37113,7 @@ function collectPageWatchNotices(artifacts, refs) {
     const refused = refusedLive && !isClosedArtifactStatus(a.status) ? refusedLive : void 0;
     if (recorded) {
       lines.push(recordedLine(a, recorded));
+      endedLines.push(recordedLine(a, recorded, true));
       structured.push({
         kind: "recorded",
         artifactId: a.id,
@@ -36828,6 +37128,7 @@ function collectPageWatchNotices(artifacts, refs) {
     }
     if (refused) {
       lines.push(refusedLine(a, refused));
+      endedLines.push(refusedLine(a, refused, true));
       structured.push({
         kind: "refused",
         artifactId: a.id,
@@ -36841,7 +37142,9 @@ function collectPageWatchNotices(artifacts, refs) {
   }
   const prose = lines.length > 0 ? `\u{1F4C4} Page file watch (${lines.length}):
 ${lines.join("\n")}` : "";
-  return { refs: out, prose, structured };
+  const endedProse = endedLines.length > 0 ? `\u{1F4C4} Page file watch (${endedLines.length}):
+${endedLines.join("\n")}` : "";
+  return { refs: out, prose, endedProse, structured };
 }
 
 // src/mcp/page-anchor-relocate.ts
@@ -37336,286 +37639,6 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
   return !trivial;
 }
 
-// src/mcp/tools/feedback-ownership.ts
-import { performance as performance2 } from "node:perf_hooks";
-var LIVE_POLL_GRACE_MS = 60 * 1e3;
-function parseFeedbackFilter(args) {
-  const a = args ?? {};
-  const filter = {};
-  if (typeof a.presentedBy === "string" && a.presentedBy.trim()) {
-    filter.presentedBy = a.presentedBy.trim().slice(0, 80);
-  }
-  if (Array.isArray(a.artifactIds)) {
-    const ids = a.artifactIds.filter((x) => typeof x === "string" && x.length > 0);
-    if (ids.length > 0) filter.artifactIds = ids;
-  }
-  return filter.presentedBy || filter.artifactIds ? filter : null;
-}
-function consumerKey(filter) {
-  if (filter.presentedBy && !filter.artifactIds) return `by:${filter.presentedBy}`;
-  return JSON.stringify({ by: filter.presentedBy ?? null, ids: [...filter.artifactIds ?? []].sort() });
-}
-function consumerLabel(filter) {
-  if (filter.presentedBy) return filter.presentedBy;
-  return `artifacts ${(filter.artifactIds ?? []).join(", ")}`;
-}
-function beginConsumer(state, filter, now = Date.now()) {
-  const key2 = consumerKey(filter);
-  state.liveConsumers ??= {};
-  const c = state.liveConsumers[key2] ??= { filter, inflight: 0, lastAt: now };
-  c.inflight++;
-  c.lastAt = now;
-  return key2;
-}
-function endConsumer(state, key2, now = Date.now()) {
-  const c = state.liveConsumers?.[key2];
-  if (!c) return;
-  c.inflight = Math.max(0, c.inflight - 1);
-  c.lastAt = now;
-}
-function liveReservations(state, now = Date.now()) {
-  const out = [];
-  for (const c of Object.values(state.liveConsumers ?? {})) {
-    const since = now - c.lastAt;
-    if (c.inflight > 0) out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: null });
-    else if (since <= LIVE_POLL_GRACE_MS) {
-      out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: LIVE_POLL_GRACE_MS - since });
-    }
-  }
-  return out;
-}
-var PendingAcks = class {
-  comments = [];
-  deliveredComments = [];
-  decisions = [];
-  statusChanges = [];
-  renderFailures = [];
-  /** #569 pilot task A — worker-stop ids to mark delivered. */
-  workerStops = [];
-  /** #680 slice 3 — page artifacts whose file-watch notices were reported. */
-  fileWatchNotices = [];
-  /** Flush every lane; a failing lane does not stop the others. Returns the
-   *  errors (an un-flushed lane simply re-delivers next poll). */
-  async flush(store) {
-    const errors = [];
-    const run2 = async (fn) => {
-      try {
-        await fn();
-      } catch (err) {
-        errors.push(err);
-      }
-    };
-    if (this.comments.length > 0) await run2(() => store.acknowledgeComments(this.comments));
-    if (this.deliveredComments.length > 0) {
-      await run2(() => store.acknowledgeComments(this.deliveredComments.map((c) => c.id), this.deliveredComments));
-    }
-    if (this.decisions.length > 0) await run2(() => store.acknowledgeDecisions(this.decisions));
-    if (this.statusChanges.length > 0) await run2(() => store.acknowledgeStatusChanges(this.statusChanges));
-    if (this.renderFailures.length > 0) await run2(() => store.acknowledgeRenderFailures?.(this.renderFailures));
-    if (this.workerStops.length > 0) await run2(() => store.markWorkerStopsDelivered?.(this.workerStops));
-    if (this.fileWatchNotices.length > 0) await run2(() => store.acknowledgeFileWatchNotices?.(this.fileWatchNotices));
-    return errors;
-  }
-};
-function matchesFilter(a, byId, filter) {
-  if (filter.presentedBy && a.presentedBy !== filter.presentedBy) return false;
-  if (filter.artifactIds) {
-    const wanted = new Set(filter.artifactIds);
-    let cur = a;
-    const seen = /* @__PURE__ */ new Set();
-    while (cur && !seen.has(cur.id)) {
-      if (wanted.has(cur.id)) return true;
-      seen.add(cur.id);
-      cur = cur.parentId ? byId[cur.parentId] : void 0;
-    }
-    return false;
-  }
-  return true;
-}
-var claimsByStore = /* @__PURE__ */ new WeakMap();
-function feedbackStoreView(store, opts) {
-  const { filter, reservations, pending } = opts;
-  const scoping = filter !== null || reservations.length > 0;
-  const token = /* @__PURE__ */ Symbol("check_feedback poll");
-  let claims = claimsByStore.get(store);
-  if (!claims) {
-    claims = /* @__PURE__ */ new Map();
-    claimsByStore.set(store, claims);
-  }
-  const claimTable = claims;
-  const mine = [];
-  const held = {};
-  const allArtifacts = async () => await store.getArtifacts() ?? [];
-  const ownership = async () => {
-    const arts = await allArtifacts();
-    const byId = {};
-    for (const a of arts) byId[a.id] = a;
-    return (artifactId) => {
-      const a = artifactId ? byId[artifactId] : void 0;
-      if (filter) return a !== void 0 && matchesFilter(a, byId, filter) ? null : "";
-      if (!a) return null;
-      for (const r of reservations) if (matchesFilter(a, byId, r.filter)) return r.label;
-      return null;
-    };
-  };
-  const consumable = (lane, read, artifactOf, idOf, claim2) => async () => {
-    const rows = await read() ?? [];
-    const owner = scoping ? await ownership() : null;
-    const out = [];
-    for (const x of rows) {
-      if (owner) {
-        const heldBy = owner(artifactOf(x));
-        if (heldBy !== null) {
-          if (heldBy) {
-            const t = held[heldBy] ??= { comments: /* @__PURE__ */ new Set(), decisions: /* @__PURE__ */ new Set(), statusChanges: /* @__PURE__ */ new Set(), renderFailures: /* @__PURE__ */ new Set(), fileWatch: /* @__PURE__ */ new Set() };
-            t[lane].add(idOf(x));
-          }
-          continue;
-        }
-      }
-      const key2 = `${lane}:${idOf(x)}`;
-      const by = claimTable.get(key2);
-      if (by && by !== token) continue;
-      if (claim2 && !by) {
-        claimTable.set(key2, token);
-        mine.push(key2);
-      }
-      out.push(x);
-    }
-    return out;
-  };
-  const commentsLane = (claim2) => consumable("comments", () => store.getUnacknowledgedComments(), (c) => c.target.artifactId, (c) => c.id, claim2);
-  const decisionsLane = (claim2) => consumable("decisions", () => store.getResolvedDecisions(), (d) => d.artifactId, (d) => d.decisionId, claim2);
-  const statusLane = (claim2) => consumable("statusChanges", () => store.getUnacknowledgedStatusChanges(), (a) => a.id, (a) => a.id, claim2);
-  const renderLane = (claim2) => consumable(
-    "renderFailures",
-    () => store.getUnacknowledgedRenderFailures?.(),
-    (f) => f.artifactId,
-    (f) => `${f.artifactId}/${f.visualId}`,
-    claim2
-  );
-  const overrides = {
-    selectFileWatchNotices: (artifacts, o) => consumable("fileWatch", () => undeliveredFileWatchRefs(artifacts), (r) => r.artifactId, fileWatchNoticeKey, !o?.peek)(),
-    getUnacknowledgedComments: commentsLane(true),
-    getResolvedDecisions: decisionsLane(true),
-    getUnacknowledgedStatusChanges: statusLane(true)
-  };
-  if (typeof store.getUnacknowledgedRenderFailures === "function") {
-    overrides.getUnacknowledgedRenderFailures = renderLane(true);
-  }
-  const workerStopsLane = (claim2) => async () => {
-    if (filter) return { stops: [] };
-    const batch = await store.getUndeliveredWorkerStops() ?? { stops: [] };
-    const out = [];
-    for (const x of batch.stops ?? []) {
-      const key2 = `workerStops:${x.id}`;
-      const by = claimTable.get(key2);
-      if (by && by !== token) continue;
-      if (claim2 && !by) {
-        claimTable.set(key2, token);
-        mine.push(key2);
-      }
-      out.push(x);
-    }
-    return batch.notice ? { stops: out, notice: batch.notice } : { stops: out };
-  };
-  if (typeof store.getUndeliveredWorkerStops === "function") {
-    overrides.getUndeliveredWorkerStops = workerStopsLane(true);
-  }
-  if (pending) {
-    if (typeof store.markWorkerStopsDelivered === "function") {
-      overrides.markWorkerStopsDelivered = (ids) => void pending.workerStops.push(...ids);
-    }
-    overrides.acknowledgeComments = (ids, delivered) => {
-      if (delivered === void 0) pending.comments.push(...ids);
-      else {
-        const selected = new Set(ids);
-        pending.deliveredComments.push(...delivered.filter((c) => selected.has(c.id)));
-      }
-    };
-    overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
-    overrides.acknowledgeStatusChanges = (ids) => void pending.statusChanges.push(...ids);
-    if (typeof store.acknowledgeFileWatchNotices === "function") {
-      overrides.acknowledgeFileWatchNotices = (refs) => void pending.fileWatchNotices.push(...refs);
-    }
-    if (typeof store.acknowledgeRenderFailures === "function") {
-      overrides.acknowledgeRenderFailures = (refs) => void pending.renderFailures.push(...refs);
-    }
-  }
-  if (scoping) {
-    const peekLanes = [commentsLane(false), decisionsLane(false), statusLane(false)];
-    if (typeof store.getUnacknowledgedRenderFailures === "function") peekLanes.push(renderLane(false));
-    if (!filter && typeof store.getUndeliveredWorkerStops === "function") {
-      const peekStops = workerStopsLane(false);
-      peekLanes.push(async () => (await peekStops()).stops);
-    }
-    overrides.waitForFeedback = async (timeoutMs = 3e4) => {
-      const deadline = performance2.now() + timeoutMs;
-      for (; ; ) {
-        const remaining = deadline - performance2.now();
-        if (remaining <= 0) return;
-        const started = performance2.now();
-        await store.waitForFeedback(Math.ceil(remaining));
-        if (performance2.now() >= deadline) return;
-        for (const peek of peekLanes) if ((await peek()).length > 0) return;
-        if (performance2.now() - started < 50) await new Promise((r) => setTimeout(r, 100));
-      }
-    };
-  }
-  if (filter) {
-    const own2 = (read, artifactOf) => async () => {
-      const rows = await read() ?? [];
-      const owner = await ownership();
-      return rows.filter((x) => owner(artifactOf(x)) === null);
-    };
-    overrides.getArtifacts = own2(() => allArtifacts(), (a) => a.id);
-    overrides.getPendingDecisions = own2(() => store.getPendingDecisions(), (d) => d.artifactId);
-    overrides.getPendingPlanReviews = own2(() => store.getPendingPlanReviews(), (p) => p.artifactId);
-    overrides.getFullState = async () => {
-      const full = await store.getFullState();
-      const owner = await ownership();
-      return {
-        ...full,
-        artifacts: (full.artifacts ?? []).filter((a) => owner(a.id) === null),
-        comments: (full.comments ?? []).filter((c) => owner(c.target.artifactId) === null),
-        // Human requests are addressed to the session, not to one presenter.
-        requests: []
-      };
-    };
-  }
-  const view = new Proxy(store, {
-    get(target, prop2, _receiver) {
-      if (typeof prop2 === "string" && Object.prototype.hasOwnProperty.call(overrides, prop2)) {
-        return overrides[prop2];
-      }
-      const v2 = Reflect.get(target, prop2, target);
-      return typeof v2 === "function" ? v2.bind(target) : v2;
-    }
-  });
-  return {
-    store: view,
-    held,
-    release() {
-      for (const key2 of mine.splice(0)) {
-        if (claimTable.get(key2) === token) claimTable.delete(key2);
-      }
-    }
-  };
-}
-function describeHeld(t) {
-  const parts = [];
-  const add = (n, one, many) => {
-    if (n > 0) parts.push(`${n} ${n === 1 ? one : many}`);
-  };
-  add(t.decisions.size, "decision", "decisions");
-  add(t.comments.size, "comment", "comments");
-  add(t.statusChanges.size, "status change", "status changes");
-  add(t.renderFailures.size, "render failure", "render failures");
-  add(t.fileWatch?.size ?? 0, "page file-watch notice", "page file-watch notices");
-  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size + (t.fileWatch?.size ?? 0);
-  return { total, text: parts.join(", ") };
-}
-
 // src/mcp/tools/check-feedback.ts
 function ledgerHealthField() {
   try {
@@ -37747,26 +37770,48 @@ async function handleCheckFeedback(ctx, args) {
     for (const id of plansBefore) state.reportedPlanVerdicts.add(id);
   };
   try {
-    let result;
+    let assembled;
+    let ended = false;
+    const reviewHasEnded = async () => {
+      ended ||= await ctx.store.getStandaloneReviewState?.() === "ended";
+      return ended;
+    };
     try {
-      result = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
+      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args, reviewHasEnded);
+      if (!ctx.signal?.aborted) await reviewHasEnded();
     } catch (err) {
       rollback();
+      if (ended && typeof err === "object" && err !== null && "status" in err && err.status === 404 && "code" in err && err.code === ERROR_CODES.session_not_registered) {
+        return annotateResult({
+          content: [{ type: "text", text: ENDED_REVIEW_HEADER }],
+          structuredContent: { status: "feedback", comments: [], decisions: [] }
+        }, {
+          filter,
+          reservations,
+          held: view.held,
+          ack: { errors: [], refusal: ERROR_CODES.session_ended }
+        });
+      }
       throw err;
     }
     if (ctx.signal?.aborted) {
       rollback();
-      return result;
+      return assembled.result;
     }
-    const ackErrors = await pending.flush(ctx.store);
-    return annotateResult(result, { filter, reservations, held: view.held, ackErrors });
+    const ack = ended ? { errors: [], refusal: ERROR_CODES.session_ended } : await pending.flush(ctx.store);
+    return annotateResult(assembled.result, { filter, reservations, held: view.held, ack, endedText: assembled.endedText });
   } finally {
     view.release();
     if (consumer) endConsumer(ctx.state, consumer);
   }
 }
+var STOP_ENDED_REVIEW = "Stop polling this ended review.";
+var ENDED_REVIEW_HEADER = `Review ended.
+
+Suggested action: ${STOP_ENDED_REVIEW}`;
 function annotateResult(result, o) {
-  const { filter, reservations, held, ackErrors } = o;
+  const { filter, reservations, held, ack: { errors: ackErrors, refusal } } = o;
+  const ended = refusal === ERROR_CODES.session_ended;
   const heldLines = [];
   const heldStructured = [];
   for (const [label, tally] of Object.entries(held)) {
@@ -37774,8 +37819,8 @@ function annotateResult(result, o) {
     if (total === 0) continue;
     const r = reservations.find((x) => x.label === label);
     const releaseInSec = r?.releaseInMs == null ? null : Math.max(1, Math.ceil(r.releaseInMs / 1e3));
-    const when = releaseInSec === null ? `while its check_feedback is open, then ${LIVE_POLL_GRACE_MS / 1e3}s` : `released to you in ${releaseInSec}s if it doesn't poll again`;
-    heldLines.push(`${text2} held for "${label}" (${when})`);
+    const when = ended ? "" : releaseInSec === null ? `while its check_feedback is open, then ${LIVE_POLL_GRACE_MS / 1e3}s` : `released to you in ${releaseInSec}s if it doesn't poll again`;
+    heldLines.push(`${text2} held for "${label}"${when ? ` (${when})` : ""}`);
     heldStructured.push({
       label,
       count: total,
@@ -37789,29 +37834,32 @@ function annotateResult(result, o) {
     notes.push(
       `
 
-(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} \u2014 only your own artifacts' feedback is shown and consumed; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`
+(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} \u2014 only your own artifacts' feedback is shown${refusal ? "" : " and consumed"}; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`
     );
   }
   if (heldLines.length > 0) {
     notes.push(
       `
 
-\u23F8 HELD for a live subagent \u2014 not lost, not yours to act on yet: ${heldLines.join("; ")}. Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll.`
+\u23F8 HELD for a live subagent \u2014 not lost, not yours to act on yet: ${heldLines.join("; ")}.${ended ? "" : " Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll."}`
     );
   }
   if (ackErrors.length > 0) {
     notes.push(
       `
 
-\u26A0\uFE0F Acknowledging this delivery failed (${errorMessage(ackErrors[0])}) \u2014 some items above may be delivered AGAIN on the next check_feedback with the same ids. Skip any id you already acted on.`
+\u26A0\uFE0F Acknowledging this delivery failed (${errorMessage(ackErrors[0])})${ended ? "." : " \u2014 some items above may be delivered AGAIN on the next check_feedback with the same ids. Skip any id you already acted on."}`
     );
   }
+  if (refusal) {
+    notes.push(ended ? "\n\nThe review has ended. This is its final feedback. Any unacknowledged items remain saved." : "\n\nThe review is closing. Unacknowledged items remain saved and can be delivered again if closeout fails and the review reopens.");
+  }
   if (notes.length === 0) return result;
-  let text = result.content[0]?.text ?? "";
+  let text = (ended ? o.endedText?.() : void 0) ?? result.content[0]?.text ?? "";
   let sc = result.structuredContent;
   if (heldStructured.length > 0 && sc) {
     const heldAction = `Something is held for a live subagent (${heldLines.join("; ")}) \u2014 don't treat this as clear; call check_feedback again.`;
-    if (sc.status === "proceed") {
+    if (!ended && sc.status === "proceed") {
       text = text.replace("Suggested action: You may proceed with implementation.", `Suggested action: ${heldAction}`);
       sc = { ...sc, status: "held", suggestedAction: heldAction };
     }
@@ -37819,6 +37867,10 @@ function annotateResult(result, o) {
   }
   if (sc && filter) sc = { ...sc, filter };
   if (sc && ackErrors.length > 0) sc = { ...sc, ackFailed: true };
+  if (refusal) {
+    sc = { ...sc, sessionStatus: refusal };
+    if (ended) sc = { ...sc, status: "feedback", suggestedAction: STOP_ENDED_REVIEW };
+  }
   const [, ...rest] = result.content;
   return {
     ...result,
@@ -37826,7 +37878,8 @@ function annotateResult(result, o) {
     ...sc ? { structuredContent: sc } : {}
   };
 }
-async function assembleCheckFeedback(ctx, args) {
+async function assembleCheckFeedback(ctx, args, reviewHasEnded) {
+  let ended = await reviewHasEnded();
   const { store, server, broadcast, port } = ctx;
   let companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : void 0;
   const portRecoveryNote = () => {
@@ -37863,7 +37916,7 @@ async function assembleCheckFeedback(ctx, args) {
     decidedPlans: decidedPlans.length,
     decidedAny: decidedAny.length
   }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0 || collectPageWatchNotices(allArtsForScope, pageWatchAtGate).prose !== "";
-  if (!hasImmediate) {
+  if (!ended && !hasImmediate) {
     const allArts = allArtsForScope;
     const hasDrafts = allArts.some(
       (a) => a.status === "draft" && PENDING_DRAFT_TYPES.includes(a.type)
@@ -37883,12 +37936,14 @@ async function assembleCheckFeedback(ctx, args) {
       }
       try {
         await store.waitForFeedback(3e4);
+        ended = await reviewHasEnded();
       } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);
       }
     }
   }
   const parts = [];
+  const guidance = (live, ended2 = "") => parts.push({ live, ended: ended2 });
   const newComments = (await store.getUnacknowledgedComments()).map((comment) => ({ ...comment }));
   const newResolved = await store.getResolvedDecisions();
   const postWakeArtifacts = await store.getArtifacts();
@@ -37901,7 +37956,7 @@ async function assembleCheckFeedback(ctx, args) {
   } else {
     ctx.state.checkFeedbackPollCount++;
   }
-  if (waitForScope !== "any") {
+  if (!ended && waitForScope !== "any") {
     const decidedPlansPostWake = postWakeArtifacts.filter(
       (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected")
     );
@@ -37917,7 +37972,7 @@ async function assembleCheckFeedback(ctx, args) {
     const newRenderFailures = postWakeRenderFailures;
     if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0 && postWakeWorkerStops.stops.length === 0) {
       const portNote2 = portRecoveryNote();
-      return {
+      return { endedText: () => ENDED_REVIEW_HEADER, result: {
         content: [{
           type: "text",
           text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll \u2014 no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).${portNote2}`
@@ -37935,7 +37990,7 @@ async function assembleCheckFeedback(ctx, args) {
           rejected: [],
           statusChanges: []
         }
-      };
+      } };
     }
   }
   const allArtifacts = postWakeArtifacts;
@@ -37990,10 +38045,11 @@ async function assembleCheckFeedback(ctx, args) {
   if (sessionMessages.length > 0) {
     await ackDeliveredComments(sessionMessages);
     const formatted = sessionMessages.map((c) => `- ${c.content}${commentSecretNote(c)}`).join("\n");
-    parts.push(`\u{1F3AF} Human directive:
-${formatted}
+    const directive = `\u{1F3AF} Human directive:
+${formatted}`;
+    guidance(`${directive}
 
-Adjust your approach based on this guidance.`);
+Adjust your approach based on this guidance.`, directive);
     for (const c of sessionMessages) {
       structuredComments.push({ id: c.id, artifactId: "__session__", kind: "directive", content: c.content });
     }
@@ -38037,11 +38093,15 @@ Adjust your approach based on this guidance.`);
       }
     }
     if (questionLines.length > 0) {
-      parts.push(`Human questions (${questionLines.length}) \u2014 answer these before proceeding:
+      const heading = `Human questions (${questionLines.length})`;
+      guidance(`${heading} \u2014 answer these before proceeding:
+${questionLines.join("\n")}`, `${heading} at End:
 ${questionLines.join("\n")}`);
     }
     if (suggestionLines.length > 0) {
-      parts.push(`\u{1F527} Suggested edits (${suggestionLines.length}) \u2014 you MUST respond to each (apply / apply-with-extension / counter). An unanswered suggestion stays PENDING in the UI as visible debt:
+      const heading = `\u{1F527} Suggested edits (${suggestionLines.length})`;
+      guidance(`${heading} \u2014 you MUST respond to each (apply / apply-with-extension / counter). An unanswered suggestion stays PENDING in the UI as visible debt:
+${suggestionLines.join("\n")}`, `${heading} at End:
 ${suggestionLines.join("\n")}`);
     }
     if (otherLines.length > 0) {
@@ -38049,7 +38109,7 @@ ${suggestionLines.join("\n")}`);
 ${otherLines.join("\n")}`);
     }
     if (anyFollowUp) {
-      parts.push(
+      guidance(
         `\u2139\uFE0F The [follow-up ...] item(s) above are FOLLOW-UP FEEDBACK on an already-APPROVED artifact \u2014 NOT a review reopening. The review outcome stands; do not treat this as a rejection or a request to re-run the review. Address it as new input: answer it (answer_question / a reply comment), or present a new artifact or revision if it genuinely warrants one.`
       );
     }
@@ -38096,8 +38156,11 @@ ${otherLines.join("\n")}`);
           return `  \u2022 ${label}${idTag} \u2014 comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`;
         }
       );
-      parts.push(
-        `\u21A9\uFE0F ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier \u2014 the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:
+      const heading = `\u21A9\uFE0F ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier`;
+      guidance(
+        `${heading} \u2014 the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:
+${lines.join("\n")}`,
+        `${heading} and still unanswered at End:
 ${lines.join("\n")}`
       );
     }
@@ -38105,19 +38168,23 @@ ${lines.join("\n")}`
   }
   if (freshlyRejected.length > 0) {
     const list2 = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
-    parts.push(
-      `\u274C REJECTED (${freshlyRejected.length}): ${list2}
-The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do NOT apply. Revise the approach or propose a different one (see their comment above for why).`
-    );
+    const rejection = `\u274C REJECTED (${freshlyRejected.length}): ${list2}
+The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do NOT apply.`;
+    guidance(`${rejection} Revise the approach or propose a different one (see their comment above for why).`, rejection);
   }
   if (pendingRequests.length > 0) {
+    const requests = pendingRequests.map(
+      (r) => `- \u{1F4E8} REQUEST [${r.id}] \u2014 ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}${requestScopeNote(r)}`
+    );
     const lines = pendingRequests.map(
-      (r) => `- \u{1F4E8} REQUEST [${r.id}] \u2014 ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}${requestScopeNote(r)}
+      (r, index) => `${requests[index]}
     \u2192 Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`
     );
-    parts.push(
+    guidance(
       `\u{1F4E8} Human requests (${pendingRequests.length}) \u2014 the human ASKED for ${pendingRequests.length === 1 ? "this" : "these"}. Serve with the matching present_* tool (explain\u2192present_explainer, plan\u2192present_plan/present_spec, status\u2192present_debrief):
-${lines.join("\n")}`
+${lines.join("\n")}`,
+      `\u{1F4E8} Human requests (${pendingRequests.length}) still open at End:
+${requests.join("\n")}`
     );
   }
   const resolved = newResolved;
@@ -38125,14 +38192,17 @@ ${lines.join("\n")}`
     const formattedDecisions = [];
     const recordedIds = [];
     const deferred = [];
+    ended = await reviewHasEnded();
     for (const d of resolved) {
-      try {
-        await recordDecisionLedger(d);
-      } catch (err) {
-        deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}). It will be delivered again on the next check_feedback \u2014 call it again shortly.`);
-        continue;
+      if (!ended) {
+        try {
+          await recordDecisionLedger(d);
+        } catch (err) {
+          deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
+          continue;
+        }
+        recordedIds.push(d.decisionId);
       }
-      recordedIds.push(d.decisionId);
       const feedback = decisionFeedback(d);
       const decisionLabel = d.title?.trim() || d.context;
       const notChosen = d.options.filter((o) => o.id !== d.response?.optionId).map((o) => `"${o.title}"`);
@@ -38147,8 +38217,14 @@ ${lines.join("\n")}`
     if (recordedIds.length > 0) await store.acknowledgeDecisions(recordedIds);
     if (formattedDecisions.length > 0) parts.push(`Decision selections:
 ${formattedDecisions.join("\n")}`);
-    if (deferred.length > 0) parts.push(`\u23F3 Decision ledger writes deferred (${deferred.length}):
-${deferred.join("\n")}`);
+    if (deferred.length > 0) {
+      guidance(
+        `\u23F3 Decision ledger writes deferred (${deferred.length}):
+${deferred.map((line) => `${line} It will be delivered again on the next check_feedback \u2014 call it again shortly.`).join("\n")}`,
+        `Decision ledger writes incomplete at End (${deferred.length}):
+${deferred.join("\n")}`
+      );
+    }
   }
   async function recordDecisionLedger(d) {
     const option = d.options.find((o) => o.id === d.response?.optionId);
@@ -38242,10 +38318,12 @@ ${lines.join("\n")}`);
       const name = f.title ? `"${f.title}"` : `visual ${f.visualId}`;
       return `- ${name} (${f.visualId}) on artifact ${f.artifactId} failed to render: ${f.error}`;
     });
-    parts.push(
+    guidance(
       `\u{1F5BC}\uFE0F Diagram render failures (${diagramFailures.length}) \u2014 the human sees a broken/repaired diagram:
 ${lines.join("\n")}
-Fix the Mermaid source and re-present the affected visual (revise_artifact).`
+Fix the Mermaid source and re-present the affected visual (revise_artifact).`,
+      `\u{1F5BC}\uFE0F Diagram render failures (${diagramFailures.length}):
+${lines.join("\n")}`
     );
   }
   if (pageRenderIssues.length > 0) {
@@ -38254,19 +38332,21 @@ Fix the Mermaid source and re-present the affected visual (revise_artifact).`
       const what = parsed ? `the page reported ${describePageRenderIssues(parsed)}` : "the page reported render issues (details unavailable)";
       return `- ${f.title ? `"${f.title}"` : "page"} (${f.artifactId}): ${what}`;
     });
-    parts.push(
+    guidance(
       `\u{1F9EF} Page render issues (${pageRenderIssues.length}) \u2014 your pair's review frame reported problems with your page:
 ${lines.join("\n")}
-The frame has no network: inline images, media and fonts as data: URIs (relative and external paths can't load), and fix script errors. Revise the page so it renders as you intended.`
+The frame has no network: inline images, media and fonts as data: URIs (relative and external paths can't load), and fix script errors. Revise the page so it renders as you intended.`,
+      `\u{1F9EF} Page render issues (${pageRenderIssues.length}):
+${lines.join("\n")}`
     );
   }
   const pageWatchRefs = store.selectFileWatchNotices ? await store.selectFileWatchNotices(postWakeArtifacts) : undeliveredFileWatchRefs(postWakeArtifacts);
   const pageWatch = collectPageWatchNotices(postWakeArtifacts, pageWatchRefs);
-  if (pageWatch.prose) parts.push(pageWatch.prose);
+  if (pageWatch.prose) guidance(pageWatch.prose, pageWatch.endedProse);
   if (pageWatch.refs.length > 0) await store.acknowledgeFileWatchNotices?.(pageWatch.refs);
   const workerStops = postWakeWorkerStops.stops;
   if (workerStops.length > 0) {
-    parts.push(formatWorkerStops(workerStops));
+    guidance(formatWorkerStops(workerStops), formatWorkerStops(workerStops, { historical: true }));
     await store.markWorkerStopsDelivered?.(workerStops.map((w) => w.id));
   }
   if (workerStopsNotice) parts.push(workerStopsNotice);
@@ -38284,16 +38364,18 @@ The frame has no network: inline images, media and fonts as data: URIs (relative
     const lines = [];
     if (owed.length > 0) {
       const named = owed.slice(0, 5).map((q) => `#${q.id} (${q.kind}) "${clipAsk(q.text)}"`).join("; ");
-      lines.push(
-        `\u{1F4DD} Page "${page.title}" has ${owed.length} open ask${owed.length === 1 ? "" : "s"} your pair hasn't answered yet: ${named}${owed.length > 5 ? `; and ${owed.length - 5} more` : ""}. They answer by commenting on the ask in the companion.`
-      );
+      lines.push({
+        text: `\u{1F4DD} Page "${page.title}" has ${owed.length} open ask${owed.length === 1 ? "" : "s"} your pair hasn't answered yet: ${named}${owed.length > 5 ? `; and ${owed.length - 5} more` : ""}.`,
+        guidance: " They answer by commenting on the ask in the companion."
+      });
     }
     if (unverifiable > 0) {
-      lines.push(
-        `${unverifiable} ask${unverifiable === 1 ? " has" : "s have"} no id on page "${page.title}", so ${unverifiable === 1 ? "its answer" : "their answers"} can't be checked here \u2014 add ids, or check the companion.`
-      );
+      lines.push({
+        text: `${unverifiable} ask${unverifiable === 1 ? " has" : "s have"} no id on page "${page.title}", so ${unverifiable === 1 ? "its answer" : "their answers"} can't be checked here`,
+        guidance: " \u2014 add ids, or check the companion."
+      });
     }
-    parts.push(lines.join("\n"));
+    guidance(lines.map((line) => line.text + line.guidance).join("\n"), lines.map((line) => line.text).join("\n"));
   }
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
@@ -38307,8 +38389,11 @@ The frame has no network: inline images, media and fonts as data: URIs (relative
   const nameDraft = (a) => `"${a.title}" (${a.type}${a.secretWarnings?.length ? " \u2014 \u26A0 possible secret detected" : ""})`;
   if (verdictDrafts.length > 0) {
     const waiting = verdictDrafts.map(nameDraft).join(", ");
-    parts.push(`\u23F3 WAITING: ${verdictDrafts.length} artifact(s) still under review: ${waiting}
-The human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
+    guidance(
+      `\u23F3 WAITING: ${verdictDrafts.length} artifact(s) still under review: ${waiting}
+The human is reviewing in the companion UI. Call check_feedback again to pick up their response.`,
+      `Artifacts awaiting a verdict at End (${verdictDrafts.length}): ${waiting}`
+    );
   }
   const structuredToRead = readOnlyDrafts.map((a) => ({
     id: a.id,
@@ -38318,8 +38403,11 @@ The human is reviewing in the companion UI. Call check_feedback again to pick up
   }));
   if (readOnlyDrafts.length > 0) {
     const toRead = readOnlyDrafts.map(nameDraft).join(", ");
-    parts.push(`\u{1F4D6} TO READ: ${readOnlyDrafts.length} read-only artifact(s) the human hasn't acknowledged yet: ${toRead}
-These await no verdict \u2014 they're explanations, not proposals. The human clicks "Got it" (or asks a follow-up) when they've read them. Don't block on these.`);
+    guidance(
+      `\u{1F4D6} TO READ: ${readOnlyDrafts.length} read-only artifact(s) the human hasn't acknowledged yet: ${toRead}
+These await no verdict \u2014 they're explanations, not proposals. The human clicks "Got it" (or asks a follow-up) when they've read them. Don't block on these.`,
+      `Read-only artifacts unacknowledged at End (${readOnlyDrafts.length}): ${toRead}`
+    );
   }
   const deliveredDecisionIds = new Set(resolved.map((d) => d.decisionId));
   const statusById = new Map(postWakeArtifacts.map((a) => [a.id, a.status]));
@@ -38337,29 +38425,35 @@ These await no verdict \u2014 they're explanations, not proposals. The human cli
   }));
   if (pendingDec.length > 0) {
     const named = pendingDec.map((d) => `"${decisionLabelOf(d)}" (${d.decisionId})`).join(", ");
-    parts.push(`\u23F3 WAITING: ${pendingDec.length} decision(s) pending: ${named}. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
+    guidance(
+      `\u23F3 WAITING: ${pendingDec.length} decision(s) pending: ${named}. The human will select in the companion UI. Call check_feedback again to pick up their choice.`,
+      `Unanswered decisions at End (${pendingDec.length}): ${named}.`
+    );
   }
   if (pendingPlans.length > 0) {
-    parts.push(`\u23F3 WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`);
+    guidance(
+      `\u23F3 WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`,
+      `Plan reviews awaiting a verdict at End (${pendingPlans.length}).`
+    );
   }
   const autonomy = autonomyLabel;
   if (autonomy !== "supervised") {
-    parts.push(`Human autonomy preference: ${autonomy}. ${autonomy === "balanced" ? AUTONOMY_POLICY_LINE.balanced : AUTONOMY_POLICY_LINE.autonomous}`);
+    guidance(`Human autonomy preference: ${autonomy}. ${autonomy === "balanced" ? AUTONOMY_POLICY_LINE.balanced : AUTONOMY_POLICY_LINE.autonomous}`);
   }
   const metrics = await store.getEngagementMetrics();
   if (autonomy !== "supervised" && metrics.avgReviewLatencyMs > 0) {
     const avgSecs = Math.round(metrics.avgReviewLatencyMs / 1e3);
     const hint = avgSecs < 30 ? `Human reviewing quickly (avg ${avgSecs}s) \u2014 safe to present more artifacts without batching.` : avgSecs > 300 ? `Human taking longer on reviews (avg ${Math.round(avgSecs / 60)}m) \u2014 consider batching related findings together.` : null;
     if (hint) {
-      parts.push(`Engagement: ${hint}`);
+      guidance(`Engagement: ${hint}`);
     }
   }
   if (ctx.state.checkFeedbackPollCount >= 3 && pendingCount > 0) {
-    parts.push(`\u26A0\uFE0F No human response after ${ctx.state.checkFeedbackPollCount} checks (~${ctx.state.checkFeedbackPollCount * 30}s). The human may not have the companion UI open.
+    guidance(`\u26A0\uFE0F No human response after ${ctx.state.checkFeedbackPollCount} checks (~${ctx.state.checkFeedbackPollCount * 30}s). The human may not have the companion UI open.
 Mention in your response: "Please open http://localhost:${port} to review the artifacts." Then continue polling with check_feedback.`);
   }
   if (ctx.state.checkFeedbackPollCount >= 6 && pendingCount > 0) {
-    parts.push(`\u{1F6D1} After ${ctx.state.checkFeedbackPollCount} empty polls you don't have to keep spinning. It's fine to STOP here: summarize what's still pending (the ${pendingCount} artifact${pendingCount === 1 ? "" : "s"} under review) in your reply and end the run. Nothing is lost \u2014 the artifacts persist and any unanswered questions carry over to your NEXT run (they resurface on your first check_feedback and in the first-call hint). Keep polling only if you'd rather wait.`);
+    guidance(`\u{1F6D1} After ${ctx.state.checkFeedbackPollCount} empty polls you don't have to keep spinning. It's fine to STOP here: summarize what's still pending (the ${pendingCount} artifact${pendingCount === 1 ? "" : "s"} under review) in your reply and end the run. Nothing is lost \u2014 the artifacts persist and any unanswered questions carry over to your NEXT run (they resurface on your first check_feedback and in the first-call hint). Keep polling only if you'd rather wait.`);
   }
   const leadingClauses = [];
   const blockingClauses = [];
@@ -38472,9 +38566,14 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     cappedClauses = remaining > 0 ? [...kept, `(+${remaining} more below.)`] : kept;
   }
   const suggestedAction = hasBlocking ? cappedClauses.join(" ") : ["You may proceed with implementation.", ...advisoryClauses].join(" ");
-  parts.unshift(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `
+  const sessionSummary = `Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}`;
+  parts.unshift({
+    live: `${sessionSummary}${oldestPendingAge ? `
 Oldest pending: ${oldestPendingAge}` : ""}
-Suggested action: ${suggestedAction}`);
+Suggested action: ${suggestedAction}`,
+    ended: `${sessionSummary} | Review ended
+Suggested action: ${STOP_ENDED_REVIEW}`
+  });
   const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 || // #176 — a broken diagram the human is staring at is actionable: the agent
   // should fix + re-present, not sit in 'waiting'.
   renderFailures.length > 0 || // G1 (#198b) — a pending human request is something to act on (serve it).
@@ -38597,9 +38696,10 @@ Suggested action: ${suggestedAction}`);
     // spreads nothing (byte-for-byte-unchanged payload) when healthy.
     ...ledgerHealthField()
   };
+  const text = (ended2) => parts.map((part) => typeof part === "string" ? part : ended2 ? part.ended : part.live).filter((part) => !ended2 || part !== "").join("\n\n") + (ended2 ? "" : portNote);
   return {
-    content: [{ type: "text", text: `${parts.join("\n\n")}${portNote}` }],
-    structuredContent
+    result: { content: [{ type: "text", text: text(false) }], structuredContent },
+    endedText: () => text(true)
   };
 }
 
@@ -44478,6 +44578,14 @@ var DaemonClient = class {
   getSessionId() {
     return this.sessionId;
   }
+  async getStandaloneReviewState() {
+    if (!isStandaloneSessionId(this.sessionId)) return;
+    const result = await this.request("/review-state", { method: "GET" });
+    if (result === void 0) return;
+    const state = result?.state;
+    if (state === "open" || state === "closing" || state === "ended") return state;
+    throw new Error("[deepPairing] daemon returned an invalid review state");
+  }
   /**
    * Z1 — common request path with auto-recover on session_not_registered.
    *
@@ -44514,6 +44622,9 @@ var DaemonClient = class {
       );
     }
     if (res.ok) return res.json();
+    if (path23 === "/review-state" && res.status === 404 && res.headers.get("Content-Type")?.startsWith("text/plain") && await res.clone().text() === "404 Not Found") {
+      return void 0;
+    }
     let body = {};
     try {
       body = await res.clone().json();
