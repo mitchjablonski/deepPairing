@@ -375,11 +375,20 @@ export class StanceExceptionRegistry {
 
   // --- The per-session operation queue (§13 condition 1) ---------------------
 
+  /** Test-only seam: called synchronously once an operation is queued. */
+  onEnqueueForTest?: (sessionId: string) => void;
+
+  /** Test-only seam: settles when everything queued for the session so far has. */
+  idleForTest(sessionId: string): Promise<unknown> {
+    return this.queues.get(sessionId) ?? Promise.resolve();
+  }
+
   private enqueue<T>(sessionId: string, fn: () => T | Promise<T>): Promise<T> {
     const prev = this.queues.get(sessionId) ?? Promise.resolve();
     const next = prev.catch(() => undefined).then(fn);
     const tail = next.catch(() => undefined);
     this.queues.set(sessionId, tail);
+    this.onEnqueueForTest?.(sessionId);
     // Prune when idle: nothing queued behind this operation.
     void tail.then(() => { if (this.queues.get(sessionId) === tail) this.queues.delete(sessionId); });
     return next;
