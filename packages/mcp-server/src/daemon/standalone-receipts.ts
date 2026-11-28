@@ -27,12 +27,34 @@ export interface StandaloneCloseoutSnapshot {
   verifyFeedback(parentId: string, proof: PageRevisionFeedbackProof): void;
 }
 
+export interface StandaloneReplaySnapshot extends StandaloneCloseoutSnapshot {
+  getArtifacts(): readonly Artifact[];
+}
+
 export function readJsonFile(file: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch (err) {
     if (err instanceof Error && "code" in err && err.code === "ENOENT") return undefined;
     throw err;
+  }
+}
+
+/** Read a durable file without following a replacement or a nonregular entry. */
+export function readRegularJsonFile(file: string): unknown {
+  const expected = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!expected) return undefined;
+  if (!expected.isFile()) throw new Error("Standalone review record is not a regular file.");
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+  const fd = fs.openSync(file, flags);
+  try {
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino) {
+      throw new Error("Standalone review record changed while it was opened.");
+    }
+    return JSON.parse(fs.readFileSync(fd, "utf8"));
+  } finally {
+    fs.closeSync(fd);
   }
 }
 

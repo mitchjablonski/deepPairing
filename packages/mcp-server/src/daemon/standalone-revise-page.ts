@@ -12,9 +12,9 @@ import type { FileStore } from "../store/file-store.js";
 import { PageRevisionFeedbackConflictError, pageRevisionFeedbackProofSchema, provePageRevisionFeedback, type PageRevisionFeedbackRefusal } from "../store/page-revision-feedback.js";
 import { findPageSuccessor } from "./page-successor.js";
 import {
-  operationDigest, readJsonFile, readSessionRecord, receiptDigestSchema,
+  operationDigest, readJsonFile, readRegularJsonFile, readSessionRecord, receiptDigestSchema,
   standaloneOperationConflict, standaloneOperationKey,
-  type StandaloneCloseoutSnapshot,
+  type StandaloneCloseoutSnapshot, type StandaloneReplaySnapshot,
 } from "./standalone-receipts.js";
 
 const receiptSchema = z.object({
@@ -28,6 +28,11 @@ const receiptSchema = z.object({
   committed: z.literal(true).optional(),
 }).strict();
 type Receipt = z.infer<typeof receiptSchema>;
+type RevisionInput = { artifactId: string; html: string; reason: string; ackCommentIds?: string[] };
+
+function revisionFingerprint({ artifactId, reason, html, ackCommentIds }: RevisionInput): string {
+  return operationDigest({ artifactId, reason, html, ...(ackCommentIds?.length ? { ackCommentIds } : {}) });
+}
 
 function refused(message: string, code: ErrorCode, details: Record<string, unknown> = {}) {
   return { isError: true as const, content: [{ type: "text" as const, text: message }], structuredContent: { code, ...details } };
@@ -35,6 +40,83 @@ function refused(message: string, code: ErrorCode, details: Record<string, unkno
 
 function childDigest(child: { version?: unknown; parentId?: unknown; content?: unknown; agentReasoning?: unknown }): string {
   return operationDigest([child.version, child.parentId, child.content, child.agentReasoning]);
+}
+
+function requireChild(child: Record<string, unknown> | Artifact, receipt: Receipt, sessionId: string, parentId: string): void {
+  if (child.type !== "page" || child.sessionId !== sessionId || child.parentId !== parentId ||
+    !receipt.childDigest || childDigest(child) !== receipt.childDigest) {
+    throw new Error("Standalone revision child does not match its receipt.");
+  }
+}
+
+function requireNote(comment: Record<string, unknown>, sessionId: string, parentId: string, note: string): void {
+  const target = comment.target as { artifactId?: unknown } | undefined;
+  if (comment.author !== "agent" || comment.sessionId !== sessionId || target?.artifactId !== parentId ||
+    comment.content !== note) {
+    throw new Error("Standalone revision note does not match its receipt.");
+  }
+}
+
+function revisionReply(child: Artifact, parentId: string, artifacts: readonly Artifact[],
+  feedback: Receipt["feedback"], replayed: boolean): ToolResult {
+  const latest = findPageSuccessor(child, artifacts);
+  return {
+    content: [{ type: "text", text: `Page ${parentId} was revised as ${child.id} (v${child.version}).` }],
+    structuredContent: {
+      sessionId: child.sessionId, parentArtifactId: parentId, artifactId: child.id, version: child.version, status: child.status,
+      ...(feedback ? { acknowledgedCommentIds: feedback.commentIds } : {}),
+      ...(feedback?.includesRuleOut ? { acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged." } : {}),
+      ...(replayed ? { replayed: true } : {}),
+      ...(latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : {}),
+    },
+  };
+}
+
+/** Return only a verified committed revision. An ended review cannot repair a receipt. */
+export function replayEndedStandaloneRevision(projectRoot: string, sessionId: string, operationId: string,
+  input: RevisionInput, readSnapshot: () => StandaloneReplaySnapshot): ToolResult | null {
+  const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+  const raw = readRegularJsonFile(path.join(dir, `revise-page-${operationId}.json`));
+  if (raw === undefined) return null;
+  const receipt = receiptSchema.parse(raw);
+  if (!receipt.committed) return null;
+
+  const ackCommentIds = [...(input.ackCommentIds ?? [])].sort();
+  if (receipt.fingerprint !== revisionFingerprint({ ...input, ackCommentIds })) {
+    return standaloneOperationConflict("revision input");
+  }
+  const recordedIds = receipt.feedback?.commentIds ?? [];
+  if (JSON.stringify(recordedIds) !== JSON.stringify(ackCommentIds)) {
+    throw new Error("Standalone revision is missing its exact feedback selection.");
+  }
+
+  const parentId = input.artifactId;
+  const key = standaloneOperationKey(projectRoot, sessionId, "revise_page", operationId);
+  const artifactId = `art_${key}`;
+  const snapshot = readSnapshot();
+  const parent = snapshot.artifact(parentId);
+  const child = snapshot.artifact(artifactId);
+  if (!child || !parent || parent.sessionId !== sessionId || parent.type !== "page" ||
+    parent.version + 1 !== child.version || snapshot.hasOtherChild(parentId, artifactId)) {
+    throw new Error("Standalone revision has inconsistent durable page lineage.");
+  }
+  requireChild(child, receipt, sessionId, parentId);
+  const { html } = PageContentSchema.parse(child.content);
+  if (typeof child.agentReasoning !== "string" || child.agentReasoning !== input.reason ||
+    revisionFingerprint({ artifactId: parentId, html, reason: child.agentReasoning, ackCommentIds: recordedIds }) !== receipt.fingerprint) {
+    throw new Error("Standalone revision child does not match its request fingerprint.");
+  }
+
+  const note = snapshot.record("comments.json", "id", `cmt_${key}`);
+  const trace = snapshot.trace(artifactId);
+  if (!note || !trace || receipt.trace?.decision !== "admitted" ||
+    receipt.trace.artifactId !== artifactId || receipt.trace.toolName !== "revise_artifact" ||
+    operationDigest(trace) !== operationDigest(receipt.trace)) {
+    throw new Error("Standalone revision is missing its durable note or preflight trace.");
+  }
+  requireNote(note, sessionId, parentId, revisionNote(artifactId, input.reason));
+  if (receipt.feedback) snapshot.verifyFeedback(parentId, receipt.feedback);
+  return revisionReply(child, parentId, snapshot.getArtifacts(), receipt.feedback, true);
 }
 
 function revisionOperation(
@@ -77,24 +159,10 @@ function revisionOperation(
     return { status: parent.status, historyLength: parent.statusHistory?.length ?? 0, metadata: { title, summary, concept } };
   }
 
-  function requireChild(child: Record<string, unknown> | Artifact, receipt: Receipt, parentId: string): void {
-    if (child.type !== "page" || child.sessionId !== sessionId || child.parentId !== parentId ||
-      !receipt.childDigest || childDigest(child) !== receipt.childDigest) {
-      throw new Error("Standalone revision child does not match its receipt.");
-    }
-  }
-
   function recover(receipt: Receipt, replayed: boolean, input: { parentId: string; reason: string; ackCommentIds: string[] },
     snapshot?: StandaloneCloseoutSnapshot): ToolResult | null {
     const { parentId, reason, ackCommentIds } = input;
     const note = revisionNote(artifactId, reason);
-    function requireNote(comment: Record<string, unknown>): void {
-      const target = comment.target as { artifactId?: unknown } | undefined;
-      if (comment.author !== "agent" || comment.sessionId !== sessionId || target?.artifactId !== parentId ||
-        comment.content !== note) {
-        throw new Error("Standalone revision note does not match its receipt.");
-      }
-    }
     const record = snapshot?.record ?? ((file: string, key: string, id: string) => readSessionRecord(dir, file, key, id));
     const child = snapshot ? snapshot.artifact(artifactId) : store.getArtifacts().find((a) => a.id === artifactId);
     const diskChild = record("artifacts.json", "id", artifactId);
@@ -106,7 +174,7 @@ function revisionOperation(
       }
       return null;
     }
-    requireChild(child, receipt, parentId);
+    requireChild(child, receipt, sessionId, parentId);
     const { feedback } = receipt;
     if (JSON.stringify(feedback?.commentIds ?? []) !== JSON.stringify(ackCommentIds)) {
       throw new Error("Standalone revision is missing its exact feedback selection.");
@@ -119,9 +187,9 @@ function revisionOperation(
     if (diskTrace && operationDigest(diskTrace) !== operationDigest(trace)) {
       throw new Error("Standalone revision preflight trace does not match its receipt.");
     }
-    if (diskChild) requireChild(diskChild, receipt, parentId);
-    if (diskNote) requireNote(diskNote);
-    if (bufferedNote) requireNote({ ...bufferedNote });
+    if (diskChild) requireChild(diskChild, receipt, sessionId, parentId);
+    if (diskNote) requireNote(diskNote, sessionId, parentId, note);
+    if (bufferedNote) requireNote({ ...bufferedNote }, sessionId, parentId, note);
 
     const parent = snapshot ? snapshot.artifact(parentId) : store.getArtifacts().find((a) => a.id === parentId);
     const hasOtherChild = snapshot ? snapshot.hasOtherChild(parentId, artifactId) :
@@ -135,7 +203,7 @@ function revisionOperation(
         durableParent.version !== child.version - 1 || (requireSuperseded && durableParent.status !== "superseded")) {
         throw new Error("Standalone revision is missing its durable page version.");
       }
-      requireChild(durableChild, receipt, parentId);
+      requireChild(durableChild, receipt, sessionId, parentId);
     };
     const checkVersion = (requireSuperseded?: boolean) => requireDurableVersion(
       record("artifacts.json", "id", parentId),
@@ -170,7 +238,7 @@ function revisionOperation(
         flush();
         const savedNote = readSessionRecord(dir, "comments.json", "id", commentId);
         if (!savedNote) throw new Error("Standalone revision is missing its durable note.");
-        requireNote(savedNote);
+        requireNote(savedNote, sessionId, parentId, note);
       }
       if (!diskTrace) store.recordPreflightTrace(artifactId, trace);
       const savedTrace = store.getPreflightTrace(artifactId);
@@ -195,17 +263,7 @@ function revisionOperation(
       if (snapshot) return { content: [] };
     }
 
-    const latest = findPageSuccessor(child, store.getArtifacts());
-    return {
-      content: [{ type: "text", text: `Page ${parentId} was revised as ${artifactId} (v${child.version}).` }],
-      structuredContent: {
-        sessionId, parentArtifactId: parentId, artifactId, version: child.version, status: child.status,
-        ...(feedback ? { acknowledgedCommentIds: feedback.commentIds } : {}),
-        ...(feedback?.includesRuleOut ? { acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged." } : {}),
-        ...(replayed ? { replayed: true } : {}),
-        ...(latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : {}),
-      },
-    };
+    return revisionReply(child, parentId, store.getArtifacts(), feedback, replayed);
   }
 
   function reconcile(snapshot?: StandaloneCloseoutSnapshot): boolean {
@@ -224,13 +282,10 @@ function revisionOperation(
     if (typeof child.parentId !== "string" || typeof child.agentReasoning !== "string" || !child.agentReasoning.trim()) {
       throw new Error("Standalone revision is missing its durable parent or revision reason.");
     }
-    requireChild(child, receipt, child.parentId);
+    requireChild(child, receipt, sessionId, child.parentId);
     const content = PageContentSchema.parse(child.content);
     const ackCommentIds = receipt.feedback?.commentIds ?? [];
-    const fingerprint = operationDigest({
-      artifactId: child.parentId, reason: child.agentReasoning, html: content.html,
-      ...(ackCommentIds.length ? { ackCommentIds } : {}),
-    });
+    const fingerprint = revisionFingerprint({ artifactId: child.parentId, reason: child.agentReasoning, html: content.html, ackCommentIds });
     if (receipt.fingerprint !== fingerprint) throw new Error("Standalone revision child does not match its request fingerprint.");
     if (!receipt.committed) {
       const parent = record("artifacts.json", "id", child.parentId);
@@ -264,13 +319,13 @@ export async function reviseStandalonePage(
   projectRoot: string,
   store: FileStore,
   operationId: string,
-  input: { artifactId: string; html: string; reason: string; ackCommentIds?: string[] },
+  input: RevisionInput,
   broadcast: BroadcastFn,
 ): Promise<ToolResult> {
   const sessionId = store.getSessionId();
   const { artifactId: parentId, reason, html } = input;
   const ackCommentIds = [...(input.ackCommentIds ?? [])].sort();
-  const fingerprint = operationDigest({ artifactId: parentId, reason, html, ...(ackCommentIds.length ? { ackCommentIds } : {}) });
+  const fingerprint = revisionFingerprint({ artifactId: parentId, reason, html, ackCommentIds });
   const { artifactId, receiptPath, save, lock, read, target: findTarget, recover: recoverOperation } =
     revisionOperation(projectRoot, store, operationId, broadcast);
   const target = () => findTarget(parentId);
