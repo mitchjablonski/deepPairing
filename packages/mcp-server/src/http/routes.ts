@@ -1940,11 +1940,10 @@ export function createHttpRoutes(
       return c.json({ error: "Invalid session ID" }, 400);
     }
     try {
-      const state = FileStore.loadSession(projectRoot, sessionId);
-      return c.json(state);
-    } catch {
-      return c.json({ error: "Session not found" }, 404);
-    }
+      const state = FileStore.readSessionSnapshot(projectRoot, sessionId);
+      if (state) return c.json(state);
+    } catch { /* A historical session may be missing or unreadable. */ }
+    return c.json({ error: "Session not found" }, 404);
   });
 
   // --- Session annotations (learner's replay notes) ---

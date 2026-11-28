@@ -367,6 +367,58 @@ it("rejects a body-targeted cold ended close-out before constructing a transient
   }
 });
 
+it("reads a cold ended review by path without writing session or project data", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const siblingId = createStandaloneSessionId(tmpDir);
+  const history = daemon.createSession(sessionId);
+  history.createArtifact({ id: "decision", type: "decision", title: "Choose a cache", content: { decisionId: "d1" } });
+  history.recordDecisionRequest({ decisionId: "d1", artifactId: "decision", context: "Choose a cache", options: OPTS });
+  history.resolveDecision("d1", "o2", "Keep the system simple");
+  history.addComment({ id: "pending", artifactId: "decision", content: "Check the TTL", author: "human" });
+  await daemon.standaloneCloseout.end(sessionId);
+  const expected = JSON.parse(JSON.stringify(history.getFullState())) as ReturnType<FileStore["getFullState"]>;
+  history.dispose();
+  daemon.sessions.delete(sessionId);
+  const sibling = daemon.createSession(siblingId);
+  sibling.createArtifact({ id: "sibling", type: "research", title: "Sibling", content: {} });
+  sibling.forceFlush();
+
+  const base = path.join(tmpDir, ".deeppairing");
+  const sessionDir = path.join(base, "sessions", sessionId);
+  const markerPath = path.join(sessionDir, "review-ended.json");
+  const optionalPath = path.join(sessionDir, "render-failures.json");
+  const queuePath = path.join(base, "ledger-mirror-pending.json");
+  fs.writeFileSync(optionalPath, "{ broken optional lane");
+  fs.writeFileSync(queuePath, "[]\n");
+  const namesBefore = fs.readdirSync(sessionDir).sort();
+  const markerBefore = fs.readFileSync(markerPath, "utf8");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const mkdir = vi.spyOn(fs, "mkdirSync");
+  const warnings = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const headers = { "X-Project-Hash": projectHashOf(tmpDir), "X-Session-Id": siblingId };
+    const replay = await daemon.app.request(`/api/sessions/${sessionId}`, { headers });
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual(expected);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mkdir.mock.calls).toHaveLength(0);
+    expect(daemon.sessions.has(sessionId)).toBe(false);
+    expect(fs.readdirSync(sessionDir).sort()).toEqual(namesBefore);
+    expect(fs.readFileSync(markerPath, "utf8")).toBe(markerBefore);
+    expect(fs.readFileSync(optionalPath, "utf8")).toBe("{ broken optional lane");
+    expect(fs.readFileSync(queuePath, "utf8")).toBe("[]\n");
+
+    const live = await daemon.app.request("/api/state", { headers });
+    expect(live.status).toBe(200);
+    expect(await live.json()).toMatchObject({ sessionId: siblingId, artifacts: [{ id: "sibling" }] });
+  } finally {
+    warnings.mockRestore();
+    mkdir.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
 it("End lets a held decision resolution settle before an admitted close-out inspects it", async () => {
   const { tmpDir, daemon } = makeDaemon();
   const sessionId = createStandaloneSessionId(tmpDir);
