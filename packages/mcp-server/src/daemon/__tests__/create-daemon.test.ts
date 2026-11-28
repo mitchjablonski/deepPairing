@@ -713,6 +713,122 @@ it("internal artifact writes and retirement retries respect the exact standalone
   }
 });
 
+// #711 — stance-exception operations write the session (create, follow-ups,
+// completedAt, flush). Seeds an admitted child without completedAt so the
+// route's real complete path is the write under test.
+function seedAdmitted(target: FileStore, id: string, operationId: string): void {
+  target.createAdmittedArtifact({ id, type: "research", title: `Admitted ${id}`, content: {} }, {
+    operationId, callFingerprint: "a".repeat(64), effectiveDigest: "digest", kind: "create",
+    exceptionIds: [`sx_${operationId}`], grantedVia: "ui", followUps: {},
+  });
+  target.forceFlush();
+}
+
+it("stance-exception operations respect the exact standalone End cutoff and End waits for an admitted one", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const siblingId = createStandaloneSessionId(tmpDir);
+  const throwerId = createStandaloneSessionId(tmpDir);
+  const wrapperId = "session_wrapper";
+  const store = daemon.createSession(sessionId);
+  const sibling = daemon.createSession(siblingId);
+  const thrower = daemon.createSession(throwerId);
+  const wrapper = daemon.createSession(wrapperId);
+  await sleep(10); // let creation-time reconciliation settle before seeding
+  seedAdmitted(store, "held", "op_held");
+  seedAdmitted(store, "late", "op_late");
+  for (const target of [sibling, wrapper]) seedAdmitted(target, "late", "op_late");
+  seedAdmitted(thrower, "boom", "op_boom");
+  const operate = (id: string, operationId: string, callFingerprint = "a".repeat(64)) =>
+    daemon.app.request(`/api/internal/sessions/${id}/operations/${operationId}`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" },
+      body: JSON.stringify({ callFingerprint }),
+    });
+  const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  const marker = path.join(dir, "review-ended.json");
+  const artifactsOnDisk = () => fs.readFileSync(path.join(dir, "artifacts.json"), "utf8");
+  const completedOnDisk = (id: string) =>
+    (JSON.parse(artifactsOnDisk()) as Array<{ id: string; admission?: { completedAt?: string } }>).find((a) => a.id === id)?.admission?.completedAt;
+
+  // A validation failure is refused before admission and never pins End.
+  expect((await operate(sessionId, "op_held", "not-a-fingerprint")).status).toBe(400);
+  // A throw inside the permit releases it: End on that review still settles.
+  const flush = vi.spyOn(thrower, "forceFlush").mockImplementationOnce(() => { throw new Error("disk full"); });
+  expect((await operate(throwerId, "op_boom")).status).toBe(500);
+  flush.mockRestore();
+  await expect(daemon.standaloneCloseout.end(throwerId)).resolves.toMatchObject({ sessionId: throwerId });
+
+  // Hold the session's real operation queue so the admitted operation is in flight when End starts.
+  let unblock!: () => void;
+  const gate = new Promise<void>((resolve) => { unblock = resolve; });
+  const queue = daemon.stanceExceptions as unknown as { enqueue(id: string, fn: () => Promise<void>): Promise<void> };
+  void queue.enqueue(sessionId, () => gate);
+  const held = operate(sessionId, "op_held");
+  await sleep(50);
+  const ending = daemon.standaloneCloseout.end(sessionId);
+  const run = vi.spyOn(daemon.stanceExceptions, "runOperation");
+  try {
+    await sleep(20);
+    expect(fs.existsSync(marker)).toBe(false);
+    const before = artifactsOnDisk();
+    const closing = await operate(sessionId, "op_late");
+    expect(closing.status).toBe(409);
+    expect(await closing.json()).toMatchObject({ code: "session_closing" });
+    for (const id of [siblingId, wrapperId]) {
+      const ok = await operate(id, "op_late");
+      expect(ok.status, id).toBe(200);
+      expect(await ok.json(), id).toMatchObject({ status: "replayed", artifactId: "late" });
+    }
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(artifactsOnDisk()).toBe(before);
+  } finally {
+    unblock();
+  }
+  const heldResponse = await held;
+  expect(heldResponse.status).toBe(200);
+  expect(await heldResponse.json()).toMatchObject({ status: "replayed", artifactId: "held" });
+  await ending;
+  // The admitted operation was durable before End wrote its marker.
+  expect(fs.existsSync(marker)).toBe(true);
+  expect(completedOnDisk("held")).toBeTruthy();
+  expect(completedOnDisk("late")).toBeUndefined();
+
+  run.mockClear();
+  const endedSnapshot = artifactsOnDisk();
+  const ended = await operate(sessionId, "op_late");
+  expect(ended.status).toBe(409);
+  expect(await ended.json()).toMatchObject({ code: "session_ended" });
+  expect(run).not.toHaveBeenCalled();
+  run.mockRestore();
+  expect(artifactsOnDisk()).toBe(endedSnapshot);
+  expect(store.getArtifacts().find((a) => a.id === "late")?.admission?.completedAt).toBeUndefined();
+  for (const target of [sibling, wrapper]) {
+    expect(target.getArtifacts().find((a) => a.id === "late")?.admission?.completedAt).toBeTruthy();
+  }
+});
+
+it("creation-time reconciliation of admitted operations never writes an ended standalone review", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const siblingId = createStandaloneSessionId(tmpDir);
+  const stores = [sessionId, siblingId].map((id) => daemon.createSession(id));
+  await sleep(10); // let creation-time reconciliation settle before seeding
+  for (const target of stores) seedAdmitted(target, "half", "op_half");
+  await daemon.standaloneCloseout.end(sessionId);
+  const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  const before = fs.readFileSync(path.join(dir, "artifacts.json"), "utf8");
+  for (const id of [sessionId, siblingId]) {
+    daemon.sessions.delete(id);
+    daemon.createSession(id);
+  }
+  await sleep(50);
+  expect(fs.readFileSync(path.join(dir, "artifacts.json"), "utf8")).toBe(before);
+  expect(daemon.sessions.get(sessionId)!.getArtifacts().find((a) => a.id === "half")?.admission?.completedAt).toBeUndefined();
+  // Control: the open sibling still finishes its half-applied operation on load.
+  expect(daemon.sessions.get(siblingId)!.getArtifacts().find((a) => a.id === "half")?.admission?.completedAt).toBeTruthy();
+});
+
 it("End waits for an admitted internal decision resolve and refuses later writes only in that review", async () => {
   const { tmpDir, daemon } = makeDaemon();
   const sessionId = createStandaloneSessionId(tmpDir);
