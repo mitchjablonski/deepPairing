@@ -45342,7 +45342,7 @@ var PageWatcher = class {
   missingRecheckMs;
   disposed = false;
   now() {
-    return (this.deps.now ?? Date.now)();
+    return this.deps.now ? this.deps.now() : performance.now();
   }
   sig(p) {
     return (this.deps.statSig ?? statSig)(p);
