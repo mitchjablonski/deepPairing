@@ -872,6 +872,126 @@ describe("authenticated standalone page revision", () => {
 });
 
 describe("authenticated standalone page", () => {
+  it("replays exact page and revision receipts after End without source, writes, or watches", async () => {
+    const f = fixture();
+    try {
+      const warm = f.start();
+      await f.open(warm);
+      const file = path.join(f.root, "watched.html");
+      fs.writeFileSync(file, "<p>File-backed page</p>");
+      const pageOp = randomUUID();
+      const pageInput = { title: "Watched page", path: "watched.html" };
+      const shown = await f.present(warm, pageOp, pageInput);
+      expect(shown.status).toBe(200);
+      const fileId = (await shown.json()).structuredContent.artifactId as string;
+      await until(() => warm.pageWatcher.watched(f.sessionId).includes(fileId));
+
+      const parent = await (await f.present(warm, randomUUID(), page("<p>First draft</p>"))).json();
+      const parentId = parent.structuredContent.artifactId as string;
+      const store = warm.sessions.get(f.sessionId)!;
+      store.addComment({ id: "root_feedback", artifactId: parentId, author: "human", content: "Clarify the backup step", target: anchored });
+      store.addComment({ id: "extra_feedback", artifactId: parentId, author: "human", content: "State who owns the backup", target: anchored });
+      const selectedIds = ["extra_feedback", "root_feedback"];
+      const reviseOp = randomUUID();
+      const html = "<p>Revised draft.</p>";
+      const revised = await f.revise(warm, reviseOp, parentId, html, "Apply feedback", selectedIds);
+      expect(revised.status).toBe(200);
+      const revision = (await revised.json()).structuredContent;
+      expect(revision).toMatchObject({ parentArtifactId: parentId, version: 2, acknowledgedCommentIds: selectedIds });
+      // A later reopen restores unread status without undoing the original revision receipt.
+      store.markCommentHumanResolved("root_feedback");
+      store.markCommentHumanResolved("root_feedback", null);
+      expect(store.getComment("root_feedback")?.acknowledged).toBe(false);
+      const replayPage = (active: Daemon) => f.present(active, pageOp, pageInput);
+      const replayRevision = (active: Daemon) => f.revise(active, reviseOp, parentId, html, "Apply feedback", [...selectedIds].reverse());
+
+      const release = warm.standaloneCloseout.admitWrite(f.sessionId);
+      expect(release).toBeTypeOf("function");
+      const ending = warm.standaloneCloseout.end(f.sessionId);
+      try {
+        for (const replay of [replayPage, replayRevision]) {
+          const closing = await replay(warm);
+          expect(closing.status).toBe(409);
+          expect(await closing.json()).toMatchObject({ code: "session_closing" });
+        }
+      } finally {
+        release?.();
+        await ending;
+      }
+      expect(warm.pageWatcher.watched(f.sessionId)).toEqual([]);
+      expect(f.watchers.every((watcher) => watcher.closed)).toBe(true);
+      fs.unlinkSync(file);
+
+      const dir = path.join(f.root, ".deeppairing", "sessions", f.sessionId);
+      const capture = () => fs.readdirSync(dir).sort().map((name) => [name, fs.readFileSync(path.join(dir, name), "utf8")]);
+      const before = capture();
+      const watchers = f.watchers.length;
+      const meta = structuredClone(warm.sessionMeta.get(f.sessionId));
+      const cold = f.start();
+      const replies: string[][] = [];
+      for (const active of [warm, cold]) {
+        const shownAgain = await replayPage(active);
+        expect(shownAgain.status).toBe(200);
+        const pageReply = await shownAgain.text();
+        expect(JSON.parse(pageReply)).toMatchObject({
+          structuredContent: { artifactId: fileId, sourcePath: "watched.html", replayed: true },
+        });
+        const revisedAgain = await replayRevision(active);
+        expect(revisedAgain.status).toBe(200);
+        const revisionReply = await revisedAgain.text();
+        expect(JSON.parse(revisionReply)).toMatchObject({
+          structuredContent: {
+            artifactId: revision.artifactId, parentArtifactId: parentId, version: 2,
+            acknowledgedCommentIds: selectedIds, replayed: true,
+          },
+        });
+        replies.push([pageReply, revisionReply]);
+        for (const mismatch of [
+          await f.present(active, pageOp, { ...pageInput, title: "Different page" }),
+          await f.revise(active, reviseOp, parentId, html, "Different reason", ["root_feedback"]),
+        ]) {
+          expect(await mismatch.json()).toMatchObject({
+            isError: true, structuredContent: { code: "standalone_operation_conflict" },
+          });
+        }
+        for (const fresh of [
+          await f.present(active, randomUUID(), page("<p>New page</p>")),
+          await f.revise(active, randomUUID(), revision.artifactId, "<p>New revision</p>"),
+        ]) {
+          expect(fresh.status).toBe(409);
+          expect(await fresh.json()).toMatchObject({ code: "session_ended" });
+        }
+        expect(active.pageWatcher.watched(f.sessionId)).toEqual([]);
+        expect(active.activeSessions.has(f.sessionId)).toBe(false);
+      }
+      expect(replies[1]).toEqual(replies[0]);
+      expect(warm.sessionMeta.get(f.sessionId)).toEqual(meta);
+      expect(cold.sessionMeta.has(f.sessionId)).toBe(false);
+      expect(cold.sessions.has(f.sessionId)).toBe(false);
+      expect(f.watchers).toHaveLength(watchers);
+      expect(capture()).toEqual(before);
+
+      const comments = path.join(dir, "comments.json");
+      const rows: Array<{ id: string }> = JSON.parse(fs.readFileSync(comments, "utf8"));
+      const missingSelection = JSON.stringify(rows.filter((row) => row.id !== "root_feedback"));
+      fs.writeFileSync(comments, missingSelection);
+      const missing = await replayRevision(cold);
+      expect(missing.status).toBe(409);
+      expect(await missing.json()).toMatchObject({ code: "session_review_conflict" });
+      expect(fs.readFileSync(comments, "utf8")).toBe(missingSelection);
+
+      fs.writeFileSync(comments, "{ corrupt");
+      const damaged = await replayRevision(cold);
+      expect(damaged.status).toBe(409);
+      expect(await damaged.json()).toMatchObject({ code: "session_review_conflict" });
+      expect(fs.readFileSync(comments, "utf8")).toBe("{ corrupt");
+      expect(cold.sessions.has(f.sessionId)).toBe(false);
+      expect(f.watchers).toHaveLength(watchers);
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("keeps End behind an admitted page presentation through preflight and receipt commit", async () => {
     const f = fixture();
     try {

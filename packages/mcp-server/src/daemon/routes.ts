@@ -23,10 +23,11 @@ import { REGISTRATION_HEADER, type StanceExceptionRegistry } from "./stance-exce
 import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing/shared";
 import type { RetirementInput } from "../store/retirement.js";
 import { isStandaloneSessionForProject, isStandaloneSessionId } from "../standalone-session-id.js";
-import { presentStandaloneOptions } from "./standalone-options.js";
-import { presentStandalonePage } from "./standalone-page.js";
-import { reviseStandalonePage } from "./standalone-revise-page.js";
-import { StandaloneCloseoutError, type StandaloneCloseout } from "./standalone-closeout.js";
+import { presentStandaloneOptions, replayEndedStandaloneOptions } from "./standalone-options.js";
+import { presentStandalonePage, replayEndedStandalonePage } from "./standalone-page.js";
+import { replayEndedStandaloneRevision, reviseStandalonePage } from "./standalone-revise-page.js";
+import { readStandaloneReplaySnapshot, StandaloneCloseoutError, type StandaloneCloseout } from "./standalone-closeout.js";
+import type { StandaloneReplaySnapshot } from "./standalone-receipts.js";
 import { pageRevisionFeedbackIdsSchema } from "../store/page-revision-feedback.js";
 import { readPageFeedback } from "./page-feedback.js";
 import { decisionFeedback, MAX_DECISION_WAIT_MS, type StandaloneDecisionRead } from "../mcp/tools/decision-feedback.js";
@@ -539,11 +540,12 @@ export function createDaemonRoutes(
     return { ok: true, store };
   }
 
-  async function withStandaloneWrite(c: Context, sessionId: string, run: () => Response | Promise<Response>): Promise<Response> {
+  async function withStandaloneWrite(c: Context, sessionId: string, run: () => Response | Promise<Response>,
+    replayEnded?: () => Response | undefined): Promise<Response> {
     const release = standaloneCloseout?.admitWrite(sessionId);
     if (standaloneCloseout && !release) {
       if (standaloneCloseout.state(sessionId).state === "ended") {
-        return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+        return replayEnded?.() ?? c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
       }
       return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
     }
@@ -589,25 +591,41 @@ export function createDaemonRoutes(
     function reviewDir(sessionId: string): string {
       return path.join(projectRoot, ".deeppairing", "sessions", sessionId);
     }
-    function requireWarmStandaloneStore(c: Context, expectedProjectRoot: string, sessionId: string, command: string): StoreLookup {
+    function verifyStandaloneDirectory(c: Context, expectedProjectRoot: string, sessionId: string): Response | undefined {
       if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
-        return { ok: false, response: c.json({
+        return c.json({
           error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch,
-        }, 403) };
+        }, 403);
       }
       if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return { ok: false, response: c.json({
+        return c.json({
           error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered,
-        }, 404) };
+        }, 404);
       }
+    }
+    function resumeRequired(c: Context, sessionId: string, command: string): Response {
+      return c.json({
+        error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry ${command}.`,
+        code: ERROR_CODES.session_not_registered,
+      }, 404);
+    }
+    function requireWarmStandaloneStore(c: Context, expectedProjectRoot: string, sessionId: string, command: string): StoreLookup {
+      const invalid = verifyStandaloneDirectory(c, expectedProjectRoot, sessionId);
+      if (invalid) return { ok: false, response: invalid };
       const store = sessions.get(sessionId);
-      if (!store) {
-        return { ok: false, response: c.json({
-          error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry ${command}.`,
-          code: ERROR_CODES.session_not_registered,
-        }, 404) };
-      }
+      if (!store) return { ok: false, response: resumeRequired(c, sessionId, command) };
       return { ok: true, store };
+    }
+    function endedReceipt(c: Context, sessionId: string,
+      read: (snapshot: () => StandaloneReplaySnapshot) => object | null): Response | undefined {
+      try {
+        const result = read(() => readStandaloneReplaySnapshot(projectRoot, sessionId));
+        // These three routes are already excluded from the activity middleware.
+        if (result) return c.json(result);
+      } catch {
+        return c.json({ error: "The saved standalone operation could not be verified. Check the review's session files.",
+          code: ERROR_CODES.session_review_conflict }, 409);
+      }
     }
     app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
       const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
@@ -636,30 +654,23 @@ export function createDaemonRoutes(
       const parsed = await parseJsonBody(c, PresentStandaloneOptionsBody);
       if (!parsed.ok) return parsed.res;
       const sessionId = c.req.param("sessionId");
-      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
-        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
-      }
-      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
-      }
+      const invalid = verifyStandaloneDirectory(c, parsed.data.expectedProjectRoot, sessionId);
+      if (invalid) return invalid;
       return withStandaloneWrite(c, sessionId, async () => {
         const store = sessions.get(sessionId) ?? installSession(sessionId, {});
         const port = refreshCompanionLink();
         const result = await presentStandaloneOptions(daemonProjectRoot, store, parsed.data.operationId, parsed.data.args, port,
           (event) => broadcast(sessionId, event));
         return c.json(result);
-      });
+      }, () => endedReceipt(c, sessionId, (snapshot) =>
+        replayEndedStandaloneOptions(projectRoot, sessionId, parsed.data.operationId, parsed.data.args, snapshot)));
     });
     app.post("/api/internal/sessions/:sessionId/present-page", async (c) => {
       const parsed = await parseJsonBody(c, PresentStandalonePageBody);
       if (!parsed.ok) return parsed.res;
       const sessionId = c.req.param("sessionId");
-      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
-        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
-      }
-      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
-      }
+      const invalid = verifyStandaloneDirectory(c, parsed.data.expectedProjectRoot, sessionId);
+      if (invalid) return invalid;
       const { htmlBase64, ...rest } = parsed.data.args;
       let html: string | undefined;
       if (htmlBase64 !== undefined) {
@@ -672,23 +683,29 @@ export function createDaemonRoutes(
         }
         html = bytes.toString("utf8");
       }
+      const input = { ...rest, ...(html !== undefined ? { html } : {}) };
       return withStandaloneWrite(c, sessionId, async () => {
         const store = sessions.get(sessionId) ?? installSession(sessionId, {});
         const port = refreshCompanionLink();
         // A replay emits no artifact event, so resync the watch on cold retries.
         try { onSessionLifecycle?.(sessionId, "registered"); } catch { /* never blocks the present */ }
-        const result = await presentStandalonePage(daemonProjectRoot, store, parsed.data.operationId,
-          { ...rest, ...(html !== undefined ? { html } : {}) }, port, (event) => broadcast(sessionId, event));
+        const result = await presentStandalonePage(projectRoot, store, parsed.data.operationId,
+          input, port, (event) => broadcast(sessionId, event));
         return c.json(result);
-      });
+      }, () => endedReceipt(c, sessionId, (snapshot) =>
+        replayEndedStandalonePage(projectRoot, sessionId, parsed.data.operationId, input, snapshot)));
     });
     app.post("/api/internal/sessions/:sessionId/revise-page", async (c) => {
       const parsed = await parseJsonBody(c, ReviseStandalonePageBody);
       if (!parsed.ok) return parsed.res;
       const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason, ackCommentIds } = parsed.data;
       const sessionId = c.req.param("sessionId");
-      const lookup = requireWarmStandaloneStore(c, expectedProjectRoot, sessionId, "revise-page");
-      if (!lookup.ok) return lookup.response;
+      const invalid = verifyStandaloneDirectory(c, expectedProjectRoot, sessionId);
+      if (invalid) return invalid;
+      const store = sessions.get(sessionId);
+      if (!store && (standaloneCloseout?.state(sessionId).state ?? "open") === "open") {
+        return resumeRequired(c, sessionId, "revise-page");
+      }
       const bytes = Buffer.from(htmlBase64, "base64");
       if (bytes.length > PAGE_HTML_MAX_BYTES) {
         return c.json({
@@ -702,11 +719,14 @@ export function createDaemonRoutes(
       if (Buffer.from(html, "utf8").toString("base64") !== htmlBase64) {
         return c.json({ error: "The page must be valid UTF-8 HTML encoded as canonical base64." }, 400);
       }
+      const input = { artifactId, html, reason, ackCommentIds };
       return withStandaloneWrite(c, sessionId, async () => {
-        const result = await reviseStandalonePage(projectRoot, lookup.store, operationId, { artifactId, html, reason, ackCommentIds },
+        if (!store) return resumeRequired(c, sessionId, "revise-page");
+        const result = await reviseStandalonePage(projectRoot, store, operationId, input,
           (event) => broadcast(sessionId, event));
         return c.json(result);
-      });
+      }, () => endedReceipt(c, sessionId, (snapshot) =>
+        replayEndedStandaloneRevision(projectRoot, sessionId, operationId, input, snapshot)));
     });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
       const signal = c.req.raw.signal;

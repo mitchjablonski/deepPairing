@@ -13,10 +13,12 @@ import {
   operationDigest as digest,
   readJsonFile as readJson,
   readSessionRecord as readRecord,
+  readRegularJsonFile,
   receiptDigestSchema as digestSchema,
   standaloneOperationConflict,
   standaloneOperationKey,
   type StandaloneCloseoutSnapshot,
+  type StandaloneReplaySnapshot,
 } from "./standalone-receipts.js";
 
 const receiptSchema = z.object({
@@ -27,6 +29,50 @@ const receiptSchema = z.object({
   committed: z.literal(true).optional(),
 }).strict();
 
+function optionsIdentity(projectRoot: string, sessionId: string, operationId: string) {
+  const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+  const key = standaloneOperationKey(projectRoot, sessionId, "present_options", operationId);
+  return {
+    dir, receiptPath: path.join(dir, `present-options-${operationId}.json`),
+    artifactId: `art_${key}`, decisionId: `dec_${key}`,
+  };
+}
+
+function optionsFingerprint(args: Record<string, unknown>): string {
+  return callFingerprint("present_options", args);
+}
+
+function optionsReplayReply(artifactId: string, decisionId: string): ToolResult {
+  return {
+    content: [{ type: "text", text: `This operation already presented artifact ${artifactId} and decision ${decisionId}.` }],
+    structuredContent: { artifactId, decisionId, replayed: true },
+  };
+}
+
+export function replayEndedStandaloneOptions(projectRoot: string, sessionId: string, operationId: string,
+  args: Record<string, unknown>, readSnapshot: () => StandaloneReplaySnapshot): ToolResult | null {
+  const { artifactId, decisionId, receiptPath } = optionsIdentity(projectRoot, sessionId, operationId);
+  const saved = readRegularJsonFile(receiptPath);
+  if (saved === undefined) return null;
+  const receipt = receiptSchema.parse(saved);
+  if (!receipt.committed) return null;
+  if (receipt.fingerprint !== optionsFingerprint(args)) return standaloneOperationConflict("options input");
+
+  const snapshot = readSnapshot();
+  const artifact = snapshot.record("artifacts.json", "id", artifactId);
+  const decision = snapshot.record("decisions.json", "decisionId", decisionId);
+  if (!artifact || !decision || artifact.sessionId !== sessionId || artifact.type !== "decision" ||
+      decision.artifactId !== artifactId || !receipt.proposalDigest || !receipt.decisionDigest) {
+    throw new Error("Standalone operation has missing or conflicting durable links.");
+  }
+  const proposal = DecisionRequestSchema.parse(artifact.content);
+  if (proposal.decisionId !== decisionId || digest(proposal) !== receipt.decisionDigest ||
+      digest(DecisionRequestSchema.parse(decision)) !== receipt.decisionDigest) {
+    throw new Error("Durable standalone decision does not match its committed receipt.");
+  }
+  return optionsReplayReply(artifactId, decisionId);
+}
+
 function optionsOperation(
   projectRoot: string,
   store: FileStore,
@@ -34,19 +80,11 @@ function optionsOperation(
   broadcast: BroadcastFn,
 ) {
   const sessionId = store.getSessionId();
-  const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
-  const receiptPath = path.join(dir, `present-options-${operationId}.json`);
-  const key = standaloneOperationKey(projectRoot, sessionId, "present_options", operationId);
-  const artifactId = `art_${key}`;
-  const decisionId = `dec_${key}`;
+  const { dir, receiptPath, artifactId, decisionId } = optionsIdentity(projectRoot, sessionId, operationId);
 
   const save = (receipt: z.infer<typeof receiptSchema>) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 0o600 });
   const lock = <T>(run: () => T) => withFileLock(path.join(dir, ".standalone-options.lock"), run);
   const readReceipt = () => receiptSchema.parse(readJson(receiptPath));
-  const reply = (): ToolResult => ({
-    content: [{ type: "text", text: `This operation already presented artifact ${artifactId} and decision ${decisionId}.` }],
-    structuredContent: { artifactId, decisionId, replayed: true },
-  });
 
   function recover(receipt: z.infer<typeof receiptSchema>, verifyOnly = false, durableOnly = false,
     snapshot?: StandaloneCloseoutSnapshot): ToolResult | null {
@@ -69,7 +107,7 @@ function optionsOperation(
         }
         if (!snapshot) save({ ...receipt, committed: true });
       }
-      return reply();
+      return optionsReplayReply(artifactId, decisionId);
     }
     if (receipt.committed || verifyOnly) throw new Error("Standalone operation is missing one or both durable records.");
 
@@ -105,7 +143,7 @@ function optionsOperation(
       }
       if (!snapshot) store.recordDecisionRequest(expected);
     }
-    if (snapshot) return reply();
+    if (snapshot) return optionsReplayReply(artifactId, decisionId);
     store.forceFlush();
     const repaired = recover(receipt, true);
     broadcast({ type: "daemon_resumed" });
@@ -135,7 +173,7 @@ export async function presentStandaloneOptions(
   broadcast: BroadcastFn,
 ): Promise<ToolResult> {
   const { artifactId, decisionId, receiptPath, save, lock, readReceipt, recover } = optionsOperation(projectRoot, store, operationId, broadcast);
-  const fingerprint = callFingerprint("present_options", args);
+  const fingerprint = optionsFingerprint(args);
   const conflict = () => standaloneOperationConflict("options input");
   const existing = lock(() => {
     const saved = readJson(receiptPath);

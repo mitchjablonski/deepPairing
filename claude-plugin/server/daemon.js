@@ -39465,6 +39465,22 @@ function readJsonFile(file2) {
     throw err;
   }
 }
+function readRegularJsonFile(file2) {
+  const expected = fs22.lstatSync(file2, { throwIfNoEntry: false });
+  if (!expected) return void 0;
+  if (!expected.isFile()) throw new Error("Standalone review record is not a regular file.");
+  const flags = fs22.constants.O_RDONLY | (fs22.constants.O_NOFOLLOW ?? 0) | (fs22.constants.O_NONBLOCK ?? 0);
+  const fd = fs22.openSync(file2, flags);
+  try {
+    const opened = fs22.fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino) {
+      throw new Error("Standalone review record changed while it was opened.");
+    }
+    return JSON.parse(fs22.readFileSync(fd, "utf8"));
+  } finally {
+    fs22.closeSync(fd);
+  }
+}
 function readSessionRecord(dir, file2, key2, id) {
   const raw2 = readJsonFile(path21.join(dir, file2));
   if (raw2 === void 0) return void 0;
@@ -39494,20 +39510,50 @@ var receiptSchema = external_exports.object({
   decisionDigest: receiptDigestSchema.optional(),
   committed: external_exports.literal(true).optional()
 }).strict();
+function optionsIdentity(projectRoot2, sessionId, operationId) {
+  const dir = path22.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+  const key2 = standaloneOperationKey(projectRoot2, sessionId, "present_options", operationId);
+  return {
+    dir,
+    receiptPath: path22.join(dir, `present-options-${operationId}.json`),
+    artifactId: `art_${key2}`,
+    decisionId: `dec_${key2}`
+  };
+}
+function optionsFingerprint(args) {
+  return callFingerprint("present_options", args);
+}
+function optionsReplayReply(artifactId, decisionId) {
+  return {
+    content: [{ type: "text", text: `This operation already presented artifact ${artifactId} and decision ${decisionId}.` }],
+    structuredContent: { artifactId, decisionId, replayed: true }
+  };
+}
+function replayEndedStandaloneOptions(projectRoot2, sessionId, operationId, args, readSnapshot) {
+  const { artifactId, decisionId, receiptPath } = optionsIdentity(projectRoot2, sessionId, operationId);
+  const saved = readRegularJsonFile(receiptPath);
+  if (saved === void 0) return null;
+  const receipt = receiptSchema.parse(saved);
+  if (!receipt.committed) return null;
+  if (receipt.fingerprint !== optionsFingerprint(args)) return standaloneOperationConflict("options input");
+  const snapshot = readSnapshot();
+  const artifact = snapshot.record("artifacts.json", "id", artifactId);
+  const decision = snapshot.record("decisions.json", "decisionId", decisionId);
+  if (!artifact || !decision || artifact.sessionId !== sessionId || artifact.type !== "decision" || decision.artifactId !== artifactId || !receipt.proposalDigest || !receipt.decisionDigest) {
+    throw new Error("Standalone operation has missing or conflicting durable links.");
+  }
+  const proposal = DecisionRequestSchema.parse(artifact.content);
+  if (proposal.decisionId !== decisionId || operationDigest(proposal) !== receipt.decisionDigest || operationDigest(DecisionRequestSchema.parse(decision)) !== receipt.decisionDigest) {
+    throw new Error("Durable standalone decision does not match its committed receipt.");
+  }
+  return optionsReplayReply(artifactId, decisionId);
+}
 function optionsOperation(projectRoot2, store, operationId, broadcast) {
   const sessionId = store.getSessionId();
-  const dir = path22.join(projectRoot2, ".deeppairing", "sessions", sessionId);
-  const receiptPath = path22.join(dir, `present-options-${operationId}.json`);
-  const key2 = standaloneOperationKey(projectRoot2, sessionId, "present_options", operationId);
-  const artifactId = `art_${key2}`;
-  const decisionId = `dec_${key2}`;
+  const { dir, receiptPath, artifactId, decisionId } = optionsIdentity(projectRoot2, sessionId, operationId);
   const save = (receipt) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 384 });
   const lock = (run) => withFileLock(path22.join(dir, ".standalone-options.lock"), run);
   const readReceipt = () => receiptSchema.parse(readJsonFile(receiptPath));
-  const reply = () => ({
-    content: [{ type: "text", text: `This operation already presented artifact ${artifactId} and decision ${decisionId}.` }],
-    structuredContent: { artifactId, decisionId, replayed: true }
-  });
   function recover(receipt, verifyOnly = false, durableOnly = false, snapshot) {
     const diskArtifact = snapshot ? snapshot.record("artifacts.json", "id", artifactId) : readSessionRecord(dir, "artifacts.json", "id", artifactId);
     const diskDecision = snapshot ? snapshot.record("decisions.json", "decisionId", decisionId) : readSessionRecord(dir, "decisions.json", "decisionId", decisionId);
@@ -39523,7 +39569,7 @@ function optionsOperation(projectRoot2, store, operationId, broadcast) {
         }
         if (!snapshot) save({ ...receipt, committed: true });
       }
-      return reply();
+      return optionsReplayReply(artifactId, decisionId);
     }
     if (receipt.committed || verifyOnly) throw new Error("Standalone operation is missing one or both durable records.");
     const bufferedArtifact = snapshot ? snapshot.artifact(artifactId) : store.getArtifacts().find((row) => row.id === artifactId);
@@ -39554,7 +39600,7 @@ function optionsOperation(projectRoot2, store, operationId, broadcast) {
       }
       if (!snapshot) store.recordDecisionRequest(expected);
     }
-    if (snapshot) return reply();
+    if (snapshot) return optionsReplayReply(artifactId, decisionId);
     store.forceFlush();
     const repaired = recover(receipt, true);
     broadcast({ type: "daemon_resumed" });
@@ -39573,7 +39619,7 @@ function planStandaloneOptionsRecovery(projectRoot2, store, operationId, broadca
 }
 async function presentStandaloneOptions(projectRoot2, store, operationId, args, port, broadcast) {
   const { artifactId, decisionId, receiptPath, save, lock, readReceipt, recover } = optionsOperation(projectRoot2, store, operationId, broadcast);
-  const fingerprint = callFingerprint("present_options", args);
+  const fingerprint = optionsFingerprint(args);
   const conflict = () => standaloneOperationConflict("options input");
   const existing = lock(() => {
     const saved = readJsonFile(receiptPath);
@@ -40246,29 +40292,58 @@ function inputRefusal(message) {
     _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] }
   };
 }
+function pageIdentity(projectRoot2, sessionId, operationId) {
+  const dir = path24.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+  return {
+    dir,
+    receiptPath: path24.join(dir, `present-page-${operationId}.json`),
+    artifactId: `art_${standaloneOperationKey(projectRoot2, sessionId, "present_page", operationId)}`
+  };
+}
+function pageArgs(input) {
+  const args = {};
+  for (const key2 of ["title", "summary", "concept", "html", "path"]) {
+    if (input[key2] !== void 0) args[key2] = input[key2];
+  }
+  return args;
+}
+function pageReplayReply(artifactId, disk, artifacts) {
+  const saved = PageContentSchema.safeParse(disk.content);
+  const sourcePath = saved.success ? saved.data.sourcePath : void 0;
+  const backing = artifacts.find((a) => a.id === artifactId);
+  const latest = backing && findPageSuccessor(backing, artifacts);
+  const version2 = backing?.version ?? (typeof disk.version === "number" ? disk.version : 1);
+  const status = String(backing?.status ?? disk.status ?? "draft");
+  const current = latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : void 0;
+  const moved = current ? ` It is ${status}; the page has since moved to v${current.currentVersion} (${current.currentArtifactId}, ${current.currentStatus}).` : isClosedArtifactStatus(status) ? ` It is ${status}.` : "";
+  return {
+    content: [{ type: "text", text: `This operation already presented page artifact ${artifactId} (v${version2}).${moved}` }],
+    structuredContent: { artifactId, ...sourcePath ? { sourcePath } : {}, replayed: true, status, ...current ?? {} }
+  };
+}
+function replayEndedStandalonePage(projectRoot2, sessionId, operationId, input, readSnapshot) {
+  const { artifactId, receiptPath } = pageIdentity(projectRoot2, sessionId, operationId);
+  const saved = readRegularJsonFile(receiptPath);
+  if (saved === void 0) return null;
+  const receipt = receiptSchema2.parse(saved);
+  if (!receipt.committed) return null;
+  if (input.path !== void 0 && !isClientRelativePath(input.path)) {
+    return inputRefusal("`path` must be relative to the project root; absolute paths are not accepted from the CLI.");
+  }
+  if (receipt.fingerprint !== callFingerprint("present_page", pageArgs(input))) return standaloneOperationConflict("page input");
+  const snapshot = readSnapshot();
+  const disk = snapshot.record("artifacts.json", "id", artifactId);
+  if (!disk || disk.sessionId !== sessionId || disk.type !== "page" || !receipt.contentDigest || contentDigest(disk.content) !== receipt.contentDigest) {
+    throw new Error("Durable standalone page does not match its committed receipt.");
+  }
+  return pageReplayReply(artifactId, disk, snapshot.getArtifacts());
+}
 function pageOperation(projectRoot2, store, operationId) {
   const sessionId = store.getSessionId();
-  const dir = path24.join(projectRoot2, ".deeppairing", "sessions", sessionId);
-  const receiptPath = path24.join(dir, `present-page-${operationId}.json`);
-  const artifactId = `art_${standaloneOperationKey(projectRoot2, sessionId, "present_page", operationId)}`;
+  const { dir, receiptPath, artifactId } = pageIdentity(projectRoot2, sessionId, operationId);
   const save = (receipt) => writeJsonAtomic(receiptPath, receipt, 2, { mode: 384 });
   const lock = (run) => withFileLock(path24.join(dir, ".standalone-page.lock"), run);
   const readReceipt = () => receiptSchema2.parse(readJsonFile(receiptPath));
-  const reply = (disk) => {
-    const saved = PageContentSchema.safeParse(disk.content);
-    const sourcePath = saved.success ? saved.data.sourcePath : void 0;
-    const artifacts = store.getArtifacts();
-    const backing = artifacts.find((a) => a.id === artifactId);
-    const latest = backing && findPageSuccessor(backing, artifacts);
-    const version2 = backing?.version ?? (typeof disk.version === "number" ? disk.version : 1);
-    const status = String(backing?.status ?? disk.status ?? "draft");
-    const current = latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : void 0;
-    const moved = current ? ` It is ${status}; the page has since moved to v${current.currentVersion} (${current.currentArtifactId}, ${current.currentStatus}).` : isClosedArtifactStatus(status) ? ` It is ${status}.` : "";
-    return {
-      content: [{ type: "text", text: `This operation already presented page artifact ${artifactId} (v${version2}).${moved}` }],
-      structuredContent: { artifactId, ...sourcePath ? { sourcePath } : {}, replayed: true, status, ...current ?? {} }
-    };
-  };
   function recover(receipt, verifyOnly = false, durableOnly = false, snapshot) {
     const disk = snapshot ? snapshot.record("artifacts.json", "id", artifactId) : readSessionRecord(dir, "artifacts.json", "id", artifactId);
     if (disk) {
@@ -40282,7 +40357,7 @@ function pageOperation(projectRoot2, store, operationId) {
         if (!snapshot) save({ ...receipt, committed: true });
       }
       if (snapshot) return { content: [] };
-      return reply(disk);
+      return pageReplayReply(artifactId, disk, store.getArtifacts());
     }
     if (receipt.committed || verifyOnly) throw new Error("Standalone page operation is missing its durable artifact.");
     const buffered = snapshot ? snapshot.artifact(artifactId) : store.getArtifacts().find((row) => row.id === artifactId);
@@ -40309,10 +40384,7 @@ async function presentStandalonePage(projectRoot2, store, operationId, input, po
   if (input.path !== void 0 && !isClientRelativePath(input.path)) {
     return inputRefusal("`path` must be relative to the project root; absolute paths are not accepted from the CLI.");
   }
-  const args = {};
-  for (const key2 of ["title", "summary", "concept", "html", "path"]) {
-    if (input[key2] !== void 0) args[key2] = input[key2];
-  }
+  const args = pageArgs(input);
   const fingerprint = callFingerprint("present_page", args);
   const { artifactId, receiptPath, save, lock, readReceipt, recover } = pageOperation(projectRoot2, store, operationId);
   const conflict = () => standaloneOperationConflict("page input");
@@ -41268,11 +41340,79 @@ var receiptSchema3 = external_exports.object({
   feedback: pageRevisionFeedbackProofSchema.optional(),
   committed: external_exports.literal(true).optional()
 }).strict();
+function revisionFingerprint({ artifactId, reason, html, ackCommentIds }) {
+  return operationDigest({ artifactId, reason, html, ...ackCommentIds?.length ? { ackCommentIds } : {} });
+}
 function refused(message, code, details = {}) {
   return { isError: true, content: [{ type: "text", text: message }], structuredContent: { code, ...details } };
 }
 function childDigest(child) {
   return operationDigest([child.version, child.parentId, child.content, child.agentReasoning]);
+}
+function requireChild(child, receipt, sessionId, parentId) {
+  if (child.type !== "page" || child.sessionId !== sessionId || child.parentId !== parentId || !receipt.childDigest || childDigest(child) !== receipt.childDigest) {
+    throw new Error("Standalone revision child does not match its receipt.");
+  }
+}
+function requireNote(comment, sessionId, parentId, note) {
+  const target = comment.target;
+  if (comment.author !== "agent" || comment.sessionId !== sessionId || target?.artifactId !== parentId || comment.content !== note) {
+    throw new Error("Standalone revision note does not match its receipt.");
+  }
+}
+function revisionReply(child, parentId, artifacts, feedback, replayed) {
+  const latest = findPageSuccessor(child, artifacts);
+  return {
+    content: [{ type: "text", text: `Page ${parentId} was revised as ${child.id} (v${child.version}).` }],
+    structuredContent: {
+      sessionId: child.sessionId,
+      parentArtifactId: parentId,
+      artifactId: child.id,
+      version: child.version,
+      status: child.status,
+      ...feedback ? { acknowledgedCommentIds: feedback.commentIds } : {},
+      ...feedback?.includesRuleOut ? { acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged." } : {},
+      ...replayed ? { replayed: true } : {},
+      ...latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : {}
+    }
+  };
+}
+function replayEndedStandaloneRevision(projectRoot2, sessionId, operationId, input, readSnapshot) {
+  const dir = path28.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+  const raw2 = readRegularJsonFile(path28.join(dir, `revise-page-${operationId}.json`));
+  if (raw2 === void 0) return null;
+  const receipt = receiptSchema3.parse(raw2);
+  if (!receipt.committed) return null;
+  const ackCommentIds = [...input.ackCommentIds ?? []].sort();
+  if (receipt.fingerprint !== revisionFingerprint({ ...input, ackCommentIds })) {
+    return standaloneOperationConflict("revision input");
+  }
+  const recordedIds = receipt.feedback?.commentIds ?? [];
+  if (JSON.stringify(recordedIds) !== JSON.stringify(ackCommentIds)) {
+    throw new Error("Standalone revision is missing its exact feedback selection.");
+  }
+  const parentId = input.artifactId;
+  const key2 = standaloneOperationKey(projectRoot2, sessionId, "revise_page", operationId);
+  const artifactId = `art_${key2}`;
+  const snapshot = readSnapshot();
+  const parent = snapshot.artifact(parentId);
+  const child = snapshot.artifact(artifactId);
+  if (!child || !parent || parent.sessionId !== sessionId || parent.type !== "page" || parent.version + 1 !== child.version || snapshot.hasOtherChild(parentId, artifactId)) {
+    throw new Error("Standalone revision has inconsistent durable page lineage.");
+  }
+  requireChild(child, receipt, sessionId, parentId);
+  const { html } = PageContentSchema.parse(child.content);
+  if (typeof child.agentReasoning !== "string" || child.agentReasoning !== input.reason || revisionFingerprint({ artifactId: parentId, html, reason: child.agentReasoning, ackCommentIds: recordedIds }) !== receipt.fingerprint) {
+    throw new Error("Standalone revision child does not match its request fingerprint.");
+  }
+  const note = snapshot.record("comments.json", "id", `cmt_${key2}`);
+  const trace = snapshot.trace(artifactId);
+  if (!note || !trace || receipt.trace?.decision !== "admitted" || receipt.trace.artifactId !== artifactId || receipt.trace.toolName !== "revise_artifact" || operationDigest(trace) !== operationDigest(receipt.trace)) {
+    throw new Error("Standalone revision is missing its durable note or preflight trace.");
+  }
+  requireNote(note, sessionId, parentId, revisionNote(artifactId, input.reason));
+  if (receipt.feedback) snapshot.verifyFeedback(parentId, receipt.feedback);
+  return revisionReply(child, parentId, snapshot.getArtifacts(), receipt.feedback, true);
 }
 function revisionOperation(projectRoot2, store, operationId, broadcast) {
   const sessionId = store.getSessionId();
@@ -41313,20 +41453,9 @@ function revisionOperation(projectRoot2, store, operationId, broadcast) {
     const { title, summary, concept } = content.data;
     return { status: parent.status, historyLength: parent.statusHistory?.length ?? 0, metadata: { title, summary, concept } };
   }
-  function requireChild(child, receipt, parentId) {
-    if (child.type !== "page" || child.sessionId !== sessionId || child.parentId !== parentId || !receipt.childDigest || childDigest(child) !== receipt.childDigest) {
-      throw new Error("Standalone revision child does not match its receipt.");
-    }
-  }
   function recover(receipt, replayed, input, snapshot) {
     const { parentId, reason, ackCommentIds } = input;
     const note = revisionNote(artifactId, reason);
-    function requireNote(comment) {
-      const target2 = comment.target;
-      if (comment.author !== "agent" || comment.sessionId !== sessionId || target2?.artifactId !== parentId || comment.content !== note) {
-        throw new Error("Standalone revision note does not match its receipt.");
-      }
-    }
     const record3 = snapshot?.record ?? ((file2, key3, id) => readSessionRecord(dir, file2, key3, id));
     const child = snapshot ? snapshot.artifact(artifactId) : store.getArtifacts().find((a) => a.id === artifactId);
     const diskChild = record3("artifacts.json", "id", artifactId);
@@ -41338,7 +41467,7 @@ function revisionOperation(projectRoot2, store, operationId, broadcast) {
       }
       return null;
     }
-    requireChild(child, receipt, parentId);
+    requireChild(child, receipt, sessionId, parentId);
     const { feedback } = receipt;
     if (JSON.stringify(feedback?.commentIds ?? []) !== JSON.stringify(ackCommentIds)) {
       throw new Error("Standalone revision is missing its exact feedback selection.");
@@ -41351,9 +41480,9 @@ function revisionOperation(projectRoot2, store, operationId, broadcast) {
     if (diskTrace && operationDigest(diskTrace) !== operationDigest(trace)) {
       throw new Error("Standalone revision preflight trace does not match its receipt.");
     }
-    if (diskChild) requireChild(diskChild, receipt, parentId);
-    if (diskNote) requireNote(diskNote);
-    if (bufferedNote) requireNote({ ...bufferedNote });
+    if (diskChild) requireChild(diskChild, receipt, sessionId, parentId);
+    if (diskNote) requireNote(diskNote, sessionId, parentId, note);
+    if (bufferedNote) requireNote({ ...bufferedNote }, sessionId, parentId, note);
     const parent = snapshot ? snapshot.artifact(parentId) : store.getArtifacts().find((a) => a.id === parentId);
     const hasOtherChild = snapshot ? snapshot.hasOtherChild(parentId, artifactId) : store.getArtifacts().some((a) => a.parentId === parentId && a.id !== artifactId);
     if (!parent || parent.sessionId !== sessionId || parent.type !== "page" || parent.version + 1 !== child.version || hasOtherChild) {
@@ -41363,7 +41492,7 @@ function revisionOperation(projectRoot2, store, operationId, broadcast) {
       if (durableChild?.id !== artifactId || durableParent?.sessionId !== sessionId || durableParent.type !== "page" || durableParent.version !== child.version - 1 || requireSuperseded && durableParent.status !== "superseded") {
         throw new Error("Standalone revision is missing its durable page version.");
       }
-      requireChild(durableChild, receipt, parentId);
+      requireChild(durableChild, receipt, sessionId, parentId);
     };
     const checkVersion = (requireSuperseded) => requireDurableVersion(
       record3("artifacts.json", "id", parentId),
@@ -41393,7 +41522,7 @@ function revisionOperation(projectRoot2, store, operationId, broadcast) {
         flush();
         const savedNote = readSessionRecord(dir, "comments.json", "id", commentId);
         if (!savedNote) throw new Error("Standalone revision is missing its durable note.");
-        requireNote(savedNote);
+        requireNote(savedNote, sessionId, parentId, note);
       }
       if (!diskTrace) store.recordPreflightTrace(artifactId, trace);
       const savedTrace = store.getPreflightTrace(artifactId);
@@ -41417,21 +41546,7 @@ function revisionOperation(projectRoot2, store, operationId, broadcast) {
       if (!diskTrace) throw new Error("Standalone revision is missing its durable preflight trace.");
       if (snapshot) return { content: [] };
     }
-    const latest = findPageSuccessor(child, store.getArtifacts());
-    return {
-      content: [{ type: "text", text: `Page ${parentId} was revised as ${artifactId} (v${child.version}).` }],
-      structuredContent: {
-        sessionId,
-        parentArtifactId: parentId,
-        artifactId,
-        version: child.version,
-        status: child.status,
-        ...feedback ? { acknowledgedCommentIds: feedback.commentIds } : {},
-        ...feedback?.includesRuleOut ? { acknowledgementNote: "Acknowledgement leaves the rule-out status unchanged." } : {},
-        ...replayed ? { replayed: true } : {},
-        ...latest ? { currentArtifactId: latest.id, currentVersion: latest.version, currentStatus: latest.status } : {}
-      }
-    };
+    return revisionReply(child, parentId, store.getArtifacts(), feedback, replayed);
   }
   function reconcile(snapshot) {
     const receipt = read();
@@ -41449,15 +41564,10 @@ function revisionOperation(projectRoot2, store, operationId, broadcast) {
     if (typeof child.parentId !== "string" || typeof child.agentReasoning !== "string" || !child.agentReasoning.trim()) {
       throw new Error("Standalone revision is missing its durable parent or revision reason.");
     }
-    requireChild(child, receipt, child.parentId);
+    requireChild(child, receipt, sessionId, child.parentId);
     const content = PageContentSchema.parse(child.content);
     const ackCommentIds = receipt.feedback?.commentIds ?? [];
-    const fingerprint = operationDigest({
-      artifactId: child.parentId,
-      reason: child.agentReasoning,
-      html: content.html,
-      ...ackCommentIds.length ? { ackCommentIds } : {}
-    });
+    const fingerprint = revisionFingerprint({ artifactId: child.parentId, reason: child.agentReasoning, html: content.html, ackCommentIds });
     if (receipt.fingerprint !== fingerprint) throw new Error("Standalone revision child does not match its request fingerprint.");
     if (!receipt.committed) {
       const parent = record3("artifacts.json", "id", child.parentId);
@@ -41484,7 +41594,7 @@ async function reviseStandalonePage(projectRoot2, store, operationId, input, bro
   const sessionId = store.getSessionId();
   const { artifactId: parentId, reason, html } = input;
   const ackCommentIds = [...input.ackCommentIds ?? []].sort();
-  const fingerprint = operationDigest({ artifactId: parentId, reason, html, ...ackCommentIds.length ? { ackCommentIds } : {} });
+  const fingerprint = revisionFingerprint({ artifactId: parentId, reason, html, ackCommentIds });
   const { artifactId, receiptPath, save, lock, read, target: findTarget, recover: recoverOperation } = revisionOperation(projectRoot2, store, operationId, broadcast);
   const target = () => findTarget(parentId);
   const recover = (receipt, replayed) => recoverOperation(receipt, replayed, { parentId, reason, ackCommentIds });
@@ -41629,10 +41739,8 @@ var StandaloneCloseoutError = class extends Error {
   code;
 };
 function readCollection(dir, file2, schema, key2) {
-  const stat = fs26.lstatSync(path29.join(dir, file2), { throwIfNoEntry: false });
-  if (stat && !stat.isFile()) throw new Error("Standalone review collection is not a regular file.");
-  const raw2 = readJsonFile(path29.join(dir, file2));
-  if (raw2 === void 0 && !stat) return /* @__PURE__ */ new Map();
+  const raw2 = readRegularJsonFile(path29.join(dir, file2));
+  if (raw2 === void 0) return /* @__PURE__ */ new Map();
   if (!Array.isArray(raw2)) throw new Error("Standalone review has a malformed durable collection.");
   const rows = /* @__PURE__ */ new Map();
   for (const row of raw2) {
@@ -41643,8 +41751,7 @@ function readCollection(dir, file2, schema, key2) {
   }
   return rows;
 }
-function closeoutSnapshot(dir, store) {
-  const sessionId = store.getSessionId();
+function closeoutSnapshot(dir, sessionId, store) {
   const artifacts = readCollection(dir, "artifacts.json", ArtifactSchema, (row) => row.id);
   const comments = readCollection(dir, "comments.json", CommentSchema, (row) => row.id);
   const decisions = readCollection(dir, "decisions.json", DecisionRequestSchema.extend({
@@ -41670,7 +41777,7 @@ function closeoutSnapshot(dir, store) {
     at: external_exports.string().datetime(),
     acknowledged: external_exports.boolean().optional()
   }), (row) => JSON.stringify([row.artifactId, row.visualId]));
-  const rawTraces = readJsonFile(path29.join(dir, "preflight-traces.json"));
+  const rawTraces = readRegularJsonFile(path29.join(dir, "preflight-traces.json"));
   const traces = external_exports.record(external_exports.string(), PreflightTraceSchema).parse(rawTraces === void 0 ? {} : rawTraces);
   for (const [id, trace] of Object.entries(traces)) {
     if (trace.artifactId !== id) throw new Error("Standalone review has a mismatched durable preflight trace.");
@@ -41695,10 +41802,10 @@ function closeoutSnapshot(dir, store) {
       throw new Error("Standalone review contains an unowned or mismatched decision.");
     }
   }
-  const warmArtifacts = new Map(store.getArtifacts().map((row) => [row.id, row]));
-  const warmParents = /* @__PURE__ */ new Map();
-  for (const row of warmArtifacts.values()) addChild(warmParents, row.parentId, row.id);
-  const warmComments = new Map(store.getComments().map((row) => [row.id, row]));
+  const visibleArtifacts = store ? new Map(store.getArtifacts().map((row) => [row.id, row])) : artifacts;
+  const visibleComments = store ? new Map(store.getComments().map((row) => [row.id, row])) : comments;
+  const visibleParents = /* @__PURE__ */ new Map();
+  for (const row of visibleArtifacts.values()) addChild(visibleParents, row.parentId, row.id);
   return {
     record(file2, key2, id) {
       if (file2 === "comments.json") return comments.get(id);
@@ -41709,15 +41816,21 @@ function closeoutSnapshot(dir, store) {
       if (children.length > 1) throw new Error("Standalone review history has conflicting successors.");
       return children[0] ? artifacts.get(children[0]) : void 0;
     },
-    artifact: (id) => warmArtifacts.get(id),
-    comment: (id) => warmComments.get(id),
-    hasOtherChild: (parentId, childId) => (warmParents.get(parentId) ?? []).some((id) => id !== childId),
+    artifact: (id) => visibleArtifacts.get(id),
+    comment: (id) => visibleComments.get(id),
+    hasOtherChild: (parentId, childId) => (visibleParents.get(parentId) ?? []).some((id) => id !== childId),
     trace: (id) => traces[id],
+    getArtifacts: () => [...artifacts.values()],
     verifyFeedback(parentId, proof) {
-      const current = provePageRevisionFeedback([...artifacts.values()], [...comments.values()], sessionId, parentId, proof.commentIds, store.getComments());
-      if (current?.digest !== proof.digest) throw new Error("Standalone revision feedback no longer matches its receipt.");
+      const current = provePageRevisionFeedback([...artifacts.values()], [...comments.values()], sessionId, parentId, proof.commentIds, store?.getComments() ?? [...comments.values()]);
+      if (!current || current.digest !== proof.digest || current.includesRuleOut !== proof.includesRuleOut) {
+        throw new Error("Standalone revision feedback no longer matches its receipt.");
+      }
     }
   };
+}
+function readStandaloneReplaySnapshot(projectRoot2, sessionId) {
+  return closeoutSnapshot(path29.join(projectRoot2, ".deeppairing", "sessions", sessionId), sessionId);
 }
 function reconcileReceipts(projectRoot2, dir, store, checkDeadline) {
   const receipts = [];
@@ -41735,7 +41848,7 @@ function reconcileReceipts(projectRoot2, dir, store, checkDeadline) {
   } finally {
     directory.closeSync();
   }
-  const snapshot = closeoutSnapshot(dir, store);
+  const snapshot = closeoutSnapshot(dir, store.getSessionId(), store);
   const quiet = () => {
   };
   const repairs = [];
@@ -43777,11 +43890,11 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     }
     return { ok: true, store };
   }
-  async function withStandaloneWrite(c, sessionId, run) {
+  async function withStandaloneWrite(c, sessionId, run, replayEnded) {
     const release2 = standaloneCloseout?.admitWrite(sessionId);
     if (standaloneCloseout && !release2) {
       if (standaloneCloseout.state(sessionId).state === "ended") {
-        return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+        return replayEnded?.() ?? c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
       }
       return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
     }
@@ -43818,29 +43931,42 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   if (authToken && daemonProjectRoot && refreshCompanionLink) {
     let reviewDir2 = function(sessionId) {
       return path32.join(projectRoot2, ".deeppairing", "sessions", sessionId);
-    }, requireWarmStandaloneStore2 = function(c, expectedProjectRoot, sessionId, command) {
+    }, verifyStandaloneDirectory2 = function(c, expectedProjectRoot, sessionId) {
       if (expectedProjectRoot !== projectRoot2 || !isStandaloneSessionForProject(sessionId, projectRoot2)) {
-        return { ok: false, response: c.json({
+        return c.json({
           error: "This standalone session does not belong to the daemon's project.",
           code: ERROR_CODES.project_mismatch
-        }, 403) };
+        }, 403);
       }
       if (!fs29.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return { ok: false, response: c.json({
+        return c.json({
           error: "Standalone session does not exist in this project.",
           code: ERROR_CODES.session_not_registered
-        }, 404) };
+        }, 404);
       }
+    }, resumeRequired2 = function(c, sessionId, command) {
+      return c.json({
+        error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry ${command}.`,
+        code: ERROR_CODES.session_not_registered
+      }, 404);
+    }, requireWarmStandaloneStore2 = function(c, expectedProjectRoot, sessionId, command) {
+      const invalid = verifyStandaloneDirectory2(c, expectedProjectRoot, sessionId);
+      if (invalid) return { ok: false, response: invalid };
       const store = sessions.get(sessionId);
-      if (!store) {
-        return { ok: false, response: c.json({
-          error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry ${command}.`,
-          code: ERROR_CODES.session_not_registered
-        }, 404) };
-      }
+      if (!store) return { ok: false, response: resumeRequired2(c, sessionId, command) };
       return { ok: true, store };
+    }, endedReceipt2 = function(c, sessionId, read) {
+      try {
+        const result = read(() => readStandaloneReplaySnapshot(projectRoot2, sessionId));
+        if (result) return c.json(result);
+      } catch {
+        return c.json({
+          error: "The saved standalone operation could not be verified. Check the review's session files.",
+          code: ERROR_CODES.session_review_conflict
+        }, 409);
+      }
     };
-    var reviewDir = reviewDir2, requireWarmStandaloneStore = requireWarmStandaloneStore2;
+    var reviewDir = reviewDir2, verifyStandaloneDirectory = verifyStandaloneDirectory2, resumeRequired = resumeRequired2, requireWarmStandaloneStore = requireWarmStandaloneStore2, endedReceipt = endedReceipt2;
     const projectRoot2 = daemonProjectRoot;
     app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
       const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
@@ -43870,12 +43996,8 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const parsed = await parseJsonBody(c, PresentStandaloneOptionsBody);
       if (!parsed.ok) return parsed.res;
       const sessionId = c.req.param("sessionId");
-      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
-        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
-      }
-      if (!fs29.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
-      }
+      const invalid = verifyStandaloneDirectory2(c, parsed.data.expectedProjectRoot, sessionId);
+      if (invalid) return invalid;
       return withStandaloneWrite(c, sessionId, async () => {
         const store = sessions.get(sessionId) ?? installSession(sessionId, {});
         const port = refreshCompanionLink();
@@ -43888,18 +44010,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           (event) => broadcast(sessionId, event)
         );
         return c.json(result);
-      });
+      }, () => endedReceipt2(c, sessionId, (snapshot) => replayEndedStandaloneOptions(projectRoot2, sessionId, parsed.data.operationId, parsed.data.args, snapshot)));
     });
     app.post("/api/internal/sessions/:sessionId/present-page", async (c) => {
       const parsed = await parseJsonBody(c, PresentStandalonePageBody);
       if (!parsed.ok) return parsed.res;
       const sessionId = c.req.param("sessionId");
-      if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
-        return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
-      }
-      if (!fs29.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
-      }
+      const invalid = verifyStandaloneDirectory2(c, parsed.data.expectedProjectRoot, sessionId);
+      if (invalid) return invalid;
       const { htmlBase64, ...rest } = parsed.data.args;
       let html;
       if (htmlBase64 !== void 0) {
@@ -43912,6 +44030,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         }
         html = bytes2.toString("utf8");
       }
+      const input = { ...rest, ...html !== void 0 ? { html } : {} };
       return withStandaloneWrite(c, sessionId, async () => {
         const store = sessions.get(sessionId) ?? installSession(sessionId, {});
         const port = refreshCompanionLink();
@@ -43920,23 +44039,27 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         } catch {
         }
         const result = await presentStandalonePage(
-          daemonProjectRoot,
+          projectRoot2,
           store,
           parsed.data.operationId,
-          { ...rest, ...html !== void 0 ? { html } : {} },
+          input,
           port,
           (event) => broadcast(sessionId, event)
         );
         return c.json(result);
-      });
+      }, () => endedReceipt2(c, sessionId, (snapshot) => replayEndedStandalonePage(projectRoot2, sessionId, parsed.data.operationId, input, snapshot)));
     });
     app.post("/api/internal/sessions/:sessionId/revise-page", async (c) => {
       const parsed = await parseJsonBody(c, ReviseStandalonePageBody);
       if (!parsed.ok) return parsed.res;
       const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason, ackCommentIds } = parsed.data;
       const sessionId = c.req.param("sessionId");
-      const lookup = requireWarmStandaloneStore2(c, expectedProjectRoot, sessionId, "revise-page");
-      if (!lookup.ok) return lookup.response;
+      const invalid = verifyStandaloneDirectory2(c, expectedProjectRoot, sessionId);
+      if (invalid) return invalid;
+      const store = sessions.get(sessionId);
+      if (!store && (standaloneCloseout?.state(sessionId).state ?? "open") === "open") {
+        return resumeRequired2(c, sessionId, "revise-page");
+      }
       const bytes2 = Buffer.from(htmlBase64, "base64");
       if (bytes2.length > PAGE_HTML_MAX_BYTES) {
         return c.json({
@@ -43948,16 +44071,18 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       if (Buffer.from(html, "utf8").toString("base64") !== htmlBase64) {
         return c.json({ error: "The page must be valid UTF-8 HTML encoded as canonical base64." }, 400);
       }
+      const input = { artifactId, html, reason, ackCommentIds };
       return withStandaloneWrite(c, sessionId, async () => {
+        if (!store) return resumeRequired2(c, sessionId, "revise-page");
         const result = await reviseStandalonePage(
           projectRoot2,
-          lookup.store,
+          store,
           operationId,
-          { artifactId, html, reason, ackCommentIds },
+          input,
           (event) => broadcast(sessionId, event)
         );
         return c.json(result);
-      });
+      }, () => endedReceipt2(c, sessionId, (snapshot) => replayEndedStandaloneRevision(projectRoot2, sessionId, operationId, input, snapshot)));
     });
     app.post("/api/internal/sessions/:sessionId/read-decision", async (c) => {
       const signal = c.req.raw.signal;

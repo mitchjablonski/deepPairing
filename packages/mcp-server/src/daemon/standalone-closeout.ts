@@ -10,7 +10,7 @@ import { withSessionFlushLock } from "../store/session-records.js";
 import { provePageRevisionFeedback } from "../store/page-revision-feedback.js";
 import { planStandaloneOptionsRecovery } from "./standalone-options.js";
 import { planStandalonePageRecovery } from "./standalone-page.js";
-import { readJsonFile, type StandaloneCloseoutSnapshot } from "./standalone-receipts.js";
+import { readJsonFile, readRegularJsonFile, type StandaloneReplaySnapshot } from "./standalone-receipts.js";
 import { planStandalonePageRevisionRecovery } from "./standalone-revise-page.js";
 
 const receiptName = /^(present-options|present-page|revise-page)-([0-9a-f-]+)\.json$/;
@@ -37,10 +37,8 @@ type Entry = {
 };
 
 function readCollection<T>(dir: string, file: string, schema: z.ZodType<T>, key: (row: T) => string): Map<string, T> {
-  const stat = fs.lstatSync(path.join(dir, file), { throwIfNoEntry: false });
-  if (stat && !stat.isFile()) throw new Error("Standalone review collection is not a regular file.");
-  const raw = readJsonFile(path.join(dir, file));
-  if (raw === undefined && !stat) return new Map();
+  const raw = readRegularJsonFile(path.join(dir, file));
+  if (raw === undefined) return new Map();
   if (!Array.isArray(raw)) throw new Error("Standalone review has a malformed durable collection.");
   const rows = new Map<string, T>();
   for (const row of raw) {
@@ -53,8 +51,7 @@ function readCollection<T>(dir: string, file: string, schema: z.ZodType<T>, key:
   return rows;
 }
 
-function closeoutSnapshot(dir: string, store: FileStore): StandaloneCloseoutSnapshot {
-  const sessionId = store.getSessionId();
+function closeoutSnapshot(dir: string, sessionId: string, store?: FileStore): StandaloneReplaySnapshot {
   const artifacts = readCollection(dir, "artifacts.json", ArtifactSchema, (row) => row.id);
   const comments = readCollection(dir, "comments.json", CommentSchema, (row) => row.id);
   const decisions = readCollection(dir, "decisions.json", DecisionRequestSchema.extend({
@@ -70,7 +67,7 @@ function closeoutSnapshot(dir: string, store: FileStore): StandaloneCloseoutSnap
     artifactId: z.string(), visualId: z.string(), error: z.string(), title: z.string().optional(),
     at: z.string().datetime(), acknowledged: z.boolean().optional(),
   }), (row) => JSON.stringify([row.artifactId, row.visualId]));
-  const rawTraces = readJsonFile(path.join(dir, "preflight-traces.json"));
+  const rawTraces = readRegularJsonFile(path.join(dir, "preflight-traces.json"));
   const traces = z.record(z.string(), PreflightTraceSchema).parse(rawTraces === undefined ? {} : rawTraces);
   for (const [id, trace] of Object.entries(traces)) {
     if (trace.artifactId !== id) throw new Error("Standalone review has a mismatched durable preflight trace.");
@@ -95,10 +92,10 @@ function closeoutSnapshot(dir: string, store: FileStore): StandaloneCloseoutSnap
       throw new Error("Standalone review contains an unowned or mismatched decision.");
     }
   }
-  const warmArtifacts = new Map(store.getArtifacts().map((row) => [row.id, row]));
-  const warmParents = new Map<string, string[]>();
-  for (const row of warmArtifacts.values()) addChild(warmParents, row.parentId, row.id);
-  const warmComments = new Map(store.getComments().map((row) => [row.id, row]));
+  const visibleArtifacts = store ? new Map(store.getArtifacts().map((row) => [row.id, row])) : artifacts;
+  const visibleComments = store ? new Map(store.getComments().map((row) => [row.id, row])) : comments;
+  const visibleParents = new Map<string, string[]>();
+  for (const row of visibleArtifacts.values()) addChild(visibleParents, row.parentId, row.id);
   return {
     record(file, key, id) {
       if (file === "comments.json") return comments.get(id);
@@ -109,15 +106,23 @@ function closeoutSnapshot(dir: string, store: FileStore): StandaloneCloseoutSnap
       if (children.length > 1) throw new Error("Standalone review history has conflicting successors.");
       return children[0] ? artifacts.get(children[0]) : undefined;
     },
-    artifact: (id) => warmArtifacts.get(id),
-    comment: (id) => warmComments.get(id),
-    hasOtherChild: (parentId, childId) => (warmParents.get(parentId) ?? []).some((id) => id !== childId),
+    artifact: (id) => visibleArtifacts.get(id),
+    comment: (id) => visibleComments.get(id),
+    hasOtherChild: (parentId, childId) => (visibleParents.get(parentId) ?? []).some((id) => id !== childId),
     trace: (id) => traces[id],
+    getArtifacts: () => [...artifacts.values()],
     verifyFeedback(parentId, proof) {
-      const current = provePageRevisionFeedback([...artifacts.values()], [...comments.values()], sessionId, parentId, proof.commentIds, store.getComments());
-      if (current?.digest !== proof.digest) throw new Error("Standalone revision feedback no longer matches its receipt.");
+      const current = provePageRevisionFeedback([...artifacts.values()], [...comments.values()], sessionId, parentId, proof.commentIds, store?.getComments() ?? [...comments.values()]);
+      if (!current || current.digest !== proof.digest || current.includesRuleOut !== proof.includesRuleOut) {
+        throw new Error("Standalone revision feedback no longer matches its receipt.");
+      }
     },
   };
+}
+
+/** The caller has verified the exact project, session directory, and End marker. */
+export function readStandaloneReplaySnapshot(projectRoot: string, sessionId: string): StandaloneReplaySnapshot {
+  return closeoutSnapshot(path.join(projectRoot, ".deeppairing", "sessions", sessionId), sessionId);
 }
 
 /** Settle only exact caller-owned effects that were durable before this scan. */
@@ -139,7 +144,7 @@ function reconcileReceipts(projectRoot: string, dir: string, store: FileStore, c
   }
   // Validate even with zero receipts, before a generic flush can salvage an
   // ambiguous record. The planning pass changes neither receipts nor feedback.
-  const snapshot = closeoutSnapshot(dir, store);
+  const snapshot = closeoutSnapshot(dir, store.getSessionId(), store);
   const quiet = () => {};
   const repairs: Array<() => void> = [];
   receipts.sort((a, b) => a.kind.localeCompare(b.kind) || a.operationId.localeCompare(b.operationId));

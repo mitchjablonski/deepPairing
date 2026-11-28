@@ -133,6 +133,87 @@ describe("authenticated standalone options", () => {
     }
   });
 
+  it("replays options reconciled by End without installing or writing", async () => {
+    const f = fixture();
+    try {
+      const warm = f.start();
+      expect((await f.request(warm, "open-review", { mode: "open" })).status).toBe(200);
+      const op = randomUUID();
+      const dir = path.join(f.root, ".deeppairing", "sessions", f.sessionId);
+      const receipt = path.join(dir, `present-options-${op}.json`);
+      const rename = fs.renameSync;
+      const interrupted = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        if (String(to) === receipt && JSON.parse(fs.readFileSync(from, "utf8")).committed) {
+          throw new Error("Interrupted final receipt write");
+        }
+        rename(from, to);
+      });
+      try {
+        expect((await f.present(warm, op)).status).toBe(500);
+      } finally {
+        interrupted.mockRestore();
+      }
+      const prepared = fs.readFileSync(receipt, "utf8");
+      expect(JSON.parse(prepared)).not.toHaveProperty("committed");
+      const abandonedOp = randomUUID();
+      const abandonedReceipt = path.join(dir, `present-options-${abandonedOp}.json`);
+      const abandoned = JSON.stringify({ version: 1, fingerprint: JSON.parse(prepared).fingerprint });
+      fs.writeFileSync(abandonedReceipt, abandoned);
+      const store = warm.sessions.get(f.sessionId)!;
+      const [artifact] = store.getArtifacts();
+      const [choice] = store.getPendingDecisions();
+      expect(choice?.artifactId).toBe(artifact?.id);
+      await warm.standaloneCloseout.end(f.sessionId);
+      const committed = fs.readFileSync(receipt, "utf8");
+      expect(JSON.parse(committed)).toMatchObject({ committed: true });
+
+      const capture = () => fs.readdirSync(dir).sort().map((name) => [name, fs.readFileSync(path.join(dir, name), "utf8")]);
+      const before = capture();
+      const cold = f.start();
+      for (const daemon of [warm, cold]) {
+        const replay = await f.present(daemon, op);
+        expect(replay.status).toBe(200);
+        expect(await replay.json()).toMatchObject({
+          structuredContent: { artifactId: artifact!.id, decisionId: choice!.decisionId, replayed: true },
+        });
+        const mismatch = await f.present(daemon, op, { ...args, context: "Choose a different backend." });
+        expect(await mismatch.json()).toMatchObject({
+          isError: true, structuredContent: { code: "standalone_operation_conflict" },
+        });
+        const fresh = await f.present(daemon, randomUUID());
+        expect(fresh.status).toBe(409);
+        expect(await fresh.json()).toMatchObject({ code: "session_ended" });
+        const neverApplied = await f.present(daemon, abandonedOp);
+        expect(neverApplied.status).toBe(409);
+        expect(await neverApplied.json()).toMatchObject({ code: "session_ended" });
+      }
+      expect(cold.sessions.has(f.sessionId)).toBe(false);
+      expect(cold.sessionMeta.has(f.sessionId)).toBe(false);
+      expect(capture()).toEqual(before);
+      expect(fs.readFileSync(abandonedReceipt, "utf8")).toBe(abandoned);
+
+      // A prepared receipt read after End must never trigger recovery, even
+      // when all of its touched records are present.
+      fs.writeFileSync(receipt, prepared);
+      const preparedRead = await f.present(cold, op);
+      expect(preparedRead.status).toBe(409);
+      expect(await preparedRead.json()).toMatchObject({ code: "session_ended" });
+      expect(fs.readFileSync(receipt, "utf8")).toBe(prepared);
+
+      fs.writeFileSync(receipt, committed);
+      const decisions = path.join(dir, "decisions.json");
+      fs.writeFileSync(decisions, "{ corrupt");
+      const corrupt = await f.present(cold, op);
+      expect(corrupt.status).toBe(409);
+      expect(await corrupt.json()).toMatchObject({ code: "session_review_conflict" });
+      expect(fs.readFileSync(decisions, "utf8")).toBe("{ corrupt");
+      expect(cold.sessions.has(f.sessionId)).toBe(false);
+      expect(cold.sessionMeta.has(f.sessionId)).toBe(false);
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("replays a committed operation after a saved rename and withdrawal", async () => {
     const f = fixture();
     try {
