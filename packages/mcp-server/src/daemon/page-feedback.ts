@@ -69,7 +69,7 @@ function fitVerdictReason(result: StandalonePageFeedbackRead, verdict: PageFeedb
 }
 
 export function readPageFeedback(
-  store: FileStore,
+  store: Pick<FileStore, "getSessionId" | "getArtifacts" | "getComments" | "getCommentsForArtifact">,
   artifactId: string,
 ): StandalonePageFeedbackRead | "metadata_too_large" | undefined {
   const sessionId = store.getSessionId();
