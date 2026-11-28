@@ -27774,7 +27774,7 @@ var VERSION2 = 1;
 function logPath(projectRoot2) {
   return path9.join(projectRoot2, ".deeppairing", "preflight-blocks.json");
 }
-function readPreflightBlocks(projectRoot2) {
+function readPreflightBlocks(projectRoot2, { readOnly = false } = {}) {
   const file2 = logPath(projectRoot2);
   let raw2;
   try {
@@ -27792,7 +27792,7 @@ function readPreflightBlocks(projectRoot2) {
     }
   } catch {
   }
-  if (raw2.trim().length > 0) {
+  if (!readOnly && raw2.trim().length > 0) {
     try {
       const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
       fs10.writeFileSync(`${file2}.corrupt-${stamp}`, raw2);
@@ -27992,10 +27992,14 @@ function writeSeen(sessionDir, ids) {
   fs11.mkdirSync(sessionDir, { recursive: true });
   writeJsonAtomic(seenPath(sessionDir), { version: VERSION3, ids: ids.slice(-MAX_SEEN_WORKER_STOPS) });
 }
-function loadDeliveredWorkerStops(sessionDir, currentIds) {
+function loadDeliveredWorkerStops(sessionDir, currentIds, { readOnly = false } = {}) {
   const r = readSeen(sessionDir);
   if (r.kind === "ok") return { ids: r.ids };
   if (r.kind === "missing") return { ids: [] };
+  if (readOnly) return {
+    ids: [...currentIds()],
+    notice: "\u26A0\uFE0F This session's worker-stop delivery record is unreadable. No stops were re-sent and the delivery record was left unchanged."
+  };
   const backup = backUpCorrupt(sessionDir, r.raw);
   const ids = [...currentIds()];
   try {
@@ -31587,15 +31591,16 @@ var FileStore = class _FileStore {
   /**
    * #569 pilot task A (#553/#572) — this session's worker-subagent gate stops
    * not yet delivered to the lead. Reads the project block log (written by
-   * the daemon's hooks-state watcher) plus this session's delivered-ids file;
-   * never touches either on read. Demo sessions have no real workers: [].
+   * the daemon's hooks-state watcher) plus this session's delivered-ids file.
+   * Historical reads leave both files untouched. Demo sessions have no real workers.
    */
-  getUndeliveredWorkerStops() {
+  getUndeliveredWorkerStops({ readOnly = false } = {}) {
     if (this.isDemoSession) return { stops: [] };
-    const entries = readPreflightBlocks(this.projectRoot);
+    const entries = readPreflightBlocks(this.projectRoot, { readOnly });
     const seen = loadDeliveredWorkerStops(
       this.sessionDir(),
-      () => workerStopsFor(entries, this.sessionId, []).map((s) => s.id)
+      () => workerStopsFor(entries, this.sessionId, []).map((s) => s.id),
+      { readOnly }
     );
     const stops = workerStopsFor(entries, this.sessionId, seen.ids);
     return seen.notice ? { stops, notice: seen.notice } : { stops };
@@ -38007,6 +38012,7 @@ import path22 from "node:path";
 
 // src/mcp/tool-helpers.ts
 import { createHash as createHash5 } from "node:crypto";
+import { debuglog } from "node:util";
 
 // src/store/comment-resolution.ts
 function time3(value) {
@@ -38049,6 +38055,9 @@ function effectiveHumanResolution(comments, artifacts) {
   };
 }
 
+// src/mcp/tools/feedback-ownership.ts
+var LIVE_POLL_GRACE_MS = 60 * 1e3;
+
 // src/mcp/advisory-recall.ts
 function tokenSetKey(s) {
   const toks = meaningfulTokens(s);
@@ -38080,6 +38089,7 @@ function getAdvisoryRecall() {
 }
 
 // src/mcp/tool-helpers.ts
+var feedbackDebug = debuglog("deeppairing");
 var ADVISORY_EXEMPT_TOOLS = /* @__PURE__ */ new Set([
   "present_explainer",
   "present_debrief"
@@ -43864,7 +43874,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   }
   const lastActivityBroadcastAt = /* @__PURE__ */ new Map();
   const AGENT_ACTIVITY_THROTTLE_MS = 5e3;
-  const standaloneWriteActivity = /* @__PURE__ */ new WeakSet();
+  const handledStandaloneActivity = /* @__PURE__ */ new WeakSet();
   function noteActivity(sid) {
     const now = Date.now();
     const meta3 = sessionMeta.get(sid);
@@ -43873,11 +43883,27 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     lastActivityBroadcastAt.set(sid, now);
     broadcast(sid, { type: "agent_activity", at: new Date(now).toISOString() });
   }
+  function standaloneStateForStore(store) {
+    const sid = store.getSessionId();
+    if (standaloneCloseout && daemonProjectRoot && isStandaloneSessionForProject(sid, daemonProjectRoot)) {
+      return standaloneCloseout.state(sid);
+    }
+  }
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    if (c.res.status >= 400 || standaloneWriteActivity.has(c) || c.req.method === "POST" && /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback|present-options|present-page|revise-page)$/.test(c.req.path)) return;
+    if (c.res.status >= 400 || handledStandaloneActivity.has(c) || c.req.method === "POST" && /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback|present-options|present-page|revise-page)$/.test(c.req.path)) return;
     const sid = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/)?.[1];
-    if (sid) noteActivity(sid);
+    if (!sid) return;
+    const store = c.req.method === "GET" || c.req.method === "HEAD" ? sessions.get(sid) : void 0;
+    if (store) {
+      try {
+        const review = standaloneStateForStore(store);
+        if (review && review.state !== "open") return;
+      } catch {
+        return;
+      }
+    }
+    noteActivity(sid);
   });
   function requireStore(c, sessionId) {
     const store = sessions.get(sessionId);
@@ -43909,7 +43935,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const response = await run();
       if (response.status < 400) {
         noteActivity(sessionId);
-        standaloneWriteActivity.add(c);
+        handledStandaloneActivity.add(c);
       }
       return response;
     } finally {
@@ -43935,29 +43961,41 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     });
     return store;
   }
+  function reviewDir(projectRoot2, sessionId) {
+    return path32.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+  }
+  function verifyStandaloneDirectory(c, projectRoot2, sessionId, expectedProjectRoot = projectRoot2) {
+    if (expectedProjectRoot !== projectRoot2 || !isStandaloneSessionForProject(sessionId, projectRoot2)) {
+      return c.json({
+        error: "This standalone session does not belong to the daemon's project.",
+        code: ERROR_CODES.project_mismatch
+      }, 403);
+    }
+    if (!fs29.lstatSync(reviewDir(projectRoot2, sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+      return c.json({
+        error: "Standalone session does not exist in this project.",
+        code: ERROR_CODES.session_not_registered
+      }, 404);
+    }
+  }
+  if (authToken && daemonProjectRoot && standaloneCloseout) {
+    app.get("/api/internal/sessions/:sessionId/review-state", (c) => {
+      const sessionId = c.req.param("sessionId");
+      const invalid = verifyStandaloneDirectory(c, daemonProjectRoot, sessionId);
+      if (invalid) return invalid;
+      const { state } = standaloneCloseout.state(sessionId);
+      handledStandaloneActivity.add(c);
+      return c.json({ state });
+    });
+  }
   if (authToken && daemonProjectRoot && refreshCompanionLink) {
-    let reviewDir2 = function(sessionId) {
-      return path32.join(projectRoot2, ".deeppairing", "sessions", sessionId);
-    }, verifyStandaloneDirectory2 = function(c, expectedProjectRoot, sessionId) {
-      if (expectedProjectRoot !== projectRoot2 || !isStandaloneSessionForProject(sessionId, projectRoot2)) {
-        return c.json({
-          error: "This standalone session does not belong to the daemon's project.",
-          code: ERROR_CODES.project_mismatch
-        }, 403);
-      }
-      if (!fs29.lstatSync(reviewDir2(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return c.json({
-          error: "Standalone session does not exist in this project.",
-          code: ERROR_CODES.session_not_registered
-        }, 404);
-      }
-    }, resumeRequired2 = function(c, sessionId, command) {
+    let resumeRequired2 = function(c, sessionId, command) {
       return c.json({
         error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry ${command}.`,
         code: ERROR_CODES.session_not_registered
       }, 404);
     }, requireWarmStandaloneStore2 = function(c, expectedProjectRoot, sessionId, command) {
-      const invalid = verifyStandaloneDirectory2(c, expectedProjectRoot, sessionId);
+      const invalid = verifyStandaloneDirectory(c, projectRoot2, sessionId, expectedProjectRoot);
       if (invalid) return { ok: false, response: invalid };
       const store = sessions.get(sessionId);
       if (!store) return { ok: false, response: resumeRequired2(c, sessionId, command) };
@@ -43973,7 +44011,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         }, 409);
       }
     };
-    var reviewDir = reviewDir2, verifyStandaloneDirectory = verifyStandaloneDirectory2, resumeRequired = resumeRequired2, requireWarmStandaloneStore = requireWarmStandaloneStore2, endedReceipt = endedReceipt2;
+    var resumeRequired = resumeRequired2, requireWarmStandaloneStore = requireWarmStandaloneStore2, endedReceipt = endedReceipt2;
     const projectRoot2 = daemonProjectRoot;
     app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
       const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
@@ -43982,7 +44020,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
       }
-      const dir = reviewDir2(sessionId);
+      const dir = reviewDir(projectRoot2, sessionId);
       const existing = fs29.lstatSync(dir, { throwIfNoEntry: false });
       if (parsed.data.mode === "resume" && !existing?.isDirectory()) {
         return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
@@ -44009,7 +44047,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const parsed = await parseJsonBody(c, PresentStandaloneOptionsBody);
       if (!parsed.ok) return parsed.res;
       const sessionId = c.req.param("sessionId");
-      const invalid = verifyStandaloneDirectory2(c, parsed.data.expectedProjectRoot, sessionId);
+      const invalid = verifyStandaloneDirectory(c, projectRoot2, sessionId, parsed.data.expectedProjectRoot);
       if (invalid) return invalid;
       return withStandaloneWrite(c, sessionId, async () => {
         const store = sessions.get(sessionId) ?? installSession(sessionId, {});
@@ -44029,7 +44067,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const parsed = await parseJsonBody(c, PresentStandalonePageBody);
       if (!parsed.ok) return parsed.res;
       const sessionId = c.req.param("sessionId");
-      const invalid = verifyStandaloneDirectory2(c, parsed.data.expectedProjectRoot, sessionId);
+      const invalid = verifyStandaloneDirectory(c, projectRoot2, sessionId, parsed.data.expectedProjectRoot);
       if (invalid) return invalid;
       const { htmlBase64, ...rest } = parsed.data.args;
       let html;
@@ -44067,7 +44105,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       if (!parsed.ok) return parsed.res;
       const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason, ackCommentIds } = parsed.data;
       const sessionId = c.req.param("sessionId");
-      const invalid = verifyStandaloneDirectory2(c, expectedProjectRoot, sessionId);
+      const invalid = verifyStandaloneDirectory(c, projectRoot2, sessionId, expectedProjectRoot);
       if (invalid) return invalid;
       const store = sessions.get(sessionId);
       if (!store && (standaloneCloseout?.state(sessionId).state ?? "open") === "open") {
@@ -44300,8 +44338,10 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
     }
     const { ids } = body;
-    r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
+      return c.json({ status: "acknowledged" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/artifacts/file-watch/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44318,8 +44358,10 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       ...str2(x.refusedAt) !== void 0 ? { refusedAt: str2(x.refusedAt) } : {},
       ...str2(x.refusedDigest) !== void 0 ? { refusedDigest: str2(x.refusedDigest) } : {}
     }));
-    r.store.acknowledgeFileWatchNotices(clean);
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeFileWatchNotices(clean);
+      return c.json({ status: "acknowledged" });
+    });
   });
   app.get("/api/internal/sessions/:sessionId/render-failures", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44338,13 +44380,36 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const o = k;
       return !!o && typeof o === "object" && typeof o.artifactId === "string" && typeof o.visualId === "string";
     }) : [];
-    r.store.acknowledgeRenderFailures?.(clean);
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeRenderFailures?.(clean);
+      return c.json({ status: "acknowledged" });
+    });
   });
   app.get("/api/internal/sessions/:sessionId/worker-stops", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    return c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] });
+    const sessionId = r.store.getSessionId();
+    if (!standaloneCloseout || !daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+      return c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] });
+    }
+    let release2;
+    try {
+      release2 = standaloneCloseout.admitWrite(sessionId);
+    } catch (error51) {
+      if (!(error51 instanceof StandaloneCloseoutError) || error51.code !== ERROR_CODES.session_marker_invalid) throw error51;
+    }
+    if (!release2) {
+      handledStandaloneActivity.add(c);
+      return c.json(r.store.getUndeliveredWorkerStops?.({ readOnly: true }) ?? { stops: [] });
+    }
+    try {
+      const response = c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] });
+      noteActivity(sessionId);
+      handledStandaloneActivity.add(c);
+      return response;
+    } finally {
+      release2();
+    }
   });
   app.post("/api/internal/sessions/:sessionId/worker-stops/delivered", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44355,8 +44420,10 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     }
     const { ids } = body;
     const clean = Array.isArray(ids) ? ids.filter((x) => typeof x === "string").slice(0, 200) : [];
-    r.store.markWorkerStopsDelivered?.(clean);
-    return c.json({ status: "delivered" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.markWorkerStopsDelivered?.(clean);
+      return c.json({ status: "delivered" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/retire", async (c) => {
     const sessionId = c.req.param("sessionId");
@@ -44540,8 +44607,10 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!snapshots.success) {
       return c.json({ error: "Invalid delivered comment resolution state", code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.acknowledgeComments(Array.isArray(ids) ? ids : [], snapshots.data);
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeComments(Array.isArray(ids) ? ids : [], snapshots.data);
+      return c.json({ status: "acknowledged" });
+    });
   });
   app.get("/api/internal/sessions/:sessionId/artifacts/:artifactId/comments", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44596,9 +44665,12 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (typeof artifactId !== "string" || artifactId.length === 0) {
       return c.json({ error: "artifactId is required", code: ERROR_CODES.validation_error }, 400);
     }
-    const linked = r.store.markRequestServed?.(c.req.param("requestId"), artifactId) ?? false;
-    if (linked) broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
-    return c.json({ status: linked ? "served" : "not_found", linked });
+    const requestId = c.req.param("requestId");
+    return withSessionWrite(c, r.store, () => {
+      const linked = r.store.markRequestServed?.(requestId, artifactId) ?? false;
+      if (linked) broadcast(r.store.getSessionId(), { type: "request_served", requestId, artifactId });
+      return c.json({ status: linked ? "served" : "not_found", linked });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/metrics", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44751,12 +44823,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
     }
     const { ids } = body;
-    r.store.acknowledgeDecisions(Array.isArray(ids) ? ids : []);
-    const known = (Array.isArray(ids) ? ids : []).filter((id) => r.store.getDecision(id));
-    if (known.length > 0) {
-      broadcast(c.req.param("sessionId"), { type: "decisions_acknowledged", decisionIds: known });
-    }
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeDecisions(Array.isArray(ids) ? ids : []);
+      const known = (Array.isArray(ids) ? ids : []).filter((id) => r.store.getDecision(id));
+      if (known.length > 0) {
+        broadcast(r.store.getSessionId(), { type: "decisions_acknowledged", decisionIds: known });
+      }
+      return c.json({ status: "acknowledged" });
+    });
   });
   app.get("/api/internal/sessions/:sessionId/decisions/:decisionId", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -44800,7 +44874,9 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const timeout = parseInt(c.req.query("timeout") ?? "30000", 10);
-    await r.store.waitForFeedback(timeout);
+    const review = standaloneStateForStore(r.store);
+    if (!review) await r.store.waitForFeedback(timeout);
+    else if (review.state !== "ended") await r.store.waitForFeedback(timeout, void 0, "review_end");
     return c.json({ status: "complete" });
   });
   app.get("/api/internal/sessions/:sessionId/state", (c) => {
