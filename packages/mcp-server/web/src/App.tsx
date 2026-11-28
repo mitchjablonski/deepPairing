@@ -42,6 +42,7 @@ import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ContextBankView } from "./components/ContextBankView";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
+import { ReviewEndedBanner } from "./components/ReviewEndedBanner";
 import { useArtifactStore, scopedVisibleArtifacts } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
 import { useConnectionStore, selectHydratedForBinding } from "./stores/connection";
@@ -1049,6 +1050,9 @@ function LiveApp() {
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}
       {tabOffline && <DisconnectBanner />}
+
+      {/* #711 gate 4 — the standalone review ended; writes are refused. */}
+      <ReviewEndedBanner />
 
       {/* #477 — connected, but the first snapshot never applied: say so, with
           Reload (bar ON carries the same state on its line). */}

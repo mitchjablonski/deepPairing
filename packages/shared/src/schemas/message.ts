@@ -168,3 +168,47 @@ export type ArtifactUpdatedEvent = z.infer<typeof ArtifactUpdatedEventSchema>;
 export type CommentAddedEvent = z.infer<typeof CommentAddedEventSchema>;
 export type CommentUpdatedEvent = z.infer<typeof CommentUpdatedEventSchema>;
 export type PlanReviewRequestEvent = z.infer<typeof PlanReviewRequestEventSchema>;
+
+// --- Companion WebSocket review-state frames (#711 gate 4) ---
+// These are daemon → companion frames, not agent events. Every field beyond
+// `type` and `sessionId` is optional so older daemons and tabs stay compatible.
+
+/** The codes a standalone review's write admission refuses with — the same
+ *  typed codes HTTP writes answer 409 with. */
+export const ReviewWriteRefusalCodeSchema = z.enum(["session_closing", "session_ended", "session_marker_invalid"]);
+
+/** Sent to a session's tabs when End review completes, and to a tab that
+ *  connects after End. `session_marker_invalid` means the End marker exists but
+ *  cannot be verified, so writes stay refused. */
+export const ReviewEndedEventSchema = z.object({
+  type: z.literal("review_ended"),
+  sessionId: z.string(),
+  endedAt: z.string().datetime().optional(),
+  code: z.enum(["session_ended", "session_marker_invalid"]).optional(),
+  message: z.string().optional(),
+});
+
+/** Reply to a read-only `{ type: "review_state" }` socket request. */
+export const ReviewStateEventSchema = z.object({
+  type: z.literal("review_state"),
+  sessionId: z.string(),
+  state: z.enum(["open", "closing", "ended", "marker_invalid"]),
+  endedAt: z.string().datetime().optional(),
+  code: ReviewWriteRefusalCodeSchema.optional(),
+});
+
+/** Reply to a socket message the daemon would not apply. Sent only to the
+ *  sending socket — never broadcast. */
+export const SocketMessageRefusedEventSchema = z.object({
+  type: z.literal("message_refused"),
+  sessionId: z.string().optional(),
+  requestId: z.string().optional(),
+  messageType: z.string().optional(),
+  code: z.string(),
+  message: z.string().optional(),
+});
+
+export type ReviewWriteRefusalCode = z.infer<typeof ReviewWriteRefusalCodeSchema>;
+export type ReviewEndedEvent = z.infer<typeof ReviewEndedEventSchema>;
+export type ReviewStateEvent = z.infer<typeof ReviewStateEventSchema>;
+export type SocketMessageRefusedEvent = z.infer<typeof SocketMessageRefusedEventSchema>;
