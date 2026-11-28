@@ -243,6 +243,7 @@ ${renderPageAuthoringGuide()}
   - "timed_out": no choice yet. Run the same command again.
   - "session_ended": the review ended while this card still awaited a choice.
                      Stop waiting on it.
+  After a review ends, its saved feedback is final. Stop polling the review.
   recordedRejections lists the approaches the human rejected from this card,
   each with their reason. Don't propose those again.
   Without --wait-ms the read answers at once and has no waitStatus: no

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { debuglog } from "node:util";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
 import { commentResolutionSnapshot } from "../store/comment-resolution.js";
@@ -15,6 +16,7 @@ import { getAdvisoryRecall, tokenSetKey } from "./advisory-recall.js";
 import { stableStringify, sameStance } from "./proposal-resolution.js";
 
 type BroadcastFn = (event: any) => void;
+const feedbackDebug = debuglog("deeppairing");
 
 /**
  * X4 — shared per-call helpers, lifted out of server.ts so the CallTool
@@ -549,7 +551,9 @@ export async function getPassiveFeedback(store: IStore, excludeIds: string[] = [
   try {
     await store.acknowledgeComments(drainable.map((c) => c.id), drainable.map(commentResolutionSnapshot));
   } catch (error) {
-    if (!feedbackAckRefusal(error)) throw error;
+    const refusal = feedbackAckRefusal(error);
+    if (!refusal) throw error;
+    feedbackDebug("Passive feedback ACK deferred for %s: %s", store.getSessionId(), refusal);
   }
   // N2 (#226 scope 6) — keep excluded comments out of the visible echo.
   const exclude = new Set(excludeIds);

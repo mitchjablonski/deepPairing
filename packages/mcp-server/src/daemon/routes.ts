@@ -600,25 +600,38 @@ export function createDaemonRoutes(
     return store;
   }
 
+  function reviewDir(projectRoot: string, sessionId: string): string {
+    return path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+  }
+
+  function verifyStandaloneDirectory(c: Context, projectRoot: string, sessionId: string, expectedProjectRoot = projectRoot): Response | undefined {
+    if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
+      return c.json({
+        error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch,
+      }, 403);
+    }
+    if (!fs.lstatSync(reviewDir(projectRoot, sessionId), { throwIfNoEntry: false })?.isDirectory()) {
+      return c.json({
+        error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered,
+      }, 404);
+    }
+  }
+
+  if (authToken && daemonProjectRoot && standaloneCloseout) {
+    app.get("/api/internal/sessions/:sessionId/review-state", (c) => {
+      const sessionId = c.req.param("sessionId");
+      const invalid = verifyStandaloneDirectory(c, daemonProjectRoot, sessionId);
+      if (invalid) return invalid;
+      const { state } = standaloneCloseout.state(sessionId);
+      handledStandaloneActivity.add(c);
+      return c.json({ state });
+    });
+  }
+
   // A shell command can disappear before it receives its response. Give it a
   // browser link without leaving a wrapper registered or granting stance authority.
   if (authToken && daemonProjectRoot && refreshCompanionLink) {
     const projectRoot = daemonProjectRoot;
-    function reviewDir(sessionId: string): string {
-      return path.join(projectRoot, ".deeppairing", "sessions", sessionId);
-    }
-    function verifyStandaloneDirectory(c: Context, expectedProjectRoot: string, sessionId: string): Response | undefined {
-      if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
-        return c.json({
-          error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch,
-        }, 403);
-      }
-      if (!fs.lstatSync(reviewDir(sessionId), { throwIfNoEntry: false })?.isDirectory()) {
-        return c.json({
-          error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered,
-        }, 404);
-      }
-    }
     function resumeRequired(c: Context, sessionId: string, command: string): Response {
       return c.json({
         error: `Resume this standalone session with "deeppairing resume ${sessionId}", then retry ${command}.`,
@@ -626,7 +639,7 @@ export function createDaemonRoutes(
       }, 404);
     }
     function requireWarmStandaloneStore(c: Context, expectedProjectRoot: string, sessionId: string, command: string): StoreLookup {
-      const invalid = verifyStandaloneDirectory(c, expectedProjectRoot, sessionId);
+      const invalid = verifyStandaloneDirectory(c, projectRoot, sessionId, expectedProjectRoot);
       if (invalid) return { ok: false, response: invalid };
       const store = sessions.get(sessionId);
       if (!store) return { ok: false, response: resumeRequired(c, sessionId, command) };
@@ -650,7 +663,7 @@ export function createDaemonRoutes(
       if (parsed.data.expectedProjectRoot !== daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
         return c.json({ error: "This standalone session does not belong to the daemon's project.", code: ERROR_CODES.project_mismatch }, 403);
       }
-      const dir = reviewDir(sessionId);
+      const dir = reviewDir(projectRoot, sessionId);
       const existing = fs.lstatSync(dir, { throwIfNoEntry: false });
       if (parsed.data.mode === "resume" && !existing?.isDirectory()) {
         return c.json({ error: "Standalone session does not exist in this project.", code: ERROR_CODES.session_not_registered }, 404);
@@ -670,7 +683,7 @@ export function createDaemonRoutes(
       const parsed = await parseJsonBody(c, PresentStandaloneOptionsBody);
       if (!parsed.ok) return parsed.res;
       const sessionId = c.req.param("sessionId");
-      const invalid = verifyStandaloneDirectory(c, parsed.data.expectedProjectRoot, sessionId);
+      const invalid = verifyStandaloneDirectory(c, projectRoot, sessionId, parsed.data.expectedProjectRoot);
       if (invalid) return invalid;
       return withStandaloneWrite(c, sessionId, async () => {
         const store = sessions.get(sessionId) ?? installSession(sessionId, {});
@@ -685,7 +698,7 @@ export function createDaemonRoutes(
       const parsed = await parseJsonBody(c, PresentStandalonePageBody);
       if (!parsed.ok) return parsed.res;
       const sessionId = c.req.param("sessionId");
-      const invalid = verifyStandaloneDirectory(c, parsed.data.expectedProjectRoot, sessionId);
+      const invalid = verifyStandaloneDirectory(c, projectRoot, sessionId, parsed.data.expectedProjectRoot);
       if (invalid) return invalid;
       const { htmlBase64, ...rest } = parsed.data.args;
       let html: string | undefined;
@@ -716,7 +729,7 @@ export function createDaemonRoutes(
       if (!parsed.ok) return parsed.res;
       const { expectedProjectRoot, operationId, artifactId, htmlBase64, reason, ackCommentIds } = parsed.data;
       const sessionId = c.req.param("sessionId");
-      const invalid = verifyStandaloneDirectory(c, expectedProjectRoot, sessionId);
+      const invalid = verifyStandaloneDirectory(c, projectRoot, sessionId, expectedProjectRoot);
       if (invalid) return invalid;
       const store = sessions.get(sessionId);
       if (!store && (standaloneCloseout?.state(sessionId).state ?? "open") === "open") {
@@ -1068,13 +1081,28 @@ export function createDaemonRoutes(
   app.get("/api/internal/sessions/:sessionId/worker-stops", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const review = standaloneStateForStore(r.store);
-    if (review && review.state !== "open") {
+    const sessionId = r.store.getSessionId();
+    if (!standaloneCloseout || !daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) {
+      return c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] });
+    }
+    let release: (() => void) | undefined;
+    try {
+      release = standaloneCloseout.admitWrite(sessionId);
+    } catch (error) {
+      if (!(error instanceof StandaloneCloseoutError) || error.code !== ERROR_CODES.session_marker_invalid) throw error;
+    }
+    if (!release) {
       handledStandaloneActivity.add(c);
       return c.json(r.store.getUndeliveredWorkerStops?.({ readOnly: true }) ?? { stops: [] });
     }
-    // Open reads can repair delivery history or back up a damaged log.
-    return withSessionWrite(c, r.store, () => c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] }));
+    try {
+      const response = c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] });
+      noteActivity(sessionId);
+      handledStandaloneActivity.add(c);
+      return response;
+    } finally {
+      release();
+    }
   });
 
   app.post("/api/internal/sessions/:sessionId/worker-stops/delivered", async (c) => {
@@ -1690,7 +1718,9 @@ export function createDaemonRoutes(
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const timeout = parseInt(c.req.query("timeout") ?? "30000", 10);
-    await r.store.waitForFeedback(timeout);
+    const review = standaloneStateForStore(r.store);
+    if (!review) await r.store.waitForFeedback(timeout);
+    else if (review.state !== "ended") await r.store.waitForFeedback(timeout, undefined, "review_end");
     return c.json({ status: "complete" });
   });
 

@@ -336,6 +336,7 @@ export interface IStore {
   readonly reviewPosts: DurableReviewPostStore;
   // Session
   getSessionId(): string;
+  getStandaloneReviewState?(): MaybePromise<"open" | "closing" | "ended" | undefined>;
   /**
    * AA7 — optional rename + cross-session reads. Both FileStore and
    * DaemonClient already implement these; lifting to IStore (as

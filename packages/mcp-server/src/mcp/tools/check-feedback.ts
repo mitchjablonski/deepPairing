@@ -298,12 +298,29 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 
   try {
     let assembled: Awaited<ReturnType<typeof assembleCheckFeedback>>;
+    let ended = false;
+    const reviewHasEnded = async () => {
+      ended ||= (await ctx.store.getStandaloneReviewState?.()) === "ended";
+      return ended;
+    };
     try {
-      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
+      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args, reviewHasEnded);
+      if (!ctx.signal?.aborted) await reviewHasEnded();
     } catch (err) {
       // Nothing was acknowledged (the acks are still in the buffer), so this
       // poll's items come back next time with the same ids.
       rollback();
+      // The state endpoint also recognizes a cold ended review. Its live
+      // feedback endpoints require a loaded store; keep the terminal result.
+      if (ended && typeof err === "object" && err !== null &&
+        "status" in err && err.status === 404 && "code" in err && err.code === ERROR_CODES.session_not_registered) {
+        return annotateResult({
+          content: [{ type: "text", text: ENDED_REVIEW_HEADER }],
+          structuredContent: { status: "feedback", comments: [], decisions: [] },
+        }, {
+          filter, reservations, held: view.held, ack: { errors: [], refusal: ERROR_CODES.session_ended },
+        });
+      }
       throw err;
     }
     if (ctx.signal?.aborted) {
@@ -312,7 +329,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       rollback();
       return assembled.result;
     }
-    const ack = await pending.flush(ctx.store);
+    const ack: FeedbackAckFlush = ended
+      ? { errors: [], refusal: ERROR_CODES.session_ended }
+      : await pending.flush(ctx.store);
     return annotateResult(assembled.result, { filter, reservations, held: view.held, ack, endedText: assembled.endedText });
   } finally {
     view.release();
@@ -321,6 +340,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 }
 
 const STOP_ENDED_REVIEW = "Stop polling this ended review.";
+const ENDED_REVIEW_HEADER = `Review ended.\n\nSuggested action: ${STOP_ENDED_REVIEW}`;
 
 /** #533 — the filter echo, the held-back report and the ack-failure note.
  *  Adds nothing to a legacy poll that held nothing back and acked cleanly. */
@@ -390,7 +410,7 @@ function annotateResult(
   if (sc && ackErrors.length > 0) sc = { ...sc, ackFailed: true };
   if (refusal) {
     sc = { ...sc, sessionStatus: refusal };
-    if (ended) sc = { ...sc, suggestedAction: STOP_ENDED_REVIEW };
+    if (ended) sc = { ...sc, status: "feedback", suggestedAction: STOP_ENDED_REVIEW };
   }
   const [, ...rest] = result.content;
   return {
@@ -400,7 +420,12 @@ function annotateResult(
   };
 }
 
-async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<{ result: ToolResult; endedText?: () => string }> {
+async function assembleCheckFeedback(
+  ctx: ToolContext,
+  args: any,
+  reviewHasEnded: () => Promise<boolean>,
+): Promise<{ result: ToolResult; endedText?: () => string }> {
+  let ended = await reviewHasEnded();
   const { store, server, broadcast, port } = ctx;
 
   // I7 — the LIVE companion UI URL, from the daemon's real bound port. This is
@@ -489,7 +514,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<{ res
     // refused) is news for the agent, so the poll returns it without waiting.
     || collectPageWatchNotices(allArtsForScope, pageWatchAtGate).prose !== "";
 
-  if (!hasImmediate) {
+  if (!ended && !hasImmediate) {
     // Check if there are draft artifacts — if so, wait for human action
     const allArts = allArtsForScope;
     const hasDrafts = allArts.some(
@@ -519,6 +544,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<{ res
       // (the handler's caller decides), but the timer never outlives the wait.
       try {
         await store.waitForFeedback(30000);
+        ended = await reviewHasEnded();
       } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);
       }
@@ -564,7 +590,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<{ res
   // the fresh post-wake data; if it's narrow and unsatisfied, return
   // a focused "still waiting" status instead of dumping out-of-scope
   // chatter at the agent.
-  if (waitForScope !== "any") {
+  if (!ended && waitForScope !== "any") {
     // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
     const decidedPlansPostWake = postWakeArtifacts.filter(
       (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected"),
@@ -596,7 +622,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<{ res
     // #569 pilot task A — nor while a worker stop is waiting for the lead.
     if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0 && postWakeWorkerStops.stops.length === 0) {
       const portNote = portRecoveryNote();
-      return { result: {
+      return { endedText: () => ENDED_REVIEW_HEADER, result: {
         content: [{
           type: "text",
           text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll — no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).${portNote}`,
@@ -954,14 +980,17 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<{ res
     const formattedDecisions: string[] = [];
     const recordedIds: string[] = [];
     const deferred: string[] = [];
+    ended = await reviewHasEnded();
     for (const d of resolved) {
-      try {
-        await recordDecisionLedger(d);
-      } catch (err) {
-        deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
-        continue;
+      if (!ended) {
+        try {
+          await recordDecisionLedger(d);
+        } catch (err) {
+          deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
+          continue;
+        }
+        recordedIds.push(d.decisionId);
       }
-      recordedIds.push(d.decisionId);
       const feedback = decisionFeedback(d);
       const decisionLabel = d.title?.trim() || d.context;
       // #549 — the unchosen options as NON-ENFORCING context: the human didn't

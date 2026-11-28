@@ -835,6 +835,7 @@ it("freezes feedback delivery during closeout and retries pending feedback after
   const post = (sid: string, route: string, body: object) => daemon.app.request(`/api/internal/sessions/${sid}/${route}`, {
     method: "POST", headers, body: JSON.stringify(body),
   });
+  const read = (route: string) => daemon.app.request(`/api/internal/sessions/${sessionId}/${route}`, { headers });
   const feedbackAcks: Array<[string, object]> = [
     ["artifacts/status-changes/acknowledge", { ids: ["page"] }],
     ["artifacts/file-watch/acknowledge", { refs: [{ artifactId: "page" }] }],
@@ -853,10 +854,13 @@ it("freezes feedback delivery during closeout and retries pending feedback after
       expect(refused.status, route).toBe(409);
       expect(await refused.json(), route).toMatchObject({ code });
     }
-    const comments = await daemon.app.request(`/api/internal/sessions/${sessionId}/comments/unacknowledged`, { headers });
+    const phase = await read("review-state");
+    expect(phase.status).toBe(200);
+    expect(await phase.json()).toEqual({ state: code === "session_closing" ? "closing" : "ended" });
+    const comments = await read("comments/unacknowledged");
     const expected = code === "session_closing" ? "feedback" : "final_feedback";
     expect(await comments.json()).toMatchObject({ comments: [{ id: expected }] });
-    const stops = await daemon.app.request(`/api/internal/sessions/${sessionId}/worker-stops`, { headers });
+    const stops = await read("worker-stops");
     expect(stops.status).toBe(200);
     expect(await stops.json()).toMatchObject({ stops: [] });
     expect(daemon.sessionMeta.get(sessionId)).toEqual(meta);
@@ -882,9 +886,44 @@ it("freezes feedback delivery during closeout and retries pending feedback after
   expect((await post(sessionId, "comments/acknowledge", { ids: ["feedback"] })).status).toBe(200);
   expect(store.getComment("feedback")?.acknowledged).toBe(true);
   store.addComment({ id: "final_feedback", artifactId: "page", content: "Keep the final note", author: "human" });
+  const waitForFeedback = store.waitForFeedback.bind(store);
+  let reportWaiting!: () => void;
+  const waiting = new Promise<void>((resolve) => { reportWaiting = resolve; });
+  const waitSpy = vi.spyOn(store, "waitForFeedback").mockImplementation((...args) => {
+    const pending = waitForFeedback(...args);
+    reportWaiting();
+    return pending;
+  });
+  const poll = read("wait-feedback?timeout=30000");
+  await waiting;
   await daemon.standaloneCloseout.end(sessionId);
+  expect((await poll).status).toBe(200);
+  expect(waitSpy).toHaveBeenCalledOnce();
+  expect((await read("wait-feedback?timeout=30000")).status).toBe(200);
+  expect(waitSpy).toHaveBeenCalledOnce();
+  waitSpy.mockRestore();
   await expectFrozen("session_ended");
   expect(store.getComment("final_feedback")?.acknowledged).toBe(false);
+
+  const markerPath = path.join(dir, "review-ended.json");
+  const marker = fs.readFileSync(markerPath, "utf8");
+  fs.writeFileSync(markerPath, malformed);
+  const damagedState = await read("review-state");
+  expect(damagedState.status).toBe(409);
+  expect(await damagedState.json()).toMatchObject({ code: "session_marker_invalid" });
+  const stops = await read("worker-stops");
+  expect(stops.status).toBe(200);
+  expect(await stops.json()).toMatchObject({ stops: [] });
+  expect(fs.readFileSync(workerPath, "utf8")).toBe(malformed);
+  expect(fs.readFileSync(blocksPath, "utf8")).toBe(malformed);
+  fs.writeFileSync(markerPath, marker);
+
+  store.dispose();
+  daemon.sessions.delete(sessionId);
+  const coldState = await read("review-state");
+  expect(coldState.status).toBe(200);
+  expect(await coldState.json()).toEqual({ state: "ended" });
+  expect(daemon.sessions.has(sessionId)).toBe(false);
 });
 
 it("a failed admitted internal decision flush releases End after rolling the choice back", async () => {

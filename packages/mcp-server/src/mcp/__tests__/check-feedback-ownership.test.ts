@@ -99,6 +99,76 @@ class AckRefusalStore extends FileStore {
 }
 
 describe("check_feedback acknowledgement during standalone closeout", () => {
+  it("returns terminal feedback with no new rows and skips the long poll", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    ctx.store.getStandaloneReviewState = () => "ended";
+    store.createArtifact({ id: "review", type: "research", title: "Cache review", content: {} });
+    const wait = vi.spyOn(store, "waitForFeedback").mockResolvedValue(undefined);
+
+    const result = await handleCheckFeedback(ctx, { waitFor: "decision" });
+
+    expect(wait).not.toHaveBeenCalled();
+    expect(result.structuredContent).toMatchObject({
+      status: "feedback", comments: [], decisions: [], sessionStatus: "session_ended", suggestedAction: "Stop polling this ended review.",
+    });
+    expect(result.content[0]?.text).not.toContain("Call check_feedback again");
+  });
+
+  it("makes an empty scoped poll terminal when the review ends during the wait", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    let state: "open" | "ended" = "open";
+    ctx.store.getStandaloneReviewState = () => state;
+    store.createArtifact({ id: "review", type: "research", title: "Cache review", content: {} });
+    const wait = vi.spyOn(store, "waitForFeedback").mockImplementation(async () => { state = "ended"; });
+
+    const result = await handleCheckFeedback(ctx, { waitFor: "decision" });
+
+    expect(wait).toHaveBeenCalledOnce();
+    expect(result.structuredContent).toMatchObject({ sessionStatus: "session_ended", suggestedAction: "Stop polling this ended review." });
+    expect(result.content[0]?.text).not.toContain("Still waiting");
+  });
+
+  it("returns terminal status when an ended review is cold", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    ctx.store.getStandaloneReviewState = () => "ended";
+    vi.spyOn(store, "getUnacknowledgedComments").mockImplementation(() => {
+      throw Object.assign(new Error("Review is not loaded"), { status: 404, code: "session_not_registered" });
+    });
+
+    const result = await handleCheckFeedback(ctx, {});
+
+    expect(result.structuredContent).toMatchObject({
+      status: "feedback", sessionStatus: "session_ended", suggestedAction: "Stop polling this ended review.",
+      comments: [], decisions: [],
+    });
+  });
+
+  it("delivers a saved decision and comment without recording or acknowledging them after End", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    ctx.store.getStandaloneReviewState = () => "ended";
+    store.createArtifact({ id: "review", type: "decision", title: "Cache review", content: { decisionId: "d1" } });
+    store.addComment({ id: "comment", artifactId: "review", content: "Keep this feedback", author: "human" });
+    store.recordDecisionRequest({ decisionId: "d1", artifactId: "review", context: "Choose a cache", options: [{
+      id: "a", title: "Local cache", description: "Cache locally", pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
+    }] });
+    store.resolveDecision("d1", "a", "Works offline");
+    const ledger = vi.spyOn(store, "recordApprovedPattern");
+    const ackComments = vi.spyOn(store, "acknowledgeComments");
+    const ackDecisions = vi.spyOn(store, "acknowledgeDecisions");
+
+    const result = await handleCheckFeedback(ctx, {});
+
+    expect(result.structuredContent).toMatchObject({ sessionStatus: "session_ended" });
+    expect(result.content[0]?.text).toContain("Works offline");
+    expect(result.content[0]?.text).toContain("Keep this feedback");
+    expect(ledger).not.toHaveBeenCalled();
+    expect(ackComments).not.toHaveBeenCalled();
+    expect(ackDecisions).not.toHaveBeenCalled();
+  });
   it.each([
     [409, "session_closing"],
     [409, "session_ended"],
