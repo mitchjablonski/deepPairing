@@ -197,6 +197,19 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
   });
   const seed = (...artifacts: any[]) => useArtifactStore.setState({ artifacts: artifacts.map((a) => ({ sessionId: "s1", ...a })), selectedArtifactId: null });
 
+  it.each([
+    { selected: "brief", cue: "In view" },
+    { selected: "f_old", cue: "Next" },
+  ])("labels the brief $cue when the visible selection is $selected", ({ selected, cue }) => {
+    seed(finding, brief);
+    useArtifactStore.setState({ selectedArtifactId: selected });
+    render(<PendingBanner visibleSelectedArtifactId={selected} />);
+    const lead = screen.getByTestId("pending-next");
+    expect(within(lead).getByText(cue, { exact: true })).toBeVisible();
+    expect(lead).toHaveAttribute("data-next-copy", BRIEF_LINE);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe(selected);
+  });
+
   it("the delegate brief is blocking: it leads over an OLDER finding, with risk and conditional 'Approve → … N tasks can proceed'", () => {
     seed(finding, brief);
     render(<PendingBanner />);
@@ -310,6 +323,7 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
     render(<PendingBanner />);
     const lead = screen.getByTestId("pending-next");
     expect(lead.getAttribute("data-next-copy")).toBe('HELD IN TERMINAL "migrations": Claude Code asked about db/m.sql · Claude Code asked in the terminal — answer it there; nothing here releases it · Answer in the terminal — approving here does not release it');
+    expect(lead).not.toHaveTextContent(/In view ·|Next ·/);
     expect(screen.getByText(/1 item waiting for you/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /migrations/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^dismiss old finding$/i })).toBeInTheDocument();
