@@ -155,4 +155,20 @@ describe("#711 — ledger approval publishes only after the pick is durable", ()
     expect(store.getDecision(DID)?.acknowledged).toBe(true);
     expect(approvedOnDisk()).toEqual(["Choose: b"]);
   });
+
+  // #711 review P3-4 — the not-on-disk branch flushes first; the stamp must
+  // land on the LIVE record (a flush can swap the record objects), or a second
+  // settle records — and mirrors and counts — again.
+  it("a settled pick that was only in memory is flushed, recorded once and stamped on the live record", () => {
+    const store = fx.track(new FileStore(fx.dir, SID));
+    seed(store);
+    expect(store.resolveDecisionAtomic(DID, "b")).toMatchObject({ kind: "resolved" });
+    store.settleResolution(DID, true); // settled, but never flushed
+    const first = store.settleDecisionLedger(DID);
+    expect(first).toMatchObject({ kind: "recorded", description: "Choose: b" });
+    expect(store.getDecision(DID)?.ledgerRecordedAt).toEqual(expect.any(String));
+    expect(store.getDecision(DID)?.ledgerPending).toBeUndefined();
+    expect(store.settleDecisionLedger(DID)).toEqual({ kind: "settled" });
+    expect(approvedOnDisk()).toEqual(["Choose: b"]);
+  });
 });

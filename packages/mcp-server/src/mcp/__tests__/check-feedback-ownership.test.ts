@@ -225,6 +225,37 @@ describe("check_feedback acknowledgement during standalone closeout", () => {
     expect(store.getDecision("d1")?.acknowledged).toBeFalsy();
   });
 
+  // #711 review P3-1 — version skew: an older daemon has no exact-pick ledger
+  // route and answers Hono's bare 404. Fall back to the pre-#748 flow (the
+  // generic approval write), then deliver and ack as before.
+  it("falls back to the generic approval write when the daemon has no ledger route (bare 404)", async () => {
+    class OlderDaemonClient extends FileStore {
+      generic: Array<{ description: string; concept?: string }> = [];
+      override settleDecisionLedger(): never {
+        throw Object.assign(new Error("[deepPairing] request failed (404)"), { status: 404, body: {} });
+      }
+      override recordApprovedPattern(params: { description: string; concept?: string }): void {
+        this.generic.push(params);
+        super.recordApprovedPattern(params);
+      }
+    }
+    const store = fx.track(new OlderDaemonClient(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    store.createArtifact({ id: "review", type: "decision", title: "Cache review", content: { decisionId: "d1" } });
+    store.recordDecisionRequest({ decisionId: "d1", artifactId: "review", context: "Choose a cache", options: [{
+      id: "a", title: "Local cache", description: "Cache locally", pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
+    }] });
+    store.resolveDecision("d1", "a", "Works offline");
+
+    const result = await handleCheckFeedback(ctx, {});
+
+    expect(result.content[0]?.text).toContain("Works offline");
+    expect(result.content[0]?.text).not.toContain("recording it in the project ledger failed");
+    expect(result.structuredContent).toMatchObject({ decisions: [expect.objectContaining({ decisionId: "d1" })] });
+    expect(store.generic).toEqual([{ description: "Choose a cache: Local cache", concept: "Cache locally" }]);
+    expect(store.getDecision("d1")?.acknowledged).toBe(true);
+  });
+
   it("acks a pick whose ledger row the resolve already wrote, without a second ledger write", async () => {
     const store = fx.track(new FileStore(fx.dir, "s1"));
     const ctx = directCtx(store);

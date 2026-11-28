@@ -422,6 +422,13 @@ function annotateResult(
   };
 }
 
+/** #711 gate 1 — an older daemon's answer for the (new) exact-pick ledger
+ *  route: a 404 with no structured error code. */
+function isMissingLedgerRoute(err: unknown): boolean {
+  if (typeof err !== "object" || err === null || !("status" in err) || err.status !== 404) return false;
+  return !("code" in err) || (err as { code?: unknown }).code === undefined;
+}
+
 async function assembleCheckFeedback(
   ctx: ToolContext,
   args: any,
@@ -1042,18 +1049,33 @@ async function assembleCheckFeedback(
   async function recordDecisionLedger(d: (typeof resolved)[number]): Promise<boolean> {
     // #711 gate 1 — the exact-pick path: the store publishes the approval of
     // THIS settled pick only once it is proven on disk, idempotently, and
-    // stamps it. Standalone feedback never writes a decision approval through
-    // the generic approved-pattern endpoint. Key rationale (P3 label, AA1
+    // stamps it. Feedback writes a decision approval through the generic
+    // approved-pattern endpoint only against a daemon that predates that path
+    // (version skew, below). Key rationale (P3 label, AA1
     // concept, #549 approval-only): decision-approval.ts.
     if (typeof store.settleDecisionLedger === "function") {
-      const out = await store.settleDecisionLedger(d.decisionId);
+      let out: Awaited<ReturnType<NonNullable<typeof store.settleDecisionLedger>>>;
+      try {
+        out = await store.settleDecisionLedger(d.decisionId);
+      } catch (err) {
+        // Version skew: an older daemon has no exact-pick ledger route and
+        // answers Hono's bare 404 (no structured code — unlike a 404
+        // session_not_registered). Fall back to the pre-#748 flow.
+        if (!isMissingLedgerRoute(err)) throw err;
+        return recordGenericApproval(d);
+      }
       if (out.kind === "unsettled") return false;
       if (out.kind === "recorded") {
         broadcast({ type: "ledger_write", kind: "approved", description: out.description, concept: out.concept, sourceArtifactId: d.artifactId });
       }
       return true;
     }
-    // Stores without the exact-pick path (in-memory fakes): the late write.
+    return recordGenericApproval(d);
+  }
+
+  /** The pre-#748 late write: stores without the exact-pick path (in-memory
+   *  fakes) and daemons that predate its route. */
+  async function recordGenericApproval(d: (typeof resolved)[number]): Promise<boolean> {
     // #549 — unchosen options add NO ledger rows; an option the human wants
     // gone goes through the per-option "Never suggest this" control.
     const approval = decisionApprovalKeys(d);

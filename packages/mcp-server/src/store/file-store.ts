@@ -2294,7 +2294,9 @@ export class FileStore implements IStore {
     const dec = this.decisions.get(decisionId);
     if (!dec?.response) return { kind: "settled" };
     if (this.pendingResolutions.has(decisionId)) return { kind: "unsettled" };
-    if (dec.ledgerRecordedAt && !dec.ledgerPending) return { kind: "settled" };
+    // Stamped (or stamped and acked: an older plugin's generic write may have
+    // left the flag behind) — nothing more to publish.
+    if (dec.ledgerRecordedAt && (dec.acknowledged || !dec.ledgerPending)) return { kind: "settled" };
     if (dec.acknowledged && !dec.ledgerPending) return { kind: "settled" };
     const keys = decisionApprovalKeys(dec);
     if (!keys) {
@@ -2308,26 +2310,32 @@ export class FileStore implements IStore {
         throw new Error(`Decision ${decisionId}'s choice is not on disk yet; its ledger approval stays pending.`);
       }
     }
+    // The flush above may have swapped in fresh record objects (session-record
+    // merge): stamp the LIVE record, re-read after it, never the stale `dec`.
+    // Synchronous from the disk proof to here, so it is still the proven pick.
+    const live = this.decisions.get(decisionId);
+    if (live?.response?.optionId !== optionId) {
+      throw new Error(`Decision ${decisionId}'s choice changed while it was being proven; its ledger approval stays pending.`);
+    }
     this.addApprovedPatternLocal(keys.description);
     try {
       this.mirrorApprovedPattern(keys.description, keys.concept);
     } catch (err) {
       FileStore.logLedgerMirrorFailure("approved", err); // advisory: never fail a saved pick
     }
-    // Synchronous from the disk proof to here: the record is still the pick
-    // proven above.
-    dec.ledgerRecordedAt = new Date().toISOString();
-    delete dec.ledgerPending;
+    live.ledgerRecordedAt = new Date().toISOString();
+    delete live.ledgerPending;
     // Land the stamp now when the disk takes it; otherwise the scheduled flush
     // retries (and End flushes before its marker). Best-effort: the approval
     // row is already durable, and an unflushed stamp is only re-derived.
     try { this.forceFlush(); } catch { try { this.scheduleFlush(); } catch { /* disposed */ } }
-    return { kind: "recorded", ...keys, artifactId: dec.artifactId };
+    return { kind: "recorded", ...keys, artifactId: live.artifactId };
   }
 
   /**
-   * #711 gate 1 — settle every owed approval (picks on disk with
-   * `ledgerPending`). The standalone End closeout calls this after writers
+   * #711 gate 1 — settle every owed approval: picks with `ledgerPending`,
+   * and unacked picks a pre-#711 daemon saved with no stamp (their
+   * check_feedback write never ran). The standalone End closeout calls this after writers
    * drain and before its final flush and marker; a throw (busy preferences
    * lock) fails that End attempt, retryably. Returns what was published.
    */
@@ -2335,7 +2343,9 @@ export class FileStore implements IStore {
     this.assertAuthorizationReadable();
     const recorded: Array<Extract<DecisionLedgerSettlement, { kind: "recorded" }>> = [];
     for (const dec of this.decisions.values()) {
-      if (!dec.ledgerPending || !dec.response) continue;
+      if (!dec.response) continue;
+      const legacyOwed = !dec.acknowledged && !dec.ledgerRecordedAt;
+      if (!dec.ledgerPending && !legacyOwed) continue;
       const out = this.settleDecisionLedger(dec.decisionId);
       if (out.kind === "unsettled") throw new Error(`Decision ${dec.decisionId}'s choice is still settling; retry.`);
       if (out.kind === "recorded") recorded.push(out);

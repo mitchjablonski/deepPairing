@@ -1188,9 +1188,10 @@ it("refuses the backstop ledger write after End and keeps the wrapper's", async 
   const store = daemon.createSession(sessionId);
   daemon.createSession(wrapperId);
   seedLedgerDecision(store, "Choose a cache");
-  // A pick saved by an older build: no ledger row, no ledgerRecordedAt, and
-  // no ledgerPending intent (End's reconcile settles only those).
+  // A pick an older build saved AND acked (its check_feedback already handled
+  // the ledger): no ledgerRecordedAt, no ledgerPending — End leaves it alone.
   store.resolveDecision("d1", "o2");
+  store.acknowledgeDecisions(["d1"]);
   store.forceFlush();
   const { approved, preferencesPath } = ledgerHarness(tmpDir, daemon);
   await daemon.standaloneCloseout.end(sessionId);
@@ -1208,6 +1209,27 @@ it("refuses the backstop ledger write after End and keeps the wrapper's", async 
   expect(store.getDecision("d1")?.response?.optionId).toBe("o2");
   expect((await write(wrapperId, "Choose a queue: Redis")).status).toBe(200);
   expect(approved()).toEqual(["Choose a queue: Redis"]);
+});
+
+// #711 review P3-3 — an UNACKED pick saved by a pre-#711 daemon (no stamp, no
+// intent) still owes its approval; End's reconcile records it, once.
+it("End records a legacy unacked pick's approval exactly once", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  seedLedgerDecision(store, "Choose a cache");
+  store.resolveDecision("d1", "o2");
+  store.forceFlush();
+  const { approved, diskDecision } = ledgerHarness(tmpDir, daemon);
+  const approvedWrites = () => readMetrics(tmpDir).counts.ledgerWrites.approved;
+  const before = approvedWrites();
+  expect(approved()).toEqual([]);
+  await daemon.standaloneCloseout.end(sessionId);
+  expect(approved()).toEqual(["Choose a cache: In-proc"]);
+  expect(approvedWrites() - before).toBe(1);
+  expect(diskDecision(sessionId)?.ledgerRecordedAt).toEqual(expect.any(String));
+  expect(store.settleDecisionLedger("d1")).toEqual({ kind: "settled" });
+  expect(approvedWrites() - before).toBe(1);
 });
 
 it("keeps an admitted pick and its ledger row across a failed End, then ends on retry", async () => {
