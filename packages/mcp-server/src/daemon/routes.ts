@@ -645,6 +645,9 @@ export function createDaemonRoutes(
       if (parsed.data.mode === "resume") {
         const state = standaloneCloseout?.state(sessionId);
         if (state?.state === "ended") return c.json({ sessionId, endedAt: state.endedAt });
+        if (state?.state === "closing") {
+          return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+        }
       }
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
