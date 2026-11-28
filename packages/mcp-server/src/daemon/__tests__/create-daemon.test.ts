@@ -631,6 +631,88 @@ it("internal comment writers refuse a closing and ended review while sibling and
   }
 });
 
+it("internal artifact writes and retirement retries respect the exact standalone End cutoff", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const siblingId = createStandaloneSessionId(tmpDir);
+  const wrapperId = "session_wrapper";
+  const store = daemon.createSession(sessionId);
+  const sibling = daemon.createSession(siblingId);
+  const wrapper = daemon.createSession(wrapperId);
+  for (const target of [store, sibling, wrapper]) {
+    target.createArtifact({ id: "retire", type: "research", title: "Old finding", content: {} });
+    target.createArtifact({ id: "plan", type: "plan", title: "Plan", content: {
+      steps: [{ description: "Add coverage", reasoning: "Pin the behavior", status: "pending" }],
+    } });
+    target.forceFlush();
+  }
+  const retirement = {
+    artifactId: "retire", expectedVersion: 1, expectedStatus: "draft", door: "revise", mode: "retract", reason: "Premise invalid",
+  };
+  const writes: Array<[route: string, body: Record<string, unknown>]> = [
+    ["artifacts", { id: "new", type: "research", title: "New finding", content: {} }],
+    ["artifacts/retire/retire", retirement],
+    ["artifacts/plan/status", { status: "reviewing" }],
+    ["artifacts/plan/plan-progress", { updates: [{ stepIndex: 0, status: "done" }] }],
+    ["artifacts/plan/rename", { title: "New title" }],
+    ["artifacts/plan/retract-reason", { reason: "Changed scope" }],
+  ];
+  const post = (id: string, route: string, body: Record<string, unknown>) =>
+    daemon.app.request(`/api/internal/sessions/${id}/${route}`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const retireOnce = await post(sessionId, "artifacts/retire/retire", retirement);
+  expect(await retireOnce.json()).toMatchObject({ kind: "committed" });
+  const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  const snapshot = () => ["artifacts.json", "comments.json"].map((file) => fs.readFileSync(path.join(dir, file), "utf8"));
+  const beforeRetry = snapshot();
+  const retry = await post(sessionId, "artifacts/retire/retire", retirement);
+  expect(await retry.json()).toMatchObject({ kind: "already_retired" });
+  expect(snapshot()).toEqual(beforeRetry);
+
+  const retire = vi.spyOn(store, "retireArtifact");
+  const release = daemon.standaloneCloseout.admitWrite(sessionId);
+  expect(release).toBeTypeOf("function");
+  const ending = daemon.standaloneCloseout.end(sessionId);
+  try {
+    try {
+      for (const [route, body] of writes) {
+        const denied = await post(sessionId, route, body);
+        expect(denied.status, route).toBe(409);
+        expect(await denied.json(), route).toMatchObject({ code: "session_closing" });
+        expect((await post(siblingId, route, body)).status, route).toBe(200);
+        expect((await post(wrapperId, route, body)).status, route).toBe(200);
+      }
+      const invalid = await post(sessionId, "artifacts/plan/status", { status: "obsolete", reason: "agent_obsolete" });
+      expect(invalid.status).toBe(400);
+      expect(snapshot()).toEqual(beforeRetry);
+    } finally {
+      release?.();
+      await ending;
+    }
+    const endedSnapshot = snapshot();
+    for (const [route, body] of writes) {
+      const denied = await post(sessionId, route, body);
+      expect(denied.status, route).toBe(409);
+      expect(await denied.json(), route).toMatchObject({ code: "session_ended" });
+    }
+    expect(retire).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(endedSnapshot);
+  } finally {
+    retire.mockRestore();
+  }
+  for (const target of [sibling, wrapper]) {
+    expect(target.getArtifacts()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "new" }), expect.objectContaining({ id: "retire", status: "retracted" }),
+      expect.objectContaining({ id: "plan", status: "reviewing", title: "New title", content: expect.objectContaining({
+        steps: [expect.objectContaining({ status: "done" })], retractReason: "Changed scope",
+      }) }),
+    ]));
+  }
+});
+
 it("End waits for an admitted internal decision resolve and refuses later writes only in that review", async () => {
   const { tmpDir, daemon } = makeDaemon();
   const sessionId = createStandaloneSessionId(tmpDir);

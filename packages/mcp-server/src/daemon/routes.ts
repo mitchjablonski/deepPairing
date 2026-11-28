@@ -914,25 +914,27 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, CreateArtifactBody);
     if (!parsed.ok) return parsed.res;
-    let artifact: ReturnType<typeof r.store.createArtifact>;
-    try {
-      artifact = r.store.createArtifact(parsed.data as Parameters<typeof r.store.createArtifact>[0]);
-    } catch (err) {
-      // #680 slice 3 (review P2-2) — the supersede compare-and-swap lost.
-      if (err instanceof ParentSupersededError) {
-        return c.json({
-          error: err.message,
-          code: ERROR_CODES.parent_superseded,
-          parentId: err.parentId,
-          ...(err.successorId ? { successorId: err.successorId } : {}),
-          ...(err.successorVersion ? { successorVersion: err.successorVersion } : {}),
-          successorFromFile: err.successorFromFile,
-        }, 409);
+    return withSessionWrite(c, r.store, () => {
+      let artifact: ReturnType<typeof r.store.createArtifact>;
+      try {
+        artifact = r.store.createArtifact(parsed.data as Parameters<typeof r.store.createArtifact>[0]);
+      } catch (err) {
+        // #680 slice 3 (review P2-2) — the supersede compare-and-swap lost.
+        if (err instanceof ParentSupersededError) {
+          return c.json({
+            error: err.message,
+            code: ERROR_CODES.parent_superseded,
+            parentId: err.parentId,
+            ...(err.successorId ? { successorId: err.successorId } : {}),
+            ...(err.successorVersion ? { successorVersion: err.successorVersion } : {}),
+            successorFromFile: err.successorFromFile,
+          }, 409);
+        }
+        throw err;
       }
-      throw err;
-    }
-    broadcast(sessionId, { type: "artifact_created", artifact });
-    return c.json({ artifact });
+      broadcast(r.store.getSessionId(), { type: "artifact_created", artifact });
+      return c.json({ artifact });
+    });
   });
 
   app.get("/api/internal/sessions/:sessionId/artifacts", (c) => {
@@ -1047,13 +1049,17 @@ export function createDaemonRoutes(
     const parsed = await parseJsonBody(c, RetirementBody);
     if (!parsed.ok) return parsed.res;
     if (parsed.data.artifactId !== c.req.param("artifactId")) return c.json({ error: "artifactId mismatch", code: ERROR_CODES.validation_error }, 400);
-    const result = r.store.retireArtifact(parsed.data as RetirementInput);
-    if (result.kind === "committed" || (result.kind === "already_retired" && result.repaired)) {
-      broadcast(sessionId, { type: "artifact_content_updated", artifact: result.artifact });
-      broadcast(sessionId, { type: "artifact_updated", artifactId: result.artifact.id, status: result.artifact.status });
-      if (result.marker && result.markerAdded) broadcast(sessionId, { type: "comment_added", comment: result.marker });
-    }
-    return c.json(result);
+    // An exact retry can repair the durable retirement marker, so it also needs admission.
+    return withSessionWrite(c, r.store, () => {
+      const result = r.store.retireArtifact(parsed.data as RetirementInput);
+      if (result.kind === "committed" || (result.kind === "already_retired" && result.repaired)) {
+        const owner = r.store.getSessionId();
+        broadcast(owner, { type: "artifact_content_updated", artifact: result.artifact });
+        broadcast(owner, { type: "artifact_updated", artifactId: result.artifact.id, status: result.artifact.status });
+        if (result.marker && result.markerAdded) broadcast(owner, { type: "comment_added", comment: result.marker });
+      }
+      return c.json(result);
+    });
   });
 
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
@@ -1070,16 +1076,19 @@ export function createDaemonRoutes(
     if (reason === "agent_retract" || reason === "agent_obsolete" || reason === "agent_withdraw") {
       return c.json({ error: "Use the guarded retirement operation", code: ERROR_CODES.validation_error }, 400);
     }
-    const target = r.store.getArtifacts().find((a) => a.id === artifactId);
-    log(
-      `[status:internal] sid=${sessionId} artifactId=${artifactId} ` +
-      `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} ` +
-      `toStatus=${status} reason=${reason ?? "unspecified"}`,
-    );
-    r.store.updateArtifactStatus(artifactId, status, reason);
-    r.store.forceFlush();
-    broadcast(sessionId, { type: "artifact_updated", artifactId, status, reason: reason ?? "unspecified" });
-    return c.json({ status: "updated" });
+    return withSessionWrite(c, r.store, () => {
+      const owner = r.store.getSessionId();
+      const target = r.store.getArtifacts().find((a) => a.id === artifactId);
+      log(
+        `[status:internal] sid=${owner} artifactId=${artifactId} ` +
+        `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} ` +
+        `toStatus=${status} reason=${reason ?? "unspecified"}`,
+      );
+      r.store.updateArtifactStatus(artifactId, status, reason);
+      r.store.forceFlush();
+      broadcast(owner, { type: "artifact_updated", artifactId, status, reason: reason ?? "unspecified" });
+      return c.json({ status: "updated" });
+    });
   });
 
   // D10 (H2) — agent marks plan step (or, #569, spec task) execution; UI
@@ -1103,27 +1112,29 @@ export function createDaemonRoutes(
     // Skeleton plans (parity PR 3) — the MCP side's fresh LIVE code snapshot;
     // the store accepts only `skelcode-live:` visuals, only on a live plan
     // version, and only when this read is newer than the stored one.
-    const artifact = r.store.updatePlanProgress(
-      artifactId,
-      clean,
-      Array.isArray(skeletonVisuals)
-        ? { skeletonVisuals, ...(typeof skeletonReadAt === "number" && Number.isFinite(skeletonReadAt) ? { skeletonReadAt } : {}) }
-        : undefined,
-    );
-    // D10 review — not-found is a DOMAIN result, not a transport error:
-    // DaemonClient.request throws on non-2xx, so a 404 here surfaced as an
-    // opaque throw instead of the handler's crafted isError message (and the
-    // client's null path was dead code). 200 + null, like :456's comment read.
-    if (!artifact) return c.json({ artifact: null });
-    // PF1 (verified): forceFlush here was 216ms of SYNC disk I/O per step
-    // update ON THE HOT PATH — the broadcast below reads memory, nothing
-    // downstream reads disk (unlike the status route, whose Stop hook DOES),
-    // and updatePlanProgress already scheduleFlush'd. Progress is
-    // reconstructible; the debounced flush is plenty.
-    // Carries the FULL artifact: step statuses live in content, and the web
-    // store patches content in place (artifact_updated only patches status).
-    broadcast(sessionId, { type: "plan_progress_updated", artifact });
-    return c.json({ artifact });
+    return withSessionWrite(c, r.store, () => {
+      const artifact = r.store.updatePlanProgress(
+        artifactId,
+        clean,
+        Array.isArray(skeletonVisuals)
+          ? { skeletonVisuals, ...(typeof skeletonReadAt === "number" && Number.isFinite(skeletonReadAt) ? { skeletonReadAt } : {}) }
+          : undefined,
+      );
+      // D10 review — not-found is a DOMAIN result, not a transport error:
+      // DaemonClient.request throws on non-2xx, so a 404 here surfaced as an
+      // opaque throw instead of the handler's crafted isError message (and the
+      // client's null path was dead code). 200 + null, like :456's comment read.
+      if (!artifact) return c.json({ artifact: null });
+      // PF1 (verified): forceFlush here was 216ms of SYNC disk I/O per step
+      // update ON THE HOT PATH — the broadcast below reads memory, nothing
+      // downstream reads disk (unlike the status route, whose Stop hook DOES),
+      // and updatePlanProgress already scheduleFlush'd. Progress is
+      // reconstructible; the debounced flush is plenty.
+      // Carries the FULL artifact: step statuses live in content, and the web
+      // store patches content in place (artifact_updated only patches status).
+      broadcast(r.store.getSessionId(), { type: "plan_progress_updated", artifact });
+      return c.json({ artifact });
+    });
   });
 
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/rename", async (c) => {
@@ -1133,9 +1144,12 @@ export function createDaemonRoutes(
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
     const { title } = parsed.body as { title: string };
-    r.store.renameArtifact(c.req.param("artifactId"), title);
-    broadcast(sessionId, { type: "artifact_renamed", artifactId: c.req.param("artifactId"), title });
-    return c.json({ status: "renamed" });
+    const artifactId = c.req.param("artifactId");
+    return withSessionWrite(c, r.store, () => {
+      r.store.renameArtifact(artifactId, title);
+      broadcast(r.store.getSessionId(), { type: "artifact_renamed", artifactId, title });
+      return c.json({ status: "renamed" });
+    });
   });
 
   // G1 (#198c) — stamp a withdrawn artifact's reason onto its content so the
@@ -1151,12 +1165,15 @@ export function createDaemonRoutes(
     if (typeof reason !== "string" || reason.length === 0) {
       return c.json({ error: "reason is required", code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.setRetractReason?.(c.req.param("artifactId"), reason);
-    // Full-artifact patch (the reason lives in content) — same shape as plan
-    // progress / changeset review, so the panel repaints live.
-    const art = r.store.getArtifacts().find((a) => a.id === c.req.param("artifactId"));
-    if (art) broadcast(sessionId, { type: "artifact_content_updated", artifact: art });
-    return c.json({ status: "stamped" });
+    const artifactId = c.req.param("artifactId");
+    return withSessionWrite(c, r.store, () => {
+      r.store.setRetractReason?.(artifactId, reason);
+      // Full-artifact patch (the reason lives in content) — same shape as plan
+      // progress / changeset review, so the panel repaints live.
+      const art = r.store.getArtifacts().find((a) => a.id === artifactId);
+      if (art) broadcast(r.store.getSessionId(), { type: "artifact_content_updated", artifact: art });
+      return c.json({ status: "stamped" });
+    });
   });
 
   // R1 (#279) — stamp a LANDED GitHub review into the session's posted-review
