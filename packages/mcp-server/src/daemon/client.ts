@@ -168,7 +168,7 @@ export class DaemonClient implements IStore {
    * connection, and the daemon may have idle-shut and respawned on a
    * DIFFERENT port). Re-adopt our project's daemon via ensureDaemon
    * (probe → projectRoot-matched adopt → spawn), rotate the token + port,
-   * and re-register the session. Returns false (so the caller surfaces a
+   * and re-register wrapper sessions. Returns false (so the caller surfaces a
    * clear error) when there's no projectRoot to recover against, when the
    * register binding lacks expectedProjectRoot (AA6.4 — never silently
    * rebind to a possibly-wrong project), or when re-adoption fails.
@@ -212,9 +212,9 @@ export class DaemonClient implements IStore {
    * those 404s flowed back to callers as `data.artifacts === undefined`
    * — silent failure for any wrapper that survived a daemon idle-shutdown.
    *
-   * Now: on a 404 + code=session_not_registered, replay register() once
-   * with the stored meta and retry the original call. Other non-2xx
-   * statuses throw with a structured error so caller bugs surface.
+   * Now: a wrapper's 404 + code=session_not_registered replays register()
+   * once with the stored meta and retries the original call. Other non-2xx
+   * responses throw a structured error.
    */
   private async request<T = any>(
     path: string,

@@ -505,14 +505,20 @@ it("internal register never warms or creates a standalone review", async () => {
   const dir = path.join(sessionsDir, sessionId);
   const files = () => fs.readdirSync(dir).sort().map((name) => [name, fs.readFileSync(path.join(dir, name), "utf8")]);
   const before = files();
-  const register = (id: string) => daemon.app.request(`/api/internal/sessions/${id}/register`, {
+  const register = (id: string, splitMode = false) => daemon.app.request(`/api/internal/sessions/${id}/register`, {
     method: "POST", headers: {
       Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json",
     },
-    body: JSON.stringify({ expectedProjectRoot: tmpDir }),
+    body: JSON.stringify({ expectedProjectRoot: tmpDir, splitMode }),
   });
 
-  const ended = await register(sessionId);
+  const wrapperId = "session_wrapper";
+  const wrapper = await register(wrapperId, true);
+  expect(wrapper.status).toBe(200);
+  const { registrationId, registrationToken } = await wrapper.json() as { registrationId: string; registrationToken: string };
+  expect(daemon.stanceExceptions.resolveToken(registrationToken)).toMatchObject({ registrationId, sessionId: wrapperId });
+
+  const ended = await register(sessionId, true);
   expect(ended.status).toBe(409);
   expect(await ended.json()).toMatchObject({ code: "session_ended" });
   expect(daemon.sessions.has(sessionId)).toBe(false);
@@ -525,15 +531,33 @@ it("internal register never warms or creates a standalone review", async () => {
   expect(daemon.sessions.has(missingId)).toBe(false);
   expect(fs.existsSync(path.join(sessionsDir, missingId))).toBe(false);
 
-  const open = await register(coldOpenId);
+  const open = await register(coldOpenId, true);
   expect(open.status).toBe(409);
   expect(await open.json()).toMatchObject({ code: "session_not_registered" });
   expect(daemon.sessions.has(coldOpenId)).toBe(false);
   expect(fs.readdirSync(coldOpenDir)).toEqual([]);
 
-  const wrapper = await register("session_wrapper");
-  expect(wrapper.status).toBe(200);
-  expect(daemon.sessions.has("session_wrapper")).toBe(true);
+  const coldRead = await daemon.app.request(`/api/internal/sessions/${coldOpenId}/artifacts`, {
+    headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir) },
+  });
+  expect(coldRead.status).toBe(404);
+  expect(await coldRead.json()).toMatchObject({
+    code: "session_not_registered", error: expect.stringContaining(`resume ${coldOpenId}`),
+  });
+  expect(daemon.sessions.has(coldOpenId)).toBe(false);
+  expect(fs.readdirSync(coldOpenDir)).toEqual([]);
+
+  fs.writeFileSync(path.join(dir, "review-ended.json"), "{ invalid");
+  const corrupt = await register(sessionId, true);
+  expect(corrupt.status).toBe(409);
+  expect(await corrupt.json()).toMatchObject({ code: "session_marker_invalid" });
+  expect(daemon.sessions.has(sessionId)).toBe(false);
+
+  expect(daemon.sessions.has(wrapperId)).toBe(true);
+  expect(daemon.activeSessions).toEqual(new Set([wrapperId]));
+  expect(daemon.stanceExceptions.resolveToken(registrationToken)).toMatchObject({ registrationId, sessionId: wrapperId });
+  expect(daemon.stanceExceptions.hasLiveRegistration(coldOpenId)).toBe(false);
+  expect(daemon.stanceExceptions.hasLiveRegistration(sessionId)).toBe(false);
 });
 
 it("internal comment writers refuse a closing and ended review while sibling and wrapper writes succeed", async () => {
