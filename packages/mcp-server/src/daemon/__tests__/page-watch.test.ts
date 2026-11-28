@@ -847,20 +847,28 @@ describe("page file watch — a save landing during the gate check (Codex review
     expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Replaced externally</p>" } });
   });
 
-  it("End rejects an adopted candidate that vanishes before the read (#737 review)", async () => {
+  it("End rejects an adopted candidate that vanishes right after the pre-read check (#737 review)", async () => {
     const sig = counterSig();
     const file = path.join(root, "docs/page.html");
+    // After the recreate, the drain stats four times before reading: its
+    // terminal in-window sample, its adoption re-stat, its post-wait sweep,
+    // and the admitted read's pre-read check. The file vanishes immediately
+    // after that fourth stat, i.e. at the old lstat shortcut.
+    let afterRecreate = -1;
     let deleted = false;
+    const statSig: PageWatchDeps["statSig"] = (p) => {
+      const result = sig.statSig!(p);
+      if (afterRecreate >= 0 && ++afterRecreate === 4) {
+        deleted = true;
+        fs.unlinkSync(file); // eventless
+      }
+      return result;
+    };
     watcher.dispose();
     watcher = makeWatcher({
       pollIntervalMs: 60_000,
-      statSig: sig.statSig,
-      sleep: async () => { fs.writeFileSync(file, "<p>Recreated</p>"); sig.bump(); },
-      beforeGraceRead: () => {
-        if (deleted) return;
-        deleted = true;
-        fs.unlinkSync(file); // eventless, after the adoption check
-      },
+      statSig,
+      sleep: async () => { fs.writeFileSync(file, "<p>Recreated</p>"); sig.bump(); afterRecreate = 0; },
     });
     const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
     watcher.sync(SID);
