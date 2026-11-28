@@ -20,6 +20,7 @@ import type {
 } from "../store/store-interface.js";
 import { projectHashOf, BASE_PORT } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
+import { isStandaloneSessionId } from "../standalone-session-id.js";
 import { errorName } from "@deeppairing/shared";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 import type { WorkerStop, WorkerStopBatch } from "../store/worker-stop-notices.js";
@@ -190,7 +191,8 @@ export class DaemonClient implements IStore {
       }
       this.livePort = info.port;
       this.baseUrl = `http://localhost:${info.port}/api/internal/sessions/${this.sessionId}`;
-      await this.register(this.lastRegisterMeta);
+      // Re-adopt the daemon without turning a standalone review into a wrapper.
+      if (!isStandaloneSessionId(this.sessionId)) await this.register(this.lastRegisterMeta);
       return true;
     } catch {
       return false;
@@ -284,7 +286,8 @@ export class DaemonClient implements IStore {
     if (
       res.status === 404 &&
       body?.code === "session_not_registered" &&
-      !isRetry
+      !isRetry &&
+      !isStandaloneSessionId(this.sessionId)
     ) {
       // Daemon restarted (or the supervisor killed + respawned it on idle
       // shutdown). The session map is empty server-side; re-register and
