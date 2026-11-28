@@ -491,6 +491,7 @@ export function createDaemonRoutes(
   // can't light the indicator.
   const lastActivityBroadcastAt = new Map<string, number>();
   const AGENT_ACTIVITY_THROTTLE_MS = 5_000;
+  const standaloneWriteActivity = new WeakSet<Context>();
   function noteActivity(sid: string): void {
     const now = Date.now();
     // Per-session-split — stamp lastActivity on EVERY successful internal
@@ -506,7 +507,7 @@ export function createDaemonRoutes(
     await next();
     // Standalone links and reads are silent. Standalone writers signal only
     // while they hold admission, before End could commit.
-    if (c.res.status >= 400 || (c.req.method === "POST" &&
+    if (c.res.status >= 400 || standaloneWriteActivity.has(c) || (c.req.method === "POST" &&
       /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback|present-options|present-page|revise-page)$/.test(c.req.path))) return;
     const sid = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/)?.[1];
     if (sid) noteActivity(sid);
@@ -534,6 +535,32 @@ export function createDaemonRoutes(
     return { ok: true, store };
   }
 
+  async function withStandaloneWrite(c: Context, sessionId: string, run: () => Response | Promise<Response>): Promise<Response> {
+    const release = standaloneCloseout?.admitWrite(sessionId);
+    if (standaloneCloseout && !release) {
+      if (standaloneCloseout.state(sessionId).state === "ended") {
+        return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+      }
+      return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+    }
+    try {
+      const response = await run();
+      if (response.status < 400) {
+        noteActivity(sessionId);
+        standaloneWriteActivity.add(c);
+      }
+      return response;
+    } finally {
+      release?.();
+    }
+  }
+
+  function withSessionWrite(c: Context, store: FileStore, run: () => Response | Promise<Response>): Response | Promise<Response> {
+    const sessionId = store.getSessionId();
+    if (!standaloneCloseout || !daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) return run();
+    return withStandaloneWrite(c, sessionId, run);
+  }
+
   // --- Session lifecycle ---
 
   function installSession(sessionId: string, meta: { title?: string; project?: string }): FileStore {
@@ -557,22 +584,6 @@ export function createDaemonRoutes(
     const projectRoot = daemonProjectRoot;
     function reviewDir(sessionId: string): string {
       return path.join(projectRoot, ".deeppairing", "sessions", sessionId);
-    }
-    async function withStandaloneWrite(c: Context, sessionId: string, run: () => Promise<Response>): Promise<Response> {
-      const release = standaloneCloseout?.admitWrite(sessionId);
-      if (standaloneCloseout && !release) {
-        if (standaloneCloseout.state(sessionId).state === "ended") {
-          return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
-        }
-        return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
-      }
-      try {
-        const response = await run();
-        if (response.status < 400) noteActivity(sessionId);
-        return response;
-      } finally {
-        release?.();
-      }
     }
     function requireWarmStandaloneStore(c: Context, expectedProjectRoot: string, sessionId: string, command: string): StoreLookup {
       if (expectedProjectRoot !== projectRoot || !isStandaloneSessionForProject(sessionId, projectRoot)) {
@@ -1394,8 +1405,10 @@ export function createDaemonRoutes(
       return c.json({ error: "Expected resolvedAt to be an ISO timestamp or null", code: ERROR_CODES.validation_error }, 400);
     }
     const resolvedAt = stamp.data;
-    const changed = r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
-    return c.json({ status: resolvedAt === null ? (changed ? "reopened" : "unchanged") : "resolved", changed });
+    return withSessionWrite(c, r.store, () => {
+      const changed = r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
+      return c.json({ status: resolvedAt === null ? (changed ? "reopened" : "unchanged") : "resolved", changed });
+    });
   });
 
   // --- Decisions ---
@@ -1405,11 +1418,13 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, RecordDecisionBody);
     if (!parsed.ok) return parsed.res;
-    // The wire body is deliberately loose (RecordDecisionBody = z.record;
-    // present_options' upstream validator owns the real shape check) — the
-    // C6c-typed param surface makes that laundering explicit.
-    r.store.recordDecisionRequest(parsed.data as unknown as Parameters<typeof r.store.recordDecisionRequest>[0]);
-    return c.json({ status: "recorded" });
+    return withSessionWrite(c, r.store, () => {
+      // The wire body is deliberately loose (RecordDecisionBody = z.record;
+      // present_options' upstream validator owns the real shape check) — the
+      // C6c-typed param surface makes that laundering explicit.
+      r.store.recordDecisionRequest(parsed.data as unknown as Parameters<typeof r.store.recordDecisionRequest>[0]);
+      return c.json({ status: "recorded" });
+    });
   });
 
   app.post("/api/internal/sessions/:sessionId/decisions/:decisionId/resolve", async (c) => {
@@ -1439,7 +1454,7 @@ export function createDaemonRoutes(
     // stays a no-op (nothing to resolve), as before.
     // Serialized per store from the atomic write through its flush — see
     // withDecisionResolveLock.
-    return withDecisionResolveLock(r.store, async () => {
+    return withSessionWrite(c, r.store, () => withDecisionResolveLock(r.store, async () => {
       const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
       // #484 review — a `resolved` write is settled exactly once: committed after
@@ -1485,7 +1500,7 @@ export function createDaemonRoutes(
       } finally {
         if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
       }
-    });
+    }));
   });
 
   app.get("/api/internal/sessions/:sessionId/decisions/pending", (c) => {

@@ -39,6 +39,39 @@ const until = async (cond: () => boolean, ms = 2_000) => {
 };
 
 describe("createDaemon — page file watch wiring", () => {
+  it.each(["wake decision readers", "stop page watches"] as const)(
+    "returns the durable End receipt even if it fails to %s", async (operation) => {
+      fx = withGlobalStore("dp-daemon-end-notification-");
+      const root = fx.dir;
+      const log = vi.fn();
+      daemon = createDaemon({
+        projectRoot: root, authToken: "tok", log, exitProcess: () => {}, releaseListenSocket: () => {}, env: {},
+      });
+      const sessionId = createStandaloneSessionId(root);
+      const store = daemon.createSession(sessionId);
+      const wake = vi.spyOn(store, "notifyStandaloneReviewEnded");
+      const stop = vi.spyOn(daemon.pageWatcher, "stopSession");
+      (operation === "wake decision readers" ? wake : stop).mockImplementationOnce(() => {
+        throw new Error("notification interrupted");
+      });
+      try {
+        const marker = await daemon.standaloneCloseout.end(sessionId);
+        const file = path.join(root, ".deeppairing", "sessions", sessionId, "review-ended.json");
+        expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(marker);
+        expect(wake).toHaveBeenCalledTimes(1);
+        expect(stop).toHaveBeenCalledTimes(1);
+        expect(stop).toHaveBeenCalledWith(sessionId);
+        expect(log).toHaveBeenCalledWith(`[end-review] Failed to ${operation}: notification interrupted`);
+        expect(await daemon.standaloneCloseout.end(sessionId)).toEqual(marker);
+        expect(wake).toHaveBeenCalledTimes(1);
+        expect(stop).toHaveBeenCalledTimes(1);
+      } finally {
+        wake.mockRestore();
+        stop.mockRestore();
+      }
+    },
+  );
+
   it("broadcast → sync → record on save; unregister → stop", async () => {
     fx = withGlobalStore("dp-daemon-pagewatch-");
     const root = fx.dir;
