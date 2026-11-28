@@ -712,6 +712,83 @@ describe("page file watch — a save landing during the gate check (Codex review
     expect(events.filter((e) => e.type === "artifact_created")).toHaveLength(1);
   });
 
+  it("End accepts an eventless recreate seen by an in-window sample while held work runs past the window (#737 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    const held = heldFirstGate();
+    watcher.dispose();
+    watcher = makeWatcher({ gate: held.gate, pollIntervalMs: 60_000, statSig: sig.statSig });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>Earlier save held in the gate</p>");
+    sig.bump();
+    await vi.advanceTimersByTimeAsync(PAGE_WATCH_QUIET_MS);
+    expect(held.pending()).toBe(true);
+
+    fs.unlinkSync(file); // eventless: the sweep sees "missing"
+    const end = watcher.drainQueuedSaves(SID);
+    vi.advanceTimersByTime(10);
+    fs.writeFileSync(file, "<p>Recreated at 10ms</p>"); // eventless, inside the window
+    sig.bump();
+    vi.advanceTimersByTime(50); // a sample inside the window sees it; held work outlasts the window
+    held.release();
+    await end;
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Recreated at 10ms</p>" } });
+    await settle(PAGE_WATCH_QUIET_MS * 2);
+    expect(pages()).toHaveLength(2);
+    expect(events.filter((e) => e.type === "artifact_created")).toHaveLength(1);
+  });
+
+  it("End rejects an eventless recreate first seen after the window, even at a late terminal wake (#737 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => {
+        vi.advanceTimersByTime(51);
+        fs.writeFileSync(file, "<p>Recreated at 51ms</p>"); // eventless, after the window
+        sig.bump();
+        vi.advanceTimersByTime(4);
+      },
+    });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await expect(watcher.drainQueuedSaves(SID)).rejects.toMatchObject({ code: "session_save_pending" });
+    expect(pages()).toHaveLength(1);
+
+    await watcher.drainQueuedSaves(SID); // the retry records it as its own save
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Recreated at 51ms</p>" } });
+  });
+
+  it("End rejects a re-delete after an in-window recreate (#737 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => {
+        fs.writeFileSync(file, "<p>Recreated</p>");
+        sig.bump();
+        fakeWatchers[0]!.fire("page.html");
+        fs.unlinkSync(file);
+        fakeWatchers[0]!.fire("page.html");
+      },
+    });
+    presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await expect(watcher.drainQueuedSaves(SID)).rejects.toMatchObject({ code: "session_save_pending" });
+    expect(pages()).toHaveLength(1);
+  });
+
   it("End rejects a second watcher-observed edit after the accepted recreate (#736 audit)", async () => {
     const sig = counterSig();
     const file = path.join(root, "docs/page.html");
@@ -723,9 +800,10 @@ describe("page file watch — a save landing during the gate check (Codex review
         fs.writeFileSync(file, "<p>Recreated</p>");
         sig.bump();
         fakeWatchers[0]!.fire("page.html"); // the recreate: accepted
+        vi.advanceTimersByTime(60);
         fs.writeFileSync(file, "<p>A second edit</p>");
         sig.bump();
-        fakeWatchers[0]!.fire("page.html"); // a different signature: not the cut's save
+        fakeWatchers[0]!.fire("page.html"); // after the window: not the cut's save
       },
     });
     presentFilePage("docs/page.html", "<p>Original</p>");

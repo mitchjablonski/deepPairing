@@ -105,16 +105,14 @@ export interface PageWatchDeps {
 interface Grace {
   /** Cut time + missingRecheckMs. A change seen later is not the cut's save. */
   deadline: number;
-  /** The one reappearance accepted inside the window, once seen. */
+  /** The last present signature observed inside the window, if any. */
   sig?: string;
-  /** The generation that accepted state stands for. */
+  /** The generation that in-window state stands for. */
   gen?: number;
   /** A change the grace can't accept was seen: End must report pending. */
   spoiled: boolean;
-  /** Set only around the observation made by the drain's own recheck, which
-   *  was scheduled inside the window: it counts as in-window however late
-   *  the timer fired. */
-  credited?: boolean;
+  /** The in-window sampler, started at the cut. */
+  sampler: ReturnType<typeof setInterval> | null;
 }
 
 interface Entry {
@@ -280,23 +278,23 @@ export class PageWatcher {
    * would be post-cut and lost. So a dirty (or mid-read) entry whose cut
    * signature is missing gets a grace window of missingRecheckMs (~50ms)
    * measured from the cut itself (the injectable `now` clock), not from when
-   * earlier in-flight work settles. Inside the window, ONE reappearance is
-   * accepted as that save completing, whether a watcher event, a poll tick or
-   * the drain's own stat sees it: its signature and generation become this
-   * drain's, and it is recorded before End commits. Repeat events carrying
-   * that same signature inside the window are the same save. Anything else is
-   * session_save_pending (retry End): a second, different signature, a
-   * re-delete after the reappearance, or any change seen after the window,
-   * including a file found back only once a held read let the drain run past
-   * the window. The one exception: the recheck the drain itself scheduled
-   * while the window was open is credited to the deadline even if its timer
-   * fires late (timer lateness is not the file's fault); a drain that first
-   * gets to stat after the window never scheduled one and keeps refusing.
-   * If the window ends with the file still missing, it is a
-   * genuine delete: nothing is recorded and End proceeds. The drain sleeps at
-   * most the window's remainder, and the entry is already marked draining, so
-   * no quiet timer or poll can start a read that would wait on End's own
-   * admission.
+   * earlier in-flight work settles. A sampler started at the cut stats the
+   * file every missingRecheckMs/5 until the deadline, in parallel with any
+   * held read. An observation counts only if `now() <= deadline` at the
+   * moment it is made, whether it comes from the sampler, a watcher event, a
+   * poll tick or the drain's own stat; a timer that fires late is discarded,
+   * never credited. The last present signature seen inside the window is that
+   * save completing (an editor may write it in steps). When the drain gets to
+   * decide, it re-stats: if the file still has that signature, it becomes
+   * this drain's generation and is recorded before End commits. Otherwise End
+   * fails with session_save_pending (retry End): a re-delete after a
+   * reappearance, any change seen after the window, a current signature that
+   * differs from the in-window one, or a file whose first reappearance is seen
+   * only after the window. If the window ends with the file still missing, it
+   * is a genuine delete: nothing is recorded and End proceeds. The drain
+   * sleeps at most the window's remainder, the sampler costs at most the
+   * window, and the entry is already marked draining, so no quiet timer or
+   * poll can start a read that would wait on End's own admission.
    *
    * Post-cut saves otherwise. A save seen after the cut on an entry that was
    * dirty at the cut makes End fail with session_save_pending (retry End). On
@@ -311,9 +309,7 @@ export class PageWatcher {
       let generation = entry.gen;
       const signature = entry.lastSig;
       const vanished = signature === MISSING && (entry.dirty || entry.processing !== null);
-      if (vanished && !entry.draining) {
-        entry.grace = { deadline: this.now() + this.missingRecheckMs, spoiled: false };
-      }
+      const grace = vanished && !entry.draining ? this.openGrace(entry) : null;
       const checkGeneration = () => {
         if (entry.gen !== generation || entry.dirty) {
           throw new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
@@ -327,29 +323,25 @@ export class PageWatcher {
         await entry.processing;
         if (entry.stopped) return;
         try {
-          const grace = entry.grace;
           if (grace) {
-            if (!grace.spoiled && grace.sig === undefined) {
-              let returned = this.sig(entry.absPath);
-              const remaining = grace.deadline - this.now();
-              let scheduled = false;
-              if (returned === MISSING && remaining > 0) {
-                await (this.deps.sleep ?? defaultSleep)(remaining);
-                if (entry.stopped) return;
-                returned = this.sig(entry.absPath);
-                scheduled = true;
-              }
-              // Judged by noteGrace: inside the window it is accepted, after
-              // it (or a held read ran past it) it spoils the grace. The
-              // recheck this drain scheduled inside the window is credited to
-              // the deadline: a late timer is not a late save.
-              if (returned !== MISSING && returned !== entry.lastSig) {
-                grace.credited = scheduled;
-                try { this.onChange(entry, returned); } finally { grace.credited = false; }
-              }
+            const remaining = grace.deadline - this.now();
+            if (remaining > 0) {
+              await (this.deps.sleep ?? defaultSleep)(remaining);
+              if (entry.stopped) return;
             }
-            entry.grace = null;
-            if (!grace.spoiled && grace.gen !== undefined && grace.gen === entry.gen) generation = grace.gen;
+            this.sampleGrace(entry, grace); // counts only if still in the window
+            this.closeGrace(entry);
+            const current = this.sig(entry.absPath);
+            const pending = () => new StandaloneCloseoutError(ERROR_CODES.session_save_pending,
+              "A watched file was replaced while the standalone review was closing. Let it settle, then retry End review.");
+            if (current !== entry.lastSig) this.onChange(entry, current); // seen after the window
+            if (grace.spoiled || current !== (grace.sig ?? MISSING) || grace.gen !== entry.gen) {
+              // A later change, a re-delete, or a first reappearance seen only
+              // after the window. Nothing still missing and unchanged lands here.
+              if (grace.spoiled || grace.sig !== undefined || current !== MISSING) throw pending();
+            } else {
+              generation = grace.gen;
+            }
           }
           // Another eventless save may have landed during the wait. Mark
           // that save dirty before reading so it cannot pass as pre-cut work.
@@ -364,7 +356,7 @@ export class PageWatcher {
           throw error;
         }
       }).finally(() => {
-        entry.grace = null;
+        this.closeGrace(entry);
         entry.draining = null;
         if (entry.dirty && !entry.stopped) this.arm(entry, this.quietMs);
       });
@@ -447,6 +439,7 @@ export class PageWatcher {
     entry.stopped = true;
     if (entry.quiet) { clearTimeout(entry.quiet); entry.quiet = null; }
     if (entry.poll) { clearInterval(entry.poll); entry.poll = null; }
+    this.closeGrace(entry);
     try { entry.watcher?.close(); } catch { /* gone */ }
     entry.watcher = null;
     const k = this.key(entry.sessionId, entry.artifactId);
@@ -470,21 +463,54 @@ export class PageWatcher {
     this.arm(entry, this.quietMs);
   }
 
-  /** Decide whether a change seen during End's missing-file grace is the
-   *  cut's save completing (accept) or a later change (spoil). */
+  /** Open End's missing-file grace at the cut and start its sampler. */
+  private openGrace(entry: Entry): Grace {
+    const grace: Grace = { deadline: this.now() + this.missingRecheckMs, spoiled: false, gen: entry.gen, sampler: null };
+    entry.grace = grace;
+    if (this.missingRecheckMs <= 0) return grace;
+    const stopSampling = () => {
+      if (grace.sampler) { clearInterval(grace.sampler); grace.sampler = null; }
+    };
+    grace.sampler = setInterval(() => {
+      // Past the deadline the sampler stops, but the grace stays open on the
+      // entry until the drain decides, so a later event still spoils it.
+      if (entry.stopped || entry.grace !== grace || this.now() > grace.deadline) {
+        stopSampling();
+        return;
+      }
+      this.sampleGrace(entry, grace);
+    }, Math.max(1, Math.floor(this.missingRecheckMs / 5)));
+    grace.sampler.unref?.();
+    return grace;
+  }
+
+  private closeGrace(entry: Entry): void {
+    const grace = entry.grace;
+    if (!grace) return;
+    if (grace.sampler) { clearInterval(grace.sampler); grace.sampler = null; }
+    entry.grace = null;
+  }
+
+  /** One in-window observation: a stat made after the deadline is discarded. */
+  private sampleGrace(entry: Entry, grace: Grace): void {
+    if (entry.grace !== grace || this.now() > grace.deadline) return;
+    const signature = this.sig(entry.absPath);
+    if (signature !== entry.lastSig) this.onChange(entry, signature);
+  }
+
+  /** Judge a change seen while End's missing-file grace is open. */
   private noteGrace(grace: Grace, signature: string, gen: number): void {
     if (grace.spoiled) return;
-    if (!grace.credited && this.now() > grace.deadline) {
+    if (this.now() > grace.deadline) {
       grace.spoiled = true;
     } else if (signature === MISSING) {
       // Still gone before any reappearance is harmless; gone again after one is not.
       if (grace.sig === undefined) grace.gen = gen;
       else grace.spoiled = true;
-    } else if (grace.sig === undefined || grace.sig === signature) {
+    } else {
+      // The editor may write the file in steps: the last in-window one wins.
       grace.sig = signature;
       grace.gen = gen;
-    } else {
-      grace.spoiled = true;
     }
   }
 
