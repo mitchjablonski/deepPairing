@@ -9,7 +9,7 @@ import { computePending, isPendingBannerVisible, isSinglePendingInView } from ".
 import { computeAttention, orderedPendingArtifacts } from "./lib/attention";
 import { attentionHolds } from "./lib/attentionCopy";
 import { selectDefaultSession } from "./lib/selectDefaultSession";
-import { enterSessionReplay } from "./lib/session-replay";
+import { enterSessionReplay, openSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { useSessionVisits } from "./hooks/useSessionVisits";
 import { useAgentWorking } from "./hooks/useAgentWorking";
@@ -61,6 +61,57 @@ import { useProvenance } from "./lib/provenance";
 import { ProvenanceChip, DemoTag } from "./components/ProvenanceMarker";
 
 function App() {
+  const history = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("history");
+  return history === null ? <LiveApp /> : <EndedReviewHistory key={history} sessionId={history} />;
+}
+
+function EndedReviewHistory({ sessionId }: { sessionId: string }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+
+  useEffect(() => {
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      setError("Invalid review session ID.");
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    // A history-only tab never starts a live connection that can replace its snapshot.
+    void openSessionReplay(sessionId, undefined, { signal: controller.signal }).then((result) => {
+      if (controller.signal.aborted) return;
+      if (result.status === "opened") {
+        const replay = useReplayStore.getState();
+        const latest = replay.events.at(-1);
+        if (latest) replay.setCursor(latest.at);
+      } else {
+        setError(result.status === "failed" ? result.message : "The review history couldn't be opened.");
+      }
+      setLoading(false);
+    });
+    return () => controller.abort();
+  }, [sessionId]);
+
+  return (
+    <div className="h-screen bg-surface-primary text-text-primary flex flex-col">
+      <header className="px-4 py-3 border-b border-border-default">
+        <h1 className="text-sm font-semibold">Review history</h1>
+      </header>
+      {!loading && !error && <ReplayScrubber readOnly />}
+      <main className="flex-1 min-h-0">
+        {loading ? <HydrationSkeleton />
+          : error ? <p role="alert" className="p-5 text-sm">{error}</p>
+          : hasArtifacts ? (
+            <ErrorBoundary fallback={<p className="p-5 text-sm">The review artifacts could not be displayed.</p>}>
+              <ArtifactPanel />
+            </ErrorBoundary>
+          ) : <p className="p-5 text-sm text-text-muted">This review contains no artifacts.</p>}
+      </main>
+    </div>
+  );
+}
+
+function LiveApp() {
   useSessionVisits();
   const connected = useConnectionStore((s) => s.connected);
   const everConnected = useConnectionGraceStore((s) => s.everConnected);

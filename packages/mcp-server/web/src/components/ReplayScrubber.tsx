@@ -82,7 +82,7 @@ const kindLabel: Record<string, string> = {
  * The scrubber is the replay surface's "chess clock" — clear what moment
  * we're viewing, easy to step back and reconsider.
  */
-export function ReplayScrubber() {
+export function ReplayScrubber({ readOnly = false }: { readOnly?: boolean } = {}) {
   const active = useReplayStore((s) => s.active);
   const events = useReplayStore((s) => s.events);
   const cursor = useReplayStore((s) => s.cursor);
@@ -178,7 +178,7 @@ export function ReplayScrubber() {
             ))}
           </div>
 
-          <button
+          {!readOnly && <button
             onClick={() => {
               // H1 (a11y) — this button unmounts with the scrubber; park
               // focus on a stable landmark first so it doesn't fall to body.
@@ -189,7 +189,7 @@ export function ReplayScrubber() {
             title="Exit replay (Esc)"
           >
             Exit
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -251,6 +251,7 @@ export function ReplayScrubber() {
       {cursorEvent && (
         <CurrentEventRow
           event={cursorEvent}
+          readOnly={readOnly}
           annotating={annotatingEvent === cursorEvent.id}
           setAnnotating={(on) => setAnnotatingEvent(on ? cursorEvent.id : null)}
         />
@@ -261,10 +262,12 @@ export function ReplayScrubber() {
 
 function CurrentEventRow({
   event,
+  readOnly,
   annotating,
   setAnnotating,
 }: {
   event: TimelineEvent;
+  readOnly: boolean;
   annotating: boolean;
   setAnnotating: (on: boolean) => void;
 }) {
@@ -291,14 +294,14 @@ function CurrentEventRow({
         <span className="text-text-muted"><KindIcon kind={event.kind} size={11} /></span>
         <span className="font-mono text-text-muted">{formatTime(event.at)}</span>
         <span className="truncate">{event.label}</span>
-        <button
+        {!readOnly && <button
           onClick={() => setAnnotating(!annotating)}
           className="ml-auto shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-accent-violet hover:bg-accent-violet-dim/40"
           title="Leave a learner note on this event"
         >
           <NoteIcon size={10} />
           note
-        </button>
+        </button>}
       </div>
 
       {myAnnotations.length > 0 && (
@@ -310,20 +313,20 @@ function CurrentEventRow({
             >
               <span className="text-accent-violet shrink-0 mt-0.5"><NoteIcon size={10} /></span>
               <span className="flex-1 whitespace-pre-wrap">{a.note}</span>
-              <button
+              {!readOnly && <button
                 disabled={!!offline}
                 onClick={() => removeAnnotation(a.id)}
                 className="shrink-0 text-text-muted hover:text-accent-red text-[10px] disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
                 title={offline ?? "Delete note"}
               >
                 ✕
-              </button>
+              </button>}
             </div>
           ))}
         </div>
       )}
 
-      {annotating && (
+      {!readOnly && annotating && (
         <div className="flex gap-1.5 pl-4">
           <input
             type="text"

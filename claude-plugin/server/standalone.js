@@ -44631,6 +44631,11 @@ var DaemonClient = class {
       throw err;
     }
     if (receipt?.sessionId !== this.sessionId) throw new Error("The daemon did not confirm the requested standalone session.");
+    if (receipt.endedAt === void 0) return {};
+    if (mode !== "resume" || typeof receipt.endedAt !== "string" || !Number.isFinite(Date.parse(receipt.endedAt))) {
+      throw new Error("The daemon returned an invalid standalone review end time.");
+    }
+    return { endedAt: receipt.endedAt };
   }
   /** Submit a standalone proposal through the daemon's shared review checks. */
   async presentStandaloneOptions(expectedProjectRoot, operationId, args, signal) {
