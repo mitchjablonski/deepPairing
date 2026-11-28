@@ -266,8 +266,17 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   const activeSessions = new Set<string>();
   const standaloneCloseout: StandaloneCloseout = new StandaloneCloseout(projectRoot, (sessionId) => sessions.get(sessionId),
     undefined, (sessionId) => {
-      sessions.get(sessionId)?.notifyStandaloneReviewEnded();
-      pageWatcher.stopSession(sessionId);
+      // The marker is already durable. Each notification is best-effort.
+      try {
+        sessions.get(sessionId)?.notifyStandaloneReviewEnded();
+      } catch (error) {
+        log(`[end-review] Failed to wake decision readers: ${errorMessage(error)}`);
+      }
+      try {
+        pageWatcher.stopSession(sessionId);
+      } catch (error) {
+        log(`[end-review] Failed to stop page watches: ${errorMessage(error)}`);
+      }
     }, (sessionId) => pageWatcher.drainQueuedSaves(sessionId));
   const demoRuns = new Map<string, () => void>();
   // #470 — active allowances live ONLY here (O1). A restart ends every grant:
