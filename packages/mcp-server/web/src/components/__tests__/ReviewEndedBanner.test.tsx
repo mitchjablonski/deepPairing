@@ -1,10 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import App from "../../App";
 import { ReviewEndedBanner } from "../ReviewEndedBanner";
+import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 
 afterEach(() => {
   useConnectionStore.setState({ reviewEnded: null });
+  vi.unstubAllGlobals();
 });
 
 describe("#711 gate 4 — ReviewEndedBanner", () => {
@@ -27,5 +30,19 @@ describe("#711 gate 4 — ReviewEndedBanner", () => {
     useConnectionStore.setState({ reviewEnded: { code: "session_marker_invalid" } });
     render(<ReviewEndedBanner />);
     expect(screen.getByTestId("review-ended-banner").textContent).toMatch(/can't be verified/);
+  });
+
+  it("is mounted by App when the bound review has ended, and absent otherwise", () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } })),
+    ));
+    useArtifactStore.getState().reset();
+    useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", reviewEnded: null } as any);
+    const { unmount } = render(<App />);
+    expect(screen.queryByTestId("review-ended-banner")).not.toBeInTheDocument();
+    unmount();
+    useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", reviewEnded: { endedAt: "2026-11-28T10:00:00.000Z", code: "session_ended" } } as any);
+    render(<App />);
+    expect(screen.getByTestId("review-ended-banner").textContent).toMatch(/Review ended/);
   });
 });

@@ -75,7 +75,7 @@ import { isSessionReviewConflictError } from "../store/session-records.js";
 import { probeDaemonIdentity } from "./lifecycle.js";
 import { PageWatcher, type PageWatchDeps } from "./page-watch.js";
 import { StandaloneCloseout } from "./standalone-closeout.js";
-import { admitSocketWrite, handleSocketMessage, readReviewState, reviewEndedOnConnect } from "./socket-messages.js";
+import { reviewEndedOnConnect } from "./socket-review-state.js";
 import { isStandaloneSessionForProject } from "../standalone-session-id.js";
 
 /**
@@ -1131,27 +1131,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   // WebSocket server (noServer: true — it rides index.ts's accept socket via
   // attachUpgradeHandler; it owns no LISTEN socket of its own, see I5).
-  // #711 gate 4 — the socket now reads inbound frames (read-only requests and
-  // refused write candidates); none is legitimately large, so cap them.
+  // The socket is send-only (every browser write is an HTTP route behind End
+  // admission), so no inbound frame is legitimately large: cap them.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
-
-  /** #711 gate 4 — inbound frames. Read-only requests are answered; anything
-   *  else takes the same synchronous End admission as an HTTP write before any
-   *  handler, and a refusal goes to this socket only (no write, broadcast or
-   *  activity stamp). */
-  function attachSocketMessages(ws: WebSocket, sessionId: string | null): void {
-    ws.on("message", (data) => {
-      void handleSocketMessage(String(data), {
-        sessionId,
-        admit: (sid) => admitSocketWrite(standaloneCloseout, projectRoot, sid),
-        reviewState: (sid) => readReviewState(standaloneCloseout, projectRoot, sid),
-        reply: (frame) => {
-          try { ws.send(JSON.stringify(frame)); } catch { /* a closing peer drops the reply */ }
-        },
-        log,
-      });
-    });
-  }
 
   // GG2 — auth the WebSocket upgrade. Pre-GG2 the upgrade handler did
   // ZERO checks: no Origin, no X-Project-Hash, accepted any sessionId
@@ -1243,7 +1225,6 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         try { ws.terminate(); } catch {}
       });
       ws.on("close", cleanup);
-      attachSocketMessages(ws, sessionId);
       clients.add(ws);
 
       // Send session state on connect. U4 — include `daemonStartedAt` so
@@ -1345,7 +1326,6 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         try { ws.terminate(); } catch {}
       });
       ws.on("close", cleanup);
-      attachSocketMessages(ws, null);
       globalClients.add(ws);
 
       // Send list of active sessions. Track WHICH session's store is being
