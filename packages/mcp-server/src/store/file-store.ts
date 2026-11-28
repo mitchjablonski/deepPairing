@@ -2172,6 +2172,8 @@ export class FileStore implements IStore {
     backingHistoryLength: number;
     /** #711 gate 1 — the approvedPatterns row recordDecisionApproval added. */
     addedApproval?: string;
+    /** #711 gate 1 — the approval's cross-project mirror, sent on commit only. */
+    deferredMirror?: { description: string; concept?: string };
   }>();
   private feedbackNotifyHolds = 0;
   private feedbackNotifyPending = false;
@@ -2206,9 +2208,11 @@ export class FileStore implements IStore {
       }
       this.unannouncedResolutions.delete(decisionId);
       // #711 gate 1 — the pick never committed, so neither did its approval:
-      // retract the local row this resolve added (a cross-project mirror that
-      // already landed stays; a queued one no longer replays, as it is gated on
-      // the local row).
+      // retract the local row this resolve added. Its cross-project mirror was
+      // deferred and is simply dropped. Accepted (P3): the retraction matches
+      // the exact description string, so a concurrent writer that recorded the
+      // same approval during this resolve's flush window loses its row too —
+      // no reference counting; a later pick or check_feedback re-records it.
       const addedApproval = pending.addedApproval;
       if (addedApproval) {
         try {
@@ -2226,6 +2230,15 @@ export class FileStore implements IStore {
       // before decisions.json) while the decision didn't: re-flush so disk
       // converges back to this rolled-back state once the store can write.
       try { this.scheduleFlush(); } catch { /* disposed: nothing to converge */ }
+    }
+    // #711 gate 1 — the pick is durable: now its approval may reach the
+    // cross-project ledger, exactly once (as check_feedback's write did).
+    if (committed && pending.deferredMirror) {
+      try {
+        this.mirrorApprovedPattern(pending.deferredMirror.description, pending.deferredMirror.concept);
+      } catch (err) {
+        FileStore.logLedgerMirrorFailure("approved", err); // advisory: never fail a committed pick
+      }
     }
     // #490 — wake waiters only for something real: this write COMMITTED, or
     // another event queued a wake-up during the hold. A rolled-back write is
@@ -2278,11 +2291,18 @@ export class FileStore implements IStore {
     if (!dec?.response) return null;
     const keys = decisionApprovalKeys(dec);
     if (!keys) return null;
-    const added = this.recordApprovedPatternReportingAdded(keys);
-    // A resolve whose flush then fails is rolled back by settleResolution; it
-    // retracts the row too, but only when this write added it.
+    // The local row lands now (inside the permit, before End's marker); the
+    // cross-project mirror waits for settleResolution(…, true), so a resolve
+    // whose flush fails never reaches the global ledger. Without a pending
+    // resolution (not written by resolveDecisionAtomic) there is nothing to
+    // wait for: mirror now, as recordApprovedPattern does.
     const pending = this.pendingResolutions.get(decisionId);
-    if (pending && added) pending.addedApproval = keys.description;
+    const added = this.recordApprovedPatternReportingAdded(keys, { mirror: !pending });
+    if (pending) {
+      pending.deferredMirror = keys;
+      // A rolled-back resolve retracts the local row, but only if it added it.
+      if (added) pending.addedApproval = keys.description;
+    }
     dec.ledgerRecordedAt = new Date().toISOString();
     this.scheduleFlush();
     return { ...keys, artifactId: dec.artifactId };
@@ -2803,7 +2823,7 @@ export class FileStore implements IStore {
   }
 
   /** #711 gate 1 — recordApprovedPattern, reporting whether the local row was new. */
-  private recordApprovedPatternReportingAdded(params: { description: string; concept?: string }): boolean {
+  private recordApprovedPatternReportingAdded(params: { description: string; concept?: string }, opts: { mirror?: boolean } = {}): boolean {
     const { description, concept } = params;
     // AA1 — symmetric with recordRejectedApproach: concept (when present)
     // is the cross-project ledger key. Pre-AA1 the approved path passed
@@ -2822,7 +2842,13 @@ export class FileStore implements IStore {
       added = true;
       return true;
     });
+    if (opts.mirror !== false) this.mirrorApprovedPattern(description, concept);
+    return added;
+  }
 
+  /** The cross-project half of recordApprovedPattern. #711 gate 1 — split out
+   *  so a resolve can defer it until its pick is durable (settleResolution). */
+  private mirrorApprovedPattern(description: string, concept: string | undefined): void {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
@@ -2833,7 +2859,6 @@ export class FileStore implements IStore {
         FileStore.logLedgerMirrorFailure("approved", err);
       }
     }
-    return added;
   }
 
   /**

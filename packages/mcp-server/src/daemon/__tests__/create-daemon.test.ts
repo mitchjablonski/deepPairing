@@ -30,6 +30,7 @@ import { projectHashOf } from "../../project-root.js";
 import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { ERROR_CODES } from "../../error-codes.js";
+import { getGlobalStore } from "../../store/global-store.js";
 import { PENDING_DRAFT_TYPES } from "../../mcp/tools/types.js";
 // The web "waiting on you" set — imported here (a server-project test, so no web
 // tsconfig rootDir boundary) to pin it EQUAL to the server's PENDING_DRAFT_TYPES.
@@ -1255,6 +1256,35 @@ it("keeps an admitted pick and its ledger row across a failed End, then ends on 
   const marker = await daemon.standaloneCloseout.end(sessionId);
   expect(JSON.parse(fs.readFileSync(markerPath, "utf8"))).toEqual(marker);
   expect(approved()).toEqual(["Choose a cache: In-proc"]);
+});
+
+it.each([
+  ["a retry of the same option", "o1", 1, 0],
+  ["a different option", "o2", 0, 1],
+] as const)("a rolled-back pick sends nothing to the cross-project ledger; %s mirrors once", async (_label, retry, redis, lru) => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  store.setGlobalLedgerPublish(true);
+  const options = OPTS.map((o, i) => ({ ...o, concept: { name: i === 0 ? "redis cache" : "lru cache" } }));
+  store.createArtifact({ id: "decision", type: "decision", title: "Choose a cache", content: { decisionId: "d1" } });
+  store.recordDecisionRequest({ decisionId: "d1", artifactId: "decision", context: "Choose a cache", options });
+  store.forceFlush();
+  const { resolve } = ledgerHarness(tmpDir, daemon);
+  const approvals = (concept: string) =>
+    (getGlobalStore().get(concept)?.instances ?? []).filter((i) => i.verdict === "approved").length;
+
+  const noFlush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("Cannot flush the choice"); });
+  try {
+    expect((await resolve("internal", sessionId, "o1")).status).toBe(500);
+  } finally {
+    noFlush.mockRestore();
+  }
+  expect(approvals("redis cache")).toBe(0);
+
+  expect((await resolve("internal", sessionId, retry)).status).toBe(200);
+  expect(approvals("redis cache")).toBe(redis);
+  expect(approvals("lru cache")).toBe(lru);
 });
 
 const RULE_OUT_HTML =
