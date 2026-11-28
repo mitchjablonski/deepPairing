@@ -11,7 +11,7 @@ import { expect, test } from "./test.js";
 
 const exec = promisify(execFile);
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
-type SessionReceipt = { sessionId: string; companionUrl: string };
+type SessionReceipt = { sessionId: string; companionUrl: string; endedAt?: string };
 
 async function stopProjectDaemon(projectRoot: string): Promise<void> {
   const info = readDaemonInfo(projectRoot);
@@ -413,6 +413,30 @@ test("standalone CLI resumes the exact session and reads browser feedback withou
     await receipt("resume", resumed.sessionId);
     expect((await readPage(inline.artifactId)).verdict).toEqual(inlineFeedback.verdict);
     expect(await readPage(revised.artifactId)).not.toHaveProperty("verdict");
+
+    // The End command is not exposed yet. Seed the durable marker after the
+    // daemon has flushed, then exercise the cold CLI-to-browser history link.
+    await stopProjectDaemon(project);
+    const endedAt = new Date().toISOString();
+    await fs.writeFile(path.join(sessionDirs, resumed.sessionId, "review-ended.json"), JSON.stringify({
+      version: 1, sessionId: resumed.sessionId, endedAt,
+    }), { mode: 0o600 });
+    const history = await receipt("resume", resumed.sessionId);
+    expect(history).toMatchObject({ sessionId: resumed.sessionId, endedAt });
+    const historyUrl = new URL(history.companionUrl);
+    expect([...historyUrl.searchParams]).toEqual([["history", resumed.sessionId]]);
+    const sockets: string[] = [];
+    page.on("websocket", (socket) => sockets.push(socket.url()));
+    await page.goto(history.companionUrl);
+    await expect(page.getByRole("heading", { name: "Review history" })).toBeVisible();
+    const historicalPage = page.locator(`button[data-artifact-item="${mermaidPage.artifactId}"]`);
+    await expect(historicalPage).toBeVisible();
+    await historicalPage.click();
+    await expect(page.locator(`[data-dp-pane][data-artifact-id="${mermaidPage.artifactId}"]:not([inert])`)).toBeVisible();
+    await expect(page.getByTitle("Leave a learner note on this event")).toHaveCount(0);
+    await expect(page.getByTitle("Exit replay (Esc)")).toHaveCount(0);
+    await expect(page.getByTitle("Click to rename")).toHaveCount(0);
+    expect(sockets).toEqual([]);
   } finally {
     await page.close();
     await stopProjectDaemon(project);

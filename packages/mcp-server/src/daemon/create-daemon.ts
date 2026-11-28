@@ -328,13 +328,37 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     });
   }
 
+  // #711 — reconciliation completes half-applied operations, which writes the
+  // session. A standalone review admits it like any other writer: a closing or
+  // ended review (or an unreadable marker) skips it, and an exact replay of the
+  // operation can still finish it while the review is open.
+  function reconcileAdmittedOperations(sessionId: string, store: FileStore): void {
+    if (!isStandaloneSessionForProject(sessionId, projectRoot)) {
+      void stanceExceptions.reconcile(sessionId, store);
+      return;
+    }
+    let release: (() => void) | undefined;
+    try {
+      release = standaloneCloseout.admitWrite(sessionId);
+    } catch {
+      release = undefined;
+    }
+    if (!release) {
+      log(`[stance-exception] reconcile skipped for ${sessionId}: the standalone review is not open`);
+      return;
+    }
+    void stanceExceptions.reconcile(sessionId, store)
+      .catch((error: unknown) => log(`[stance-exception] reconcile ${sessionId} failed: ${errorMessage(error)}`))
+      .finally(release);
+  }
+
   function createSession(sessionId: string): FileStore {
     log(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot, sessionId);
     sessions.set(sessionId, store);
     // #470 (§7) — startup reconciliation: finish any admitted operation a
     // crash left without completedAt, through the session's operation queue.
-    if (!sessionId.startsWith("demo_")) void stanceExceptions.reconcile(sessionId, store);
+    if (!sessionId.startsWith("demo_")) reconcileAdmittedOperations(sessionId, store);
     // R1: count session starts so "N sessions deep" stats become real.
     // Demo sessions are excluded — they're throwaway proof of the hook,
     // not pairing work worth measuring.

@@ -909,6 +909,9 @@ describe("authenticated standalone page", () => {
       expect(release).toBeTypeOf("function");
       const ending = warm.standaloneCloseout.end(f.sessionId);
       try {
+        const resume = await f.request(warm, "open-review", { mode: "resume" });
+        expect(resume.status).toBe(409);
+        expect(await resume.json()).toMatchObject({ code: "session_closing" });
         for (const replay of [replayPage, replayRevision]) {
           const closing = await replay(warm);
           expect(closing.status).toBe(409);

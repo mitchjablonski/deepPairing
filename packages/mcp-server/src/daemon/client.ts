@@ -467,8 +467,8 @@ export class DaemonClient implements IStore {
   }
 
   /** Prepare a browser link without creating a live wrapper registration. */
-  async openStandaloneReview(mode: "open" | "resume", expectedProjectRoot: string, signal: AbortSignal): Promise<void> {
-    let receipt: { sessionId: string };
+  async openStandaloneReview(mode: "open" | "resume", expectedProjectRoot: string, signal: AbortSignal): Promise<{ endedAt?: string }> {
+    let receipt: { sessionId: string; endedAt?: unknown };
     try {
       receipt = await this.request("/open-review", {
         method: "POST", signal, redirect: "error",
@@ -482,6 +482,11 @@ export class DaemonClient implements IStore {
       throw err;
     }
     if (receipt?.sessionId !== this.sessionId) throw new Error("The daemon did not confirm the requested standalone session.");
+    if (receipt.endedAt === undefined) return {};
+    if (mode !== "resume" || typeof receipt.endedAt !== "string" || !Number.isFinite(Date.parse(receipt.endedAt))) {
+      throw new Error("The daemon returned an invalid standalone review end time.");
+    }
+    return { endedAt: receipt.endedAt };
   }
 
   /** Submit a standalone proposal through the daemon's shared review checks. */

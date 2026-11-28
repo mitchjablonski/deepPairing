@@ -671,7 +671,13 @@ export function createDaemonRoutes(
       if (parsed.data.mode === "open" && (existing || sessions.has(sessionId))) {
         return c.json({ error: "Standalone session already exists. Resume it instead." }, 409);
       }
-      if (parsed.data.mode === "resume") standaloneCloseout?.state(sessionId);
+      if (parsed.data.mode === "resume") {
+        const state = standaloneCloseout?.state(sessionId);
+        if (state?.state === "ended") return c.json({ sessionId, endedAt: state.endedAt });
+        if (state?.state === "closing") {
+          return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+        }
+      }
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
       // A resumed standalone review re-arms the file watch for its live
@@ -1512,12 +1518,18 @@ export function createDaemonRoutes(
     const parsed = await parseJsonBody(c, OperationBody);
     if (!parsed.ok) return parsed.res;
     if (!stanceExceptions) return c.json({ status: "none" });
-    const outcome = await stanceExceptions.runOperation(
-      sessionId, r.store, c.req.header(REGISTRATION_HEADER), c.req.param("operationId"),
-      parsed.data.callFingerprint, parsed.data.admission,
-    );
-    if (outcome.status === "inconsistent") return c.json(outcome, 409);
-    return c.json(outcome);
+    const registry = stanceExceptions;
+    // #711 — admit before enqueue: an admitted operation keeps its permit while
+    // queued and through create, follow-ups, flushes and broadcasts, so End
+    // waits for it; one arriving after the cutoff is refused before any write.
+    return withSessionWrite(c, r.store, async () => {
+      const outcome = await registry.runOperation(
+        r.store.getSessionId(), r.store, c.req.header(REGISTRATION_HEADER), c.req.param("operationId"),
+        parsed.data.callFingerprint, parsed.data.admission,
+      );
+      if (outcome.status === "inconsistent") return c.json(outcome, 409);
+      return c.json(outcome);
+    });
   });
 
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {

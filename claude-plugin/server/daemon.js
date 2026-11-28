@@ -36085,11 +36085,18 @@ var StanceExceptionRegistry = class {
     while (this.blocks.size > MAX_BLOCK_BINDINGS) this.blocks.delete(this.blocks.keys().next().value);
   }
   // --- The per-session operation queue (§13 condition 1) ---------------------
+  /** Test-only seam: called synchronously once an operation is queued. */
+  onEnqueueForTest;
+  /** Test-only seam: settles when everything queued for the session so far has. */
+  idleForTest(sessionId) {
+    return this.queues.get(sessionId) ?? Promise.resolve();
+  }
   enqueue(sessionId, fn) {
     const prev = this.queues.get(sessionId) ?? Promise.resolve();
     const next = prev.catch(() => void 0).then(fn);
     const tail = next.catch(() => void 0);
     this.queues.set(sessionId, tail);
+    this.onEnqueueForTest?.(sessionId);
     void tail.then(() => {
       if (this.queues.get(sessionId) === tail) this.queues.delete(sessionId);
     });
@@ -43983,7 +43990,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       if (parsed.data.mode === "open" && (existing || sessions.has(sessionId))) {
         return c.json({ error: "Standalone session already exists. Resume it instead." }, 409);
       }
-      if (parsed.data.mode === "resume") standaloneCloseout?.state(sessionId);
+      if (parsed.data.mode === "resume") {
+        const state = standaloneCloseout?.state(sessionId);
+        if (state?.state === "ended") return c.json({ sessionId, endedAt: state.endedAt });
+        if (state?.state === "closing") {
+          return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+        }
+      }
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
       try {
@@ -44637,16 +44650,19 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await parseJsonBody(c, OperationBody);
     if (!parsed.ok) return parsed.res;
     if (!stanceExceptions) return c.json({ status: "none" });
-    const outcome = await stanceExceptions.runOperation(
-      sessionId,
-      r.store,
-      c.req.header(REGISTRATION_HEADER),
-      c.req.param("operationId"),
-      parsed.data.callFingerprint,
-      parsed.data.admission
-    );
-    if (outcome.status === "inconsistent") return c.json(outcome, 409);
-    return c.json(outcome);
+    const registry2 = stanceExceptions;
+    return withSessionWrite(c, r.store, async () => {
+      const outcome = await registry2.runOperation(
+        r.store.getSessionId(),
+        r.store,
+        c.req.header(REGISTRATION_HEADER),
+        c.req.param("operationId"),
+        parsed.data.callFingerprint,
+        parsed.data.admission
+      );
+      if (outcome.status === "inconsistent") return c.json(outcome, 409);
+      return c.json(outcome);
+    });
   });
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -46103,11 +46119,28 @@ function createDaemon(deps) {
       }
     });
   }
+  function reconcileAdmittedOperations(sessionId, store) {
+    if (!isStandaloneSessionForProject(sessionId, projectRoot2)) {
+      void stanceExceptions.reconcile(sessionId, store);
+      return;
+    }
+    let release2;
+    try {
+      release2 = standaloneCloseout.admitWrite(sessionId);
+    } catch {
+      release2 = void 0;
+    }
+    if (!release2) {
+      log2(`[stance-exception] reconcile skipped for ${sessionId}: the standalone review is not open`);
+      return;
+    }
+    void stanceExceptions.reconcile(sessionId, store).catch((error51) => log2(`[stance-exception] reconcile ${sessionId} failed: ${errorMessage(error51)}`)).finally(release2);
+  }
   function createSession(sessionId) {
     log2(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot2, sessionId);
     sessions.set(sessionId, store);
-    if (!sessionId.startsWith("demo_")) void stanceExceptions.reconcile(sessionId, store);
+    if (!sessionId.startsWith("demo_")) reconcileAdmittedOperations(sessionId, store);
     if (!sessionId.startsWith("demo_")) {
       try {
         recordMetricEvent(projectRoot2, { kind: "session_started" });

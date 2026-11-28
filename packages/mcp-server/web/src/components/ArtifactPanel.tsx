@@ -202,18 +202,23 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(artifact.title);
   const renameArtifact = useArtifactStore((s) => s.renameArtifact);
+  const replaying = useReplayStore((s) => s.active);
   // #487 review — a rename is a write: refused offline. Mid-edit, saving keeps
   // the editor open with the draft instead of dropping it.
   const offline = useOfflineReason();
 
   const handleSave = () => {
-    if (offline) return;
+    if (offline || replaying) return;
     const trimmed = draft.trim();
     if (trimmed && trimmed !== artifact.title) {
       renameArtifact(artifact.id, trimmed);
     }
     setEditing(false);
   };
+
+  if (replaying) {
+    return <h2 className="text-sm font-semibold text-text-primary leading-[1.2]">{artifact.title}</h2>;
+  }
 
   if (editing) {
     return (
