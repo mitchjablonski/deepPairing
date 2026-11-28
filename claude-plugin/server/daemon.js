@@ -30089,6 +30089,15 @@ function isPublishableStance(addedVia, requestedBy) {
   return addedVia !== "mcp" && requestedBy !== "unknown";
 }
 
+// src/store/decision-approval.ts
+function decisionApprovalKeys(d) {
+  const option = d.options?.find((o) => o.id === d.response?.optionId);
+  if (!option) return null;
+  const decisionLabel = d.title?.trim() || d.context;
+  const concept = option.concept?.name ?? option.description ?? void 0;
+  return { description: `${decisionLabel}: ${option.title}`, ...concept !== void 0 ? { concept } : {} };
+}
+
 // src/store/page-revision-feedback.ts
 import { createHash as createHash3 } from "node:crypto";
 var pageRevisionFeedbackIdsSchema = external_exports.array(external_exports.string().trim().min(1).max(128)).min(1).max(50).refine((ids) => new Set(ids).size === ids.length, "Feedback comment IDs must be unique.");
@@ -31798,9 +31807,29 @@ var FileStore = class _FileStore {
         }
       }
       this.unannouncedResolutions.delete(decisionId);
+      const addedApproval = pending.addedApproval;
+      if (addedApproval) {
+        try {
+          this.mutatePreferences((prefs) => {
+            const approved = Array.isArray(prefs.approvedPatterns) ? prefs.approvedPatterns : [];
+            if (!approved.includes(addedApproval)) return false;
+            prefs.approvedPatterns = approved.filter((p) => p !== addedApproval);
+            return true;
+          });
+        } catch (err) {
+          console.error(`[deepPairing] could not retract the approval of a rolled-back pick (${String(err)}).`);
+        }
+      }
       try {
         this.scheduleFlush();
       } catch {
+      }
+    }
+    if (committed && pending.deferredMirror) {
+      try {
+        this.mirrorApprovedPattern(pending.deferredMirror.description, pending.deferredMirror.concept);
+      } catch (err) {
+        _FileStore.logLedgerMirrorFailure("approved", err);
       }
     }
     this.feedbackNotifyHolds = Math.max(0, this.feedbackNotifyHolds - 1);
@@ -31837,6 +31866,29 @@ var FileStore = class _FileStore {
     } catch {
       return false;
     }
+  }
+  /**
+   * #711 gate 1 — record the pick's approval in the ledger INSIDE the resolve
+   * (see IStore.recordDecisionApproval). The preferences write is synchronous
+   * and lock-guarded, so the row is durable when this returns; the
+   * `ledgerRecordedAt` stamp rides the resolve's own flush, and a rolled-back
+   * resolve (settleResolution(…, false)) restores the record without it.
+   */
+  recordDecisionApproval(decisionId) {
+    this.assertAuthorizationReadable();
+    const dec = this.decisions.get(decisionId);
+    if (!dec?.response) return null;
+    const keys = decisionApprovalKeys(dec);
+    if (!keys) return null;
+    const pending = this.pendingResolutions.get(decisionId);
+    const added = this.recordApprovedPatternReportingAdded(keys, { mirror: !pending });
+    if (pending) {
+      pending.deferredMirror = keys;
+      if (added) pending.addedApproval = keys.description;
+    }
+    dec.ledgerRecordedAt = (/* @__PURE__ */ new Date()).toISOString();
+    this.scheduleFlush();
+    return { ...keys, artifactId: dec.artifactId };
   }
   /** #484 review — decisions whose answer was written by resolveDecisionAtomic
    *  but not yet announced after a successful flush. In-memory on purpose: an
@@ -32220,14 +32272,26 @@ var FileStore = class _FileStore {
    * Stored in .deeppairing/preferences.json under "approvedPatterns".
    */
   recordApprovedPattern(params) {
+    this.recordApprovedPatternReportingAdded(params);
+  }
+  /** #711 gate 1 — recordApprovedPattern, reporting whether the local row was new. */
+  recordApprovedPatternReportingAdded(params, opts = {}) {
     const { description, concept } = params;
+    let added = false;
     this.mutatePreferences((prefs) => {
       const approved = prefs.approvedPatterns ?? [];
       if (approved.includes(description)) return false;
       approved.push(description);
       prefs.approvedPatterns = approved;
+      added = true;
       return true;
     });
+    if (opts.mirror !== false) this.mirrorApprovedPattern(description, concept);
+    return added;
+  }
+  /** The cross-project half of recordApprovedPattern. #711 gate 1 — split out
+   *  so a resolve can defer it until its pick is durable (settleResolution). */
+  mirrorApprovedPattern(description, concept) {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
@@ -37602,6 +37666,7 @@ function createReviewRoutes({
             await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
           }
         }
+        const approval = outcome.kind === "resolved" ? await store.recordDecisionApproval?.(decisionId) : null;
         try {
           await store.forceFlush();
         } catch (error51) {
@@ -37620,6 +37685,9 @@ function createReviewRoutes({
           optionId: ann?.optionId ?? optionId,
           reasoning: ann ? ann.reasoning : reasoning
         }, sid2);
+        if (approval) {
+          broadcast({ type: "ledger_write", kind: "approved", description: approval.description, concept: approval.concept, sourceArtifactId: approval.artifactId }, sid2);
+        }
         return c.json({ status: "resolved", decisionId });
       } finally {
         if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
@@ -44791,6 +44859,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
         }
         const artifactId = r.store.getDecision(decisionId)?.artifactId;
+        const approval = r.store.recordDecisionApproval(decisionId);
         try {
           await r.store.forceFlush();
         } catch (error51) {
@@ -44799,6 +44868,9 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
         committed = true;
         r.store.takeResolutionAnnouncement(decisionId);
         broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
+        if (approval) {
+          broadcast(sessionId, { type: "ledger_write", kind: "approved", description: approval.description, concept: approval.concept, sourceArtifactId: approval.artifactId });
+        }
         return c.json({ status: "resolved" });
       } finally {
         if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
@@ -44953,14 +45025,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const message = err instanceof external_exports.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.recordApprovedPattern(parsed);
-    if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
-      try {
-        recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" });
-      } catch {
+    return withSessionWrite(c, r.store, () => {
+      r.store.recordApprovedPattern(parsed);
+      if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+        try {
+          recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" });
+        } catch {
+        }
       }
-    }
-    return c.json({ status: "recorded" });
+      return c.json({ status: "recorded" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/memory/override", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));

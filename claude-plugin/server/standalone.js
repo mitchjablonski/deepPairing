@@ -37639,6 +37639,15 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
   return !trivial;
 }
 
+// src/store/decision-approval.ts
+function decisionApprovalKeys(d) {
+  const option = d.options?.find((o) => o.id === d.response?.optionId);
+  if (!option) return null;
+  const decisionLabel = d.title?.trim() || d.context;
+  const concept = option.concept?.name ?? option.description ?? void 0;
+  return { description: `${decisionLabel}: ${option.title}`, ...concept !== void 0 ? { concept } : {} };
+}
+
 // src/mcp/tools/check-feedback.ts
 function ledgerHealthField() {
   try {
@@ -38194,14 +38203,18 @@ ${requests.join("\n")}`
     const deferred = [];
     ended = await reviewHasEnded();
     for (const d of resolved) {
-      if (!ended) {
+      if (!ended && d.ledgerRecordedAt) {
+        recordedIds.push(d.decisionId);
+      } else if (!ended) {
         try {
           await recordDecisionLedger(d);
+          recordedIds.push(d.decisionId);
         } catch (err) {
-          deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
-          continue;
+          if (!feedbackAckRefusal(err)) {
+            deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
+            continue;
+          }
         }
-        recordedIds.push(d.decisionId);
       }
       const feedback = decisionFeedback(d);
       const decisionLabel = d.title?.trim() || d.context;
@@ -38227,23 +38240,16 @@ ${deferred.join("\n")}`
     }
   }
   async function recordDecisionLedger(d) {
-    const option = d.options.find((o) => o.id === d.response?.optionId);
-    const decisionLabel = d.title?.trim() || d.context;
-    if (option) {
-      const approvedDescription = `${decisionLabel}: ${option.title}`;
-      const approvedConcept = option.concept?.name ?? option.description ?? void 0;
-      await store.recordApprovedPattern({
-        description: approvedDescription,
-        concept: approvedConcept
-      });
-      broadcast({
-        type: "ledger_write",
-        kind: "approved",
-        description: approvedDescription,
-        concept: approvedConcept,
-        sourceArtifactId: d.artifactId
-      });
-    }
+    const approval = decisionApprovalKeys(d);
+    if (!approval) return;
+    await store.recordApprovedPattern(approval);
+    broadcast({
+      type: "ledger_write",
+      kind: "approved",
+      description: approval.description,
+      concept: approval.concept,
+      sourceArtifactId: d.artifactId
+    });
   }
   const pendingPlans = await store.getPendingPlanReviews();
   const planArtifacts = postWakeArtifacts.filter((a) => a.type === "plan");
