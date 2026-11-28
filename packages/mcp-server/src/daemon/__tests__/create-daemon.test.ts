@@ -32,6 +32,7 @@ import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { ERROR_CODES } from "../../error-codes.js";
 import { getGlobalStore } from "../../store/global-store.js";
+import { readMetrics } from "../../store/metrics-store.js";
 import { PENDING_DRAFT_TYPES } from "../../mcp/tools/types.js";
 // The web "waiting on you" set — imported here (a server-project test, so no web
 // tsconfig rootDir boundary) to pin it EQUAL to the server's PENDING_DRAFT_TYPES.
@@ -1328,6 +1329,61 @@ it.each(["internal", "public"] as const)(
     expect(settled?.ledgerPending).toBeUndefined();
   },
 );
+
+// #711 review — the per-pick `ledger_write` count (the daemon's broadcast tap
+// records one metric per `ledger_write` event) must not drop or double: exactly
+// one per pick, whichever step records it, and none from a later settle of an
+// already-stamped pick.
+it.each([
+  ["resolve", "internal"], ["resolve", "public"],
+  ["busy lock then End reconcile", "internal"], ["busy lock then End reconcile", "public"],
+] as const)("emits exactly one ledger_write per pick: %s (%s route)", async (path_, route) => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  seedLedgerDecision(store, "Choose a cache");
+  const { resolve, preferencesPath } = ledgerHarness(tmpDir, daemon);
+  const approvedWrites = () => readMetrics(tmpDir).counts.ledgerWrites.approved;
+  const before = approvedWrites();
+  // What check_feedback does for a delivered pick (DaemonClient → this route).
+  const backfill = () => daemon.app.request(`/api/internal/sessions/${sessionId}/decisions/d1/ledger`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" },
+  });
+  const lock = `${preferencesPath}.lock`;
+  if (path_ !== "resolve") {
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, JSON.stringify({ ...ownLockIdentity()!, pid: process.ppid, processStartTime: null, createdAt: new Date().toISOString(), nonce: "prefs-holder" }));
+  }
+  try {
+    expect((await resolve(route, sessionId)).status).toBe(200);
+    expect(approvedWrites() - before).toBe(path_ === "resolve" ? 1 : 0);
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+  await daemon.standaloneCloseout.end(sessionId);
+  expect(approvedWrites() - before).toBe(1);
+  expect(await (await backfill()).json()).toMatchObject({ code: ERROR_CODES.session_ended });
+  expect(store.settleDecisionLedger("d1")).toEqual({ kind: "settled" });
+  expect(approvedWrites() - before).toBe(1);
+});
+
+it("a check_feedback backfill of an already-stamped pick emits no second ledger_write", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = "session_wrapper";
+  seedLedgerDecision(daemon.createSession(sessionId), "Choose a queue");
+  const { resolve } = ledgerHarness(tmpDir, daemon);
+  const approvedWrites = () => readMetrics(tmpDir).counts.ledgerWrites.approved;
+  const before = approvedWrites();
+  expect((await resolve("internal", sessionId, "o1")).status).toBe(200);
+  expect(approvedWrites() - before).toBe(1);
+  const backfill = await daemon.app.request(`/api/internal/sessions/${sessionId}/decisions/d1/ledger`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" },
+  });
+  expect(await backfill.json()).toEqual({ kind: "settled" });
+  expect(approvedWrites() - before).toBe(1);
+});
 
 it.each([
   ["a retry of the same option", "o1", 1, 0],
