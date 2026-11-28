@@ -151,6 +151,10 @@ export class ParentSupersededError extends Error {
  * Stores data in .deeppairing/ directory within the project root.
  * In-memory cache with debounced disk flush.
  */
+/** Read accessors of a load-only session snapshot. Mutators are deliberately absent. */
+export type SessionSnapshotView = Pick<FileStore,
+  "getSessionId" | "getArtifacts" | "getComments" | "getCommentsForArtifact" | "getDecision" | "getSessionMemory" | "getFullState">;
+
 export class FileStore implements IStore {
   private static readonly sessionSnapshot = Symbol("sessionSnapshot");
   private readonly snapshotOnly: boolean;
@@ -429,7 +433,13 @@ export class FileStore implements IStore {
     if (this.reviewConflict) throw this.reviewConflict;
   }
 
+  /** A load-only snapshot never writes its session (#711). */
+  private assertWritable(): void {
+    if (this.snapshotOnly) throw new Error(`FileStore snapshot for session ${this.sessionId} is read-only`);
+  }
+
   private scheduleFlush(delay = 100): void {
+    this.assertWritable();
     if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
@@ -557,6 +567,7 @@ export class FileStore implements IStore {
   }
 
   private flush(pageFeedback?: { parentId: string; proof: PageRevisionFeedbackProof }): void {
+    this.assertWritable();
     // A conflicted writer still holds the stale in-memory verdict that caused
     // the safety failure. Never write its artifacts again: only a newly created
     // FileStore may reload the persisted artifact and resume authorization.
@@ -650,6 +661,7 @@ export class FileStore implements IStore {
 
   /** Force an immediate flush — call before process exit */
   forceFlush(pageFeedback?: { parentId: string; proof: PageRevisionFeedbackProof }): void {
+    this.assertWritable();
     if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -3590,10 +3602,26 @@ export class FileStore implements IStore {
 
   /** Load the replay payload from an existing session without opening a writer. */
   static readSessionSnapshot(projectRoot: string, sessionId: string): ReturnType<FileStore["getFullState"]> | null {
+    return FileStore.openSessionSnapshot(projectRoot, sessionId)?.getFullState() ?? null;
+  }
+
+  /** The same load-only reader as readSessionSnapshot, exposed through its read
+   * accessors only: no mkdir, mirror replay, corruption backup or flush. */
+  static openSessionSnapshot(projectRoot: string, sessionId: string): SessionSnapshotView | null {
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return null;
     const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
     if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return null;
-    return new FileStore(projectRoot, sessionId, FileStore.sessionSnapshot).getFullState();
+    const store = new FileStore(projectRoot, sessionId, FileStore.sessionSnapshot);
+    // Bound getters only: a cast cannot reach a FileStore mutator through this view.
+    return Object.freeze({
+      getSessionId: () => store.getSessionId(),
+      getArtifacts: () => store.getArtifacts(),
+      getComments: () => store.getComments(),
+      getCommentsForArtifact: (artifactId: string) => store.getCommentsForArtifact(artifactId),
+      getDecision: (decisionId: string) => store.getDecision(decisionId),
+      getSessionMemory: () => store.getSessionMemory(),
+      getFullState: () => store.getFullState(),
+    });
   }
 
   static searchAll = searchAll;
