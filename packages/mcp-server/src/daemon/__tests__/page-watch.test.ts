@@ -658,6 +658,59 @@ describe("page file watch — a save landing during the gate check (Codex review
     expect(events.filter((e) => e.type === "artifact_created")).toHaveLength(1);
   });
 
+  it("End rejects a recreate that lands after the grace window while an earlier read is held (#736 audit)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    const held = heldFirstGate();
+    watcher.dispose();
+    watcher = makeWatcher({ gate: held.gate, pollIntervalMs: 60_000, statSig: sig.statSig });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    write("docs/page.html", "<p>Earlier save held in the gate</p>");
+    sig.bump();
+    await vi.advanceTimersByTimeAsync(PAGE_WATCH_QUIET_MS);
+    expect(held.pending()).toBe(true);
+
+    fs.unlinkSync(file);
+    fakeWatchers[0]!.fire("page.html");
+    const end = watcher.drainQueuedSaves(SID); // the cut: the grace starts now
+    vi.advanceTimersByTime(200); // well past the 50ms window
+    fs.writeFileSync(file, "<p>Recreated late</p>"); // eventless
+    sig.bump();
+    const pending = expect(end).rejects.toMatchObject({ code: "session_save_pending" });
+    held.release();
+    await pending;
+    expect(pages()).toHaveLength(1);
+
+    await watcher.drainQueuedSaves(SID); // the retry records it as its own save
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Recreated late</p>" } });
+  });
+
+  it("End rejects a second watcher-observed edit after the accepted recreate (#736 audit)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => {
+        fs.writeFileSync(file, "<p>Recreated</p>");
+        sig.bump();
+        fakeWatchers[0]!.fire("page.html"); // the recreate: accepted
+        fs.writeFileSync(file, "<p>A second edit</p>");
+        sig.bump();
+        fakeWatchers[0]!.fire("page.html"); // a different signature: not the cut's save
+      },
+    });
+    presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await expect(watcher.drainQueuedSaves(SID)).rejects.toMatchObject({ code: "session_save_pending" });
+    expect(pages()).toHaveLength(1);
+  });
+
   it("End still completes for a genuine delete after one bounded recheck (#730 review)", async () => {
     const sig = counterSig();
     const waits: number[] = [];
