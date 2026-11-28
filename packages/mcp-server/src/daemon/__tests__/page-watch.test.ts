@@ -686,6 +686,32 @@ describe("page file watch — a save landing during the gate check (Codex review
     expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Recreated late</p>" } });
   });
 
+  it("End credits an eventless in-window recreate to its scheduled recheck even when the timer fires late (#737 review)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => {
+        vi.advanceTimersByTime(10);
+        fs.writeFileSync(file, "<p>Recreated at 10ms</p>"); // eventless, inside the window
+        sig.bump();
+        vi.advanceTimersByTime(45); // the recheck timer fires late, at 55ms
+      },
+    });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await watcher.drainQueuedSaves(SID);
+    expect(liveTip()).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>Recreated at 10ms</p>" } });
+    await settle(PAGE_WATCH_QUIET_MS * 2);
+    expect(pages()).toHaveLength(2);
+    expect(events.filter((e) => e.type === "artifact_created")).toHaveLength(1);
+  });
+
   it("End rejects a second watcher-observed edit after the accepted recreate (#736 audit)", async () => {
     const sig = counterSig();
     const file = path.join(root, "docs/page.html");

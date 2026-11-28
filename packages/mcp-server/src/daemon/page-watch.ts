@@ -111,6 +111,10 @@ interface Grace {
   gen?: number;
   /** A change the grace can't accept was seen: End must report pending. */
   spoiled: boolean;
+  /** Set only around the observation made by the drain's own recheck, which
+   *  was scheduled inside the window: it counts as in-window however late
+   *  the timer fired. */
+  credited?: boolean;
 }
 
 interface Entry {
@@ -284,7 +288,11 @@ export class PageWatcher {
    * session_save_pending (retry End): a second, different signature, a
    * re-delete after the reappearance, or any change seen after the window,
    * including a file found back only once a held read let the drain run past
-   * the window. If the window ends with the file still missing, it is a
+   * the window. The one exception: the recheck the drain itself scheduled
+   * while the window was open is credited to the deadline even if its timer
+   * fires late (timer lateness is not the file's fault); a drain that first
+   * gets to stat after the window never scheduled one and keeps refusing.
+   * If the window ends with the file still missing, it is a
    * genuine delete: nothing is recorded and End proceeds. The drain sleeps at
    * most the window's remainder, and the entry is already marked draining, so
    * no quiet timer or poll can start a read that would wait on End's own
@@ -324,14 +332,21 @@ export class PageWatcher {
             if (!grace.spoiled && grace.sig === undefined) {
               let returned = this.sig(entry.absPath);
               const remaining = grace.deadline - this.now();
+              let scheduled = false;
               if (returned === MISSING && remaining > 0) {
                 await (this.deps.sleep ?? defaultSleep)(remaining);
                 if (entry.stopped) return;
                 returned = this.sig(entry.absPath);
+                scheduled = true;
               }
               // Judged by noteGrace: inside the window it is accepted, after
-              // it (or a held read ran past it) it spoils the grace.
-              if (returned !== MISSING && returned !== entry.lastSig) this.onChange(entry, returned);
+              // it (or a held read ran past it) it spoils the grace. The
+              // recheck this drain scheduled inside the window is credited to
+              // the deadline: a late timer is not a late save.
+              if (returned !== MISSING && returned !== entry.lastSig) {
+                grace.credited = scheduled;
+                try { this.onChange(entry, returned); } finally { grace.credited = false; }
+              }
             }
             entry.grace = null;
             if (!grace.spoiled && grace.gen !== undefined && grace.gen === entry.gen) generation = grace.gen;
@@ -459,7 +474,7 @@ export class PageWatcher {
    *  cut's save completing (accept) or a later change (spoil). */
   private noteGrace(grace: Grace, signature: string, gen: number): void {
     if (grace.spoiled) return;
-    if (this.now() > grace.deadline) {
+    if (!grace.credited && this.now() > grace.deadline) {
       grace.spoiled = true;
     } else if (signature === MISSING) {
       // Still gone before any reappearance is harmless; gone again after one is not.
