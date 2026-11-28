@@ -734,7 +734,8 @@ it("stance-exception operations respect the exact standalone End cutoff and End 
   const sibling = daemon.createSession(siblingId);
   const thrower = daemon.createSession(throwerId);
   const wrapper = daemon.createSession(wrapperId);
-  await sleep(10); // let creation-time reconciliation settle before seeding
+  // Creation-time reconciliation settles before seeding.
+  await Promise.all([sessionId, siblingId, throwerId, wrapperId].map((id) => daemon.stanceExceptions.idleForTest(id)));
   seedAdmitted(store, "held", "op_held");
   seedAdmitted(store, "late", "op_late");
   for (const target of [sibling, wrapper]) seedAdmitted(target, "late", "op_late");
@@ -764,13 +765,16 @@ it("stance-exception operations respect the exact standalone End cutoff and End 
   const gate = new Promise<void>((resolve) => { unblock = resolve; });
   const queue = daemon.stanceExceptions as unknown as { enqueue(id: string, fn: () => Promise<void>): Promise<void> };
   void queue.enqueue(sessionId, () => gate);
+  // Admission is synchronous before enqueue, so this signal means the operation holds its permit.
+  const queued = new Promise<void>((resolve) => {
+    daemon.stanceExceptions.onEnqueueForTest = (id) => { if (id === sessionId) resolve(); };
+  });
   const held = operate(sessionId, "op_held");
-  await sleep(50);
+  await queued;
+  daemon.stanceExceptions.onEnqueueForTest = undefined;
   const ending = daemon.standaloneCloseout.end(sessionId);
   const run = vi.spyOn(daemon.stanceExceptions, "runOperation");
   try {
-    await sleep(20);
-    expect(fs.existsSync(marker)).toBe(false);
     const before = artifactsOnDisk();
     const closing = await operate(sessionId, "op_late");
     expect(closing.status).toBe(409);
@@ -782,6 +786,8 @@ it("stance-exception operations respect the exact standalone End cutoff and End 
     }
     expect(run).toHaveBeenCalledTimes(2);
     expect(artifactsOnDisk()).toBe(before);
+    // End is still waiting on the held operation's permit.
+    expect(fs.existsSync(marker)).toBe(false);
   } finally {
     unblock();
   }
@@ -813,7 +819,7 @@ it("creation-time reconciliation of admitted operations never writes an ended st
   const sessionId = createStandaloneSessionId(tmpDir);
   const siblingId = createStandaloneSessionId(tmpDir);
   const stores = [sessionId, siblingId].map((id) => daemon.createSession(id));
-  await sleep(10); // let creation-time reconciliation settle before seeding
+  await Promise.all([sessionId, siblingId].map((id) => daemon.stanceExceptions.idleForTest(id)));
   for (const target of stores) seedAdmitted(target, "half", "op_half");
   await daemon.standaloneCloseout.end(sessionId);
   const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
@@ -822,7 +828,8 @@ it("creation-time reconciliation of admitted operations never writes an ended st
     daemon.sessions.delete(id);
     daemon.createSession(id);
   }
-  await sleep(50);
+  // Reconciliation is enqueued synchronously by createSession; await the real queue.
+  await Promise.all([sessionId, siblingId].map((id) => daemon.stanceExceptions.idleForTest(id)));
   expect(fs.readFileSync(path.join(dir, "artifacts.json"), "utf8")).toBe(before);
   expect(daemon.sessions.get(sessionId)!.getArtifacts().find((a) => a.id === "half")?.admission?.completedAt).toBeUndefined();
   // Control: the open sibling still finishes its half-applied operation on load.
