@@ -46,7 +46,42 @@ function record(target: EventTarget) {
   return () => { target.addEventListener = add; };
 }
 
+// happy-dom's ErrorEvent keeps message/error as OWN instance fields (a browser
+// has prototype getters) and it has no SecurityPolicyViolationEvent. Test-level
+// PLATFORM shims, installed before the annotator boots, give both the
+// browser's getter shape, so a test can patch those getters after boot and
+// see that the annotator reads through the ones it captured.
+const slots = new WeakMap<Event, Record<string, unknown>>();
+class PlatformErrorEvent extends Event {
+  constructor(type: string, init: { message?: string; error?: unknown } = {}) {
+    super(type);
+    slots.set(this, { message: init.message ?? "", error: init.error ?? null });
+  }
+}
+class PlatformSpvEvent extends Event {
+  constructor(type: string, init: { effectiveDirective?: string; violatedDirective?: string } = {}) {
+    super(type);
+    slots.set(this, { effectiveDirective: init.effectiveDirective ?? "", violatedDirective: init.violatedDirective ?? "" });
+  }
+}
+for (const [cls, names] of [[PlatformErrorEvent, ["message", "error"]], [PlatformSpvEvent, ["effectiveDirective", "violatedDirective"]]] as const) {
+  for (const name of names) {
+    Object.defineProperty(cls.prototype, name, {
+      configurable: true,
+      get(this: Event) {
+        const v = slots.get(this);
+        if (!v) throw new TypeError("Illegal invocation");
+        return v[name];
+      },
+    });
+  }
+}
+const w = window as unknown as Record<string, unknown>;
+const savedCtors = { ErrorEvent: w.ErrorEvent, SecurityPolicyViolationEvent: w.SecurityPolicyViolationEvent };
+
 beforeAll(() => {
+  w.ErrorEvent = PlatformErrorEvent;
+  w.SecurityPolicyViolationEvent = PlatformSpvEvent;
   Object.defineProperty(Event.prototype, "isTrusted", {
     configurable: true,
     get(this: Event) { return trusted.has(this); },
@@ -68,6 +103,8 @@ beforeAll(() => {
   if (!posted.some((m) => m?.dp === "ready")) window.dispatchEvent(new Event("load"));
 });
 afterAll(() => {
+  w.ErrorEvent = savedCtors.ErrorEvent;
+  w.SecurityPolicyViolationEvent = savedCtors.SecurityPolicyViolationEvent;
   window.postMessage = realPost;
   delete (Event.prototype as { isTrusted?: unknown }).isTrusted;
 });
@@ -169,6 +206,119 @@ describe("annotator scrubs its document id before page script can run (#727)", (
     expect(d.scriptErrors.classes).toEqual([{ key: "TypeError", count: 1 }, { key: "RangeError", count: 1 }]);
     expect(d.scriptErrors.samples).toEqual(["TypeError: boom", "RangeError: deep"]);
     expect(setterHits).toBe(0);
+  });
+
+  it("patched String/RegExp builtins can't relabel a trusted CSP or error event, or skip redaction", async () => {
+    const count = (l: { key: string; count: number }[] | undefined, k: string) => l?.find((x) => x.key === k)?.count ?? 0;
+    const before = lastDiag();
+    const onError = listeners.error?.[0] as EventListener, onCsp = listeners.securitypolicyviolation?.[0] as EventListener;
+    const SP = String.prototype as any, RP = RegExp.prototype as any;
+    const saved = { toLowerCase: SP.toLowerCase, replace: SP.replace, split: SP.split, trim: SP.trim, exec: RP.exec, symReplace: RP[Symbol.replace] };
+    try {
+      SP.toLowerCase = function () { return "img-src"; };
+      SP.replace = function (this: string) { return String(this); };
+      SP.split = function () { return ["img-src"]; };
+      RP.exec = function () { return null; };
+      RP[Symbol.replace] = function (s: string) { return s; };
+      onCsp({ isTrusted: true, effectiveDirective: "Connect-Src extra" } as unknown as Event);
+      onError({ isTrusted: true, message: "RangeError: fetch https://user:pw@evil.example/a?k=1 failed", error: {} } as unknown as Event);
+    } finally {
+      Object.assign(SP, { toLowerCase: saved.toLowerCase, replace: saved.replace, split: saved.split, trim: saved.trim });
+      RP.exec = saved.exec;
+      RP[Symbol.replace] = saved.symReplace;
+    }
+    await settle();
+    const d = lastDiag();
+    expect(count(d.blocked, "connect-src")).toBe(count(before?.blocked, "connect-src") + 1);
+    expect(count(d.blocked, "img-src")).toBe(count(before?.blocked, "img-src"));
+    expect(count(d.scriptErrors.classes, "RangeError")).toBe(count(before?.scriptErrors.classes, "RangeError") + 1);
+    const json = JSON.stringify(d);
+    expect(json).not.toMatch(/evil\.example|user:pw/);
+    expect(d.scriptErrors.samples).toContain("RangeError: fetch [url] failed");
+  });
+
+  it("a patched WeakSet.prototype.has can't defeat the per-element resource dedupe", async () => {
+    const onError = listeners.error?.[0] as EventListener;
+    const img = document.createElement("img");
+    img.setAttribute("src", "missing.png");
+    document.body.appendChild(img);
+    const before = lastDiag()?.resources?.find((x: { key: string }) => x.key === "img src")?.count ?? 0;
+    const WP = WeakSet.prototype as any;
+    const savedHas = WP.has;
+    try {
+      WP.has = function () { return false; };
+      onError({ isTrusted: true, target: img } as unknown as Event);
+      onError({ isTrusted: true, target: img } as unknown as Event);
+    } finally {
+      WP.has = savedHas;
+    }
+    await settle();
+    expect(lastDiag().resources.find((x: { key: string }) => x.key === "img src")?.count).toBe(before + 1);
+  });
+
+  it("patched event getters (ErrorEvent message/error, SPV effectiveDirective, Event target) can't relabel real trusted events", async () => {
+    const count = (l: { key: string; count: number }[] | undefined, k: string) => l?.find((x) => x.key === k)?.count ?? 0;
+    const before = lastDiag();
+    const EP = PlatformErrorEvent.prototype, SP = PlatformSpvEvent.prototype, BP = Event.prototype;
+    const saved = {
+      message: Object.getOwnPropertyDescriptor(EP, "message")!,
+      error: Object.getOwnPropertyDescriptor(EP, "error")!,
+      effective: Object.getOwnPropertyDescriptor(SP, "effectiveDirective")!,
+      target: Object.getOwnPropertyDescriptor(BP, "target")!,
+    };
+    const img = document.createElement("img");
+    img.setAttribute("src", "gone.png");
+    document.body.appendChild(img);
+    const decoy = document.createElement("video");
+    const err = new PlatformErrorEvent("error", { message: "URIError: bad https://evil.example/q", error: { name: "URIError" } });
+    const spv = new PlatformSpvEvent("securitypolicyviolation", { effectiveDirective: "font-src" });
+    const res = new Event("error");
+    const onError = listeners.error?.[0] as EventListener, onCsp = listeners.securitypolicyviolation?.[0] as EventListener;
+    try {
+      Object.defineProperty(EP, "message", { configurable: true, get: () => "SyntaxError: forged sample" });
+      Object.defineProperty(EP, "error", { configurable: true, get: () => ({ name: "SyntaxError" }) });
+      Object.defineProperty(SP, "effectiveDirective", { configurable: true, get: () => "img-src" });
+      // The browser delivers each event to the annotator's listeners (real
+      // instances, so the captured getters, not the patched ones, apply).
+      trusted.add(err);
+      trusted.add(spv);
+      onError(err);
+      onCsp(spv);
+      browserDispatch(img, res);
+      // A page patch of the target getter AFTER dispatch set the real target.
+      Object.defineProperty(BP, "target", { configurable: true, get: () => decoy });
+      trusted.add(res);
+      onError(res);
+    } finally {
+      Object.defineProperty(EP, "message", saved.message);
+      Object.defineProperty(EP, "error", saved.error);
+      Object.defineProperty(SP, "effectiveDirective", saved.effective);
+      Object.defineProperty(BP, "target", saved.target);
+    }
+    await settle();
+    const d = lastDiag();
+    expect(count(d.scriptErrors.classes, "URIError")).toBe(count(before?.scriptErrors.classes, "URIError") + 1);
+    expect(count(d.scriptErrors.classes, "SyntaxError")).toBe(0);
+    expect(d.scriptErrors.samples.join("|")).not.toContain("forged");
+    expect(count(d.blocked, "font-src")).toBe(count(before?.blocked, "font-src") + 1);
+    expect(count(d.blocked, "img-src")).toBe(count(before?.blocked, "img-src"));
+    // The img failed once (dispatch + direct call: deduped); the decoy never counted.
+    expect(count(d.resources, "img src")).toBe(count(before?.resources, "img src") + 1);
+    expect(count(d.resources, "video src") + count(d.resources, "video poster")).toBe(0);
+  });
+
+  it("dGet never falls back to a prototype lookup: an inherited field is ignored", async () => {
+    const before = lastDiag();
+    const onCsp = listeners.securitypolicyviolation?.[0] as EventListener;
+    const proto = { effectiveDirective: "img-src" };
+    const fake = Object.create(proto) as Event & { isTrusted: boolean };
+    Object.defineProperty(fake, "isTrusted", { value: true });
+    onCsp(fake);
+    await settle();
+    const d = lastDiag();
+    const c = (l: { key: string; count: number }[] | undefined, k: string) => l?.find((x) => x.key === k)?.count ?? 0;
+    expect(c(d.blocked, "img-src")).toBe(c(before?.blocked, "img-src"));
+    expect(c(d.blocked, "other")).toBe(c(before?.blocked, "other") + 1);
   });
 
   it('both shipped sources start with "use strict" (no fn.arguments / CallSite walk to the id closure)', () => {

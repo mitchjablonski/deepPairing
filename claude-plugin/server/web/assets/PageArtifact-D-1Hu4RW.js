@@ -1,4 +1,4 @@
-import{a as e}from"./chunk-Dy9vhvp_.js";import{t}from"./react-MiZfE901.js";import{t as n}from"./jsx-runtime-DRdVPR4T.js";import{n as r,o as i,s as a}from"./api-BRSI0TD2.js";import{S as o,h as s,s as c}from"./artifact-C8HXcGbg.js";import{a as l,d as u,n as d,o as f,r as p,s as m,t as h,u as g}from"./schemas-DIAwpD5w.js";import{A as _,C as v,D as y,E as b,F as x,I as S,L as C,M as ee,N as te,O as ne,P as w,S as T,T as re,W as ie,X as ae,b as oe,ct as se,j as ce,k as le,nt as ue,tt as de,v as fe,w as pe,x as me,y as E}from"./dist-Cv8Ie_oF.js";import{f as he,t as ge}from"./useOfflineReason-v_VMDVVP.js";import{i as _e,r as ve}from"./preferences-CF5l9JQc.js";import{E as ye,M as be,_ as xe,a as Se,h as Ce,v as D,w as we,y as Te}from"./index-Cg52oT8q.js";import{r as Ee,t as De}from"./mermaidRendererProtocol-Tplhn0By.js";import{t as Oe}from"./PrototypeFrame-DHjiJQrj.js";import{t as ke}from"./ConceptBadge-HAmLisn0.js";import{r as Ae}from"./NeverSuggestControl-DMmsh5QD.js";import{t as je}from"./ArtifactStatusActions-CtHKIuIL.js";var O=e(t(),1),Me=String.raw`
+import{a as e}from"./chunk-Dy9vhvp_.js";import{t}from"./react-MiZfE901.js";import{t as n}from"./jsx-runtime-DRdVPR4T.js";import{n as r,o as i,s as a}from"./api-BRSI0TD2.js";import{S as o,h as s,s as c}from"./artifact-C8HXcGbg.js";import{a as l,d as u,n as d,o as f,r as p,s as m,t as h,u as g}from"./schemas-DIAwpD5w.js";import{A as _,C as v,D as y,E as b,F as x,I as S,L as C,M as ee,N as te,O as ne,P as w,S as T,T as re,W as ie,X as ae,b as oe,ct as se,j as ce,k as le,nt as ue,tt as de,v as fe,w as pe,x as me,y as E}from"./dist-Cv8Ie_oF.js";import{f as he,t as ge}from"./useOfflineReason-v_VMDVVP.js";import{i as _e,r as ve}from"./preferences-CF5l9JQc.js";import{E as ye,M as be,_ as xe,a as Se,h as Ce,v as D,w as we,y as Te}from"./index-Dh-q2Mkm.js";import{r as Ee,t as De}from"./mermaidRendererProtocol-Tplhn0By.js";import{t as Oe}from"./PrototypeFrame-DHjiJQrj.js";import{t as ke}from"./ConceptBadge-HAmLisn0.js";import{r as Ae}from"./NeverSuggestControl-DMmsh5QD.js";import{t as je}from"./ArtifactStatusActions-D3GNZgYa.js";var O=e(t(),1),Me=String.raw`
 "use strict";
 var LIMITS = { locator: 512, quote: 280, affix: 32, header: 200, nodeId: 200, href: 512, sectionHeading: 120, sectionId: 200 };
 var SECTION_HEADS = "h1, h2, h3, h4, h5, h6";
@@ -788,6 +788,73 @@ return {
 };
 `,Ne=String.raw`
 "use strict";
+/** #727 — builtins captured at boot. This runs while the parser is blocked on
+ *  our script, before any page script exists; after Run the page shares this
+ *  realm and may patch String/RegExp/WeakSet/Element prototypes or the timer
+ *  globals. The diagnostics path (and own()) uses only these captures, so a
+ *  patch can't relabel a genuine event or skip redaction. Captured methods
+ *  are called through a bound Function.prototype.call (captured here too).
+ *  String.prototype.replace/split are never used there: with a RegExp or a
+ *  string separator they dispatch through page-patchable Symbol.replace /
+ *  Symbol.split; dReplace drives the captured RegExp exec (which reads only
+ *  the regex's internal flags and own lastIndex) and slices instead. */
+var dCall = Function.prototype.call;
+function dBind(f) { return typeof f === "function" ? dCall.bind(f) : null; }
+var dGOPD = Object.getOwnPropertyDescriptor;
+function dGetterOf(ctor, name) {
+  try { var d = ctor && ctor.prototype ? dGOPD(ctor.prototype, name) : null; return d && d.get ? dBind(d.get) : null; } catch (e) { return null; }
+}
+var dString = String;
+var dExec = dBind(RegExp.prototype.exec);
+var dSlice = dBind(String.prototype.slice);
+var dLower = dBind(String.prototype.toLowerCase);
+var dTrim = dBind(String.prototype.trim);
+var dStrIndex = dBind(String.prototype.indexOf);
+var dHasOwn = dBind(Object.prototype.hasOwnProperty);
+var dWsHas = typeof WeakSet === "function" ? dBind(WeakSet.prototype.has) : null;
+var dWsAdd = typeof WeakSet === "function" ? dBind(WeakSet.prototype.add) : null;
+var dSetTimeout = setTimeout, dClearTimeout = clearTimeout;
+var dNodeType = dGetterOf(window.Node, "nodeType"), dParentEl = dGetterOf(window.Node, "parentElement");
+var dLocalName = dGetterOf(window.Element, "localName");
+var dHasAttr = window.Element ? dBind(window.Element.prototype.hasAttribute) : null;
+var dGetAttrNS = window.Element ? dBind(window.Element.prototype.getAttributeNS) : null;
+var dEvTarget = dGetterOf(window.Event, "target");
+var dErrMessage = dGetterOf(window.ErrorEvent, "message"), dErrError = dGetterOf(window.ErrorEvent, "error");
+var dRejReason = dGetterOf(window.PromiseRejectionEvent, "reason");
+var dCspEffective = dGetterOf(window.SecurityPolicyViolationEvent, "effectiveDirective");
+var dCspViolated = dGetterOf(window.SecurityPolicyViolationEvent, "violatedDirective");
+/** A field through its captured getter. Never a prototype lookup (page
+ *  script can patch those after Run): where the platform has no such getter,
+ *  the object isn't an instance (the getter throws), or the getter yields
+ *  undefined, only an OWN data property is read, via the captured
+ *  hasOwnProperty and descriptor value (a browser-made event has none; our
+ *  capture listeners run before any page listener could add one). */
+function dGet(getter, o, name) {
+  if (getter) { try { var v = getter(o); if (v !== undefined) return v; } catch (e) { /* not an instance */ } }
+  try {
+    if (o == null || !dHasOwn(o, name)) return undefined;
+    var d = dGOPD(o, name);
+    return d && dHasOwn(d, "value") ? d.value : undefined;
+  } catch (e) { return undefined; }
+}
+function dTimeout(fn, ms) { return dSetTimeout(fn, ms); }
+function dCancel(id) { dClearTimeout(id); }
+/** Every match of a GLOBAL regex replaced by f(match), by captured exec. */
+function dReplace(re, str, f) {
+  var out = "", last = 0, m;
+  re.lastIndex = 0;
+  while ((m = dExec(re, str)) !== null) {
+    out += dSlice(str, last, m.index) + f(m);
+    last = m.index + m[0].length;
+    if (m[0].length === 0) re.lastIndex = re.lastIndex + 1;
+  }
+  return out + dSlice(str, last);
+}
+var D_SPACES = /\s+/g, D_DATA = /\b(?:data|blob):[^\s"'<>()]*/gi, D_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>()]*/gi,
+  D_PROTO_REL = /(^|[\s("'=])\/\/[^\s"'<>()]+/g, D_CLASS = /^(?:Uncaught )?([A-Za-z]{1,40})\b/;
+/** core.norm / core.clip, on captured builtins only. */
+function dNorm(v) { return dTrim(dReplace(D_SPACES, dString(v == null ? "" : v), function () { return " "; })); }
+function dClip(v, n) { var t = dString(v == null ? "" : v); return t.length > n ? dSlice(t, 0, n) : t; }
 var annotate = true, scripts = false, suppressClick = false, hoverBox = null, layer = null;
 var current = [], lastFound = null, pending = 0, pinEls = [];
 // #714 gap 7 — per pin: its colour state and the comment id a click on its
@@ -806,10 +873,10 @@ function withKey(msg) { if (pinsKey !== null) msg.key = pinsKey; return msg; }
 var changes = [], showChanges = false, lastChangesFound = null;
 /** Our own nodes, by reference: an authored element can carry the marker
  *  attribute too, so ownership is never inferred from markup (#715 review). */
-var ownNodes = typeof WeakSet === "function" ? new WeakSet() : null;
+var ownNodes = dWsHas ? new WeakSet() : null;
 function own(el) {
   if (!ownNodes) return false;
-  for (var n = el; n && n.nodeType === 1; n = n.parentElement) if (ownNodes.has(n)) return true;
+  for (var n = el; n && dGet(dNodeType, n, "nodeType") === 1; n = dGet(dParentEl, n, "parentElement")) if (dWsHas(ownNodes, n)) return true;
   return false;
 }
 function post(msg) { try { parent.postMessage(msg, "*"); } catch (e) { /* parent gone */ } }
@@ -845,7 +912,7 @@ function mk(tag) {
   // screen reader gets the pins, the keyboard cursor and the queue from the
   // companion (labelled list + live region), never as stray numbers here.
   el.setAttribute("aria-hidden", "true");
-  if (ownNodes) ownNodes.add(el);
+  if (ownNodes) dWsAdd(ownNodes, el);
   return el;
 }
 function ensureLayer() {
@@ -1914,19 +1981,20 @@ var ERROR_CLASSES = ["Error", "TypeError", "RangeError", "ReferenceError", "Synt
 function knownClass(n) { return typeof n === "string" && dIndex(ERROR_CLASSES, n) !== -1; }
 function errClass(name, message) {
   if (knownClass(name)) return name;
-  var m = /^(?:Uncaught )?([A-Za-z]{1,40})\b/.exec(typeof message === "string" ? message : "");
+  D_CLASS.lastIndex = 0;
+  var m = dExec(D_CLASS, typeof message === "string" ? message : "");
   return m && knownClass(m[1]) ? m[1] : "Error";
 }
-var diagSeen = typeof WeakSet === "function" ? new WeakSet() : null, diagPending = 0, lastDiagJson = "";
+var diagSeen = dWsHas ? new WeakSet() : null, diagPending = 0, lastDiagJson = "";
 /** Nothing is published before ready: until then the parent may not know
  *  this document, and a report it dropped would be deduped away for good. */
 var readySent = false;
 function redactDiag(v) {
-  var t = core.norm(v);
-  t = t.replace(/\b(?:data|blob):[^\s"'<>()]*/gi, "[data URI]");
-  t = t.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>()]*/gi, "[url]");
-  t = t.replace(/(^|[\s("'=])\/\/[^\s"'<>()]+/g, "$1[url]");
-  return core.clip(t, DIAG.text);
+  var t = dNorm(v);
+  t = dReplace(D_DATA, t, function () { return "[data URI]"; });
+  t = dReplace(D_URL, t, function () { return "[url]"; });
+  t = dReplace(D_PROTO_REL, t, function (m) { return m[1] + "[url]"; });
+  return dClip(t, DIAG.text);
 }
 function diagBump(n) { return n < DIAG.max ? n + 1 : n; }
 function diagSample(list, v) {
@@ -1941,8 +2009,10 @@ function diagKey(list, key) {
   dPush(list, { key: key, count: 1 });
 }
 function diagHas(el, attr) {
-  if (attr === "xlink:href") return !!(el.getAttributeNS && el.getAttributeNS(XLINK, "href") !== null);
-  return !!(el.hasAttribute && el.hasAttribute(attr));
+  try {
+    if (attr === "xlink:href") return dGetAttrNS ? dGetAttrNS(el, XLINK, "href") !== null : false;
+    return dHasAttr ? !!dHasAttr(el, attr) : false;
+  } catch (e) { return false; }
 }
 /** #727 — only events the browser dispatched count: page script can
  *  dispatchEvent a synthetic ErrorEvent, PromiseRejectionEvent or
@@ -1951,12 +2021,12 @@ function diagHas(el, attr) {
 function untrusted(e) { return !e || e.isTrusted === false; }
 function onDiagError(e) {
   if (untrusted(e)) return;
-  var t = e ? e.target : null;
-  if (t && t.nodeType === 1) {
+  var t = dGet(dEvTarget, e, "target");
+  if (t && dGet(dNodeType, t, "nodeType") === 1) {
     if (own(t)) return;
-    var tag = String(t.localName || "").toLowerCase(), attrs = DIAG_ATTRS[tag];
+    var tag = dLower(dString(dGet(dLocalName, t, "localName") || "")), attrs = dHasOwn(DIAG_ATTRS, tag) ? DIAG_ATTRS[tag] : null;
     if (!attrs) return;
-    if (diagSeen) { if (diagSeen.has(t)) return; diagSeen.add(t); }
+    if (diagSeen) { if (dWsHas(diagSeen, t)) return; dWsAdd(diagSeen, t); }
     var attr = attrs[0];
     for (var i = 0; i < attrs.length; i++) if (diagHas(t, attrs[i])) { attr = attrs[i]; break; }
     var rk = tag + " " + (attr === "xlink:href" ? "href" : attr);
@@ -1965,8 +2035,9 @@ function onDiagError(e) {
     diag.script = diagBump(diag.script);
     var m = "", cls = "Error";
     try {
-      m = e && typeof e.message === "string" ? e.message : "";
-      var er = e ? e.error : null;
+      var em = dGet(dErrMessage, e, "message");
+      m = typeof em === "string" ? em : "";
+      var er = dGet(dErrError, e, "error");
       cls = errClass(er && typeof er === "object" ? er.name : null, m);
     } catch (x) { m = ""; cls = "Error"; }
     diagSample(diag.scriptSamples, m || "Script error");
@@ -1978,11 +2049,11 @@ function onDiagRejection(e) {
   if (untrusted(e)) return;
   var m = "", cls = "Error";
   try {
-    var r = e ? e.reason : undefined;
+    var r = dGet(dRejReason, e, "reason");
     if (r && typeof r === "object" && typeof r.message === "string") {
       m = (typeof r.name === "string" && r.name ? r.name + ": " : "") + r.message;
       cls = errClass(r.name, "");
-    } else m = String(r);
+    } else m = dString(r);
   } catch (x) { m = "Unhandled rejection"; cls = "Error"; }
   diag.rejection = diagBump(diag.rejection);
   diagSample(diag.rejectionSamples, m || "Unhandled rejection");
@@ -1992,7 +2063,11 @@ function onDiagRejection(e) {
 function onDiagCsp(e) {
   if (untrusted(e)) return;
   var d = "";
-  try { d = String((e && (e.effectiveDirective || e.violatedDirective)) || "").toLowerCase().split(" ")[0]; } catch (x) { d = ""; }
+  try {
+    d = dLower(dString(dGet(dCspEffective, e, "effectiveDirective") || dGet(dCspViolated, e, "violatedDirective") || ""));
+    var sp = dStrIndex(d, " ");
+    if (sp !== -1) d = dSlice(d, 0, sp);
+  } catch (x) { d = ""; }
   if (dIndex(CSP_DIRECTIVES, d) === -1) d = "other";
   diagKey(diag.blocked, d);
   scheduleDiag();
@@ -2042,7 +2117,7 @@ function reportDiag() {
 }
 function scheduleDiag() {
   if (diagPending) return;
-  try { diagPending = setTimeout(reportDiag, 250); } catch (e) { diagPending = 0; }
+  try { diagPending = dTimeout(reportDiag, 250); } catch (e) { diagPending = 0; }
 }
 function onReady() {
   if (document.body && ro) { try { ro.observe(document.body); } catch (e) { /* ignore */ } }
@@ -2051,7 +2126,7 @@ function onReady() {
   // never suppressed by a dedupe from before ready.
   readySent = true;
   lastDiagJson = "";
-  if (diagPending) { clearTimeout(diagPending); diagPending = 0; }
+  if (diagPending) { dCancel(diagPending); diagPending = 0; }
   reportOutline();
   reportDiag();
 }
@@ -2099,7 +2174,7 @@ return function uninstall() {
   window.removeEventListener("error", onDiagError, true);
   window.removeEventListener("unhandledrejection", onDiagRejection);
   document.removeEventListener("securitypolicyviolation", onDiagCsp, true);
-  if (diagPending) clearTimeout(diagPending);
+  if (diagPending) dCancel(diagPending);
   if (mo) mo.disconnect();
   if (ro) ro.disconnect();
   if (pending) clearTimeout(pending);
