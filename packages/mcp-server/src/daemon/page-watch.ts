@@ -97,7 +97,10 @@ export interface PageWatchDeps {
   /** The recheck's wait. Tests pass a fake that recreates (or keeps deleted)
    *  the file instead of advancing a clock. */
   sleep?: (ms: number) => Promise<void>;
-  /** The clock End's missing-file grace is measured on. Default Date.now. */
+  /** The clock End's missing-file grace is measured on. Default
+   *  performance.now: monotonic, so an NTP or manual wall-clock change can't
+   *  stretch or cut the window. It is only ever compared with deadlines taken
+   *  from itself, never with file times or Date.now. */
   now?: () => number;
   /** Test hook: runs on the End-grace path between the pre-read signature
    *  check and the read itself (to replace or delete the file there). */
@@ -201,7 +204,7 @@ export class PageWatcher {
   }
 
   private now(): number {
-    return (this.deps.now ?? Date.now)();
+    return this.deps.now ? this.deps.now() : performance.now();
   }
 
   private sig(p: string): string {

@@ -66,7 +66,8 @@ async function settle(ms: number): Promise<void> {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  // performance too: the grace window's default clock is performance.now.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-pagewatch-root-")));
   outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-pagewatch-outside-")));
   fs.mkdirSync(path.join(root, "docs"), { recursive: true });
@@ -880,6 +881,44 @@ describe("page file watch — a save landing during the gate check (Codex review
     expect(pages()).toHaveLength(1);
     expect(liveTip()!.id).toBe(v1.id);
     expect(liveTip()!.fileWatch).toBeUndefined();
+  });
+
+  it("the grace window runs on a monotonic clock: wall-clock jumps don't change acceptance (#737 note)", async () => {
+    const sig = counterSig();
+    const file = path.join(root, "docs/page.html");
+    const HOUR = 3_600_000;
+    let late = false;
+    watcher.dispose();
+    watcher = makeWatcher({
+      pollIntervalMs: 60_000,
+      statSig: sig.statSig,
+      sleep: async () => {
+        if (!late) {
+          // Wall clock jumps an hour forward inside the window; the recreate is still in-window.
+          vi.setSystemTime(Date.now() + HOUR);
+          vi.advanceTimersByTime(10);
+        } else {
+          // Past the window on the monotonic clock; the wall clock jumping back doesn't reopen it.
+          vi.advanceTimersByTime(60);
+          vi.setSystemTime(Date.now() - HOUR);
+        }
+        fs.writeFileSync(file, late ? "<p>Late</p>" : "<p>In window</p>");
+        sig.bump();
+      },
+    });
+    const v1 = presentFilePage("docs/page.html", "<p>Original</p>");
+    watcher.sync(SID);
+    await settle(PAGE_WATCH_QUIET_MS);
+
+    fs.unlinkSync(file);
+    await watcher.drainQueuedSaves(SID);
+    const v2 = liveTip()!;
+    expect(v2).toMatchObject({ version: 2, parentId: v1.id, content: { html: "<p>In window</p>" } });
+
+    late = true;
+    fs.unlinkSync(file);
+    await expect(watcher.drainQueuedSaves(SID)).rejects.toMatchObject({ code: "session_save_pending" });
+    expect(liveTip()!.id).toBe(v2.id);
   });
 
   it("End rejects a second watcher-observed edit after the accepted recreate (#736 audit)", async () => {
