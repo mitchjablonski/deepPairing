@@ -121,8 +121,9 @@ function emptyLog(): PreflightBlockLogFile {
  * returning [] on a parse error is what ACTUALLY destroys the history — the
  * bad bytes get overwritten by a one-entry file the moment the gate fires
  * again. The copy makes that recoverable by hand.
+ * A read-only caller leaves malformed bytes in place without making a copy.
  */
-export function readPreflightBlocks(projectRoot: string): PreflightBlockEntry[] {
+export function readPreflightBlocks(projectRoot: string, { readOnly = false } = {}): PreflightBlockEntry[] {
   const file = logPath(projectRoot);
   let raw: string;
   try {
@@ -149,7 +150,7 @@ export function readPreflightBlocks(projectRoot: string): PreflightBlockEntry[] 
   }
   // Empty file is not corrupt — there is nothing to preserve, and writing a
   // zero-byte .corrupt- sibling on every read would be litter.
-  if (raw.trim().length > 0) {
+  if (!readOnly && raw.trim().length > 0) {
     try {
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       fs.writeFileSync(`${file}.corrupt-${stamp}`, raw);

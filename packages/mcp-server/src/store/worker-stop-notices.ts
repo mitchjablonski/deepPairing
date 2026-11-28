@@ -152,14 +152,20 @@ export function readDeliveredWorkerStops(sessionDir: string): string[] {
  * then rewritten as "seen = every stop of this session in the log now", and a
  * one-time notice says so. The notice is one-time because the rewrite makes
  * the next read healthy.
+ * A read-only caller suppresses the old stops without changing the file.
  */
 export function loadDeliveredWorkerStops(
   sessionDir: string,
   currentIds: () => readonly string[],
+  { readOnly = false } = {},
 ): { ids: string[]; notice?: string } {
   const r = readSeen(sessionDir);
   if (r.kind === "ok") return { ids: r.ids };
   if (r.kind === "missing") return { ids: [] };
+  if (readOnly) return {
+    ids: [...currentIds()],
+    notice: "⚠️ This session's worker-stop delivery record is unreadable. No stops were re-sent and the delivery record was left unchanged.",
+  };
   const backup = backUpCorrupt(sessionDir, r.raw);
   const ids = [...currentIds()];
   try {
@@ -226,28 +232,28 @@ export function proseSafe(value: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-function stopSentence(s: WorkerStop): string {
+function stopSentence(s: WorkerStop, historical: boolean): string {
   const type = proseSafe(s.agentType ?? "worker", 60) || "worker";
   const target = proseSafe(s.targetPath ?? "(unknown path)", 200) || "(unknown path)";
   const concept = proseSafe(s.concept, 120);
   if (s.decision === "deny") {
     return (
       `a \`${type}\` subagent was **stopped** at \`${target}\` by stance \`${concept}\`. That edit did not happen. ` +
-      "Don't advance work that depends on it; re-plan or ask the human. Don't retry the same edit."
+      (historical ? "Work depending on that edit remains blocked." : "Don't advance work that depends on it; re-plan or ask the human. Don't retry the same edit.")
     );
   }
   return (
     `a \`${type}\` subagent's edit to \`${target}\` matched stance \`${concept}\`, and Claude Code **asked the human**. ` +
-    "It may or may not have gone through, so check the file before relying on it. Don't retry it if it was refused."
+    (historical ? "The result of that edit was unconfirmed." : "It may or may not have gone through, so check the file before relying on it. Don't retry it if it was refused.")
   );
 }
 
 /** One prose block for the stops, or "" when there are none. */
-export function formatWorkerStops(stops: readonly WorkerStop[]): string {
+export function formatWorkerStops(stops: readonly WorkerStop[], { historical = false } = {}): string {
   if (stops.length === 0) return "";
   const denies = stops.filter((s) => s.decision === "deny").length;
   const label =
     denies === stops.length ? "Worker stopped" : denies === 0 ? "Worker asked the human" : "Worker stopped or asked the human";
-  if (stops.length === 1) return `⛔ ${label} (1): ${stopSentence(stops[0]!)}`;
-  return `⛔ ${label} (${stops.length}):\n${stops.map((s) => `- ${stopSentence(s)}`).join("\n")}`;
+  if (stops.length === 1) return `⛔ ${label} (1): ${stopSentence(stops[0]!, historical)}`;
+  return `⛔ ${label} (${stops.length}):\n${stops.map((s) => `- ${stopSentence(s, historical)}`).join("\n")}`;
 }

@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import type { Artifact, FileWatchNoticeRef } from "@deeppairing/shared";
 import { fileWatchNoticeKey, undeliveredFileWatchRefs } from "@deeppairing/shared";
+import { ERROR_CODES } from "../../error-codes.js";
 import type { CommentResolutionSnapshot, IStore } from "../../store/store-interface.js";
 import type { ToolState } from "./types.js";
 
@@ -148,6 +149,19 @@ export function liveReservations(state: ToolState, now = Date.now()): Reservatio
   return out;
 }
 
+type FeedbackAckRefusal = typeof ERROR_CODES.session_closing | typeof ERROR_CODES.session_ended;
+
+/** Only the daemon's typed closeout conflict is an expected ACK refusal. */
+export function feedbackAckRefusal(error: unknown): FeedbackAckRefusal | undefined {
+  if (typeof error !== "object" || error === null || !("status" in error) || error.status !== 409 || !("code" in error)) return;
+  if (error.code === ERROR_CODES.session_closing || error.code === ERROR_CODES.session_ended) return error.code;
+}
+
+export interface FeedbackAckFlush {
+  errors: unknown[];
+  refusal: FeedbackAckRefusal | undefined;
+}
+
 /** Acknowledgements buffered until the hand-off point. */
 export class PendingAcks {
   comments: string[] = [];
@@ -160,15 +174,18 @@ export class PendingAcks {
   /** #680 slice 3 — page artifacts whose file-watch notices were reported. */
   fileWatchNotices: FileWatchNoticeRef[] = [];
 
-  /** Flush every lane; a failing lane does not stop the others. Returns the
-   *  errors (an un-flushed lane simply re-delivers next poll). */
-  async flush(store: IStore): Promise<unknown[]> {
+  /** Flush every lane. Unacknowledged entries remain in the store so a later
+   *  poll can select them again if closeout fails and the review reopens. */
+  async flush(store: IStore): Promise<FeedbackAckFlush> {
     const errors: unknown[] = [];
+    let refusal: FeedbackAckRefusal | undefined;
     const run = async (fn: () => unknown) => {
       try {
         await fn();
       } catch (err) {
-        errors.push(err);
+        const closeout = feedbackAckRefusal(err);
+        if (!closeout) errors.push(err);
+        else if (!refusal || closeout === ERROR_CODES.session_ended) refusal = closeout;
       }
     };
     if (this.comments.length > 0) await run(() => store.acknowledgeComments(this.comments));
@@ -180,7 +197,7 @@ export class PendingAcks {
     if (this.renderFailures.length > 0) await run(() => store.acknowledgeRenderFailures?.(this.renderFailures));
     if (this.workerStops.length > 0) await run(() => store.markWorkerStopsDelivered?.(this.workerStops));
     if (this.fileWatchNotices.length > 0) await run(() => store.acknowledgeFileWatchNotices?.(this.fileWatchNotices));
-    return errors;
+    return { errors, refusal };
   }
 }
 

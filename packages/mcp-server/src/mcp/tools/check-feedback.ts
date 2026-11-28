@@ -5,6 +5,7 @@ import { commentResolutionSnapshot, effectiveHumanResolution } from "../../store
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { decisionFeedback } from "./decision-feedback.js";
 import { SERVER_VERSION } from "../../version.js";
+import { ERROR_CODES } from "../../error-codes.js";
 import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, coercePageContent, errorMessage, undeliveredFileWatchRefs, PAGE_RENDER_ISSUES_VISUAL_ID, parsePageRenderIssues, describePageRenderIssues } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
@@ -23,6 +24,7 @@ import {
   feedbackStoreView,
   liveReservations,
   parseFeedbackFilter,
+  type FeedbackAckFlush,
   type FeedbackFilter,
   type HeldTally,
   type Reservation,
@@ -295,9 +297,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   };
 
   try {
-    let result: ToolResult;
+    let assembled: Awaited<ReturnType<typeof assembleCheckFeedback>>;
     try {
-      result = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
+      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
     } catch (err) {
       // Nothing was acknowledged (the acks are still in the buffer), so this
       // poll's items come back next time with the same ids.
@@ -308,23 +310,26 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       // The client cancelled (e.g. Esc during the long-poll): this result will
       // never reach the model, so acknowledge nothing — re-deliver next poll.
       rollback();
-      return result;
+      return assembled.result;
     }
-    const ackErrors = await pending.flush(ctx.store);
-    return annotateResult(result, { filter, reservations, held: view.held, ackErrors });
+    const ack = await pending.flush(ctx.store);
+    return annotateResult(assembled.result, { filter, reservations, held: view.held, ack, endedText: assembled.endedText });
   } finally {
     view.release();
     if (consumer) endConsumer(ctx.state, consumer);
   }
 }
 
+const STOP_ENDED_REVIEW = "Stop polling this ended review.";
+
 /** #533 — the filter echo, the held-back report and the ack-failure note.
  *  Adds nothing to a legacy poll that held nothing back and acked cleanly. */
 function annotateResult(
   result: ToolResult,
-  o: { filter: FeedbackFilter | null; reservations: Reservation[]; held: HeldTally; ackErrors: unknown[] },
+  o: { filter: FeedbackFilter | null; reservations: Reservation[]; held: HeldTally; ack: FeedbackAckFlush; endedText?: () => string },
 ): ToolResult {
-  const { filter, reservations, held, ackErrors } = o;
+  const { filter, reservations, held, ack: { errors: ackErrors, refusal } } = o;
+  const ended = refusal === ERROR_CODES.session_ended;
   const heldLines: string[] = [];
   const heldStructured: Array<Record<string, unknown>> = [];
   for (const [label, tally] of Object.entries(held)) {
@@ -332,11 +337,11 @@ function annotateResult(
     if (total === 0) continue;
     const r = reservations.find((x) => x.label === label);
     const releaseInSec = r?.releaseInMs == null ? null : Math.max(1, Math.ceil(r.releaseInMs / 1000));
-    const when =
-      releaseInSec === null
+    const when = ended ? ""
+      : releaseInSec === null
         ? `while its check_feedback is open, then ${LIVE_POLL_GRACE_MS / 1000}s`
         : `released to you in ${releaseInSec}s if it doesn't poll again`;
-    heldLines.push(`${text} held for "${label}" (${when})`);
+    heldLines.push(`${text} held for "${label}"${when ? ` (${when})` : ""}`);
     heldStructured.push({
       label,
       count: total,
@@ -349,28 +354,33 @@ function annotateResult(
   const notes: string[] = [];
   if (filter) {
     notes.push(
-      `\n\n(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} — only your own artifacts' feedback is shown and consumed; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`,
+      `\n\n(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} — only your own artifacts' feedback is shown${refusal ? "" : " and consumed"}; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`,
     );
   }
   if (heldLines.length > 0) {
     notes.push(
-      `\n\n⏸ HELD for a live subagent — not lost, not yours to act on yet: ${heldLines.join("; ")}. Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll.`,
+      `\n\n⏸ HELD for a live subagent — not lost, not yours to act on yet: ${heldLines.join("; ")}.${ended ? "" : " Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll."}`,
     );
   }
   if (ackErrors.length > 0) {
     notes.push(
-      `\n\n⚠️ Acknowledging this delivery failed (${errorMessage(ackErrors[0])}) — some items above may be delivered AGAIN on the next check_feedback with the same ids. Skip any id you already acted on.`,
+      `\n\n⚠️ Acknowledging this delivery failed (${errorMessage(ackErrors[0])})${ended ? "." : " — some items above may be delivered AGAIN on the next check_feedback with the same ids. Skip any id you already acted on."}`,
     );
+  }
+  if (refusal) {
+    notes.push(ended
+      ? "\n\nThe review has ended. This is its final feedback. Any unacknowledged items remain saved."
+      : "\n\nThe review is closing. Unacknowledged items remain saved and can be delivered again if closeout fails and the review reopens.");
   }
   if (notes.length === 0) return result;
 
-  let text = result.content[0]?.text ?? "";
+  let text = (ended ? o.endedText?.() : undefined) ?? result.content[0]?.text ?? "";
   let sc = result.structuredContent;
   if (heldStructured.length > 0 && sc) {
     // Never "proceed" while something is held: the coordinator must know a
     // human answer exists that it hasn't seen.
     const heldAction = `Something is held for a live subagent (${heldLines.join("; ")}) — don't treat this as clear; call check_feedback again.`;
-    if (sc.status === "proceed") {
+    if (!ended && sc.status === "proceed") {
       text = text.replace("Suggested action: You may proceed with implementation.", `Suggested action: ${heldAction}`);
       sc = { ...sc, status: "held", suggestedAction: heldAction };
     }
@@ -378,6 +388,10 @@ function annotateResult(
   }
   if (sc && filter) sc = { ...sc, filter };
   if (sc && ackErrors.length > 0) sc = { ...sc, ackFailed: true };
+  if (refusal) {
+    sc = { ...sc, sessionStatus: refusal };
+    if (ended) sc = { ...sc, suggestedAction: STOP_ENDED_REVIEW };
+  }
   const [, ...rest] = result.content;
   return {
     ...result,
@@ -386,7 +400,7 @@ function annotateResult(
   };
 }
 
-async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolResult> {
+async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<{ result: ToolResult; endedText?: () => string }> {
   const { store, server, broadcast, port } = ctx;
 
   // I7 — the LIVE companion UI URL, from the daemon's real bound port. This is
@@ -511,7 +525,10 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     }
   }
 
-  const parts: string[] = [];
+  const parts: Array<string | { live: string; ended: string }> = [];
+  // The ACK can discover closeout after assembly. Keep lifecycle guidance
+  // separate from the human's actual messages so only our own wording changes.
+  const guidance = (live: string, ended = "") => parts.push({ live, ended });
 
   // O3 (#231) — ONE post-wake snapshot of the store lanes the rest of the poll
   // reads. Pre-O3 the handler re-fetched each of these 2-6× per poll; in prod
@@ -579,7 +596,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // #569 pilot task A — nor while a worker stop is waiting for the lead.
     if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0 && postWakeWorkerStops.stops.length === 0) {
       const portNote = portRecoveryNote();
-      return {
+      return { result: {
         content: [{
           type: "text",
           text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll — no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).${portNote}`,
@@ -597,7 +614,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
           rejected: [],
           statusChanges: [],
         },
-      };
+      } };
     }
   }
 
@@ -721,7 +738,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   if (sessionMessages.length > 0) {
     await ackDeliveredComments(sessionMessages);
     const formatted = sessionMessages.map((c) => `- ${c.content}${commentSecretNote(c)}`).join("\n");
-    parts.push(`🎯 Human directive:\n${formatted}\n\nAdjust your approach based on this guidance.`);
+    const directive = `🎯 Human directive:\n${formatted}`;
+    guidance(`${directive}\n\nAdjust your approach based on this guidance.`, directive);
     for (const c of sessionMessages) {
       structuredComments.push({ id: c.id, artifactId: "__session__", kind: "directive", content: c.content });
     }
@@ -786,10 +804,12 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       }
     }
     if (questionLines.length > 0) {
-      parts.push(`Human questions (${questionLines.length}) — answer these before proceeding:\n${questionLines.join("\n")}`);
+      const heading = `Human questions (${questionLines.length})`;
+      guidance(`${heading} — answer these before proceeding:\n${questionLines.join("\n")}`, `${heading} at End:\n${questionLines.join("\n")}`);
     }
     if (suggestionLines.length > 0) {
-      parts.push(`🔧 Suggested edits (${suggestionLines.length}) — you MUST respond to each (apply / apply-with-extension / counter). An unanswered suggestion stays PENDING in the UI as visible debt:\n${suggestionLines.join("\n")}`);
+      const heading = `🔧 Suggested edits (${suggestionLines.length})`;
+      guidance(`${heading} — you MUST respond to each (apply / apply-with-extension / counter). An unanswered suggestion stays PENDING in the UI as visible debt:\n${suggestionLines.join("\n")}`, `${heading} at End:\n${suggestionLines.join("\n")}`);
     }
     if (otherLines.length > 0) {
       parts.push(`Human comments (${otherLines.length}):\n${otherLines.join("\n")}`);
@@ -798,7 +818,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // comment/question was delivered above (anyFollowUp set from deliverComment's
     // isFollowUp). Absent otherwise → normal delivery is byte-for-byte unchanged.
     if (anyFollowUp) {
-      parts.push(
+      guidance(
         `ℹ️ The [follow-up ...] item(s) above are FOLLOW-UP FEEDBACK on an already-APPROVED artifact — NOT a review reopening. The review outcome stands; do not treat this as a rejection or a request to re-run the review. Address it as new input: answer it (answer_question / a reply comment), or present a new artifact or revision if it genuinely warrants one.`,
       );
     }
@@ -880,8 +900,10 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
           return `  • ${label}${idTag} — comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`;
         },
       );
-      parts.push(
-        `↩️ ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier — the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:\n${lines.join("\n")}`,
+      const heading = `↩️ ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier`;
+      guidance(
+        `${heading} — the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:\n${lines.join("\n")}`,
+        `${heading} and still unanswered at End:\n${lines.join("\n")}`,
       );
     }
   } catch {
@@ -894,9 +916,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // agent doesn't apply a rejected change.
   if (freshlyRejected.length > 0) {
     const list = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
-    parts.push(
-      `❌ REJECTED (${freshlyRejected.length}): ${list}\nThe human rejected ${freshlyRejected.length === 1 ? "this" : "these"} — do NOT apply. Revise the approach or propose a different one (see their comment above for why).`,
-    );
+    const rejection = `❌ REJECTED (${freshlyRejected.length}): ${list}\nThe human rejected ${freshlyRejected.length === 1 ? "this" : "these"} — do NOT apply.`;
+    guidance(`${rejection} Revise the approach or propose a different one (see their comment above for why).`, rejection);
   }
 
   // G1 (#198b) — pending human REQUESTS prose block. Placed AFTER the carryover
@@ -906,11 +927,15 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // servedRequestId on the fulfilling present_* call), so they re-surface each
   // poll like a WAITING line until served.
   if (pendingRequests.length > 0) {
-    const lines = pendingRequests.map(
-      (r) => `- 📨 REQUEST [${r.id}] — ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}${requestScopeNote(r)}\n    → Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`,
+    const requests = pendingRequests.map(
+      (r) => `- 📨 REQUEST [${r.id}] — ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}${requestScopeNote(r)}`,
     );
-    parts.push(
+    const lines = pendingRequests.map(
+      (r, index) => `${requests[index]}\n    → Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`,
+    );
+    guidance(
       `📨 Human requests (${pendingRequests.length}) — the human ASKED for ${pendingRequests.length === 1 ? "this" : "these"}. Serve with the matching present_* tool (explain→present_explainer, plan→present_plan/present_spec, status→present_debrief):\n${lines.join("\n")}`,
+      `📨 Human requests (${pendingRequests.length}) still open at End:\n${requests.join("\n")}`,
     );
   }
 
@@ -933,7 +958,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       try {
         await recordDecisionLedger(d);
       } catch (err) {
-        deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}). It will be delivered again on the next check_feedback — call it again shortly.`);
+        deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
         continue;
       }
       recordedIds.push(d.decisionId);
@@ -957,7 +982,12 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     }
     if (recordedIds.length > 0) await store.acknowledgeDecisions(recordedIds);
     if (formattedDecisions.length > 0) parts.push(`Decision selections:\n${formattedDecisions.join("\n")}`);
-    if (deferred.length > 0) parts.push(`⏳ Decision ledger writes deferred (${deferred.length}):\n${deferred.join("\n")}`);
+    if (deferred.length > 0) {
+      guidance(
+        `⏳ Decision ledger writes deferred (${deferred.length}):\n${deferred.map((line) => `${line} It will be delivered again on the next check_feedback — call it again shortly.`).join("\n")}`,
+        `Decision ledger writes incomplete at End (${deferred.length}):\n${deferred.join("\n")}`,
+      );
+    }
   }
 
   async function recordDecisionLedger(d: (typeof resolved)[number]): Promise<void> {
@@ -1170,8 +1200,9 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       const name = f.title ? `"${f.title}"` : `visual ${f.visualId}`;
       return `- ${name} (${f.visualId}) on artifact ${f.artifactId} failed to render: ${f.error}`;
     });
-    parts.push(
+    guidance(
       `🖼️ Diagram render failures (${diagramFailures.length}) — the human sees a broken/repaired diagram:\n${lines.join("\n")}\nFix the Mermaid source and re-present the affected visual (revise_artifact).`,
+      `🖼️ Diagram render failures (${diagramFailures.length}):\n${lines.join("\n")}`,
     );
   }
   if (pageRenderIssues.length > 0) {
@@ -1182,9 +1213,10 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       const what = parsed ? `the page reported ${describePageRenderIssues(parsed)}` : "the page reported render issues (details unavailable)";
       return `- ${f.title ? `"${f.title}"` : "page"} (${f.artifactId}): ${what}`;
     });
-    parts.push(
+    guidance(
       `🧯 Page render issues (${pageRenderIssues.length}) — your pair's review frame reported problems with your page:\n${lines.join("\n")}\n` +
         "The frame has no network: inline images, media and fonts as data: URIs (relative and external paths can't load), and fix script errors. Revise the page so it renders as you intended.",
+      `🧯 Page render issues (${pageRenderIssues.length}):\n${lines.join("\n")}`,
     );
   }
 
@@ -1200,7 +1232,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     ? await store.selectFileWatchNotices(postWakeArtifacts)
     : undeliveredFileWatchRefs(postWakeArtifacts);
   const pageWatch = collectPageWatchNotices(postWakeArtifacts, pageWatchRefs);
-  if (pageWatch.prose) parts.push(pageWatch.prose);
+  if (pageWatch.prose) guidance(pageWatch.prose, pageWatch.endedProse);
   if (pageWatch.refs.length > 0) await store.acknowledgeFileWatchNotices?.(pageWatch.refs);
 
   // #569 pilot task A (#553/#572) — a WORKER SUBAGENT this session's lead
@@ -1213,7 +1245,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // The post-wake snapshot; nothing between there and here marks stops.
   const workerStops = postWakeWorkerStops.stops;
   if (workerStops.length > 0) {
-    parts.push(formatWorkerStops(workerStops));
+    guidance(formatWorkerStops(workerStops), formatWorkerStops(workerStops, { historical: true }));
     await store.markWorkerStopsDelivered?.(workerStops.map((w) => w.id));
   }
   if (workerStopsNotice) parts.push(workerStopsNotice);
@@ -1232,22 +1264,24 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     const clipAsk = (t: string) => (t.length > 100 ? `${t.slice(0, 99)}…` : t);
     const owed = open.filter((q) => q.id);
     const unverifiable = open.length - owed.length;
-    const lines: string[] = [];
+    const lines: Array<{ text: string; guidance: string }> = [];
     if (owed.length > 0) {
       const named = owed
         .slice(0, 5)
         .map((q) => `#${q.id} (${q.kind}) "${clipAsk(q.text)}"`)
         .join("; ");
-      lines.push(
-        `📝 Page "${page.title}" has ${owed.length} open ask${owed.length === 1 ? "" : "s"} your pair hasn't answered yet: ${named}${owed.length > 5 ? `; and ${owed.length - 5} more` : ""}. They answer by commenting on the ask in the companion.`,
-      );
+      lines.push({
+        text: `📝 Page "${page.title}" has ${owed.length} open ask${owed.length === 1 ? "" : "s"} your pair hasn't answered yet: ${named}${owed.length > 5 ? `; and ${owed.length - 5} more` : ""}.`,
+        guidance: " They answer by commenting on the ask in the companion.",
+      });
     }
     if (unverifiable > 0) {
-      lines.push(
-        `${unverifiable} ask${unverifiable === 1 ? " has" : "s have"} no id on page "${page.title}", so ${unverifiable === 1 ? "its answer" : "their answers"} can't be checked here — add ids, or check the companion.`,
-      );
+      lines.push({
+        text: `${unverifiable} ask${unverifiable === 1 ? " has" : "s have"} no id on page "${page.title}", so ${unverifiable === 1 ? "its answer" : "their answers"} can't be checked here`,
+        guidance: " — add ids, or check the companion.",
+      });
     }
-    parts.push(lines.join("\n"));
+    guidance(lines.map((line) => line.text + line.guidance).join("\n"), lines.map((line) => line.text).join("\n"));
   }
 
   // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
@@ -1270,7 +1304,10 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     `"${a.title}" (${a.type}${a.secretWarnings?.length ? " — ⚠ possible secret detected" : ""})`;
   if (verdictDrafts.length > 0) {
     const waiting = verdictDrafts.map(nameDraft).join(", ");
-    parts.push(`⏳ WAITING: ${verdictDrafts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
+    guidance(
+      `⏳ WAITING: ${verdictDrafts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call check_feedback again to pick up their response.`,
+      `Artifacts awaiting a verdict at End (${verdictDrafts.length}): ${waiting}`,
+    );
   }
   // Q3 (the N1 class, re-opened by P3) — the 📖 TO READ line was PROSE-ONLY, so
   // a structured-only client (one that branches on structuredContent and never
@@ -1286,7 +1323,10 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   }));
   if (readOnlyDrafts.length > 0) {
     const toRead = readOnlyDrafts.map(nameDraft).join(", ");
-    parts.push(`📖 TO READ: ${readOnlyDrafts.length} read-only artifact(s) the human hasn't acknowledged yet: ${toRead}\nThese await no verdict — they're explanations, not proposals. The human clicks "Got it" (or asks a follow-up) when they've read them. Don't block on these.`);
+    guidance(
+      `📖 TO READ: ${readOnlyDrafts.length} read-only artifact(s) the human hasn't acknowledged yet: ${toRead}\nThese await no verdict — they're explanations, not proposals. The human clicks "Got it" (or asks a follow-up) when they've read them. Don't block on these.`,
+      `Read-only artifacts unacknowledged at End (${readOnlyDrafts.length}): ${toRead}`,
+    );
   }
 
   // P3 — the pending-decision nag, made non-self-contradicting. A round-11
@@ -1340,10 +1380,16 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   }));
   if (pendingDec.length > 0) {
     const named = pendingDec.map((d) => `"${decisionLabelOf(d)}" (${d.decisionId})`).join(", ");
-    parts.push(`⏳ WAITING: ${pendingDec.length} decision(s) pending: ${named}. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
+    guidance(
+      `⏳ WAITING: ${pendingDec.length} decision(s) pending: ${named}. The human will select in the companion UI. Call check_feedback again to pick up their choice.`,
+      `Unanswered decisions at End (${pendingDec.length}): ${named}.`,
+    );
   }
   if (pendingPlans.length > 0) {
-    parts.push(`⏳ WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`);
+    guidance(
+      `⏳ WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`,
+      `Plan reviews awaiting a verdict at End (${pendingPlans.length}).`,
+    );
   }
 
   // Session memory is delivered once on the very first tool call (see
@@ -1364,7 +1410,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // O3 — reuse the autonomy level read once above (was a redundant read).
   const autonomy = autonomyLabel;
   if (autonomy !== "supervised") {
-    parts.push(`Human autonomy preference: ${autonomy}. ${
+    guidance(`Human autonomy preference: ${autonomy}. ${
       autonomy === "balanced"
         ? AUTONOMY_POLICY_LINE.balanced
         : AUTONOMY_POLICY_LINE.autonomous
@@ -1381,13 +1427,13 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
         ? `Human taking longer on reviews (avg ${Math.round(avgSecs / 60)}m) — consider batching related findings together.`
         : null;
     if (hint) {
-      parts.push(`Engagement: ${hint}`);
+      guidance(`Engagement: ${hint}`);
     }
   }
 
   // Escalation hint after repeated empty polls
   if (ctx.state.checkFeedbackPollCount >= 3 && pendingCount > 0) {
-    parts.push(`⚠️ No human response after ${ctx.state.checkFeedbackPollCount} checks (~${ctx.state.checkFeedbackPollCount * 30}s). The human may not have the companion UI open.\nMention in your response: "Please open http://localhost:${port} to review the artifacts." Then continue polling with check_feedback.`);
+    guidance(`⚠️ No human response after ${ctx.state.checkFeedbackPollCount} checks (~${ctx.state.checkFeedbackPollCount * 30}s). The human may not have the companion UI open.\nMention in your response: "Please open http://localhost:${port} to review the artifacts." Then continue polling with check_feedback.`);
   }
 
   // M1 — poll give-up ceiling. The escalation above is unbounded ("continue
@@ -1396,7 +1442,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // healthy/early payloads are byte-unchanged). This is TRUE thanks to #192 E1:
   // artifacts persist and open questions carry over to the next run.
   if (ctx.state.checkFeedbackPollCount >= 6 && pendingCount > 0) {
-    parts.push(`🛑 After ${ctx.state.checkFeedbackPollCount} empty polls you don't have to keep spinning. It's fine to STOP here: summarize what's still pending (the ${pendingCount} artifact${pendingCount === 1 ? "" : "s"} under review) in your reply and end the run. Nothing is lost — the artifacts persist and any unanswered questions carry over to your NEXT run (they resurface on your first check_feedback and in the first-call hint). Keep polling only if you'd rather wait.`);
+    guidance(`🛑 After ${ctx.state.checkFeedbackPollCount} empty polls you don't have to keep spinning. It's fine to STOP here: summarize what's still pending (the ${pendingCount} artifact${pendingCount === 1 ? "" : "s"} under review) in your reply and end the run. Nothing is lost — the artifacts persist and any unanswered questions carry over to your NEXT run (they resurface on your first check_feedback and in the first-call hint). Keep polling only if you'd rather wait.`);
   }
 
   // ------------------------------------------------------------------
@@ -1697,7 +1743,11 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
 
   // The preamble is UNSHIFTED (it used to be the first push): the emitted prose
   // order is identical, the state it summarizes is now complete.
-  parts.unshift(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);
+  const sessionSummary = `Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}`;
+  parts.unshift({
+    live: `${sessionSummary}${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`,
+    ended: `${sessionSummary} | Review ended\nSuggested action: ${STOP_ENDED_REVIEW}`,
+  });
 
   // B3 — the machine-readable mirror. status: feedback (something to act on),
   // waiting (drafts/decisions/plans pending), or proceed.
@@ -1858,8 +1908,12 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // Q3 (dead weight) — there used to be a `parts.length === 1` special case here
   // returning `${preamble}${portNote}`. `["x"].join("\n\n") === "x"`, so it was
   // byte-identical to the fallthrough below and only existed to say so. Deleted.
+  const text = (ended: boolean) => parts
+    .map((part) => typeof part === "string" ? part : ended ? part.ended : part.live)
+    .filter((part) => !ended || part !== "")
+    .join("\n\n") + (ended ? "" : portNote);
   return {
-    content: [{ type: "text", text: `${parts.join("\n\n")}${portNote}` }],
-    structuredContent,
+    result: { content: [{ type: "text", text: text(false) }], structuredContent },
+    endedText: () => text(true),
   };
 }

@@ -12,6 +12,7 @@ export interface PageWatchNotices {
   /** The notices this poll consumed (to acknowledge, exactly these). */
   refs: FileWatchNoticeRef[];
   prose: string;
+  endedProse: string;
   structured: Array<Record<string, unknown>>;
 }
 
@@ -20,9 +21,9 @@ function clip(s: string, n: number): string {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 }
 
-function recordedLine(a: Artifact, r: PageFileWatchRecorded): string {
+function recordedLine(a: Artifact, r: PageFileWatchRecorded, ended = false): string {
   const orphanCount = r.orphaned.length + (r.orphanedOverflow ?? 0);
-  let line = `- ${a.id} (v${a.version}) "${a.title}" was recorded automatically from ${r.sourcePath} after your save; it supersedes ${r.fromArtifactId} (v${r.fromVersion}) and is the draft under review now.`;
+  let line = `- ${a.id} (v${a.version}) "${a.title}" was recorded automatically from ${r.sourcePath} after your save; it supersedes ${r.fromArtifactId} (v${r.fromVersion})${ended ? "." : " and is the draft under review now."}`;
   if (orphanCount === 0) {
     line += r.carriedCount > 0 ? ` All ${r.carriedCount} page comment(s) still point at text on the page.` : "";
     return line;
@@ -37,12 +38,13 @@ function recordedLine(a: Artifact, r: PageFileWatchRecorded): string {
   return line;
 }
 
-function refusedLine(a: Artifact, r: PageFileWatchRefused): string {
+function refusedLine(a: Artifact, r: PageFileWatchRefused, ended = false): string {
+  const visible = ended ? `The saved page stayed at v${a.version}.` : `Your pair still sees v${a.version}.`;
   if (r.cause === "gate") {
     return `- ⛔ A save to ${r.sourcePath} was NOT recorded as a new version of ${a.id} "${a.title}": ${r.message}. ` +
-      `Your pair still sees v${a.version}. Change the page so it no longer proposes that approach (the next save is checked again), or ask your pair.`;
+      visible + (ended ? "" : " Change the page so it no longer proposes that approach (the next save is checked again), or ask your pair.");
   }
-  return `- ⚠ A save to ${r.sourcePath} could not be recorded for ${a.id} "${a.title}": ${r.message}. Your pair still sees v${a.version}.`;
+  return `- ⚠ A save to ${r.sourcePath} could not be recorded for ${a.id} "${a.title}": ${r.message}. ${visible}`;
 }
 
 /**
@@ -57,6 +59,7 @@ export function collectPageWatchNotices(artifacts: readonly Artifact[], refs: re
   const byId = new Map(artifacts.map((a) => [a.id, a]));
   const out: FileWatchNoticeRef[] = [];
   const lines: string[] = [];
+  const endedLines: string[] = [];
   const structured: Array<Record<string, unknown>> = [];
   for (const ref of refs) {
     const a = byId.get(ref.artifactId);
@@ -73,6 +76,7 @@ export function collectPageWatchNotices(artifacts: readonly Artifact[], refs: re
     const refused = refusedLive && !isClosedArtifactStatus(a.status) ? refusedLive : undefined;
     if (recorded) {
       lines.push(recordedLine(a, recorded));
+      endedLines.push(recordedLine(a, recorded, true));
       structured.push({
         kind: "recorded",
         artifactId: a.id,
@@ -87,6 +91,7 @@ export function collectPageWatchNotices(artifacts: readonly Artifact[], refs: re
     }
     if (refused) {
       lines.push(refusedLine(a, refused));
+      endedLines.push(refusedLine(a, refused, true));
       structured.push({
         kind: "refused",
         artifactId: a.id,
@@ -99,5 +104,6 @@ export function collectPageWatchNotices(artifacts: readonly Artifact[], refs: re
     }
   }
   const prose = lines.length > 0 ? `📄 Page file watch (${lines.length}):\n${lines.join("\n")}` : "";
-  return { refs: out, prose, structured };
+  const endedProse = endedLines.length > 0 ? `📄 Page file watch (${endedLines.length}):\n${endedLines.join("\n")}` : "";
+  return { refs: out, prose, endedProse, structured };
 }

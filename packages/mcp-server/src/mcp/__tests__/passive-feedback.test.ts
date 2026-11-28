@@ -34,6 +34,23 @@ describe("getPassiveFeedback — skips obligation-bearing comments (#225 F1)", (
     expect(store.getCommentsForArtifact("art_1").find((c) => c.id === "cmt_plain")?.acknowledged).toBe(true);
   });
 
+  it.each(["session_closing", "session_ended"])("delivers a plain comment despite %s refusing its ACK", async (code) => {
+    const id = "cmt_pending";
+    store.addComment({ id, artifactId: "art_1", content: "Keep this context", author: "human" });
+    const refusal = vi.spyOn(store, "acknowledgeComments").mockImplementationOnce(() => {
+      throw Object.assign(new Error("ACK refused"), { status: 409, code });
+    });
+    try {
+      expect(await getPassiveFeedback(store)).toContain("Keep this context");
+      expect(store.getComment(id)?.acknowledged).toBe(false);
+      refusal.mockImplementationOnce(() => { throw Object.assign(new Error("ACK failed"), { status: 503, code }); });
+      await expect(getPassiveFeedback(store)).rejects.toThrow("ACK failed");
+      expect(store.getComment(id)?.acknowledged).toBe(false);
+    } finally {
+      refusal.mockRestore();
+    }
+  });
+
   it("leaves explicit reopens for check_feedback, including one that raced with passive settlement", async () => {
     const id = "cmt_reopen";
     store.addComment({ id, artifactId: "art_1", content: "please revisit", author: "human" });

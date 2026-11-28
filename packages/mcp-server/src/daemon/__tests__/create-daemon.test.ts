@@ -811,6 +811,82 @@ it("End waits for an admitted internal decision resolve and refuses later writes
   }
 });
 
+it("freezes feedback delivery during closeout and retries pending feedback after a failed End", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const wrapperId = "session_wrapper";
+  const store = daemon.createSession(sessionId);
+  const wrapper = daemon.createSession(wrapperId);
+  daemon.sessionMeta.set(sessionId, { title: "Review", project: "Test", registeredAt: "2026-01-02T00:00:00.000Z" });
+  for (const target of [store, wrapper]) {
+    target.createArtifact({ id: "page", type: "page", title: "Page", content: { title: "Page", html: "<p>Review</p>" } });
+    target.addComment({ id: "feedback", artifactId: "page", content: "Clarify this", author: "human" });
+    target.forceFlush();
+  }
+  const base = path.join(tmpDir, ".deeppairing");
+  const dir = path.join(base, "sessions", sessionId);
+  const commentsPath = path.join(dir, "comments.json");
+  const workerPath = path.join(dir, "worker-stops-delivered.json");
+  const blocksPath = path.join(base, "preflight-blocks.json");
+  const malformed = "{ unreadable";
+  fs.writeFileSync(workerPath, malformed);
+  fs.writeFileSync(blocksPath, malformed);
+  const headers = { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" };
+  const post = (sid: string, route: string, body: object) => daemon.app.request(`/api/internal/sessions/${sid}/${route}`, {
+    method: "POST", headers, body: JSON.stringify(body),
+  });
+  const feedbackAcks: Array<[string, object]> = [
+    ["artifacts/status-changes/acknowledge", { ids: ["page"] }],
+    ["artifacts/file-watch/acknowledge", { refs: [{ artifactId: "page" }] }],
+    ["render-failures/acknowledge", { keys: [{ artifactId: "page", visualId: "diagram" }] }],
+    ["worker-stops/delivered", { ids: ["stop"] }],
+    ["comments/acknowledge", { ids: ["feedback", "final_feedback"] }],
+    ["decisions/acknowledge", { ids: ["decision"] }],
+    ["requests/request/served", { artifactId: "page" }],
+  ];
+  async function expectFrozen(code: "session_closing" | "session_ended") {
+    const before = fs.readFileSync(commentsPath, "utf8");
+    const meta = structuredClone(daemon.sessionMeta.get(sessionId));
+    const files = [fs.readdirSync(base).sort(), fs.readdirSync(dir).sort()];
+    for (const [route, body] of feedbackAcks) {
+      const refused = await post(sessionId, route, body);
+      expect(refused.status, route).toBe(409);
+      expect(await refused.json(), route).toMatchObject({ code });
+    }
+    const comments = await daemon.app.request(`/api/internal/sessions/${sessionId}/comments/unacknowledged`, { headers });
+    const expected = code === "session_closing" ? "feedback" : "final_feedback";
+    expect(await comments.json()).toMatchObject({ comments: [{ id: expected }] });
+    const stops = await daemon.app.request(`/api/internal/sessions/${sessionId}/worker-stops`, { headers });
+    expect(stops.status).toBe(200);
+    expect(await stops.json()).toMatchObject({ stops: [] });
+    expect(daemon.sessionMeta.get(sessionId)).toEqual(meta);
+    expect(fs.readFileSync(commentsPath, "utf8")).toBe(before);
+    expect(fs.readFileSync(workerPath, "utf8")).toBe(malformed);
+    expect(fs.readFileSync(blocksPath, "utf8")).toBe(malformed);
+    expect([fs.readdirSync(base).sort(), fs.readdirSync(dir).sort()]).toEqual(files);
+  }
+
+  const release = daemon.standaloneCloseout.admitWrite(sessionId);
+  expect(release).toBeTypeOf("function");
+  const failFlush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("Closeout flush interrupted"); });
+  const failed = expect(daemon.standaloneCloseout.end(sessionId)).rejects.toThrow("Closeout flush interrupted");
+  try {
+    await expectFrozen("session_closing");
+    expect((await post(wrapperId, "comments/acknowledge", { ids: ["feedback"] })).status).toBe(200);
+    expect(wrapper.getComment("feedback")?.acknowledged).toBe(true);
+  } finally {
+    release?.();
+    try { await failed; } finally { failFlush.mockRestore(); }
+  }
+  expect(daemon.standaloneCloseout.state(sessionId)).toEqual({ state: "open" });
+  expect((await post(sessionId, "comments/acknowledge", { ids: ["feedback"] })).status).toBe(200);
+  expect(store.getComment("feedback")?.acknowledged).toBe(true);
+  store.addComment({ id: "final_feedback", artifactId: "page", content: "Keep the final note", author: "human" });
+  await daemon.standaloneCloseout.end(sessionId);
+  await expectFrozen("session_ended");
+  expect(store.getComment("final_feedback")?.acknowledged).toBe(false);
+});
+
 it("a failed admitted internal decision flush releases End after rolling the choice back", async () => {
   const { tmpDir, daemon } = makeDaemon();
   const sessionId = createStandaloneSessionId(tmpDir);

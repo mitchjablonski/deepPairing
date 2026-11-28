@@ -5,6 +5,7 @@ import { commentResolutionSnapshot } from "../store/comment-resolution.js";
 import type { TeamPreference, Comment, ProseMode, ProseSeverity, StanceRef } from "@deeppairing/shared";
 import { lintArtifactContent, lintProse, bySeverity } from "@deeppairing/shared";
 import type { ToolResult } from "./tools/types.js";
+import { feedbackAckRefusal } from "./tools/feedback-ownership.js";
 import {
   ELICIT_APPROVE_SCHEMA,
   decideElicitResponse,
@@ -545,7 +546,11 @@ export async function getPassiveFeedback(store: IStore, excludeIds: string[] = [
   if (drainable.length === 0) return "";
   // Acknowledge ALL drainable comments (including N2-excluded ones — they have
   // now been seen/handled) so nothing re-surfaces on a later unrelated drain.
-  await store.acknowledgeComments(drainable.map((c) => c.id), drainable.map(commentResolutionSnapshot));
+  try {
+    await store.acknowledgeComments(drainable.map((c) => c.id), drainable.map(commentResolutionSnapshot));
+  } catch (error) {
+    if (!feedbackAckRefusal(error)) throw error;
+  }
   // N2 (#226 scope 6) — keep excluded comments out of the visible echo.
   const exclude = new Set(excludeIds);
   const shown = drainable.filter((c) => !exclude.has(c.id));

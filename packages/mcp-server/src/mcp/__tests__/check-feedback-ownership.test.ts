@@ -17,6 +17,7 @@ import { createMcpServer } from "../server.js";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import { LIVE_POLL_GRACE_MS } from "../tools/feedback-ownership.js";
 import type { ToolContext } from "../tools/types.js";
+import type { CommentResolutionSnapshot } from "../../store/store-interface.js";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { SERVER_VERSION } from "../../version.js";
@@ -82,6 +83,85 @@ const OPTIONS = (p: string) => [
 const commentIds = (sc: Record<string, any>) =>
   [...(sc.comments ?? []), ...(sc.questions ?? [])].map((c: any) => c.id ?? c.commentId).sort();
 const decisionArtifacts = (sc: Record<string, any>) => (sc.decisions ?? []).map((d: any) => d.artifactId).sort();
+
+class AckRefusalStore extends FileStore {
+  ackError?: Error;
+
+  override acknowledgeComments(ids: string[], delivered?: CommentResolutionSnapshot[]) {
+    if (this.ackError) throw this.ackError;
+    super.acknowledgeComments(ids, delivered);
+  }
+
+  override acknowledgeFileWatchNotices(refs: Parameters<FileStore["acknowledgeFileWatchNotices"]>[0]) {
+    if (this.ackError) throw this.ackError;
+    super.acknowledgeFileWatchNotices(refs);
+  }
+}
+
+describe("check_feedback acknowledgement during standalone closeout", () => {
+  it.each([
+    [409, "session_closing"],
+    [409, "session_ended"],
+    [503, "session_ended"],
+  ] as const)("preserves the payload after an ACK response of %i %s", async (status, code) => {
+    const store = fx.track(new AckRefusalStore(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    store.createArtifact({ id: "review", type: "research", title: "Cache review", content: {} });
+    const humanText = "Retain this feedback. Call check_feedback again to pick up their response.";
+    store.addComment({ id: "feedback", artifactId: "review", content: humanText, author: "human" });
+    if (status === 409 && code === "session_ended") {
+      store.createArtifact({ id: "page", type: "page", title: "Saved draft", content: { title: "Saved draft", html: "<p>Draft</p>" } });
+      store.setPageFileWatch("page", "refused", {
+        at: new Date().toISOString(), sourcePath: "draft.html", cause: "gate", digest: "draft-save", message: "Rejected approach",
+      });
+      store.createArtifact({ id: "plan", type: "plan", title: "Pending plan", content: {} });
+      store.recordPlanReview("plan");
+      store.createArtifact({ id: "decision", type: "decision", title: "Pending choice", content: { decisionId: "d1" } });
+      store.recordDecisionRequest({ decisionId: "d1", artifactId: "decision", context: "Pending choice", options: [{
+        id: "a", title: "Option A", description: "Use A", pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
+      }] });
+    }
+    store.ackError = Object.assign(new Error("ACK refused"), { status, code });
+
+    const result = await handleCheckFeedback(ctx, {});
+    const feedback = { id: "feedback", content: humanText };
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent?.comments).toEqual(expect.arrayContaining([expect.objectContaining(feedback)]));
+    expect(store.getComment("feedback")?.acknowledged).toBe(false);
+    const prose = result.content[0]?.text;
+    expect(prose).toContain(feedback.content);
+    if (status !== 409) {
+      expect(result.structuredContent?.ackFailed).toBe(true);
+      expect(result.structuredContent?.sessionStatus).toBeUndefined();
+      expect(prose).toContain("Acknowledging this delivery failed (ACK refused)");
+      return;
+    }
+    expect(result.structuredContent?.sessionStatus).toBe(code);
+    expect(result.structuredContent?.ackFailed).toBeUndefined();
+    expect(prose).not.toContain("Acknowledging this delivery failed");
+    if (code === "session_ended") {
+      expect(prose).toContain("The review has ended. This is its final feedback.");
+      expect(prose).toContain("Suggested action: Stop polling this ended review.");
+      expect(result.structuredContent?.suggestedAction).toBe("Stop polling this ended review.");
+      expect(prose).toContain("Artifacts awaiting a verdict at End");
+      expect(prose).toContain("Unanswered decisions at End");
+      expect(prose).toContain("Plan reviews awaiting a verdict at End");
+      expect(prose).toContain("Rejected approach");
+      expect(prose).toContain("The saved page stayed at v1.");
+      expect(prose).not.toContain("the next save is checked again");
+      expect(prose?.split("Call check_feedback again")).toHaveLength(2); // the human's phrase only
+      expect(prose).not.toMatch(/⏳ WAITING|The human (?:is reviewing|will select|will review) in the companion UI|continue polling/);
+      return;
+    }
+
+    expect(prose).toContain("if closeout fails and the review reopens");
+    store.ackError = undefined;
+    const retried = await handleCheckFeedback(ctx, {});
+    expect(retried.structuredContent?.comments).toEqual(expect.arrayContaining([expect.objectContaining(feedback)]));
+    expect(retried.structuredContent?.sessionStatus).toBeUndefined();
+    expect(store.getComment("feedback")?.acknowledged).toBe(true);
+  });
+});
 
 describe("#533 routing — presentedBy + check_feedback filter", () => {
   it("a filtered poll returns and acks ONLY its own feedback; a live consumer's is held (status held), then orphans reach the coordinator after the grace window", async () => {

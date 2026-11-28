@@ -493,7 +493,7 @@ export function createDaemonRoutes(
   // can't light the indicator.
   const lastActivityBroadcastAt = new Map<string, number>();
   const AGENT_ACTIVITY_THROTTLE_MS = 5_000;
-  const standaloneWriteActivity = new WeakSet<Context>();
+  const handledStandaloneActivity = new WeakSet<Context>();
   function noteActivity(sid: string): void {
     const now = Date.now();
     // Per-session-split — stamp lastActivity on EVERY successful internal
@@ -505,14 +505,30 @@ export function createDaemonRoutes(
     lastActivityBroadcastAt.set(sid, now);
     broadcast(sid, { type: "agent_activity", at: new Date(now).toISOString() });
   }
+  function standaloneStateForStore(store: FileStore) {
+    const sid = store.getSessionId();
+    if (standaloneCloseout && daemonProjectRoot && isStandaloneSessionForProject(sid, daemonProjectRoot)) {
+      return standaloneCloseout.state(sid);
+    }
+  }
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    // Standalone links and reads are silent. Standalone writers signal only
-    // while they hold admission, before End could commit.
-    if (c.res.status >= 400 || standaloneWriteActivity.has(c) || (c.req.method === "POST" &&
+    // Exact standalone reads are silent. Guarded writers signal only while
+    // they hold admission, before End could commit.
+    if (c.res.status >= 400 || handledStandaloneActivity.has(c) || (c.req.method === "POST" &&
       /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback|present-options|present-page|revise-page)$/.test(c.req.path))) return;
     const sid = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/)?.[1];
-    if (sid) noteActivity(sid);
+    if (!sid) return;
+    const store = c.req.method === "GET" || c.req.method === "HEAD" ? sessions.get(sid) : undefined;
+    if (store) {
+      // Preserve a successful read even when its review marker is unreadable.
+      // Only a verifiably open review can signal agent activity.
+      try {
+        const review = standaloneStateForStore(store);
+        if (review && review.state !== "open") return;
+      } catch { return; }
+    }
+    noteActivity(sid);
   });
 
   /**
@@ -553,7 +569,7 @@ export function createDaemonRoutes(
       const response = await run();
       if (response.status < 400) {
         noteActivity(sessionId);
-        standaloneWriteActivity.add(c);
+        handledStandaloneActivity.add(c);
       }
       return response;
     } finally {
@@ -982,8 +998,10 @@ export function createDaemonRoutes(
       return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
     }
     const { ids } = body as { ids?: unknown };
-    r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
+      return c.json({ status: "acknowledged" });
+    });
   });
 
   // #680 slice 3 — file-watch notice acknowledgement (mirrors status-changes
@@ -1005,8 +1023,10 @@ export function createDaemonRoutes(
         ...(str(x.refusedAt) !== undefined ? { refusedAt: str(x.refusedAt) } : {}),
         ...(str(x.refusedDigest) !== undefined ? { refusedDigest: str(x.refusedDigest) } : {}),
       }));
-    r.store.acknowledgeFileWatchNotices(clean);
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeFileWatchNotices(clean);
+      return c.json({ status: "acknowledged" });
+    });
   });
 
   // #176 (Option A) — render-failure drain (mirrors status-changes above).
@@ -1035,8 +1055,10 @@ export function createDaemonRoutes(
             typeof o.artifactId === "string" && typeof o.visualId === "string";
         })
       : [];
-    r.store.acknowledgeRenderFailures?.(clean);
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeRenderFailures?.(clean);
+      return c.json({ status: "acknowledged" });
+    });
   });
 
   // #569 pilot task A (#553/#572) — the worker-stop drain. check_feedback reads
@@ -1046,7 +1068,13 @@ export function createDaemonRoutes(
   app.get("/api/internal/sessions/:sessionId/worker-stops", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    return c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] });
+    const review = standaloneStateForStore(r.store);
+    if (review && review.state !== "open") {
+      handledStandaloneActivity.add(c);
+      return c.json(r.store.getUndeliveredWorkerStops?.({ readOnly: true }) ?? { stops: [] });
+    }
+    // Open reads can repair delivery history or back up a damaged log.
+    return withSessionWrite(c, r.store, () => c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] }));
   });
 
   app.post("/api/internal/sessions/:sessionId/worker-stops/delivered", async (c) => {
@@ -1058,8 +1086,10 @@ export function createDaemonRoutes(
     }
     const { ids } = body as { ids?: unknown };
     const clean = Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string").slice(0, 200) : [];
-    r.store.markWorkerStopsDelivered?.(clean);
-    return c.json({ status: "delivered" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.markWorkerStopsDelivered?.(clean);
+      return c.json({ status: "delivered" });
+    });
   });
 
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/retire", async (c) => {
@@ -1290,8 +1320,10 @@ export function createDaemonRoutes(
     if (!snapshots.success) {
       return c.json({ error: "Invalid delivered comment resolution state", code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.acknowledgeComments(Array.isArray(ids) ? ids : [], snapshots.data);
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeComments(Array.isArray(ids) ? ids : [], snapshots.data);
+      return c.json({ status: "acknowledged" });
+    });
   });
 
   app.get("/api/internal/sessions/:sessionId/artifacts/:artifactId/comments", (c) => {
@@ -1360,10 +1392,13 @@ export function createDaemonRoutes(
     if (typeof artifactId !== "string" || artifactId.length === 0) {
       return c.json({ error: "artifactId is required", code: ERROR_CODES.validation_error }, 400);
     }
-    const linked = r.store.markRequestServed?.(c.req.param("requestId"), artifactId) ?? false;
-    // Broadcast only a real link, so a bad id doesn't fabricate a served pip.
-    if (linked) broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
-    return c.json({ status: linked ? "served" : "not_found", linked });
+    const requestId = c.req.param("requestId");
+    return withSessionWrite(c, r.store, () => {
+      const linked = r.store.markRequestServed?.(requestId, artifactId) ?? false;
+      // Broadcast only a real link, so a bad id doesn't fabricate a served pip.
+      if (linked) broadcast(r.store.getSessionId(), { type: "request_served", requestId, artifactId });
+      return c.json({ status: linked ? "served" : "not_found", linked });
+    });
   });
 
   // F1 — sink for metric events the MCP server knows about but the daemon's
@@ -1589,18 +1624,15 @@ export function createDaemonRoutes(
       return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
     }
     const { ids } = body as { ids?: unknown };
-    r.store.acknowledgeDecisions(Array.isArray(ids) ? ids : []);
-    // C2 — this is the exact moment the agent CONSUMES the human's decision
-    // (check_feedback drains resolved decisions then acks them). Broadcast it
-    // so the resolved DecisionCard can show a receipt ("Claude picked this
-    // up") instead of leaving the handoff unconfirmed. Only ids that matched
-    // a real decision record — a buggy wrapper acking unknown ids must not
-    // fabricate receipts client-side.
-    const known = (Array.isArray(ids) ? ids : []).filter((id: string) => r.store.getDecision(id));
-    if (known.length > 0) {
-      broadcast(c.req.param("sessionId"), { type: "decisions_acknowledged", decisionIds: known });
-    }
-    return c.json({ status: "acknowledged" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.acknowledgeDecisions(Array.isArray(ids) ? ids : []);
+      // Only a real decision record can produce a receipt in the companion.
+      const known = (Array.isArray(ids) ? ids : []).filter((id: string) => r.store.getDecision(id));
+      if (known.length > 0) {
+        broadcast(r.store.getSessionId(), { type: "decisions_acknowledged", decisionIds: known });
+      }
+      return c.json({ status: "acknowledged" });
+    });
   });
 
   app.get("/api/internal/sessions/:sessionId/decisions/:decisionId", (c) => {
