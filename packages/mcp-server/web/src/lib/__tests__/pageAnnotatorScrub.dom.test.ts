@@ -171,6 +171,54 @@ describe("annotator scrubs its document id before page script can run (#727)", (
     expect(setterHits).toBe(0);
   });
 
+  it("patched String/RegExp builtins can't relabel a trusted CSP or error event, or skip redaction", async () => {
+    const count = (l: { key: string; count: number }[] | undefined, k: string) => l?.find((x) => x.key === k)?.count ?? 0;
+    const before = lastDiag();
+    const onError = listeners.error?.[0] as EventListener, onCsp = listeners.securitypolicyviolation?.[0] as EventListener;
+    const SP = String.prototype as any, RP = RegExp.prototype as any;
+    const saved = { toLowerCase: SP.toLowerCase, replace: SP.replace, split: SP.split, trim: SP.trim, exec: RP.exec, symReplace: RP[Symbol.replace] };
+    try {
+      SP.toLowerCase = function () { return "img-src"; };
+      SP.replace = function (this: string) { return String(this); };
+      SP.split = function () { return ["img-src"]; };
+      RP.exec = function () { return null; };
+      RP[Symbol.replace] = function (s: string) { return s; };
+      onCsp({ isTrusted: true, effectiveDirective: "Connect-Src extra" } as unknown as Event);
+      onError({ isTrusted: true, message: "RangeError: fetch https://user:pw@evil.example/a?k=1 failed", error: {} } as unknown as Event);
+    } finally {
+      Object.assign(SP, { toLowerCase: saved.toLowerCase, replace: saved.replace, split: saved.split, trim: saved.trim });
+      RP.exec = saved.exec;
+      RP[Symbol.replace] = saved.symReplace;
+    }
+    await settle();
+    const d = lastDiag();
+    expect(count(d.blocked, "connect-src")).toBe(count(before?.blocked, "connect-src") + 1);
+    expect(count(d.blocked, "img-src")).toBe(count(before?.blocked, "img-src"));
+    expect(count(d.scriptErrors.classes, "RangeError")).toBe(count(before?.scriptErrors.classes, "RangeError") + 1);
+    const json = JSON.stringify(d);
+    expect(json).not.toMatch(/evil\.example|user:pw/);
+    expect(d.scriptErrors.samples).toContain("RangeError: fetch [url] failed");
+  });
+
+  it("a patched WeakSet.prototype.has can't defeat the per-element resource dedupe", async () => {
+    const onError = listeners.error?.[0] as EventListener;
+    const img = document.createElement("img");
+    img.setAttribute("src", "missing.png");
+    document.body.appendChild(img);
+    const before = lastDiag()?.resources?.find((x: { key: string }) => x.key === "img src")?.count ?? 0;
+    const WP = WeakSet.prototype as any;
+    const savedHas = WP.has;
+    try {
+      WP.has = function () { return false; };
+      onError({ isTrusted: true, target: img } as unknown as Event);
+      onError({ isTrusted: true, target: img } as unknown as Event);
+    } finally {
+      WP.has = savedHas;
+    }
+    await settle();
+    expect(lastDiag().resources.find((x: { key: string }) => x.key === "img src")?.count).toBe(before + 1);
+  });
+
   it('both shipped sources start with "use strict" (no fn.arguments / CallSite walk to the id closure)', () => {
     expect(ANNOTATOR_CORE_SOURCE.trimStart().startsWith('"use strict";')).toBe(true);
     expect(ANNOTATOR_MAIN_SOURCE.trimStart().startsWith('"use strict";')).toBe(true);
