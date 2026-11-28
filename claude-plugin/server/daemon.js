@@ -43731,6 +43731,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   }
   const lastActivityBroadcastAt = /* @__PURE__ */ new Map();
   const AGENT_ACTIVITY_THROTTLE_MS = 5e3;
+  const standaloneWriteActivity = /* @__PURE__ */ new WeakSet();
   function noteActivity(sid) {
     const now = Date.now();
     const meta3 = sessionMeta.get(sid);
@@ -43741,7 +43742,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   }
   app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
-    if (c.res.status >= 400 || c.req.method === "POST" && /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback|present-options|present-page|revise-page)$/.test(c.req.path)) return;
+    if (c.res.status >= 400 || standaloneWriteActivity.has(c) || c.req.method === "POST" && /^\/api\/internal\/sessions\/[a-zA-Z0-9_-]+\/(?:open-review|read-decision|read-page-feedback|present-options|present-page|revise-page)$/.test(c.req.path)) return;
     const sid = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/)?.[1];
     if (sid) noteActivity(sid);
   });
@@ -43761,6 +43762,30 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       };
     }
     return { ok: true, store };
+  }
+  async function withStandaloneWrite(c, sessionId, run) {
+    const release2 = standaloneCloseout?.admitWrite(sessionId);
+    if (standaloneCloseout && !release2) {
+      if (standaloneCloseout.state(sessionId).state === "ended") {
+        return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
+      }
+      return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
+    }
+    try {
+      const response = await run();
+      if (response.status < 400) {
+        noteActivity(sessionId);
+        standaloneWriteActivity.add(c);
+      }
+      return response;
+    } finally {
+      release2?.();
+    }
+  }
+  function withSessionWrite(c, store, run) {
+    const sessionId = store.getSessionId();
+    if (!standaloneCloseout || !daemonProjectRoot || !isStandaloneSessionForProject(sessionId, daemonProjectRoot)) return run();
+    return withStandaloneWrite(c, sessionId, run);
   }
   function installSession(sessionId, meta3) {
     let store = sessions.get(sessionId);
@@ -43803,22 +43828,6 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     };
     var reviewDir = reviewDir2, requireWarmStandaloneStore = requireWarmStandaloneStore2;
     const projectRoot2 = daemonProjectRoot;
-    async function withStandaloneWrite(c, sessionId, run) {
-      const release2 = standaloneCloseout?.admitWrite(sessionId);
-      if (standaloneCloseout && !release2) {
-        if (standaloneCloseout.state(sessionId).state === "ended") {
-          return c.json({ error: "This standalone review has ended.", code: ERROR_CODES.session_ended }, 409);
-        }
-        return c.json({ error: "This standalone review is closing. Retry after closeout settles.", code: ERROR_CODES.session_closing }, 409);
-      }
-      try {
-        const response = await run();
-        if (response.status < 400) noteActivity(sessionId);
-        return response;
-      } finally {
-        release2?.();
-      }
-    }
     app.post("/api/internal/sessions/:sessionId/open-review", async (c) => {
       const parsed = await parseJsonBody(c, OpenStandaloneReviewBody);
       if (!parsed.ok) return parsed.res;
@@ -44468,16 +44477,20 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       return c.json({ error: "Expected resolvedAt to be an ISO timestamp or null", code: ERROR_CODES.validation_error }, 400);
     }
     const resolvedAt = stamp.data;
-    const changed = r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
-    return c.json({ status: resolvedAt === null ? changed ? "reopened" : "unchanged" : "resolved", changed });
+    return withSessionWrite(c, r.store, () => {
+      const changed = r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
+      return c.json({ status: resolvedAt === null ? changed ? "reopened" : "unchanged" : "resolved", changed });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/decisions", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, RecordDecisionBody);
     if (!parsed.ok) return parsed.res;
-    r.store.recordDecisionRequest(parsed.data);
-    return c.json({ status: "recorded" });
+    return withSessionWrite(c, r.store, () => {
+      r.store.recordDecisionRequest(parsed.data);
+      return c.json({ status: "recorded" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/decisions/:decisionId/resolve", async (c) => {
     const sessionId = c.req.param("sessionId");
@@ -44490,7 +44503,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (typeof optionId !== "string" || optionId.length === 0) {
       return c.json({ error: "optionId is required", code: ERROR_CODES.validation_error }, 400);
     }
-    return withDecisionResolveLock(r.store, async () => {
+    return withSessionWrite(c, r.store, () => withDecisionResolveLock(r.store, async () => {
       const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
       let committed = false;
@@ -44521,7 +44534,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       } finally {
         if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
       }
-    });
+    }));
   });
   app.get("/api/internal/sessions/:sessionId/decisions/pending", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -45754,8 +45767,16 @@ function createDaemon(deps) {
     (sessionId) => sessions.get(sessionId),
     void 0,
     (sessionId) => {
-      sessions.get(sessionId)?.notifyStandaloneReviewEnded();
-      pageWatcher.stopSession(sessionId);
+      try {
+        sessions.get(sessionId)?.notifyStandaloneReviewEnded();
+      } catch (error51) {
+        log2(`[end-review] Failed to wake decision readers: ${errorMessage(error51)}`);
+      }
+      try {
+        pageWatcher.stopSession(sessionId);
+      } catch (error51) {
+        log2(`[end-review] Failed to stop page watches: ${errorMessage(error51)}`);
+      }
     },
     (sessionId) => pageWatcher.drainQueuedSaves(sessionId)
   );

@@ -438,6 +438,104 @@ it("End lets a held decision resolution settle before an admitted close-out insp
   }
 });
 
+it("End waits for an admitted internal decision resolve and refuses later writes only in that review", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const siblingId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  const sibling = daemon.createSession(siblingId);
+  const resolvedAt = "2026-01-02T00:00:00.000Z";
+  const decision = (id: string) => ({ decisionId: id, artifactId: `art_${id}`, context: "Choose a cache", options: OPTS });
+  for (const target of [store, sibling]) {
+    for (const id of ["initial", "pending", "new"]) {
+      const entry = decision(id);
+      target.createArtifact({ id: entry.artifactId, type: "decision", title: entry.context, content: { decisionId: id } });
+      if (id !== "new") target.recordDecisionRequest(entry);
+    }
+    target.addComment({ id: "open", artifactId: "art_pending", content: "Needs an answer", author: "human" });
+    target.addComment({ id: "resolved", artifactId: "art_pending", content: "Already done", author: "human" });
+    target.markCommentHumanResolved("resolved", resolvedAt);
+    target.acknowledgeComments(["resolved"]);
+    target.forceFlush();
+  }
+
+  const post = (sid: string, route: string, body: Record<string, unknown>) =>
+    daemon.app.request(`/api/internal/sessions/${sid}/${route}`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir),
+        "X-Session-Id": sid, "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const writes: Array<[string, Record<string, unknown>]> = [
+    ["comments/open/mark-resolved", {}],
+    ["comments/resolved/mark-resolved", { resolvedAt: null }],
+    ["decisions", decision("new")],
+    ["decisions/pending/resolve", { optionId: "o1" }],
+  ];
+  const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  const marker = path.join(dir, "review-ended.json");
+  const records = () => ["artifacts.json", "decisions.json", "comments.json"].map((file) =>
+    fs.readFileSync(path.join(dir, file), "utf8"));
+  const commentsBefore = fs.readFileSync(path.join(dir, "comments.json"), "utf8");
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const flushEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const flush = store.forceFlush.bind(store);
+  const delayed = vi.spyOn(store as IStore, "forceFlush").mockImplementationOnce(async () => {
+    entered();
+    await held;
+    flush();
+  });
+  const resolving = post(sessionId, "decisions/initial/resolve", { optionId: "o2" });
+  let ending: ReturnType<typeof daemon.standaloneCloseout.end> | undefined;
+  try {
+    await Promise.race([flushEntered, resolving.then(() => { throw new Error("Resolve did not reach the held flush."); })]);
+    ending = daemon.standaloneCloseout.end(sessionId);
+    for (const [route, body] of writes) {
+      const denied = await post(sessionId, route, body);
+      expect(denied.status, route).toBe(409);
+      expect(await denied.json(), route).toMatchObject({ code: "session_closing" });
+      expect((await post(siblingId, route, body)).status, route).toBe(200);
+    }
+    expect(fs.existsSync(marker)).toBe(false);
+    // The admitted resolve's scheduled flush can run while the route is held.
+    // Only the refused writes must leave their records untouched.
+    expect(fs.readFileSync(path.join(dir, "comments.json"), "utf8")).toBe(commentsBefore);
+    expect(store.getDecision("new")).toBeUndefined();
+    expect(store.getDecision("pending")?.response).toBeUndefined();
+
+    release();
+    const [resolved, ended] = await Promise.all([resolving, ending]);
+    expect(resolved.status).toBe(200);
+    expect(JSON.parse(fs.readFileSync(marker, "utf8"))).toEqual(ended);
+    const committed = records();
+    expect(JSON.parse(committed[1]!)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ decisionId: "initial", response: expect.objectContaining({ optionId: "o2" }) }),
+    ]));
+    for (const [route, body] of writes) {
+      const denied = await post(sessionId, route, body);
+      expect(denied.status, route).toBe(409);
+      expect(await denied.json(), route).toMatchObject({ code: "session_ended" });
+    }
+    expect(records()).toEqual(committed);
+    expect(store.getDecision("new")).toBeUndefined();
+    expect(store.getDecision("pending")?.response).toBeUndefined();
+    expect(store.getComment("open")?.humanResolvedAt).toBeUndefined();
+    expect(store.getComment("resolved")).toMatchObject({ humanResolvedAt: resolvedAt, acknowledged: true });
+    expect(sibling.getDecision("new")?.artifactId).toBe("art_new");
+    expect(sibling.getDecision("pending")?.response?.optionId).toBe("o1");
+    expect(sibling.getComment("open")?.humanResolvedAt).toBeTruthy();
+    expect(sibling.getComment("resolved")).toMatchObject({ humanResolvedAt: null, acknowledged: false });
+  } finally {
+    release();
+    await Promise.allSettled([resolving, ending]);
+    delayed.mockRestore();
+  }
+});
+
 const RULE_OUT_HTML =
   "<table><tr><th>Strategy</th><th>Staleness</th></tr><tr><td>TTL expiry</td><td>Up to 60s</td></tr></table>";
 const RULE_OUT_ANCHOR = {
