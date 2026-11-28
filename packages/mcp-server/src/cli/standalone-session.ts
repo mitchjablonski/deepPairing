@@ -58,7 +58,7 @@ export async function standaloneSession(
   projectRoot: string,
   command: "open" | "resume",
   args: string[],
-): Promise<{ sessionId: string; companionUrl: string }> {
+): Promise<{ sessionId: string; companionUrl: string; endedAt?: string }> {
   let sessionId: string;
   if (command === "resume") {
     if (args.length !== 1) throw new Error("Usage: deeppairing resume <standalone-session-id>");
@@ -71,7 +71,13 @@ export async function standaloneSession(
 
   const { client, companionUrl } = await connectStandaloneSession(projectRoot, sessionId);
   try {
-    await client.openStandaloneReview(command, projectRoot, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
+    const { endedAt } = await client.openStandaloneReview(command, projectRoot, AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS));
+    if (endedAt) {
+      const historyUrl = new URL(companionUrl);
+      historyUrl.search = "";
+      historyUrl.searchParams.set("history", sessionId);
+      return { sessionId, companionUrl: historyUrl.href, endedAt };
+    }
   } catch (err) {
     const recovery = command === "open" ? ` If the request reached the daemon, recover with 'deeppairing resume ${sessionId}'.` : "";
     throw new Error(`${errorMessage(err)}${recovery}`);

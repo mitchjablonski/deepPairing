@@ -642,7 +642,10 @@ export function createDaemonRoutes(
       if (parsed.data.mode === "open" && (existing || sessions.has(sessionId))) {
         return c.json({ error: "Standalone session already exists. Resume it instead." }, 409);
       }
-      if (parsed.data.mode === "resume") standaloneCloseout?.state(sessionId);
+      if (parsed.data.mode === "resume") {
+        const state = standaloneCloseout?.state(sessionId);
+        if (state?.state === "ended") return c.json({ sessionId, endedAt: state.endedAt });
+      }
       if (!sessions.has(sessionId) || !sessionMeta.has(sessionId)) installSession(sessionId, {});
       refreshCompanionLink();
       // A resumed standalone review re-arms the file watch for its live

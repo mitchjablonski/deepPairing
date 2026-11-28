@@ -224,16 +224,39 @@ describe("createDaemon — page file watch wiring", () => {
     expect(watchers[0]!.closed).toBe(true);
     expect(watchers[1]!.closed).toBe(false);
 
-    // Simulate a cold review while retaining the same daemon factory routes.
-    store.dispose();
-    daemon.sessions.delete(sessionId);
+    const sessionDir = path.join(root, ".deeppairing", "sessions", sessionId);
+    const endedAt = JSON.parse(fs.readFileSync(path.join(sessionDir, "review-ended.json"), "utf8")).endedAt;
+    const before = fs.readdirSync(sessionDir).sort().map((file) => [file, fs.readFileSync(path.join(sessionDir, file), "utf8")]);
+    const meta = structuredClone(daemon.sessionMeta.get(sessionId));
+    const sync = vi.spyOn(daemon.pageWatcher, "sync");
+    try {
+      const resumed = await internal(sessionId, "open-review", { mode: "resume" });
+      expect(resumed.status).toBe(200);
+      expect(await resumed.json()).toEqual({ sessionId, endedAt });
+      expect(daemon.sessions.get(sessionId)).toBe(store);
+      expect(daemon.sessionMeta.get(sessionId)).toEqual(meta);
+
+      // Simulate a cold review while retaining the same daemon factory routes.
+      store.dispose();
+      daemon.sessions.delete(sessionId);
+      daemon.sessionMeta.delete(sessionId);
+      const cold = await internal(sessionId, "open-review", { mode: "resume" });
+      expect(cold.status).toBe(200);
+      expect(await cold.json()).toEqual({ sessionId, endedAt });
+      expect(daemon.sessions.has(sessionId)).toBe(false);
+      expect(daemon.sessionMeta.has(sessionId)).toBe(false);
+      expect(daemon.activeSessions.has(sessionId)).toBe(false);
+      expect(sync).not.toHaveBeenCalled();
+      expect(fs.readdirSync(sessionDir).sort().map((file) => [file, fs.readFileSync(path.join(sessionDir, file), "utf8")])).toEqual(before);
+    } finally {
+      sync.mockRestore();
+    }
     for (const [command, body] of writes.slice(0, 2)) {
       const result = await internal(sessionId, command, body);
       expect(result.status).toBe(409);
       expect(await result.json()).toMatchObject({ code: "session_ended" });
       expect(daemon.sessions.has(sessionId)).toBe(false);
     }
-    expect((await internal(sessionId, "open-review", { mode: "resume" })).status).toBe(200);
     daemon.pageWatcher.sync(sessionId);
     expect(daemon.pageWatcher.watched(sessionId)).toEqual([]);
     expect(watchers).toHaveLength(2);
