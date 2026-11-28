@@ -30,7 +30,7 @@ import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import { isCrossTerminalVerdictFlip, stalePageVerdictSuccessor } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult, RejectedApproachOrigin, CommentResolutionSnapshot } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams, StanceAddedVia, StanceRequestedBy, AddStanceParams, AddStanceResult, RejectedApproachOrigin, CommentResolutionSnapshot, DecisionLedgerSettlement } from "./store-interface.js";
 import { isRejectedApproachOrigin, PAGE_RENDER_ISSUES_WAKE_WINDOW_MS } from "./store-interface.js";
 import { PAGE_RENDER_ISSUES_VISUAL_ID, pageRenderIssuesWakeKey, parsePageRenderIssues } from "@deeppairing/shared";
 import { normalizeConceptKey } from "../mcp/preflight-validator.js";
@@ -2149,6 +2149,14 @@ export class FileStore implements IStore {
     this.resolveDecision(decisionId, optionId, reasoning, prediction);
     this.feedbackNotifyPending = otherNotifyPending;
     const written = this.decisions.get(decisionId)!;
+    // #711 gate 1 — the durable ledger intent rides the pick's own write: on
+    // disk exactly when the pick is, so a restart can tell an owed approval
+    // (pick on disk, flag set) from none at all (pick never landed). Cleared
+    // by settleDecisionLedger; a rolled-back write restores prevDecision.
+    if (decisionApprovalKeys(written)) {
+      written.ledgerPending = true;
+      delete written.ledgerRecordedAt;
+    }
     const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : undefined;
     this.pendingResolutions.set(decisionId, {
       prevDecision,
@@ -2170,10 +2178,6 @@ export class FileStore implements IStore {
     writtenResponse: DecisionRecord["response"];
     backingStatus: Artifact["status"] | undefined;
     backingHistoryLength: number;
-    /** #711 gate 1 — the approvedPatterns row recordDecisionApproval added. */
-    addedApproval?: string;
-    /** #711 gate 1 — the approval's cross-project mirror, sent on commit only. */
-    deferredMirror?: { description: string; concept?: string };
   }>();
   private feedbackNotifyHolds = 0;
   private feedbackNotifyPending = false;
@@ -2207,38 +2211,14 @@ export class FileStore implements IStore {
         }
       }
       this.unannouncedResolutions.delete(decisionId);
-      // #711 gate 1 — the pick never committed, so neither did its approval:
-      // retract the local row this resolve added. Its cross-project mirror was
-      // deferred and is simply dropped. Accepted (P3): the retraction matches
-      // the exact description string, so a concurrent writer that recorded the
-      // same approval during this resolve's flush window loses its row too —
-      // no reference counting; a later pick or check_feedback re-records it.
-      const addedApproval = pending.addedApproval;
-      if (addedApproval) {
-        try {
-          this.mutatePreferences((prefs) => {
-            const approved: string[] = Array.isArray(prefs.approvedPatterns) ? prefs.approvedPatterns : [];
-            if (!approved.includes(addedApproval)) return false;
-            prefs.approvedPatterns = approved.filter((p) => p !== addedApproval);
-            return true;
-          });
-        } catch (err) {
-          console.error(`[deepPairing] could not retract the approval of a rolled-back pick (${String(err)}).`);
-        }
-      }
+      // #711 gate 1 — nothing to undo in the ledger: a pick's approval is
+      // published only after the pick is proven on disk (settleDecisionLedger),
+      // and an approval string is never deleted as compensation (another
+      // review may share it).
       // #490 — a partial flush may have landed the backing artifact (written
       // before decisions.json) while the decision didn't: re-flush so disk
       // converges back to this rolled-back state once the store can write.
       try { this.scheduleFlush(); } catch { /* disposed: nothing to converge */ }
-    }
-    // #711 gate 1 — the pick is durable: now its approval may reach the
-    // cross-project ledger, exactly once (as check_feedback's write did).
-    if (committed && pending.deferredMirror) {
-      try {
-        this.mirrorApprovedPattern(pending.deferredMirror.description, pending.deferredMirror.concept);
-      } catch (err) {
-        FileStore.logLedgerMirrorFailure("approved", err); // advisory: never fail a committed pick
-      }
     }
     // #490 — wake waiters only for something real: this write COMMITTED, or
     // another event queued a wake-up during the hold. A rolled-back write is
@@ -2279,33 +2259,100 @@ export class FileStore implements IStore {
   }
 
   /**
-   * #711 gate 1 — record the pick's approval in the ledger INSIDE the resolve
-   * (see IStore.recordDecisionApproval). The preferences write is synchronous
-   * and lock-guarded, so the row is durable when this returns; the
-   * `ledgerRecordedAt` stamp rides the resolve's own flush, and a rolled-back
-   * resolve (settleResolution(…, false)) restores the record without it.
+   * #711 gate 1 — the exact-pick ledger path (IStore.settleDecisionLedger).
+   *
+   * Invariants, in order:
+   *   1. Only a SETTLED pick: a resolve still in pendingResolutions may yet be
+   *      rolled back, so it is reported `unsettled` and nothing is written.
+   *   2. Proven on disk: the stored decisions.json row must carry this exact
+   *      pick before the ledger is touched. A settled pick that only lives in
+   *      memory is flushed first (a flush failure throws: nothing published).
+   *      So preferences.json can never hold an approval for a pick a restart
+   *      would not find.
+   *   3. Idempotent and add-only: the row is added if absent and NEVER removed
+   *      here or as compensation elsewhere — two reviews of one project can
+   *      share the string, and one's failure must not erase the other's row.
+   *   4. A busy preferences lock throws with the record still `ledgerPending`
+   *      (or, for a legacy record, still unstamped): retryable, never a lost
+   *      or refused pick. check_feedback and the standalone End closeout retry.
+   *   5. The advisory cross-project mirror is sent after the local row and
+   *      before the stamp. Delivery limit: it is at-least-once per settlement,
+   *      not exactly-once — if the process stops after the mirror call and
+   *      before the stamp reaches disk, the restarted store settles the pick
+   *      again (the local add is a no-op) and mirrors one duplicate approved
+   *      instance. Conversely a stamp on disk implies the mirror was already
+   *      attempted: one refused by a busy global ledger is queued durably and
+   *      replayed (#486); one that fails even to queue (a disk error) is
+   *      logged and dropped, as for every advisory mirror. Not mirrored at all:
+   *      demo sessions and projects without the publish opt-in (III8).
+   * An acknowledged record without the flag predates the stamp: check_feedback
+   * already recorded it when it acked it, so it is `settled` (re-adding could
+   * resurrect a row the human retired from the Ledger).
    */
-  recordDecisionApproval(decisionId: string): { description: string; concept?: string; artifactId: string } | null {
+  settleDecisionLedger(decisionId: string): DecisionLedgerSettlement {
     this.assertAuthorizationReadable();
     const dec = this.decisions.get(decisionId);
-    if (!dec?.response) return null;
+    if (!dec?.response) return { kind: "settled" };
+    if (this.pendingResolutions.has(decisionId)) return { kind: "unsettled" };
+    if (dec.ledgerRecordedAt && !dec.ledgerPending) return { kind: "settled" };
+    if (dec.acknowledged && !dec.ledgerPending) return { kind: "settled" };
     const keys = decisionApprovalKeys(dec);
-    if (!keys) return null;
-    // The local row lands now (inside the permit, before End's marker); the
-    // cross-project mirror waits for settleResolution(…, true), so a resolve
-    // whose flush fails never reaches the global ledger. Without a pending
-    // resolution (not written by resolveDecisionAtomic) there is nothing to
-    // wait for: mirror now, as recordApprovedPattern does.
-    const pending = this.pendingResolutions.get(decisionId);
-    const added = this.recordApprovedPatternReportingAdded(keys, { mirror: !pending });
-    if (pending) {
-      pending.deferredMirror = keys;
-      // A rolled-back resolve retracts the local row, but only if it added it.
-      if (added) pending.addedApproval = keys.description;
+    if (!keys) {
+      if (dec.ledgerPending) { delete dec.ledgerPending; this.scheduleFlush(); }
+      return { kind: "settled" };
     }
+    const optionId = dec.response.optionId;
+    if (!this.isPickOnDisk(decisionId, optionId)) {
+      this.forceFlush();
+      if (!this.isPickOnDisk(decisionId, optionId)) {
+        throw new Error(`Decision ${decisionId}'s choice is not on disk yet; its ledger approval stays pending.`);
+      }
+    }
+    this.addApprovedPatternLocal(keys.description);
+    try {
+      this.mirrorApprovedPattern(keys.description, keys.concept);
+    } catch (err) {
+      FileStore.logLedgerMirrorFailure("approved", err); // advisory: never fail a saved pick
+    }
+    // Synchronous from the disk proof to here: the record is still the pick
+    // proven above.
     dec.ledgerRecordedAt = new Date().toISOString();
-    this.scheduleFlush();
-    return { ...keys, artifactId: dec.artifactId };
+    delete dec.ledgerPending;
+    // Land the stamp now when the disk takes it; otherwise the scheduled flush
+    // retries (and End flushes before its marker). Best-effort: the approval
+    // row is already durable, and an unflushed stamp is only re-derived.
+    try { this.forceFlush(); } catch { try { this.scheduleFlush(); } catch { /* disposed */ } }
+    return { kind: "recorded", ...keys, artifactId: dec.artifactId };
+  }
+
+  /**
+   * #711 gate 1 — settle every owed approval (picks on disk with
+   * `ledgerPending`). The standalone End closeout calls this after writers
+   * drain and before its final flush and marker; a throw (busy preferences
+   * lock) fails that End attempt, retryably. Returns what was published.
+   */
+  reconcileDecisionLedgers(): Array<Extract<DecisionLedgerSettlement, { kind: "recorded" }>> {
+    this.assertAuthorizationReadable();
+    const recorded: Array<Extract<DecisionLedgerSettlement, { kind: "recorded" }>> = [];
+    for (const dec of this.decisions.values()) {
+      if (!dec.ledgerPending || !dec.response) continue;
+      const out = this.settleDecisionLedger(dec.decisionId);
+      if (out.kind === "unsettled") throw new Error(`Decision ${dec.decisionId}'s choice is still settling; retry.`);
+      if (out.kind === "recorded") recorded.push(out);
+    }
+    return recorded;
+  }
+
+  /** #711 gate 1 — does decisions.json hold exactly this pick? Any read
+   *  problem means "not proven". */
+  private isPickOnDisk(decisionId: string, optionId: string): boolean {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "decisions.json"), "utf8")) as DecisionRecord[];
+      const row = Array.isArray(raw) ? raw.find((d) => d?.decisionId === decisionId) : undefined;
+      return row?.response?.optionId === optionId;
+    } catch {
+      return false;
+    }
   }
 
   /** #484 review — decisions whose answer was written by resolveDecisionAtomic
@@ -2386,7 +2433,12 @@ export class FileStore implements IStore {
 
   getResolvedDecisions(): DecisionRecord[] {
     this.assertAuthorizationReadable();
-    return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
+    // #711 gate 1 — a pick whose resolve is still unsettled (its flush may yet
+    // fail and roll it back) is not deliverable: an early check_feedback must
+    // not report — or record a ledger approval for — a tentative choice.
+    return Array.from(this.decisions.values()).filter(
+      (d) => d.response && !d.acknowledged && !this.pendingResolutions.has(d.decisionId),
+    );
   }
 
   acknowledgeDecisions(decisionIds: string[]): void {
@@ -2819,11 +2871,6 @@ export class FileStore implements IStore {
    * Stored in .deeppairing/preferences.json under "approvedPatterns".
    */
   recordApprovedPattern(params: { description: string; concept?: string }): void {
-    this.recordApprovedPatternReportingAdded(params);
-  }
-
-  /** #711 gate 1 — recordApprovedPattern, reporting whether the local row was new. */
-  private recordApprovedPatternReportingAdded(params: { description: string; concept?: string }, opts: { mirror?: boolean } = {}): boolean {
     const { description, concept } = params;
     // AA1 — symmetric with recordRejectedApproach: concept (when present)
     // is the cross-project ledger key. Pre-AA1 the approved path passed
@@ -2833,21 +2880,23 @@ export class FileStore implements IStore {
     // III8 — same per-project publish opt-in gate as the rejected path.
     // Demo isolation — same never-mirror gate as the rejected path.
     // #408 review — local record first (a busy lock throws before the mirror).
-    let added = false;
+    this.addApprovedPatternLocal(description);
+    this.mirrorApprovedPattern(description, concept);
+  }
+
+  /** The local, idempotent, add-only half of recordApprovedPattern. */
+  private addApprovedPatternLocal(description: string): void {
     this.mutatePreferences((prefs) => {
       const approved: string[] = prefs.approvedPatterns ?? [];
       if (approved.includes(description)) return false;
       approved.push(description);
       prefs.approvedPatterns = approved;
-      added = true;
       return true;
     });
-    if (opts.mirror !== false) this.mirrorApprovedPattern(description, concept);
-    return added;
   }
 
   /** The cross-project half of recordApprovedPattern. #711 gate 1 — split out
-   *  so a resolve can defer it until its pick is durable (settleResolution). */
+   *  so settleDecisionLedger can order it after the local row. */
   private mirrorApprovedPattern(description: string, concept: string | undefined): void {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {

@@ -20,6 +20,7 @@ import type { IStore } from "../store/store-interface.js";
 import { stripLeadingPathToken } from "../store/concept-hygiene.js";
 import { isCrossTerminalVerdictFlip, stalePageVerdictSuccessor } from "../store/verdict-guard.js";
 import { staleResolveBody, closedResolveBody, classifyClosedDecision, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
+import { settlePickLedger } from "../store/decision-approval.js";
 import { getSessionId, NO_SESSION_RESPONSE, readJsonValue } from "./route-helpers.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../store/rejected-option-recorder.js";
 import { artifactProposal } from "../mcp/artifact-preflight.js";
@@ -40,7 +41,7 @@ export type ReviewStore = Pick<
   | "recordRejectedApproach"
   | "resolveDecisionAtomic"
   | "isResolutionDurable"
-  | "recordDecisionApproval"
+  | "settleDecisionLedger"
   | "settleResolution"
   | "takeResolutionAnnouncement"
   | "resolvePlanReview"
@@ -127,6 +128,7 @@ export function createReviewRoutes({
       // a durable flush, otherwise ROLLED BACK so memory matches disk (the 503 the
       // human saw stays true: no delivery, no false "already answered", no event).
       let committed = false;
+      let settled = false; // #711 gate 1 — settled early, before the ledger step
       try {
         // #484 review — an idempotent success (or a refusal naming the winner)
         // reports ONLY what is persisted: an earlier request may have written the
@@ -237,12 +239,6 @@ export function createReviewRoutes({
           }
         }
 
-        // #711 gate 1 — the pick's ledger approval lands inside this admission
-        // permit, before the flush, so End's marker can never precede it. A
-        // throw (busy preferences lock) fails the resolve and the finally rolls
-        // the pick back — never a saved pick without its ledger row.
-        const approval = outcome.kind === "resolved" ? await store.recordDecisionApproval?.(decisionId) : null;
-
         // A decision response authorizes its backing artifact. Persist the
         // artifact and decision record together before announcing success; a
         // concurrent proposal rewrite must return the global typed 409 and emit no
@@ -257,6 +253,18 @@ export function createReviewRoutes({
           log(`[decision] flush failed after ${decisionId}'s answer was persisted — treating as committed: ${String(error)}`);
         }
         committed = true; // #484 review — durable: settle as committed
+        // #711 gate 1 — settle now (the finally's call is then a no-op), then
+        // publish the pick's ledger approval: only after the pick is proven on
+        // disk, still inside this admission permit, so End's marker can never
+        // precede it. A busy preferences lock leaves the saved pick
+        // ledger-pending (retried by check_feedback / End), never refused.
+        let approval: Awaited<ReturnType<typeof settlePickLedger>>["approval"] = null;
+        let ledgerPending = false;
+        if (outcome.kind === "resolved") {
+          await store.settleResolution(decisionId, true);
+          settled = true;
+          ({ approval, ledgerPending } = await settlePickLedger(store, decisionId, log));
+        }
 
         if (targetArtifactId) {
           // X6 — emission seam: HTTP-side mutations pass null for `server`
@@ -280,9 +288,9 @@ export function createReviewRoutes({
           broadcast({ type: "ledger_write", kind: "approved", description: approval.description, concept: approval.concept, sourceArtifactId: approval.artifactId }, sid);
         }
 
-        return c.json({ status: "resolved", decisionId });
+        return c.json({ status: "resolved", decisionId, ...(ledgerPending ? { ledgerPending: true } : {}) });
       } finally {
-        if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
+        if (outcome.kind === "resolved" && !settled) await store.settleResolution(decisionId, committed);
       }
     }));
   });

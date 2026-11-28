@@ -306,7 +306,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       return ended;
     };
     try {
-      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args, reviewHasEnded);
+      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args, reviewHasEnded, (code) => pending.noteRefusal(code));
       if (!ctx.signal?.aborted) await reviewHasEnded();
     } catch (err) {
       // Nothing was acknowledged (the acks are still in the buffer), so this
@@ -426,6 +426,7 @@ async function assembleCheckFeedback(
   ctx: ToolContext,
   args: any,
   reviewHasEnded: () => Promise<boolean>,
+  noteRefusal: (code: NonNullable<ReturnType<typeof feedbackAckRefusal>>) => void = () => {},
 ): Promise<{ result: ToolResult; endedText?: () => string }> {
   let ended = await reviewHasEnded();
   const { store, server, broadcast, port } = ctx;
@@ -984,23 +985,29 @@ async function assembleCheckFeedback(
     const deferred: string[] = [];
     ended = await reviewHasEnded();
     for (const d of resolved) {
-      // #711 gate 1 — a pick the resolve route already recorded (inside its
-      // admission permit) needs no second ledger write here: only the ack.
-      if (!ended && d.ledgerRecordedAt) {
+      // #711 gate 1 — a pick the resolve route already recorded (after its
+      // pick was durable, inside its admission permit) needs only the ack.
+      if (!ended && d.ledgerRecordedAt && !d.ledgerPending) {
         recordedIds.push(d.decisionId);
       } else if (!ended) {
         try {
-          await recordDecisionLedger(d);
+          const settled = await recordDecisionLedger(d);
+          // An unsettled pick is not deliverable yet (its resolve may still
+          // roll back): neither reported nor acked; the next poll sees it.
+          if (!settled) continue;
           recordedIds.push(d.decisionId);
         } catch (err) {
           // #711 gate 1 — End's cutoff landed after the ended check above: the
-          // backstop write is refused (typed). Never fail the read or report a
+          // backfill is refused (typed). Never fail the read or report a
           // ledger failure — the saved choice is still delivered below, left
-          // un-acked (the ack would be refused the same way).
-          if (!feedbackAckRefusal(err)) {
+          // un-acked, and the typed refusal reaches the caller even when no
+          // acknowledgement is left to carry it.
+          const refusal = feedbackAckRefusal(err);
+          if (!refusal) {
             deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
             continue;
           }
+          noteRefusal(refusal);
         }
       }
       const feedback = decisionFeedback(d);
@@ -1031,15 +1038,26 @@ async function assembleCheckFeedback(
     }
   }
 
-  async function recordDecisionLedger(d: (typeof resolved)[number]): Promise<void> {
-    // #711 gate 1 — the keys are single-sourced with the resolve routes (which
-    // now record the approval inside their admission permit); this is the
-    // backstop for records resolved before `ledgerRecordedAt` existed. Key
-    // rationale (P3 label, AA1 concept, #549 approval-only): decision-approval.ts.
+  /** → false when the pick is still unsettled (not deliverable yet). */
+  async function recordDecisionLedger(d: (typeof resolved)[number]): Promise<boolean> {
+    // #711 gate 1 — the exact-pick path: the store publishes the approval of
+    // THIS settled pick only once it is proven on disk, idempotently, and
+    // stamps it. Standalone feedback never writes a decision approval through
+    // the generic approved-pattern endpoint. Key rationale (P3 label, AA1
+    // concept, #549 approval-only): decision-approval.ts.
+    if (typeof store.settleDecisionLedger === "function") {
+      const out = await store.settleDecisionLedger(d.decisionId);
+      if (out.kind === "unsettled") return false;
+      if (out.kind === "recorded") {
+        broadcast({ type: "ledger_write", kind: "approved", description: out.description, concept: out.concept, sourceArtifactId: d.artifactId });
+      }
+      return true;
+    }
+    // Stores without the exact-pick path (in-memory fakes): the late write.
     // #549 — unchosen options add NO ledger rows; an option the human wants
     // gone goes through the per-option "Never suggest this" control.
     const approval = decisionApprovalKeys(d);
-    if (!approval) return;
+    if (!approval) return true;
     await store.recordApprovedPattern(approval);
     broadcast({
       type: "ledger_write",
@@ -1048,6 +1066,7 @@ async function assembleCheckFeedback(
       concept: approval.concept,
       sourceArtifactId: d.artifactId,
     });
+    return true;
   }
 
   // Plan review verdicts

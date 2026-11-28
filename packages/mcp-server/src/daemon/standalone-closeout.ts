@@ -267,6 +267,12 @@ export class StandaloneCloseout {
       if (watchDrainError) throw watchDrainError;
       checkDeadline();
       reconcileReceipts(this.projectRoot, dir, store, checkDeadline);
+      // #711 gate 1 — writers are drained: settle every saved pick whose ledger
+      // approval is still owed (ledger-pending) before the final flush and the
+      // marker. A busy preferences lock fails this End attempt (retryable);
+      // the marker never precedes an owed approval.
+      store.reconcileDecisionLedgers();
+      checkDeadline();
       store.forceFlush();
       checkDeadline();
       // The session is drained. Take the existing flush lock only for this

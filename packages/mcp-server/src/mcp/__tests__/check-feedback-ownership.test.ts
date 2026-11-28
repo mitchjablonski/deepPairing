@@ -174,8 +174,8 @@ describe("check_feedback acknowledgement during standalone closeout", () => {
   it("delivers the saved choice when End refuses the backstop ledger write mid-read", async () => {
     let state: "open" | "ended" = "open";
     class EndsDuringLedgerWrite extends FileStore {
-      override recordApprovedPattern(params: Parameters<FileStore["recordApprovedPattern"]>[0]) {
-        void params;
+      override settleDecisionLedger(decisionId: string): never {
+        void decisionId;
         state = "ended";
         throw Object.assign(new Error("This standalone review has ended."), { status: 409, code: "session_ended" });
       }
@@ -200,6 +200,31 @@ describe("check_feedback acknowledgement during standalone closeout", () => {
     expect(store.getDecision("d1")?.acknowledged).toBeFalsy();
   });
 
+  // #711 review — the only write this poll makes is the legacy backfill, and
+  // End's cutoff refuses it: the typed refusal must still reach the caller.
+  it("carries a closing refusal of the legacy backfill through check_feedback when nothing was acked", async () => {
+    const closing = () => Object.assign(new Error("This standalone review is closing."), { status: 409, code: "session_closing" });
+    class ClosingDuringBackfill extends FileStore {
+      override settleDecisionLedger(): never { throw closing(); }
+    }
+    const store = fx.track(new ClosingDuringBackfill(fx.dir, "s1"));
+    const ctx = directCtx(store);
+    ctx.store.getStandaloneReviewState = () => "closing";
+    store.createArtifact({ id: "review", type: "decision", title: "Cache review", content: { decisionId: "d1" } });
+    store.recordDecisionRequest({ decisionId: "d1", artifactId: "review", context: "Choose a cache", options: [{
+      id: "a", title: "Local cache", description: "Cache locally", pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
+    }] });
+    store.resolveDecision("d1", "a", "Works offline");
+
+    const result = await handleCheckFeedback(ctx, {});
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]?.text).toContain("Works offline");
+    expect(result.content[0]?.text).toContain("The review is closing.");
+    expect(result.structuredContent).toMatchObject({ sessionStatus: "session_closing", decisions: [expect.objectContaining({ decisionId: "d1" })] });
+    expect(store.getDecision("d1")?.acknowledged).toBeFalsy();
+  });
+
   it("acks a pick whose ledger row the resolve already wrote, without a second ledger write", async () => {
     const store = fx.track(new FileStore(fx.dir, "s1"));
     const ctx = directCtx(store);
@@ -209,14 +234,16 @@ describe("check_feedback acknowledgement during standalone closeout", () => {
       id: "a", title: "Local cache", description: "Cache locally", pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
     }] });
     expect(store.resolveDecisionAtomic("d1", "a", "Works offline")).toMatchObject({ kind: "resolved" });
-    expect(store.recordDecisionApproval("d1")).toMatchObject({ description: "Choose a cache: Local cache", concept: "Cache locally" });
     store.settleResolution("d1", true);
+    expect(store.settleDecisionLedger("d1")).toMatchObject({ kind: "recorded", description: "Choose a cache: Local cache", concept: "Cache locally" });
     const ledger = vi.spyOn(store, "recordApprovedPattern");
+    const settle = vi.spyOn(store, "settleDecisionLedger");
 
     const result = await handleCheckFeedback(ctx, {});
 
     expect(result.content[0]?.text).toContain("Works offline");
     expect(ledger).not.toHaveBeenCalled();
+    expect(settle).not.toHaveBeenCalled();
     expect(store.getDecision("d1")?.acknowledged).toBe(true);
   });
   it.each([
