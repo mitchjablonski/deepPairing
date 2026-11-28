@@ -30096,6 +30096,28 @@ function isPublishableStance(addedVia, requestedBy) {
   return addedVia !== "mcp" && requestedBy !== "unknown";
 }
 
+// src/store/decision-approval.ts
+function decisionApprovalKeys(d) {
+  const option = d.options?.find((o) => o.id === d.response?.optionId);
+  if (!option) return null;
+  const decisionLabel = d.title?.trim() || d.context;
+  const concept = option.concept?.name ?? option.description ?? void 0;
+  return { description: `${decisionLabel}: ${option.title}`, ...concept !== void 0 ? { concept } : {} };
+}
+async function settlePickLedger(store, decisionId, log2 = () => {
+}) {
+  if (typeof store.settleDecisionLedger !== "function") return { approval: null, ledgerPending: false };
+  let out;
+  try {
+    out = await store.settleDecisionLedger(decisionId);
+  } catch (err) {
+    log2(`[decision] ${decisionId}'s choice is saved; its ledger approval is pending (${String(err)}).`);
+    return { approval: null, ledgerPending: true };
+  }
+  if (out.kind === "unsettled") return { approval: null, ledgerPending: true };
+  return { approval: out.kind === "recorded" ? out : null, ledgerPending: false };
+}
+
 // src/store/page-revision-feedback.ts
 import { createHash as createHash3 } from "node:crypto";
 var pageRevisionFeedbackIdsSchema = external_exports.array(external_exports.string().trim().min(1).max(128)).min(1).max(50).refine((ids) => new Set(ids).size === ids.length, "Feedback comment IDs must be unique.");
@@ -31767,6 +31789,10 @@ var FileStore = class _FileStore {
     this.resolveDecision(decisionId, optionId, reasoning, prediction);
     this.feedbackNotifyPending = otherNotifyPending;
     const written = this.decisions.get(decisionId);
+    if (decisionApprovalKeys(written)) {
+      written.ledgerPending = true;
+      delete written.ledgerRecordedAt;
+    }
     const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : void 0;
     this.pendingResolutions.set(decisionId, {
       prevDecision,
@@ -31852,6 +31878,112 @@ var FileStore = class _FileStore {
       return false;
     }
   }
+  /**
+   * #711 gate 1 — the exact-pick ledger path (IStore.settleDecisionLedger).
+   *
+   * Invariants, in order:
+   *   1. Only a SETTLED pick: a resolve still in pendingResolutions may yet be
+   *      rolled back, so it is reported `unsettled` and nothing is written.
+   *   2. Proven on disk: the stored decisions.json row must carry this exact
+   *      pick before the ledger is touched. A settled pick that only lives in
+   *      memory is flushed first (a flush failure throws: nothing published).
+   *      So preferences.json can never hold an approval for a pick a restart
+   *      would not find.
+   *   3. Idempotent and add-only: the row is added if absent and NEVER removed
+   *      here or as compensation elsewhere — two reviews of one project can
+   *      share the string, and one's failure must not erase the other's row.
+   *   4. A busy preferences lock throws with the record still `ledgerPending`
+   *      (or, for a legacy record, still unstamped): retryable, never a lost
+   *      or refused pick. check_feedback and the standalone End closeout retry.
+   *   5. The advisory cross-project mirror is sent after the local row and
+   *      before the stamp. Delivery limit: it is at-least-once per settlement,
+   *      not exactly-once — if the process stops after the mirror call and
+   *      before the stamp reaches disk, the restarted store settles the pick
+   *      again (the local add is a no-op) and mirrors one duplicate approved
+   *      instance. Conversely a stamp on disk implies the mirror was already
+   *      attempted: one refused by a busy global ledger is queued durably and
+   *      replayed (#486); one that fails even to queue (a disk error) is
+   *      logged and dropped, as for every advisory mirror. Not mirrored at all:
+   *      demo sessions and projects without the publish opt-in (III8).
+   * An acknowledged record without the flag predates the stamp: check_feedback
+   * already recorded it when it acked it, so it is `settled` (re-adding could
+   * resurrect a row the human retired from the Ledger).
+   */
+  settleDecisionLedger(decisionId) {
+    this.assertAuthorizationReadable();
+    const dec = this.decisions.get(decisionId);
+    if (!dec?.response) return { kind: "settled" };
+    if (this.pendingResolutions.has(decisionId)) return { kind: "unsettled" };
+    if (dec.ledgerRecordedAt && (dec.acknowledged || !dec.ledgerPending)) return { kind: "settled" };
+    if (dec.acknowledged && !dec.ledgerPending) return { kind: "settled" };
+    const keys = decisionApprovalKeys(dec);
+    if (!keys) {
+      if (dec.ledgerPending) {
+        delete dec.ledgerPending;
+        this.scheduleFlush();
+      }
+      return { kind: "settled" };
+    }
+    const optionId = dec.response.optionId;
+    if (!this.isPickOnDisk(decisionId, optionId)) {
+      this.forceFlush();
+      if (!this.isPickOnDisk(decisionId, optionId)) {
+        throw new Error(`Decision ${decisionId}'s choice is not on disk yet; its ledger approval stays pending.`);
+      }
+    }
+    const live = this.decisions.get(decisionId);
+    if (live?.response?.optionId !== optionId) {
+      throw new Error(`Decision ${decisionId}'s choice changed while it was being proven; its ledger approval stays pending.`);
+    }
+    this.addApprovedPatternLocal(keys.description);
+    try {
+      this.mirrorApprovedPattern(keys.description, keys.concept);
+    } catch (err) {
+      _FileStore.logLedgerMirrorFailure("approved", err);
+    }
+    live.ledgerRecordedAt = (/* @__PURE__ */ new Date()).toISOString();
+    delete live.ledgerPending;
+    try {
+      this.forceFlush();
+    } catch {
+      try {
+        this.scheduleFlush();
+      } catch {
+      }
+    }
+    return { kind: "recorded", ...keys, artifactId: live.artifactId };
+  }
+  /**
+   * #711 gate 1 — settle every owed approval: picks with `ledgerPending`,
+   * and unacked picks a pre-#711 daemon saved with no stamp (their
+   * check_feedback write never ran). The standalone End closeout calls this after writers
+   * drain and before its final flush and marker; a throw (busy preferences
+   * lock) fails that End attempt, retryably. Returns what was published.
+   */
+  reconcileDecisionLedgers() {
+    this.assertAuthorizationReadable();
+    const recorded = [];
+    for (const dec of this.decisions.values()) {
+      if (!dec.response) continue;
+      const legacyOwed = !dec.acknowledged && !dec.ledgerRecordedAt;
+      if (!dec.ledgerPending && !legacyOwed) continue;
+      const out = this.settleDecisionLedger(dec.decisionId);
+      if (out.kind === "unsettled") throw new Error(`Decision ${dec.decisionId}'s choice is still settling; retry.`);
+      if (out.kind === "recorded") recorded.push(out);
+    }
+    return recorded;
+  }
+  /** #711 gate 1 — does decisions.json hold exactly this pick? Any read
+   *  problem means "not proven". */
+  isPickOnDisk(decisionId, optionId) {
+    try {
+      const raw2 = JSON.parse(fs18.readFileSync(path17.join(this.sessionDir(), "decisions.json"), "utf8"));
+      const row = Array.isArray(raw2) ? raw2.find((d) => d?.decisionId === decisionId) : void 0;
+      return row?.response?.optionId === optionId;
+    } catch {
+      return false;
+    }
+  }
   /** #484 review — decisions whose answer was written by resolveDecisionAtomic
    *  but not yet announced after a successful flush. In-memory on purpose: an
    *  answer that never flushed doesn't survive a restart either. */
@@ -31924,7 +32056,9 @@ var FileStore = class _FileStore {
   }
   getResolvedDecisions() {
     this.assertAuthorizationReadable();
-    return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
+    return Array.from(this.decisions.values()).filter(
+      (d) => d.response && !d.acknowledged && !this.pendingResolutions.has(d.decisionId)
+    );
   }
   acknowledgeDecisions(decisionIds) {
     this.assertAuthorizationReadable();
@@ -32235,6 +32369,11 @@ var FileStore = class _FileStore {
    */
   recordApprovedPattern(params) {
     const { description, concept } = params;
+    this.addApprovedPatternLocal(description);
+    this.mirrorApprovedPattern(description, concept);
+  }
+  /** The local, idempotent, add-only half of recordApprovedPattern. */
+  addApprovedPatternLocal(description) {
     this.mutatePreferences((prefs) => {
       const approved = prefs.approvedPatterns ?? [];
       if (approved.includes(description)) return false;
@@ -32242,6 +32381,10 @@ var FileStore = class _FileStore {
       prefs.approvedPatterns = approved;
       return true;
     });
+  }
+  /** The cross-project half of recordApprovedPattern. #711 gate 1 — split out
+   *  so settleDecisionLedger can order it after the local row. */
+  mirrorApprovedPattern(description, concept) {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
@@ -37567,6 +37710,7 @@ function createReviewRoutes({
     return withReviewWrite(c, store, sid, (sid2) => withDecisionResolveLock(store, async () => {
       const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
       let committed = false;
+      let settled = false;
       try {
         if (outcome.kind === "closed") {
           log2(`[decision] REFUSED resolve on closed decision ${decisionId} (${outcome.currentStatus})`);
@@ -37637,6 +37781,13 @@ function createReviewRoutes({
           log2(`[decision] flush failed after ${decisionId}'s answer was persisted \u2014 treating as committed: ${String(error51)}`);
         }
         committed = true;
+        let approval = null;
+        let ledgerPending = false;
+        if (outcome.kind === "resolved") {
+          await store.settleResolution(decisionId, true);
+          settled = true;
+          ({ approval, ledgerPending } = await settlePickLedger(store, decisionId, log2));
+        }
         if (targetArtifactId) {
           await updateTaskStatus(targetArtifactId, store);
         }
@@ -37648,9 +37799,12 @@ function createReviewRoutes({
           optionId: ann?.optionId ?? optionId,
           reasoning: ann ? ann.reasoning : reasoning
         }, sid2);
-        return c.json({ status: "resolved", decisionId });
+        if (approval) {
+          broadcast({ type: "ledger_write", kind: "approved", description: approval.description, concept: approval.concept, sourceArtifactId: approval.artifactId }, sid2);
+        }
+        return c.json({ status: "resolved", decisionId, ...ledgerPending ? { ledgerPending: true } : {} });
       } finally {
-        if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
+        if (outcome.kind === "resolved" && !settled) await store.settleResolution(decisionId, committed);
       }
     }));
   });
@@ -41909,18 +42063,20 @@ function reconcileReceipts(projectRoot2, dir, store, checkDeadline) {
   }
 }
 var StandaloneCloseout = class {
-  constructor(projectRoot2, getStore, timeoutMs = 5e3, onEnded, drainWatchedSaves) {
+  constructor(projectRoot2, getStore, timeoutMs = 5e3, onEnded, drainWatchedSaves, onLedgerRecorded) {
     this.projectRoot = projectRoot2;
     this.getStore = getStore;
     this.timeoutMs = timeoutMs;
     this.onEnded = onEnded;
     this.drainWatchedSaves = drainWatchedSaves;
+    this.onLedgerRecorded = onLedgerRecorded;
   }
   projectRoot;
   getStore;
   timeoutMs;
   onEnded;
   drainWatchedSaves;
+  onLedgerRecorded;
   entries = /* @__PURE__ */ new Map();
   directory(sessionId) {
     if (!isStandaloneSessionForProject(sessionId, this.projectRoot)) {
@@ -42013,6 +42169,14 @@ var StandaloneCloseout = class {
       if (watchDrainError) throw watchDrainError;
       checkDeadline();
       reconcileReceipts(this.projectRoot, dir, store, checkDeadline);
+      const recorded = store.reconcileDecisionLedgers();
+      if (recorded.length > 0) {
+        try {
+          this.onLedgerRecorded?.(sessionId, recorded);
+        } catch {
+        }
+      }
+      checkDeadline();
       store.forceFlush();
       checkDeadline();
       const committed = withSessionFlushLock(path29.join(dir, ".flush.lock"), () => {
@@ -44883,6 +45047,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
       let committed = false;
+      let settled = false;
       try {
         if (outcome.kind === "closed") return c.json(closedResolveBody(outcome, decisionId), 409);
         if (outcome.kind === "same" || outcome.kind === "conflict") {
@@ -44904,11 +45069,17 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           if (!r.store.isResolutionDurable(decisionId)) throw error51;
         }
         committed = true;
+        r.store.settleResolution(decisionId, true);
+        settled = true;
+        const { approval, ledgerPending } = await settlePickLedger(r.store, decisionId, log2);
         r.store.takeResolutionAnnouncement(decisionId);
         broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
-        return c.json({ status: "resolved" });
+        if (approval) {
+          broadcast(sessionId, { type: "ledger_write", kind: "approved", description: approval.description, concept: approval.concept, sourceArtifactId: approval.artifactId });
+        }
+        return c.json({ status: "resolved", ...ledgerPending ? { ledgerPending: true } : {} });
       } finally {
-        if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
+        if (outcome.kind === "resolved" && !settled) await r.store.settleResolution(decisionId, committed);
       }
     }));
   });
@@ -45050,6 +45221,24 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     }
     return c.json(result);
   });
+  app.post("/api/internal/sessions/:sessionId/decisions/:decisionId/ledger", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const decisionId = c.req.param("decisionId");
+    return withSessionWrite(c, r.store, () => withDecisionResolveLock(r.store, async () => {
+      const out = r.store.settleDecisionLedger(decisionId);
+      if (out.kind === "recorded") {
+        if (daemonProjectRoot && !sessionId.startsWith("demo_")) {
+          try {
+            recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" });
+          } catch {
+          }
+        }
+      }
+      return c.json(out);
+    }));
+  });
   app.post("/api/internal/sessions/:sessionId/memory/approved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
@@ -45060,14 +45249,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const message = err instanceof external_exports.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.recordApprovedPattern(parsed);
-    if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
-      try {
-        recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" });
-      } catch {
+    return withSessionWrite(c, r.store, () => {
+      r.store.recordApprovedPattern(parsed);
+      if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+        try {
+          recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" });
+        } catch {
+        }
       }
-    }
-    return c.json({ status: "recorded" });
+      return c.json({ status: "recorded" });
+    });
   });
   app.post("/api/internal/sessions/:sessionId/memory/override", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -46292,7 +46483,14 @@ function createDaemon(deps) {
         log2(`[end-review] Failed to stop page watches: ${errorMessage(error51)}`);
       }
     },
-    (sessionId) => pageWatcher.drainQueuedSaves(sessionId)
+    (sessionId) => pageWatcher.drainQueuedSaves(sessionId),
+    // #711 gate 1 — an approval End's reconcile recorded is announced like a
+    // resolve's: one `ledger_write` per pick (the broadcast tap counts it).
+    (sessionId, recorded) => {
+      for (const r of recorded) {
+        broadcast(sessionId, { type: "ledger_write", kind: "approved", description: r.description, concept: r.concept, sourceArtifactId: r.artifactId });
+      }
+    }
   );
   const demoRuns = /* @__PURE__ */ new Map();
   const stanceExceptions = new StanceExceptionRegistry({

@@ -60,7 +60,32 @@ export interface DecisionRecord {
   acknowledged?: boolean;
   createdAt: string;
   resolvedAt?: string;
+  /** #711 gate 1 — set once this pick's approval is in the project ledger
+   *  (preferences.json approvedPatterns), by the exact-pick path
+   *  (IStore.settleDecisionLedger) after the pick was proven on disk.
+   *  check_feedback acks such a pick without a second ledger write. Absent on
+   *  records resolved before this field existed; check_feedback backfills
+   *  those through the same exact-pick path. */
+  ledgerRecordedAt?: string;
+  /** #711 gate 1 — the durable intent: written in the SAME decisions.json
+   *  write as the pick (resolveDecisionAtomic), cleared when ledgerRecordedAt
+   *  is stamped. A pick that is on disk with this flag still owes its
+   *  idempotent approval (busy preferences lock, or the process stopped
+   *  between the pick's flush and the ledger write); check_feedback and the
+   *  standalone End closeout settle it. A pick that never reached disk never
+   *  carries it, so a restart leaves no approval behind for it. */
+  ledgerPending?: boolean;
 }
+
+/** #711 gate 1 — what IStore.settleDecisionLedger did for one decision. */
+export type DecisionLedgerSettlement =
+  /** The approval was published now (announce it). */
+  | { kind: "recorded"; description: string; concept?: string; artifactId: string }
+  /** Nothing (more) to publish: already stamped, no matching option, or an
+   *  acknowledged record from before the ledger stamp existed. */
+  | { kind: "settled" }
+  /** The pick's resolve hasn't settled yet: not deliverable, not ackable. */
+  | { kind: "unsettled" };
 
 export interface PlanReviewRecord {
   artifactId: string;
@@ -594,6 +619,16 @@ export interface IStore {
   /** #490 — after a failed flush: is this unsettled resolution durably on disk
    *  anyway (a partial write)? true → the caller settles it as committed. */
   isResolutionDurable(decisionId: string): MaybePromise<boolean>;
+  /**
+   * #711 gate 1 — the exact-pick ledger path. Publish the approval for this
+   * decision's SETTLED pick (never one whose resolve is still unsettled) once
+   * the pick is proven on disk: an idempotent add to the project's approved
+   * patterns (never a removal), the advisory cross-project mirror, then the
+   * `ledgerRecordedAt` stamp. Throws when the ledger can't be written (busy
+   * preferences lock); the pick stays saved and ledger-pending. Optional:
+   * stores without it fall back to recordApprovedPattern.
+   */
+  settleDecisionLedger?(decisionId: string): MaybePromise<DecisionLedgerSettlement>;
   getDecisionResponse(decisionId: string): MaybePromise<{ optionId: string; reasoning?: string } | null>;
   getPendingDecisions(): MaybePromise<DecisionRecord[]>;
   getDecision(decisionId: string): MaybePromise<DecisionRecord | undefined>;

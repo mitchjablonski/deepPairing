@@ -15,10 +15,12 @@ import { openPageAsks, pageAsksFor, type PageAskScan } from "../page-asks.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
 import { briefEchoOf } from "../brief-ref.js";
+import { decisionApprovalKeys } from "../../store/decision-approval.js";
 import {
   LIVE_POLL_GRACE_MS,
   PendingAcks,
   beginConsumer,
+  feedbackAckRefusal,
   describeHeld,
   endConsumer,
   feedbackStoreView,
@@ -304,7 +306,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       return ended;
     };
     try {
-      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args, reviewHasEnded);
+      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args, reviewHasEnded, (code) => pending.noteRefusal(code));
       if (!ctx.signal?.aborted) await reviewHasEnded();
     } catch (err) {
       // Nothing was acknowledged (the acks are still in the buffer), so this
@@ -420,10 +422,18 @@ function annotateResult(
   };
 }
 
+/** #711 gate 1 — an older daemon's answer for the (new) exact-pick ledger
+ *  route: a 404 with no structured error code. */
+function isMissingLedgerRoute(err: unknown): boolean {
+  if (typeof err !== "object" || err === null || !("status" in err) || err.status !== 404) return false;
+  return !("code" in err) || (err as { code?: unknown }).code === undefined;
+}
+
 async function assembleCheckFeedback(
   ctx: ToolContext,
   args: any,
   reviewHasEnded: () => Promise<boolean>,
+  noteRefusal: (code: NonNullable<ReturnType<typeof feedbackAckRefusal>>) => void = () => {},
 ): Promise<{ result: ToolResult; endedText?: () => string }> {
   let ended = await reviewHasEnded();
   const { store, server, broadcast, port } = ctx;
@@ -982,14 +992,30 @@ async function assembleCheckFeedback(
     const deferred: string[] = [];
     ended = await reviewHasEnded();
     for (const d of resolved) {
-      if (!ended) {
-        try {
-          await recordDecisionLedger(d);
-        } catch (err) {
-          deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
-          continue;
-        }
+      // #711 gate 1 — a pick the resolve route already recorded (after its
+      // pick was durable, inside its admission permit) needs only the ack.
+      if (!ended && d.ledgerRecordedAt && !d.ledgerPending) {
         recordedIds.push(d.decisionId);
+      } else if (!ended) {
+        try {
+          const settled = await recordDecisionLedger(d);
+          // An unsettled pick is not deliverable yet (its resolve may still
+          // roll back): neither reported nor acked; the next poll sees it.
+          if (!settled) continue;
+          recordedIds.push(d.decisionId);
+        } catch (err) {
+          // #711 gate 1 — End's cutoff landed after the ended check above: the
+          // backfill is refused (typed). Never fail the read or report a
+          // ledger failure — the saved choice is still delivered below, left
+          // un-acked, and the typed refusal reaches the caller even when no
+          // acknowledgement is left to carry it.
+          const refusal = feedbackAckRefusal(err);
+          if (!refusal) {
+            deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
+            continue;
+          }
+          noteRefusal(refusal);
+        }
       }
       const feedback = decisionFeedback(d);
       const decisionLabel = d.title?.trim() || d.context;
@@ -1019,67 +1045,50 @@ async function assembleCheckFeedback(
     }
   }
 
-  async function recordDecisionLedger(d: (typeof resolved)[number]): Promise<void> {
-    const option = d.options.find((o) => o.id === d.response?.optionId);
-    // P3 — the DECISION LABEL for every human-facing key this block mints.
-    // M1.1 gave present_options a short fork-naming `title` and made it the
-    // artifact/card/session heading, but this block kept keying on the full
-    // `context` PARAGRAPH — so the ledger (and export-learnings) showed
-    // "<three-line background paragraph>: Redis" where every other surface
-    // showed "Cache backend: Redis". Same label everywhere now.
-    //
-    // BACKWARD COMPAT (load-bearing, and stated precisely because the first
-    // cut of this comment overclaimed): this changes what NEW entries RECORD.
-    // The BLOCKING lanes that carry the moat are key-length-invariant —
-    //   - the post-colon `specificNoun` lane (findRejectedApproachMatch) sees
-    //     the option title under BOTH the old paragraph-prefixed key and the
-    //     new title-prefixed one, so a re-proposal of a rejected option
-    //     blocks identically either way; and
-    //   - the concept lane keys on option.concept.name, untouched here, so
-    //     the paraphrase catch is unaffected.
-    // The one lane that DID read the whole description — the reverse-phrase
-    // check — was prefix-sensitive in both directions (a long key blocked any
-    // short proposal appearing in the background paragraph, INCLUDING the
-    // chosen winner; a short key would block a later option titled with the
-    // generic fork words). It is now scoped to `specificNoun` too
-    // (preflight-validator.ts), which removes both false-block classes and
-    // makes this key change genuinely behavior-neutral for legitimate
-    // proposals. Divergence cases pinned in
-    // check-feedback-decision-title.test.ts.
-    const decisionLabel = d.title?.trim() || d.context;
-    if (option) {
-      const approvedDescription = `${decisionLabel}: ${option.title}`;
-      // AA1 — concept.name (from Y5) is the cross-project ledger key.
-      // Pre-AA1 we passed option.description here, which is prose
-      // and broke compounding (every project minted unique long
-      // keys instead of bucketing under e.g. "argon2id for password
-      // hashing"). Fall back to description for older agents that
-      // don't supply concept.
-      const approvedConcept: string | undefined =
-        option.concept?.name ?? option.description ?? undefined;
-      await store.recordApprovedPattern({
-        description: approvedDescription,
-        concept: approvedConcept,
-      });
-      broadcast({
-        type: "ledger_write",
-        kind: "approved",
-        description: approvedDescription,
-        concept: approvedConcept,
-        sourceArtifactId: d.artifactId,
-      });
-      // #549 — PICKING ONE OPTION IS NOT REJECTING THE OTHERS. This block used
-      // to record every unchosen option as a rejected stance, so choosing A
-      // made a later proposal of B hard-block at the pre-flight gate even
-      // though the human never rejected B (#540 trial). The human's rule: only
-      // if they say so. Unchosen options now add NO ledger rows; an option the
-      // human explicitly wants gone goes through the per-option "Never suggest
-      // this" control (POST /api/decisions/:id/options/:optionId/never-suggest),
-      // which records exactly that one option via recordRejectedOption.
-      // Whole-card "Reject & remember" and the "None of these fit" send-back are
-      // unchanged. Rows an older build auto-recorded here carry no origin
-      // marker, so they are left in place; retire them from the Ledger.
+  /** → false when the pick is still unsettled (not deliverable yet). */
+  async function recordDecisionLedger(d: (typeof resolved)[number]): Promise<boolean> {
+    // #711 gate 1 — the exact-pick path: the store publishes the approval of
+    // THIS settled pick only once it is proven on disk, idempotently, and
+    // stamps it. Feedback writes a decision approval through the generic
+    // approved-pattern endpoint only against a daemon that predates that path
+    // (version skew, below). Key rationale (P3 label, AA1
+    // concept, #549 approval-only): decision-approval.ts.
+    if (typeof store.settleDecisionLedger === "function") {
+      let out: Awaited<ReturnType<NonNullable<typeof store.settleDecisionLedger>>>;
+      try {
+        out = await store.settleDecisionLedger(d.decisionId);
+      } catch (err) {
+        // Version skew: an older daemon has no exact-pick ledger route and
+        // answers Hono's bare 404 (no structured code — unlike a 404
+        // session_not_registered). Fall back to the pre-#748 flow.
+        if (!isMissingLedgerRoute(err)) throw err;
+        return recordGenericApproval(d);
+      }
+      if (out.kind === "unsettled") return false;
+      if (out.kind === "recorded") {
+        broadcast({ type: "ledger_write", kind: "approved", description: out.description, concept: out.concept, sourceArtifactId: d.artifactId });
+      }
+      return true;
     }
+    return recordGenericApproval(d);
+  }
+
+  /** The pre-#748 late write: stores without the exact-pick path (in-memory
+   *  fakes) and daemons that predate its route. */
+  async function recordGenericApproval(d: (typeof resolved)[number]): Promise<boolean> {
+    // #549 — unchosen options add NO ledger rows; an option the human wants
+    // gone goes through the per-option "Never suggest this" control.
+    const approval = decisionApprovalKeys(d);
+    if (!approval) return true;
+    await store.recordApprovedPattern(approval);
+    broadcast({
+      type: "ledger_write",
+      kind: "approved",
+      description: approval.description,
+      concept: approval.concept,
+      sourceArtifactId: d.artifactId,
+    });
+    return true;
   }
 
   // Plan review verdicts

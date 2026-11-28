@@ -68,7 +68,8 @@ describe("review boundary — current-main integration", () => {
       expect(diskResponse(fx.dir)).toMatchObject({ optionId: winner, reasoning: winner });
       expect(store.settlements).toEqual([true]);
       expect(taskCalls).toBe(1);
-      expect(order).toEqual(["task", "decision_resolved", "artifact_updated"]);
+      // #711 gate 1 — the pick's ledger approval is announced once, after it.
+      expect(order).toEqual(["task", "decision_resolved", "ledger_write", "artifact_updated"]);
       expect(events.every(e => e.sid === SID)).toBe(true);
       expect(events.filter(e => e.event.type === "decision_resolved")).toHaveLength(1);
       const before = store.getDecision(DID)?.resolvedAt;
@@ -77,7 +78,7 @@ describe("review boundary — current-main integration", () => {
       expect(await retry.json()).toMatchObject({ alreadyResolved: true });
       expect(store.getDecision(DID)?.resolvedAt).toBe(before);
       expect(diskResponse(fx.dir)?.reasoning).toBe(winner);
-      expect(taskCalls).toBe(1); expect(events).toHaveLength(2);
+      expect(taskCalls).toBe(1); expect(events).toHaveLength(3);
     } finally { fx.dispose(); }
   });
 
@@ -97,10 +98,13 @@ describe("review boundary — current-main integration", () => {
       expect(store.getDecisionResponse(DID)).toBeNull(); expect(diskResponse(fx.dir)).toBeNull();
       expect(store.getArtifacts().find(a => a.id === AID)?.status).toBe("draft");
       expect(events).toEqual([]);
+      // #711 gate 1 — the rolled-back pick's ledger approval is retracted too.
+      expect(store.getSessionMemory().approvedPatterns ?? []).toEqual([]);
       fs.unlinkSync(lock);
       expect((await app.request(`/api/decisions/${DID}`, request("b"))).status).toBe(200);
       expect(store.settlements).toEqual([false, true]);
       expect(diskResponse(fx.dir)?.optionId).toBe("b");
+      expect(store.getSessionMemory().approvedPatterns).toHaveLength(1);
       expect(events.filter(e => e.type === "decision_resolved")).toHaveLength(1);
     } finally { try { fs.unlinkSync(lock); } catch { /* released */ } fx.dispose(); }
   });
@@ -125,7 +129,7 @@ describe("review boundary — current-main integration", () => {
       expect(events.filter(e => e.type === "decision_resolved")).toHaveLength(1);
       fs.rmdirSync(broken);
       expect((await app.request(`/api/decisions/${DID}`, request("a"))).status).toBe(200);
-      expect(taskCalls).toBe(1); expect(events).toHaveLength(1);
+      expect(taskCalls).toBe(1); expect(events).toHaveLength(2);
     } finally { fx.dispose(); }
   });
 

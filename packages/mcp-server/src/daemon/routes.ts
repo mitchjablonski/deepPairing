@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { staleResolveBody, closedResolveBody, classifyClosedDecision, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
+import { settlePickLedger } from "../store/decision-approval.js";
 import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -1697,6 +1698,7 @@ export function createDaemonRoutes(
       // a durable flush, otherwise ROLLED BACK so memory matches disk (the 503 the
       // human saw stays true: no delivery, no false "already answered", no event).
       let committed = false;
+      let settled = false; // #711 gate 1 — settled early, before the ledger step
       try {
         // #484 review — report only what is persisted (see the public route).
         // #492 — closed decision: 409 decision_closed, nothing written.
@@ -1730,11 +1732,22 @@ export function createDaemonRoutes(
           if (!r.store.isResolutionDurable(decisionId)) throw error;
         }
         committed = true; // #484 review — durable: settle as committed
+        // #711 gate 1 — settle now (the finally's call is then a no-op), then
+        // publish the pick's ledger approval: only after the pick is proven on
+        // disk, still inside this admission permit, so End's marker can never
+        // precede it. A busy preferences lock leaves the saved pick
+        // ledger-pending (retried by check_feedback / End), never refused.
+        r.store.settleResolution(decisionId, true);
+        settled = true;
+        const { approval, ledgerPending } = await settlePickLedger(r.store, decisionId, log);
         r.store.takeResolutionAnnouncement(decisionId); // #484 review — announced now; a retry won't repeat it
         broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
-        return c.json({ status: "resolved" });
+        if (approval) {
+          broadcast(sessionId, { type: "ledger_write", kind: "approved", description: approval.description, concept: approval.concept, sourceArtifactId: approval.artifactId });
+        }
+        return c.json({ status: "resolved", ...(ledgerPending ? { ledgerPending: true } : {}) });
       } finally {
-        if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
+        if (outcome.kind === "resolved" && !settled) await r.store.settleResolution(decisionId, committed);
       }
     }));
   });
@@ -1910,6 +1923,28 @@ export function createDaemonRoutes(
     return c.json(result);
   });
 
+  // #711 gate 1 — check_feedback's exact-pick ledger path: publish the owed
+  // approval of a SETTLED pick (ledger-pending, or a record resolved before
+  // the stamp existed) only once the pick is proven on disk. A session write
+  // (refused with the typed closeout code after End's cutoff) serialized with
+  // the resolves; a busy preferences lock surfaces as the typed lock error and
+  // the pick stays saved and pending.
+  app.post("/api/internal/sessions/:sessionId/decisions/:decisionId/ledger", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const decisionId = c.req.param("decisionId");
+    return withSessionWrite(c, r.store, () => withDecisionResolveLock(r.store, async () => {
+      const out = r.store.settleDecisionLedger(decisionId);
+      if (out.kind === "recorded") {
+        if (daemonProjectRoot && !sessionId.startsWith("demo_")) {
+          try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" }); } catch {}
+        }
+      }
+      return c.json(out);
+    }));
+  });
+
   app.post("/api/internal/sessions/:sessionId/memory/approved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
@@ -1920,11 +1955,17 @@ export function createDaemonRoutes(
       const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.recordApprovedPattern(parsed);
-    if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
-      try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" }); } catch {}
-    }
-    return c.json({ status: "recorded" });
+    // #711 gate 1 — the explicit generic approval write stays a session write:
+    // refused with the typed closeout code once End's cutoff starts. (Decision
+    // picks no longer come through here from standalone feedback — they use
+    // the exact-pick /decisions/:id/ledger path.)
+    return withSessionWrite(c, r.store, () => {
+      r.store.recordApprovedPattern(parsed);
+      if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+        try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" }); } catch {}
+      }
+      return c.json({ status: "recorded" });
+    });
   });
 
   // Scope-down a personal rejected-approach the pre-flight gate matched as a

@@ -285,7 +285,14 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       } catch (error) {
         log(`[end-review] Failed to stop page watches: ${errorMessage(error)}`);
       }
-    }, (sessionId) => pageWatcher.drainQueuedSaves(sessionId));
+    }, (sessionId) => pageWatcher.drainQueuedSaves(sessionId),
+    // #711 gate 1 — an approval End's reconcile recorded is announced like a
+    // resolve's: one `ledger_write` per pick (the broadcast tap counts it).
+    (sessionId, recorded) => {
+      for (const r of recorded) {
+        broadcast(sessionId, { type: "ledger_write", kind: "approved", description: r.description, concept: r.concept, sourceArtifactId: r.artifactId });
+      }
+    });
   const demoRuns = new Map<string, () => void>();
   // #470 — active allowances live ONLY here (O1). A restart ends every grant:
   // each registrationId embeds this instanceId.

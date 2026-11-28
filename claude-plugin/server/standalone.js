@@ -31532,11 +31532,18 @@ var PendingAcks = class {
   workerStops = [];
   /** #680 slice 3 — page artifacts whose file-watch notices were reported. */
   fileWatchNotices = [];
+  /** #711 gate 1 — a typed closeout refusal met by a write the assembly made
+   *  itself (the decision-ledger backfill), carried to the caller even when
+   *  no acknowledgement is left to meet it. */
+  noted;
+  noteRefusal(code) {
+    if (!this.noted || code === ERROR_CODES.session_ended) this.noted = code;
+  }
   /** Flush every lane. Unacknowledged entries remain in the store so a later
    *  poll can select them again if closeout fails and the review reopens. */
   async flush(store) {
     const errors = [];
-    let refusal;
+    let refusal = this.noted;
     const run2 = async (fn) => {
       try {
         await fn();
@@ -37646,6 +37653,15 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
   return !trivial;
 }
 
+// src/store/decision-approval.ts
+function decisionApprovalKeys(d) {
+  const option = d.options?.find((o) => o.id === d.response?.optionId);
+  if (!option) return null;
+  const decisionLabel = d.title?.trim() || d.context;
+  const concept = option.concept?.name ?? option.description ?? void 0;
+  return { description: `${decisionLabel}: ${option.title}`, ...concept !== void 0 ? { concept } : {} };
+}
+
 // src/mcp/tools/check-feedback.ts
 function ledgerHealthField() {
   try {
@@ -37784,7 +37800,7 @@ async function handleCheckFeedback(ctx, args) {
       return ended;
     };
     try {
-      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args, reviewHasEnded);
+      assembled = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args, reviewHasEnded, (code) => pending.noteRefusal(code));
       if (!ctx.signal?.aborted) await reviewHasEnded();
     } catch (err) {
       rollback();
@@ -37885,7 +37901,12 @@ function annotateResult(result, o) {
     ...sc ? { structuredContent: sc } : {}
   };
 }
-async function assembleCheckFeedback(ctx, args, reviewHasEnded) {
+function isMissingLedgerRoute(err) {
+  if (typeof err !== "object" || err === null || !("status" in err) || err.status !== 404) return false;
+  return !("code" in err) || err.code === void 0;
+}
+async function assembleCheckFeedback(ctx, args, reviewHasEnded, noteRefusal = () => {
+}) {
   let ended = await reviewHasEnded();
   const { store, server, broadcast, port } = ctx;
   let companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : void 0;
@@ -38201,14 +38222,21 @@ ${requests.join("\n")}`
     const deferred = [];
     ended = await reviewHasEnded();
     for (const d of resolved) {
-      if (!ended) {
-        try {
-          await recordDecisionLedger(d);
-        } catch (err) {
-          deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
-          continue;
-        }
+      if (!ended && d.ledgerRecordedAt && !d.ledgerPending) {
         recordedIds.push(d.decisionId);
+      } else if (!ended) {
+        try {
+          const settled = await recordDecisionLedger(d);
+          if (!settled) continue;
+          recordedIds.push(d.decisionId);
+        } catch (err) {
+          const refusal = feedbackAckRefusal(err);
+          if (!refusal) {
+            deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}).`);
+            continue;
+          }
+          noteRefusal(refusal);
+        }
       }
       const feedback = decisionFeedback(d);
       const decisionLabel = d.title?.trim() || d.context;
@@ -38234,23 +38262,34 @@ ${deferred.join("\n")}`
     }
   }
   async function recordDecisionLedger(d) {
-    const option = d.options.find((o) => o.id === d.response?.optionId);
-    const decisionLabel = d.title?.trim() || d.context;
-    if (option) {
-      const approvedDescription = `${decisionLabel}: ${option.title}`;
-      const approvedConcept = option.concept?.name ?? option.description ?? void 0;
-      await store.recordApprovedPattern({
-        description: approvedDescription,
-        concept: approvedConcept
-      });
-      broadcast({
-        type: "ledger_write",
-        kind: "approved",
-        description: approvedDescription,
-        concept: approvedConcept,
-        sourceArtifactId: d.artifactId
-      });
+    if (typeof store.settleDecisionLedger === "function") {
+      let out;
+      try {
+        out = await store.settleDecisionLedger(d.decisionId);
+      } catch (err) {
+        if (!isMissingLedgerRoute(err)) throw err;
+        return recordGenericApproval(d);
+      }
+      if (out.kind === "unsettled") return false;
+      if (out.kind === "recorded") {
+        broadcast({ type: "ledger_write", kind: "approved", description: out.description, concept: out.concept, sourceArtifactId: d.artifactId });
+      }
+      return true;
     }
+    return recordGenericApproval(d);
+  }
+  async function recordGenericApproval(d) {
+    const approval = decisionApprovalKeys(d);
+    if (!approval) return true;
+    await store.recordApprovedPattern(approval);
+    broadcast({
+      type: "ledger_write",
+      kind: "approved",
+      description: approval.description,
+      concept: approval.concept,
+      sourceArtifactId: d.artifactId
+    });
+    return true;
   }
   const pendingPlans = await store.getPendingPlanReviews();
   const planArtifacts = postWakeArtifacts.filter((a) => a.type === "plan");
@@ -45071,6 +45110,11 @@ var DaemonClient = class {
   async getResolvedDecisions() {
     const data = await this.get("/decisions/resolved");
     return data.decisions;
+  }
+  /** #711 gate 1 — the daemon's exact-pick ledger path (it owns the store,
+   *  the disk proof and the End admission). */
+  async settleDecisionLedger(decisionId) {
+    return this.post(`/decisions/${decisionId}/ledger`);
   }
   async acknowledgeDecisions(decisionIds) {
     await this.post("/decisions/acknowledge", { ids: decisionIds });

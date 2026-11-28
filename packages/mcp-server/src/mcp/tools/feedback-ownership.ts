@@ -149,7 +149,7 @@ export function liveReservations(state: ToolState, now = Date.now()): Reservatio
   return out;
 }
 
-type FeedbackAckRefusal = typeof ERROR_CODES.session_closing | typeof ERROR_CODES.session_ended;
+export type FeedbackAckRefusal = typeof ERROR_CODES.session_closing | typeof ERROR_CODES.session_ended;
 
 /** Only the daemon's typed closeout conflict is an expected ACK refusal. */
 export function feedbackAckRefusal(error: unknown): FeedbackAckRefusal | undefined {
@@ -173,12 +173,20 @@ export class PendingAcks {
   workerStops: string[] = [];
   /** #680 slice 3 — page artifacts whose file-watch notices were reported. */
   fileWatchNotices: FileWatchNoticeRef[] = [];
+  /** #711 gate 1 — a typed closeout refusal met by a write the assembly made
+   *  itself (the decision-ledger backfill), carried to the caller even when
+   *  no acknowledgement is left to meet it. */
+  noted: FeedbackAckRefusal | undefined;
+
+  noteRefusal(code: FeedbackAckRefusal): void {
+    if (!this.noted || code === ERROR_CODES.session_ended) this.noted = code;
+  }
 
   /** Flush every lane. Unacknowledged entries remain in the store so a later
    *  poll can select them again if closeout fails and the review reopens. */
   async flush(store: IStore): Promise<FeedbackAckFlush> {
     const errors: unknown[] = [];
-    let refusal: FeedbackAckRefusal | undefined;
+    let refusal: FeedbackAckRefusal | undefined = this.noted;
     const run = async (fn: () => unknown) => {
       try {
         await fn();

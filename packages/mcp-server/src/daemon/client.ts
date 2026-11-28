@@ -17,6 +17,7 @@ import type {
   AddStanceResult,
   RenderFailureRecord,
   CommentResolutionSnapshot,
+  DecisionLedgerSettlement,
 } from "../store/store-interface.js";
 import { projectHashOf, BASE_PORT } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
@@ -875,6 +876,12 @@ export class DaemonClient implements IStore {
   async getResolvedDecisions(): Promise<DecisionRecord[]> {
     const data = await this.get<{ decisions: DecisionRecord[] }>("/decisions/resolved");
     return data.decisions;
+  }
+
+  /** #711 gate 1 — the daemon's exact-pick ledger path (it owns the store,
+   *  the disk proof and the End admission). */
+  async settleDecisionLedger(decisionId: string): Promise<DecisionLedgerSettlement> {
+    return this.post<DecisionLedgerSettlement>(`/decisions/${decisionId}/ledger`);
   }
 
   async acknowledgeDecisions(decisionIds: string[]): Promise<void> {

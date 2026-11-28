@@ -25,11 +25,14 @@ import crypto from "node:crypto";
 import type { DecisionOption } from "@deeppairing/shared";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
 import { FileStore } from "../../store/file-store.js";
+import { ownLockIdentity } from "../../store/file-lock.js";
 import type { IStore } from "../../store/store-interface.js";
 import { projectHashOf } from "../../project-root.js";
 import { createStandaloneSessionId } from "../../standalone-session-id.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { ERROR_CODES } from "../../error-codes.js";
+import { getGlobalStore } from "../../store/global-store.js";
+import { readMetrics } from "../../store/metrics-store.js";
 import { PENDING_DRAFT_TYPES } from "../../mcp/tools/types.js";
 // The web "waiting on you" set — imported here (a server-project test, so no web
 // tsconfig rootDir boundary) to pin it EQUAL to the server's PENDING_DRAFT_TYPES.
@@ -1078,6 +1081,361 @@ it("a failed admitted internal decision flush releases End after rolling the cho
   }
 });
 
+// #711 gate 1 — the decision-ledger write rides the resolve's admission permit.
+function seedLedgerDecision(store: FileStore, context: string): void {
+  store.createArtifact({ id: "decision", type: "decision", title: context, content: { decisionId: "d1" } });
+  store.recordDecisionRequest({ decisionId: "d1", artifactId: "decision", context, options: OPTS });
+  store.forceFlush();
+}
+
+function ledgerHarness(tmpDir: string, daemon: Daemon) {
+  const preferencesPath = path.join(tmpDir, ".deeppairing", "preferences.json");
+  const approved = (): string[] => {
+    try { return JSON.parse(fs.readFileSync(preferencesPath, "utf8")).approvedPatterns ?? []; } catch { return []; }
+  };
+  const resolve = (route: "internal" | "public", sid: string, optionId = "o2") =>
+    daemon.app.request(route === "internal" ? `/api/internal/sessions/${sid}/decisions/d1/resolve` : "/api/decisions/d1", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir),
+        "X-Session-Id": sid, "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ optionId }),
+    });
+  const diskDecision = (sid: string) => (JSON.parse(fs.readFileSync(
+    path.join(tmpDir, ".deeppairing", "sessions", sid, "decisions.json"), "utf8")) as Array<{
+      decisionId: string; response?: { optionId: string }; ledgerRecordedAt?: string;
+    }>).find((d) => d.decisionId === "d1");
+  return { preferencesPath, approved, resolve, diskDecision };
+}
+
+it.each(["internal", "public"] as const)(
+  "an admitted %s pick writes its ledger row inside the permit, durable before End's marker",
+  async (route) => {
+    const { tmpDir, daemon } = makeDaemon();
+    const sessionId = createStandaloneSessionId(tmpDir);
+    const wrapperId = "session_wrapper";
+    const store = daemon.createSession(sessionId);
+    const wrapper = daemon.createSession(wrapperId);
+    seedLedgerDecision(store, "Choose a cache");
+    seedLedgerDecision(wrapper, "Choose a queue");
+    const { approved, resolve, diskDecision } = ledgerHarness(tmpDir, daemon);
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+    const markerPath = path.join(dir, "review-ended.json");
+
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const flushEntered = new Promise<void>((r) => { entered = r; });
+    const flush = store.forceFlush.bind(store);
+    // What End's own closeout flush (the last step before the marker) sees.
+    const atCloseout: Array<{ marker: boolean; approved: string[]; ledgerRecordedAt?: string; optionId?: string }> = [];
+    let calls = 0;
+    const spy = vi.spyOn(store as IStore, "forceFlush").mockImplementation(async () => {
+      if (calls++ === 0) {
+        entered();
+        await held;
+        flush();
+        return;
+      }
+      const disk = diskDecision(sessionId);
+      atCloseout.push({ marker: fs.existsSync(markerPath), approved: approved(), ledgerRecordedAt: disk?.ledgerRecordedAt, optionId: disk?.response?.optionId });
+      flush();
+    });
+    const resolving = resolve(route, sessionId);
+    let ending: ReturnType<typeof daemon.standaloneCloseout.end> | undefined;
+    try {
+      await Promise.race([flushEntered, resolving.then(() => { throw new Error("Resolve did not reach the held flush."); })]);
+      ending = daemon.standaloneCloseout.end(sessionId);
+      expect(daemon.standaloneCloseout.state(sessionId)).toEqual({ state: "closing" });
+      // A late pick in the closing review is refused; the wrapper is untouched
+      // and still records its own pick's ledger row at resolve time.
+      const late = await daemon.app.request(`/api/internal/sessions/${sessionId}/memory/approved`, {
+        method: "POST",
+        headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" },
+        body: JSON.stringify({ description: "Late write" }),
+      });
+      expect(late.status).toBe(409);
+      expect(await late.json()).toMatchObject({ code: ERROR_CODES.session_closing });
+      expect((await resolve(route, wrapperId, "o1")).status).toBe(200);
+      expect(approved()).toContain("Choose a queue: Redis");
+      expect(wrapper.getDecision("d1")?.ledgerRecordedAt).toBeTruthy();
+      expect(fs.existsSync(markerPath)).toBe(false);
+
+      release();
+      const [resolved, marker] = await Promise.all([resolving, ending]);
+      expect(resolved.status).toBe(200);
+      expect(JSON.parse(fs.readFileSync(markerPath, "utf8"))).toEqual(marker);
+      // End's closeout flush ran before the marker, and by then the pick AND its
+      // ledger row were already on disk.
+      expect(atCloseout.length).toBeGreaterThan(0);
+      expect(atCloseout.at(-1)).toMatchObject({ marker: false, optionId: "o2", ledgerRecordedAt: expect.any(String) });
+      expect(atCloseout.at(-1)!.approved).toContain("Choose a cache: In-proc");
+      expect(approved()).not.toContain("Late write");
+      expect(approved().filter((p) => p === "Choose a cache: In-proc")).toHaveLength(1);
+    } finally {
+      release();
+      await Promise.allSettled([resolving, ending]);
+      spy.mockRestore();
+    }
+  },
+);
+
+it("refuses the backstop ledger write after End and keeps the wrapper's", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const wrapperId = "session_wrapper";
+  const store = daemon.createSession(sessionId);
+  daemon.createSession(wrapperId);
+  seedLedgerDecision(store, "Choose a cache");
+  // A pick an older build saved AND acked (its check_feedback already handled
+  // the ledger): no ledgerRecordedAt, no ledgerPending — End leaves it alone.
+  store.resolveDecision("d1", "o2");
+  store.acknowledgeDecisions(["d1"]);
+  store.forceFlush();
+  const { approved, preferencesPath } = ledgerHarness(tmpDir, daemon);
+  await daemon.standaloneCloseout.end(sessionId);
+  const prefsBefore = fs.existsSync(preferencesPath) ? fs.readFileSync(preferencesPath, "utf8") : null;
+  const write = (sid: string, description: string) => daemon.app.request(`/api/internal/sessions/${sid}/memory/approved`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" },
+    body: JSON.stringify({ description }),
+  });
+  const refused = await write(sessionId, "Choose a cache: In-proc");
+  expect(refused.status).toBe(409);
+  expect(await refused.json()).toMatchObject({ code: ERROR_CODES.session_ended });
+  expect(fs.existsSync(preferencesPath) ? fs.readFileSync(preferencesPath, "utf8") : null).toBe(prefsBefore);
+  // The saved choice is still readable.
+  expect(store.getDecision("d1")?.response?.optionId).toBe("o2");
+  expect((await write(wrapperId, "Choose a queue: Redis")).status).toBe(200);
+  expect(approved()).toEqual(["Choose a queue: Redis"]);
+});
+
+// #711 review P3-3 — an UNACKED pick saved by a pre-#711 daemon (no stamp, no
+// intent) still owes its approval; End's reconcile records it, once.
+it("End records a legacy unacked pick's approval exactly once", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  seedLedgerDecision(store, "Choose a cache");
+  store.resolveDecision("d1", "o2");
+  store.forceFlush();
+  const { approved, diskDecision } = ledgerHarness(tmpDir, daemon);
+  const approvedWrites = () => readMetrics(tmpDir).counts.ledgerWrites.approved;
+  const before = approvedWrites();
+  expect(approved()).toEqual([]);
+  await daemon.standaloneCloseout.end(sessionId);
+  expect(approved()).toEqual(["Choose a cache: In-proc"]);
+  expect(approvedWrites() - before).toBe(1);
+  expect(diskDecision(sessionId)?.ledgerRecordedAt).toEqual(expect.any(String));
+  expect(store.settleDecisionLedger("d1")).toEqual({ kind: "settled" });
+  expect(approvedWrites() - before).toBe(1);
+});
+
+it("keeps an admitted pick and its ledger row across a failed End, then ends on retry", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  seedLedgerDecision(store, "Choose a cache");
+  const { approved, resolve, diskDecision } = ledgerHarness(tmpDir, daemon);
+  const markerPath = path.join(tmpDir, ".deeppairing", "sessions", sessionId, "review-ended.json");
+
+  // A pick whose flush fails is rolled back, and it never wrote a ledger row
+  // (the approval is published only after the pick is on disk). The busy
+  // preferences-lock case is the ledger-pending test below.
+  const noFlush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("Cannot flush the choice"); });
+  try {
+    expect((await resolve("internal", sessionId, "o1")).status).toBe(500);
+  } finally {
+    noFlush.mockRestore();
+  }
+  expect(store.getDecision("d1")?.response).toBeUndefined();
+  expect(store.getDecision("d1")?.ledgerRecordedAt).toBeUndefined();
+  expect(approved()).toEqual([]);
+
+  expect((await resolve("internal", sessionId)).status).toBe(200);
+  const failFlush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("Closeout flush interrupted"); });
+  try {
+    await expect(daemon.standaloneCloseout.end(sessionId)).rejects.toThrow("Closeout flush interrupted");
+  } finally {
+    failFlush.mockRestore();
+  }
+  expect(daemon.standaloneCloseout.state(sessionId)).toEqual({ state: "open" });
+  expect(fs.existsSync(markerPath)).toBe(false);
+  expect(diskDecision(sessionId)).toMatchObject({ response: { optionId: "o2" }, ledgerRecordedAt: expect.any(String) });
+  expect(approved()).toEqual(["Choose a cache: In-proc"]);
+
+  const marker = await daemon.standaloneCloseout.end(sessionId);
+  expect(JSON.parse(fs.readFileSync(markerPath, "utf8"))).toEqual(marker);
+  expect(approved()).toEqual(["Choose a cache: In-proc"]);
+});
+
+// #711 review — two reviews of one project share an approval string. A's
+// failed pick must never retract the row B's committed pick relies on.
+it("keeps B's shared approval when A's same-description pick fails after B stamps, through B's End", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionA = createStandaloneSessionId(tmpDir);
+  const sessionB = createStandaloneSessionId(tmpDir);
+  expect(sessionA).not.toBe(sessionB);
+  const storeA = daemon.createSession(sessionA);
+  const storeB = daemon.createSession(sessionB);
+  seedLedgerDecision(storeA, "Choose a cache");
+  seedLedgerDecision(storeB, "Choose a cache");
+  const { approved, resolve, diskDecision } = ledgerHarness(tmpDir, daemon);
+
+  // A fake flush for A: held at entry, then refused (the disk said no).
+  let entered!: () => void;
+  let fail!: () => void;
+  const reached = new Promise<void>((r) => { entered = r; });
+  const refused = new Promise<void>((r) => { fail = r; });
+  const realFlush = storeA.forceFlush.bind(storeA);
+  let heldOnce = false;
+  (storeA as { forceFlush: () => unknown }).forceFlush = () => {
+    if (heldOnce) return realFlush();
+    heldOnce = true;
+    entered();
+    return refused.then(() => { throw new Error("Cannot flush A's choice"); });
+  };
+  const resolvingA = resolve("internal", sessionA);
+  try {
+    await reached;
+    expect((await resolve("internal", sessionB)).status).toBe(200);
+    expect(diskDecision(sessionB)).toMatchObject({ response: { optionId: "o2" }, ledgerRecordedAt: expect.any(String) });
+    expect(approved()).toEqual(["Choose a cache: In-proc"]);
+  } finally {
+    fail();
+  }
+  expect((await resolvingA).status).toBe(500);
+  expect(storeA.getDecision("d1")?.response).toBeUndefined();
+
+  const marker = await daemon.standaloneCloseout.end(sessionB);
+  expect(marker.sessionId).toBe(sessionB);
+  expect(diskDecision(sessionB)).toMatchObject({ response: { optionId: "o2" }, ledgerRecordedAt: expect.any(String) });
+  expect(approved()).toEqual(["Choose a cache: In-proc"]);
+});
+
+// #711 review — a busy preferences lock after the pick is durable is a
+// retryable ledger-pending state, never a refused choice; End reconciles it
+// before its marker.
+it.each(["internal", "public"] as const)(
+  "a %s pick made while the preferences lock is busy is saved ledger-pending and reconciled before End's marker",
+  async (route) => {
+    const { tmpDir, daemon } = makeDaemon();
+    const sessionId = createStandaloneSessionId(tmpDir);
+    const store = daemon.createSession(sessionId);
+    seedLedgerDecision(store, "Choose a cache");
+    const { approved, resolve, diskDecision, preferencesPath } = ledgerHarness(tmpDir, daemon);
+    const markerPath = path.join(tmpDir, ".deeppairing", "sessions", sessionId, "review-ended.json");
+    const lock = `${preferencesPath}.lock`;
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, JSON.stringify({ ...ownLockIdentity()!, pid: process.ppid, processStartTime: null, createdAt: new Date().toISOString(), nonce: "prefs-holder" }));
+    try {
+      expect((await resolve(route, sessionId)).status).toBe(200);
+      const saved = diskDecision(sessionId) as { response?: { optionId: string }; ledgerRecordedAt?: string; ledgerPending?: boolean } | undefined;
+      expect(saved?.response?.optionId).toBe("o2");
+      expect(saved?.ledgerRecordedAt).toBeUndefined();
+      expect(saved?.ledgerPending).toBe(true);
+      expect(approved()).toEqual([]);
+      // End cannot commit while the owed approval can't be written.
+      await expect(daemon.standaloneCloseout.end(sessionId)).rejects.toThrow(/lock busy/i);
+      expect(fs.existsSync(markerPath)).toBe(false);
+      expect(daemon.standaloneCloseout.state(sessionId)).toEqual({ state: "open" });
+    } finally {
+      fs.rmSync(lock, { force: true });
+    }
+    const marker = await daemon.standaloneCloseout.end(sessionId);
+    expect(JSON.parse(fs.readFileSync(markerPath, "utf8"))).toEqual(marker);
+    expect(approved()).toEqual(["Choose a cache: In-proc"]);
+    const settled = diskDecision(sessionId) as { ledgerRecordedAt?: string; ledgerPending?: boolean } | undefined;
+    expect(settled?.ledgerRecordedAt).toEqual(expect.any(String));
+    expect(settled?.ledgerPending).toBeUndefined();
+  },
+);
+
+// #711 review — the per-pick `ledger_write` count (the daemon's broadcast tap
+// records one metric per `ledger_write` event) must not drop or double: exactly
+// one per pick, whichever step records it, and none from a later settle of an
+// already-stamped pick.
+it.each([
+  ["resolve", "internal"], ["resolve", "public"],
+  ["busy lock then End reconcile", "internal"], ["busy lock then End reconcile", "public"],
+] as const)("emits exactly one ledger_write per pick: %s (%s route)", async (path_, route) => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  seedLedgerDecision(store, "Choose a cache");
+  const { resolve, preferencesPath } = ledgerHarness(tmpDir, daemon);
+  const approvedWrites = () => readMetrics(tmpDir).counts.ledgerWrites.approved;
+  const before = approvedWrites();
+  // What check_feedback does for a delivered pick (DaemonClient → this route).
+  const backfill = () => daemon.app.request(`/api/internal/sessions/${sessionId}/decisions/d1/ledger`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" },
+  });
+  const lock = `${preferencesPath}.lock`;
+  if (path_ !== "resolve") {
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, JSON.stringify({ ...ownLockIdentity()!, pid: process.ppid, processStartTime: null, createdAt: new Date().toISOString(), nonce: "prefs-holder" }));
+  }
+  try {
+    expect((await resolve(route, sessionId)).status).toBe(200);
+    expect(approvedWrites() - before).toBe(path_ === "resolve" ? 1 : 0);
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+  await daemon.standaloneCloseout.end(sessionId);
+  expect(approvedWrites() - before).toBe(1);
+  expect(await (await backfill()).json()).toMatchObject({ code: ERROR_CODES.session_ended });
+  expect(store.settleDecisionLedger("d1")).toEqual({ kind: "settled" });
+  expect(approvedWrites() - before).toBe(1);
+});
+
+it("a check_feedback backfill of an already-stamped pick emits no second ledger_write", async () => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = "session_wrapper";
+  seedLedgerDecision(daemon.createSession(sessionId), "Choose a queue");
+  const { resolve } = ledgerHarness(tmpDir, daemon);
+  const approvedWrites = () => readMetrics(tmpDir).counts.ledgerWrites.approved;
+  const before = approvedWrites();
+  expect((await resolve("internal", sessionId, "o1")).status).toBe(200);
+  expect(approvedWrites() - before).toBe(1);
+  const backfill = await daemon.app.request(`/api/internal/sessions/${sessionId}/decisions/d1/ledger`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test-token", "X-Project-Hash": projectHashOf(tmpDir), "Content-Type": "application/json" },
+  });
+  expect(await backfill.json()).toEqual({ kind: "settled" });
+  expect(approvedWrites() - before).toBe(1);
+});
+
+it.each([
+  ["a retry of the same option", "o1", 1, 0],
+  ["a different option", "o2", 0, 1],
+] as const)("a rolled-back pick sends nothing to the cross-project ledger; %s mirrors once", async (_label, retry, redis, lru) => {
+  const { tmpDir, daemon } = makeDaemon();
+  const sessionId = createStandaloneSessionId(tmpDir);
+  const store = daemon.createSession(sessionId);
+  store.setGlobalLedgerPublish(true);
+  const options = OPTS.map((o, i) => ({ ...o, concept: { name: i === 0 ? "redis cache" : "lru cache" } }));
+  store.createArtifact({ id: "decision", type: "decision", title: "Choose a cache", content: { decisionId: "d1" } });
+  store.recordDecisionRequest({ decisionId: "d1", artifactId: "decision", context: "Choose a cache", options });
+  store.forceFlush();
+  const { resolve } = ledgerHarness(tmpDir, daemon);
+  const approvals = (concept: string) =>
+    (getGlobalStore().get(concept)?.instances ?? []).filter((i) => i.verdict === "approved").length;
+
+  const noFlush = vi.spyOn(store, "forceFlush").mockImplementationOnce(() => { throw new Error("Cannot flush the choice"); });
+  try {
+    expect((await resolve("internal", sessionId, "o1")).status).toBe(500);
+  } finally {
+    noFlush.mockRestore();
+  }
+  expect(approvals("redis cache")).toBe(0);
+
+  expect((await resolve("internal", sessionId, retry)).status).toBe(200);
+  expect(approvals("redis cache")).toBe(redis);
+  expect(approvals("lru cache")).toBe(lru);
+});
+
 const RULE_OUT_HTML =
   "<table><tr><th>Strategy</th><th>Staleness</th></tr><tr><td>TTL expiry</td><td>Up to 60s</td></tr></table>";
 const RULE_OUT_ANCHOR = {
@@ -1102,6 +1460,9 @@ function seedReviewWriters(store: FileStore): void {
   store.recordDecisionRequest({ decisionId: "d1", artifactId: "decision", context: "Choose a cache", options: OPTS });
   expect(store.resolveDecisionAtomic("d1", "o1")).toMatchObject({ kind: "resolved" });
   store.forceFlush();
+  // #711 — a resolve route settles its write; End refuses to close over an
+  // unsettled one (its owed ledger approval could not be proven).
+  store.settleResolution("d1", true);
 }
 
 function reviewWriterHarness(tmpDir: string, daemon: Daemon) {

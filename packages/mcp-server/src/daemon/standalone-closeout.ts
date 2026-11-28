@@ -172,6 +172,9 @@ export class StandaloneCloseout {
     private readonly timeoutMs = 5_000,
     private readonly onEnded?: (sessionId: string, endedAt: string) => void,
     private readonly drainWatchedSaves?: (sessionId: string) => Promise<void>,
+    /** #711 gate 1 — told about each owed approval End's reconcile recorded,
+     *  so it is announced (and counted) exactly once, like a resolve's. */
+    private readonly onLedgerRecorded?: (sessionId: string, recorded: ReturnType<FileStore["reconcileDecisionLedgers"]>) => void,
   ) {}
 
   private directory(sessionId: string): string {
@@ -267,6 +270,15 @@ export class StandaloneCloseout {
       if (watchDrainError) throw watchDrainError;
       checkDeadline();
       reconcileReceipts(this.projectRoot, dir, store, checkDeadline);
+      // #711 gate 1 — writers are drained: settle every saved pick whose ledger
+      // approval is still owed (ledger-pending) before the final flush and the
+      // marker. A busy preferences lock fails this End attempt (retryable);
+      // the marker never precedes an owed approval.
+      const recorded = store.reconcileDecisionLedgers();
+      if (recorded.length > 0) {
+        try { this.onLedgerRecorded?.(sessionId, recorded); } catch { /* advisory: the rows are durable */ }
+      }
+      checkDeadline();
       store.forceFlush();
       checkDeadline();
       // The session is drained. Take the existing flush lock only for this
